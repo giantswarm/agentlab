@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -53,22 +54,23 @@ const (
 	gitProofFile = "agentlab-git-proof.txt"
 	gitPauseFile = "agentlab-git-pause.txt"
 	// The probe's lines.
-	gitProbeClone       = "clone"
-	gitProbePush        = "push"
-	gitProbeCommitter   = "committer"
-	gitProbeStart       = "start"
-	gitProbeParent      = "parent"
-	gitProbeGHUser      = "gh-user"
-	gitProbePRCreate    = "pr-create"
-	gitProbePRAuthor    = "pr-author"
-	gitProbePushActor   = "push-actor"
-	gitProbePRClose     = "pr-close"
-	gitProbeGHToken     = "gh-token" // #nosec G101 -- a probe line's name, not a credential
-	gitProbeTokenEnv    = "token-env"
-	gitProbeTokenFiles  = "token-files"
-	gitProbeBranch      = "branch"
-	gitProbePauseFile   = "pause-file"
-	gitProbePauseStatus = "pause-status"
+	gitProbeClone        = "clone"
+	gitProbePush         = "push"
+	gitProbeCommitter    = "committer"
+	gitProbeStart        = "start"
+	gitProbeParent       = "parent"
+	gitProbeGHUser       = "gh-user"
+	gitProbePRCreate     = "pr-create"
+	gitProbePRAuthor     = "pr-author"
+	gitProbePushActor    = "push-actor"
+	gitProbePRClose      = "pr-close"
+	gitProbeGHToken      = "gh-token" // #nosec G101 -- a probe line's name, not a credential
+	gitProbeTokenEnv     = "token-env"
+	gitProbeTokenFiles   = "token-files"
+	gitProbeTokenScanned = "token-scanned"
+	gitProbeBranch       = "branch"
+	gitProbePauseFile    = "pause-file"
+	gitProbePauseStatus  = "pause-status"
 	// What the gh-token line says of the Session's GH_TOKEN.
 	gitTokenPlaceholder = "placeholder"
 	gitTokenUnset       = "unset"
@@ -304,7 +306,7 @@ func (gp *gitProof) write(harness, agent string) error {
 		return fmt.Errorf("the Session %s: %w", id, err)
 	}
 	r.login, r.pr, r.directory = login, pr, v["pwd"]
-	note("%s on %s: pushed %s and opened %s as %s, both read back from GitHub as %s, closed and its branch deleted; no GitHub token in the environment or files (GH_TOKEN the placeholder)", id, harness, r.branch, pr, login, login)
+	note("%s on %s: pushed %s and opened %s as %s, both read back from GitHub as %s, closed and its branch deleted; no GitHub token in the environment or %s files (GH_TOKEN the placeholder)", id, harness, r.branch, pr, login, login, v[gitProbeTokenScanned])
 	return nil
 }
 
@@ -333,13 +335,17 @@ func parseProbeLines(reply string) map[string]string {
 
 // gitShell are the shell functions the part's commands share: a marker
 // line, an attempt's exit code and its output's last lines, gh against
-// github.com that never prompts, and the GitHub token scan.
+// github.com that never prompts, and the GitHub token scan: find and grep
+// as BusyBox has them too, with the number of files scanned, so a scan
+// that read nothing is told from one that found nothing.
 const gitShell = `m() { echo "` + probeMarker + ` $1=$(printf '%s' "$2" | tr '\n' ' ' | sed 's/ *$//')"; }; ` +
 	`try() { k=$1; shift; o=$("$@" 2>&1); rc=$?; m "$k" "rc$rc $(printf '%s' "$o" | grep -v '^[[:space:]]*$' | tail -n 3)"; }; ` +
 	`ghc() { GH_PROMPT_DISABLED=1 GH_NO_UPDATE_NOTIFIER=1 timeout 60 gh "$@"; }; ` +
 	`case "${GH_TOKEN-unset}" in unset) t=` + gitTokenUnset + `;; ` + credentialPlaceholder + `) t=` + gitTokenPlaceholder + `;; *) t=` + gitTokenForeign + `;; esac; m ` + gitProbeGHToken + ` "$t"; ` +
 	`m ` + gitProbeTokenEnv + ` "$(env | grep -E '` + gitHubTokenPattern + `' | cut -d= -f1 | sort -u)"; ` +
-	`m ` + gitProbeTokenFiles + ` "$(grep -rlaE --exclude-dir=.git '` + gitHubTokenPattern + `' /data /workspace "$PWD" "$HOME" 2>/dev/null | sort -u | head -n 5)"; `
+	`f() { find /data /workspace "$PWD" "$HOME" -name .git -prune -o -type f "$@" 2>/dev/null; }; ` +
+	`m ` + gitProbeTokenScanned + ` "$(f -print | sort -u | wc -l)"; ` +
+	`m ` + gitProbeTokenFiles + ` "$(f -exec grep -lE '` + gitHubTokenPattern + `' {} + | sort -u | head -n 5)"; `
 
 // gitWriteCommand is the write turn: in the Session's clone of repo a
 // branch from origin/HEAD, a commit, the push; gh's user, the pull request opened, its author
@@ -402,11 +408,12 @@ const rcSuccess = "rc0"
 // opened by them and their push, closed again. It returns the login and the
 // pull request's URL.
 func judgeGitWrite(v map[string]string, repo, email string) (login, pr string, err error) {
+	if err := judgeGitTokenScan(v); err != nil {
+		return "", "", err
+	}
 	switch {
 	case v[gitProbeClone] == "" || v[gitProbeClone] == probeNone:
 		return "", "", fmt.Errorf("the Session's directory %s holds no clone of %s", v["pwd"], repo)
-	case v[gitProbeTokenEnv] != "" || v[gitProbeTokenFiles] != "":
-		return "", "", fmt.Errorf("a GitHub token in the sandbox: environment variables [%s], files [%s]; the person's token stays in muster and the egress gateway", v[gitProbeTokenEnv], v[gitProbeTokenFiles])
 	case v[gitProbeGHToken] != gitTokenPlaceholder:
 		return "", "", fmt.Errorf("GH_TOKEN is %s, want the Harness's placeholder %s, which the egress gateway replaces", v[gitProbeGHToken], credentialPlaceholder)
 	case v[gitProbeCommitter] != email:
@@ -438,12 +445,25 @@ func judgeGitWrite(v map[string]string, repo, email string) (login, pr string, e
 	return login, pr, nil
 }
 
+// judgeGitTokenScan is the verdict on the token scan: files scanned, and
+// no GitHub token in the environment or in one of them.
+func judgeGitTokenScan(v map[string]string) error {
+	if n, err := strconv.Atoi(v[gitProbeTokenScanned]); err != nil || n == 0 {
+		return fmt.Errorf("the token scan read no file (%q scanned): it proves nothing", v[gitProbeTokenScanned])
+	}
+	if v[gitProbeTokenEnv] != "" || v[gitProbeTokenFiles] != "" {
+		return fmt.Errorf("a GitHub token in the sandbox: environment variables [%s], files [%s]; the person's token stays in muster and the egress gateway", v[gitProbeTokenEnv], v[gitProbeTokenFiles])
+	}
+	return nil
+}
+
 // judgeGitBare is the verdict on a Session without a workspace: gh's user
 // and the push refused, no GitHub token anywhere it looked.
 func judgeGitBare(v map[string]string) error {
+	if err := judgeGitTokenScan(v); err != nil {
+		return err
+	}
 	switch {
-	case v[gitProbeTokenEnv] != "" || v[gitProbeTokenFiles] != "":
-		return fmt.Errorf("a GitHub token in a Session without a workspace: environment variables [%s], files [%s]", v[gitProbeTokenEnv], v[gitProbeTokenFiles])
 	case rcOK(v[gitProbeGHUser]):
 		return fmt.Errorf("gh api user answered %q: a Session without a workspace reached GitHub as someone", v[gitProbeGHUser])
 	case rcOK(v[gitProbePush]):
@@ -572,7 +592,7 @@ func (gp *gitProof) noWorkspace(harness, agent string) error {
 	if err := judgeGitBare(v); err != nil {
 		return fmt.Errorf("the Session %s: %w", id, err)
 	}
-	note("%s on %s, no workspace: gh api user %s; push %s; GH_TOKEN %s; no GitHub token in the environment or files", id, harness, v[gitProbeGHUser], v[gitProbePush], v[gitProbeGHToken])
+	note("%s on %s, no workspace: gh api user %s; push %s; GH_TOKEN %s; no GitHub token in the environment or %s files", id, harness, v[gitProbeGHUser], v[gitProbePush], v[gitProbeGHToken], v[gitProbeTokenScanned])
 	return nil
 }
 

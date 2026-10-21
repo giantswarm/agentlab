@@ -13,7 +13,7 @@ import (
 // gitWritten is a write turn's lines of a run that passes.
 func gitWritten() map[string]string {
 	return map[string]string{
-		"pwd": "/workspace", gitProbeClone: "./o/r", gitProbeGHToken: gitTokenPlaceholder, gitProbeTokenEnv: "", gitProbeTokenFiles: "",
+		"pwd": "/workspace", gitProbeClone: "./o/r", gitProbeGHToken: gitTokenPlaceholder, gitProbeTokenEnv: "", gitProbeTokenFiles: "", gitProbeTokenScanned: "12",
 		gitProbeCommitter: testPortalUser, gitProbePush: "rc0", gitProbeGHUser: "rc0 octo User",
 		gitProbePRCreate: "rc0 https://github.com/o/r/pull/7", gitProbePRAuthor: "rc0 octo https://github.com/o/r/pull/7",
 		gitProbePushActor: "octo", gitProbePRClose: "rc0 ✓ Closed pull request o/r#7",
@@ -31,6 +31,7 @@ func TestJudgeGitWrite(t *testing.T) {
 		wantErr string
 	}{
 		{"no clone", map[string]string{gitProbeClone: probeNone}, "holds no clone"},
+		{"a scan that read nothing", map[string]string{gitProbeTokenScanned: "0"}, "read no file"},
 		{"a token in the environment", map[string]string{gitProbeTokenEnv: "AGENT_SECRET_VAR"}, "a GitHub token in the sandbox"},
 		{"a token in a file", map[string]string{gitProbeTokenFiles: "/data/x"}, "a GitHub token in the sandbox"},
 		{"GH_TOKEN unset", map[string]string{gitProbeGHToken: gitTokenUnset}, "want the Harness's placeholder"},
@@ -54,7 +55,7 @@ func TestJudgeGitWrite(t *testing.T) {
 }
 
 func TestJudgeGitBare(t *testing.T) {
-	refused := map[string]string{gitProbeGHUser: "rc1 HTTP 401: Bad credentials", gitProbePush: "rc128 fatal: Authentication failed"}
+	refused := map[string]string{gitProbeGHUser: "rc1 HTTP 401: Bad credentials", gitProbePush: "rc128 fatal: Authentication failed", gitProbeTokenScanned: "3"}
 	if err := judgeGitBare(refused); err != nil {
 		t.Fatalf("judgeGitBare(refused) = %v", err)
 	}
@@ -128,8 +129,11 @@ func TestGitPauseAndResumeCommands(t *testing.T) {
 
 func TestGitShellTokenScan(t *testing.T) {
 	dir, home := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "notes.txt"), []byte("nothing secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	clean := runGitShell(t, dir, home, gitShell+`true`)
-	if clean[gitProbeTokenEnv] != "" || clean[gitProbeTokenFiles] != "" {
+	if clean[gitProbeTokenEnv] != "" || clean[gitProbeTokenFiles] != "" || clean[gitProbeTokenScanned] == "0" {
 		t.Fatalf("a clean sandbox reads tokens: %v", clean)
 	}
 	// A token assembled at run time, so no file of the repository holds one.
