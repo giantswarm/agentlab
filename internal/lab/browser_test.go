@@ -7,6 +7,8 @@ import (
 	"testing"
 )
 
+const signInFailedHeading = "<h1>Sign-in failed</h1>"
+
 func TestBrowserCallbackPages(t *testing.T) {
 	const state = "lab-state"
 	tests := []struct {
@@ -28,20 +30,20 @@ func TestBrowserCallbackPages(t *testing.T) {
 			name:       "Dex refuses",
 			query:      "error=access_denied&error_description=%3Cb%3Eno%3C%2Fb%3E&state=" + state,
 			wantStatus: http.StatusBadRequest,
-			want:       []string{"<h1>Sign-in failed</h1>", "The sign-in was denied or failed", "<code>access_denied</code>"},
+			want:       []string{signInFailedHeading, "The sign-in was denied or failed", "<code>access_denied</code>"},
 			notWant:    []string{"<b>no</b>"},
 		},
 		{
 			name:       "state mismatch",
 			query:      "code=c&state=forged",
 			wantStatus: http.StatusBadRequest,
-			want:       []string{"<h1>Sign-in failed</h1>", "The sign-in response could not be verified"},
+			want:       []string{signInFailedHeading, "The sign-in response could not be verified"},
 		},
 		{
 			name:       "no code",
 			query:      "state=" + state,
 			wantStatus: http.StatusBadRequest,
-			want:       []string{"<h1>Sign-in failed</h1>", "The sign-in response is incomplete"},
+			want:       []string{signInFailedHeading, "The sign-in response is incomplete"},
 		},
 	}
 

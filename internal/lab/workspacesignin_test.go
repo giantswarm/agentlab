@@ -198,7 +198,7 @@ func TestSignInCompleted(t *testing.T) {
 		"<h1>Signed in</h1><p>workspace-manager is now connected</p>": true,
 		"<h1>Authentication Successful</h1>":                          true,
 		"<h1>Authentication Failed</h1>":                              false,
-		"<h1>Sign-in failed</h1>":                                     false,
+		signInFailedHeading:                                           false,
 	} {
 		if got := signInCompleted([]byte(page)); got != want {
 			t.Errorf("signInCompleted(%q) = %t, want %t", page, got, want)
