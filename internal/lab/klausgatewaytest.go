@@ -127,7 +127,9 @@ const (
 	klausGatewayWord         = "pong"
 	klausGatewayWordPrompt   = "Reply with exactly the word " + klausGatewayWord + "."
 	klausGatewayRecallPrompt = "Which single word did I ask you to reply with earlier in this conversation? Answer with just that word."
-	klausGatewayToolPrompt   = "How many namespaces does the cluster have? Use your tools to list them."
+	// klausGatewayToolPrompt names the MCP tools: a coding Harness's model
+	// otherwise tries kubectl in its shell, which no approval gates.
+	klausGatewayToolPrompt = "How many namespaces does the cluster have? List them with your MCP tools, not the shell."
 	// klausGatewayStopPrompt is step 4's long turn, the one `stop`
 	// interrupts: a mechanical count that runs for minutes on every model.
 	// An open-ended ask for length does not: a codex model answers it in a
