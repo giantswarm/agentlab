@@ -481,6 +481,9 @@ type scriptedGateway struct {
 	bound     map[string]string
 	approvals int
 	running   map[string]chan struct{}
+	// declines is how many more times the model answers the count "No."
+	// instead of counting, as a terse model does.
+	declines int
 
 	// workspaces has a new thread's first message held behind the
 	// workspace prompt, as the adapter does for a person with workspaces;
@@ -678,12 +681,23 @@ func (g *scriptedGateway) onMessage(ev map[string]string) {
 	case klausGatewayToolPrompt:
 		g.card(channel, thread, "task-"+thread)
 	case klausGatewayStopPrompt:
+		g.mu.Lock()
+		declined := g.declines > 0
+		if declined {
+			g.declines--
+		}
+		g.mu.Unlock()
+		if declined {
+			g.answer(channel, thread, "No.")
+			g.done(thread, outcomeCompleted, "declined-"+thread)
+			return
+		}
 		stop := make(chan struct{})
 		g.mu.Lock()
 		g.running[thread] = stop
 		g.mu.Unlock()
 		g.ctrl.setTaskState(a2a.TaskID("essay-"+thread), a2a.TaskStateWorking)
-		g.api(slackStartStream, map[string]any{slackKeyChannel: channel, slackKeyThreadTS: thread, slackKeyChunks: []any{map[string]any{fieldTypeKey: slackMarkdownChunk, slackKeyText: "Once upon a time"}}})
+		g.api(slackStartStream, map[string]any{slackKeyChannel: channel, slackKeyThreadTS: thread, slackKeyChunks: []any{map[string]any{fieldTypeKey: slackMarkdownChunk, slackKeyText: "One\nTwo\nThree\nFour\nFive\n"}}})
 		<-stop
 		g.ctrl.setTaskState(a2a.TaskID("essay-"+thread), a2a.TaskStateCanceled)
 		g.post(channel, thread, slackStopped)
@@ -863,12 +877,15 @@ func TestSlackProof(t *testing.T) {
 		t.Error(err)
 	}
 
+	// The model declines the count once: the proof asks once more and
+	// stops the count that follows.
+	gw.declines = 1
 	before, _ := api.taskIDs(context.Background(), session)
 	stopped, err := p.stop(main, klausGatewayStopPrompt)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stopped.answer, "Once upon") {
+	if !strings.Contains(stopped.answer, "Five") {
 		t.Errorf("stopped answer = %q", stopped.answer)
 	}
 	if canceled, err := api.waitCanceledTask(session, before, 3*time.Second); err != nil || canceled != "essay-"+main.ts {
@@ -879,13 +896,31 @@ func TestSlackProof(t *testing.T) {
 		t.Errorf("the turn after stop: %+v %v", turn, err)
 	}
 
-	// A turn that does not pause cannot be decided; one that ends before
-	// `stop` is not a stop.
+	// A turn that does not pause cannot be decided; a model that declines
+	// the count twice fails as the model's doing, never as the gateway's.
 	if _, err := p.decideUntilSettled(api, session, main, turn, true); err == nil || !strings.Contains(err.Error(), "did not pause") {
 		t.Errorf("deciding a completed turn: %v", err)
 	}
-	if _, err := p.stop(main, klausGatewayWordPrompt); err == nil || !strings.Contains(err.Error(), "not canceled") {
-		t.Errorf("stopping a turn that completes: %v", err)
+	gw.declines = 2
+	if _, err := p.stop(main, klausGatewayStopPrompt); err == nil || !strings.Contains(err.Error(), "the model's doing") {
+		t.Errorf("stopping a count the model declines twice: %v", err)
+	}
+}
+
+func TestCountReached(t *testing.T) {
+	for answer, want := range map[string]bool{
+		"No.":                              false,
+		"":                                 false,
+		"one\ntwo\nthree\nfour\nfive":      true,
+		"One\nTwo\nThree\nFour\nFive\nSix": true,
+		"1. one\n2. two\n3. three\n4. four\n5. five": true,
+		"- one\n- two\n- three\n- four\n- **five**":  true,
+		"I won't write out five hundred numbers.":    false,
+		"one\ntwo\nthree\nfour":                      false,
+	} {
+		if got := countReached(answer); got != want {
+			t.Errorf("countReached(%q) = %v, want %v", answer, got, want)
+		}
 	}
 }
 

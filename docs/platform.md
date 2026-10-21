@@ -1570,16 +1570,21 @@ directly so it depends on no chart release resolving in the lab); and
    named, no `tool dispatched` for a tool its `call_tool` named. The
    person's other muster calls meanwhile (a Dev Portal tab polling as them)
    do not count.
-4. **stop**: once a long answer streams, a `stop` reply in the thread ends
+4. **stop**: once a long answer (every number to a thousand in words) has
+   counted to five, a `stop` reply in the thread ends
    the turn `canceled`, the thread is told `Stopped.`, the new task is
    `TASK_STATE_CANCELED` at the controller, and the thread takes a following
-   turn.
+   turn. Steps 4 and 5b act on a count only once it reaches five, so the turn
+   is still running when they do: a model that completes the turn first
+   (declines or shortens the count) is asked once more with the reason
+   logged, and a second early end fails as the model's doing, not the
+   gateway's.
 5. **Restart**: the gateway is stopped and started again on the same stores;
    the next mention recalls the first turn's word, no new `session_bound`
    record is written, and the controller lists the thread's `Session`
    and the Deny thread's, nothing else. No `token_refresh` record in the run.
    **5b. Restart mid-turn**: in the same thread a long answer (every number
-   to five hundred in words) starts streaming; the gateway is stopped (it
+   to five hundred in words) counts to five; the gateway is stopped (it
    records `task_left_running` and the thread gets the notice that the answer
    is posted when it is done) and started again while a loopback gate in
    front of the edge refuses connections for 45 s. The restarted gateway's
