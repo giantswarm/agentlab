@@ -156,15 +156,8 @@ components:
   # an Envoy filter kind has no implementation of.
   dicebear:
     enabled: false
-  muster:
-{{- if .TenantsEnabled }}
-    # platform.tenants: the first muster that forgets a tenant namespace's
-    # sign-ins when its last server goes (giantswarm/muster#1603); the
-    # chart's range admits older ones. Drop the pin once the chart's range
-    # starts there (HACKS.md U38).
-    versionRange: "{{ .TenantsMusterVersion }}"
-{{- end }}
 {{- with index .PostRenderers "muster" }}
+  muster:
     postRenderers:
 {{ . | indent 6 }}
 {{- end }}
