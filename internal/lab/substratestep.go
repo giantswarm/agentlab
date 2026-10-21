@@ -1061,25 +1061,40 @@ const (
 	// snapshotLayoutPerVolume is one rootfs-upper tar per container and one
 	// durable-dir-<volume>.tar per durable volume.
 	snapshotLayoutPerVolume int32 = 2
+	// snapshotLayoutGVisorNightly20260909 is PerVolume with the checkpoint
+	// image of the gVisor nightly of 2026-09-09: runsc restores only its own
+	// build's checkpoint images, so a golden of an older build is taken again.
+	snapshotLayoutGVisorNightly20260909 int32 = 3
 )
 
-// snapshotLayoutRecordedFrom is the first Substrate release that records the
-// layout on the goldens it takes.
-var snapshotLayoutRecordedFrom = semver.MustParse("1.8.1-rc.4")
+// snapshotLayouts is the layout each Substrate release writes, from the first
+// release that writes it on, oldest first; a release before the first records
+// none (snapshotLayoutUnrecorded).
+var snapshotLayouts = []struct {
+	from   *semver.Version
+	layout int32
+}{
+	{semver.MustParse("1.8.1-rc.4"), snapshotLayoutPerVolume},
+	{semver.MustParse("1.17.5-rc.2"), snapshotLayoutGVisorNightly20260909},
+}
 
 // currentSnapshotLayout is the snapshot layout a Substrate release writes and
 // records on the goldens it takes (the release's snapshotlayout.Current): a
 // golden in an older layout, or recorded without one, it takes again; a
 // golden in this layout it keeps, so a step that keeps the layout (1.8.1 to
 // 1.8.2) keeps its goldens. Substrate exposes the constant on no API, so the
-// proof keeps it per release: PerVolume from 1.8.1-rc.4 on, none recorded
-// before. A release that writes a new layout is added here; until then the
-// proof reports its goldens taken again into a layout it does not expect.
+// proof keeps it per release (snapshotLayouts). A release that writes a new
+// layout is added there; until then the proof reports its goldens taken again
+// into a layout it does not expect.
 func currentSnapshotLayout(release *semver.Version) int32 {
-	if release.LessThan(snapshotLayoutRecordedFrom) {
-		return snapshotLayoutUnrecorded
+	layout := snapshotLayoutUnrecorded
+	for _, l := range snapshotLayouts {
+		if release.LessThan(l.from) {
+			break
+		}
+		layout = l.layout
 	}
-	return snapshotLayoutPerVolume
+	return layout
 }
 
 // substrateStepOverlay is the step's values overlay: the substrate and
