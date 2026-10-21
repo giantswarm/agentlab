@@ -36,6 +36,10 @@ import (
 
 func main() {
 	err := rootCmd().Execute()
+	// A proof's hold on the version ranges ends with the command, failed or not.
+	if releaseErr := proofHold.Release(context.Background()); releaseErr != nil {
+		fmt.Fprintln(os.Stderr, "Warning:", releaseErr)
+	}
 	// After Execute rather than in a PersistentPostRun, which cobra skips
 	// when the command failed: the usage signal counts failed runs too.
 	telemetry.Flush(context.Background())
@@ -338,11 +342,22 @@ func loadProofLab() (*config.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := lab.NoteChartUnderTest(cfg); err != nil {
+	installed, err := lab.NoteChartUnderTest(cfg)
+	if err != nil {
 		return nil, err
+	}
+	// The proof runs against the components in place: their version ranges
+	// are held until main releases the hold, once the command is done.
+	if installed != nil {
+		if proofHold, err = lab.HoldComponentRanges(context.Background()); err != nil {
+			return nil, err
+		}
 	}
 	return cfg, nil
 }
+
+// proofHold is the hold loadProofLab took on the platform's version ranges.
+var proofHold *lab.RangeHold
 
 // loadLab is loadConfig for every kind of command: mode is enterLab's.
 func loadLab(mode labs.Mode) (*config.Config, error) {

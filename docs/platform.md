@@ -98,6 +98,24 @@ The lab installs it in its **lab shape**:
   state (overlays, dev images, a chart directory, the dev channel, a local
   guest image) and `agentlab platform` installs the released platform, so
   the next holder starts there.
+- A proof runs against the components in place when it starts. The meta
+  chart tracks most components by semver range, and source-controller
+  resolves a range again on every interval, so a component release published
+  mid-proof would roll its HelmRelease under the proof. Every `*-test`
+  therefore holds the ranges for its length: each OCIRepository in
+  `agent-platform` whose `spec.ref.semver` is a range (and has resolved it) is
+  suspended — it keeps the artifact it has, its HelmRelease keeps the chart
+  it runs — with the proof listed in its `agentlab.giantswarm.io/range-hold`
+  annotation, and resumed when the proof ends, failed or interrupted. An
+  exact version is never held, nor a source someone suspended by hand. Two
+  proofs on one lab share the hold (the last one out resumes), and a holder
+  whose process is gone is pruned by the next proof. An explicit change wins:
+  `agentlab platform` and `up` (and the step proofs' installs) lift every hold
+  before they install, so `platform.devImages`, `platform.chartPath`, an
+  overlay's version and a new chart apply, and a proof in the same process
+  holds again on what the install left running. A release that must reach
+  the lab mid-lease comes by `agentlab platform`; otherwise it lands after
+  the proof.
 - A field a hand wrote on a platform workload — `kubectl patch` of muster's
   `hostNetwork`, a `kubectl set env` on Backstage — is no release's: Helm and
   helm-controller's drift correction own and correct only the fields the

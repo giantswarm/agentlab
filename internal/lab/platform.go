@@ -315,6 +315,18 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	// about to — the way the command signal counts failed runs.
 	telemetry.Platform(ctx, cfg, chart.installedVersion())
 	step("Installing %s in the lab shape (bundled Flux engine on, self-management off)", chart)
+	// An install decides what runs: a proof's hold on the version ranges
+	// (rangehold.go) is lifted for it, and the proof in this process holds
+	// again on what the install left running.
+	held, err := liftRangeHolds(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := resumeRangeHold(ctx, held); err != nil {
+			warn("%v", err)
+		}
+	}()
 
 	// The cluster-level APIs the lab provides itself (providedapis.go: the
 	// Gateway API, the Cilium policy CRDs) — before anything that renders
