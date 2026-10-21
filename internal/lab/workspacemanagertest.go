@@ -229,7 +229,7 @@ func viewerKeptOut(env *toolEnvelope, err error) (string, error) {
 // viewer's list_workspaces is judged either way (viewerKeptOut).
 func grantForStage(pinned string, people ...*workspacePerson) (stop *workspaceGrantStop, err error) {
 	for _, p := range people {
-		link, err := p.grantLink()
+		link, err := p.grantLink(pinned)
 		if err != nil {
 			return nil, err
 		}

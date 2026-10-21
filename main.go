@@ -1314,7 +1314,7 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&codexHostModel, "codex-host-model", false, fmt.Sprintf("add the extraModels entry %s for the codex Harness: the first of %s the host's Ollama has, on its Responses API (coding-test --harness codex --model-config %s); each needs more memory than a lab proof's host model gets, so configure adds none without this flag", lab.CodexHostModelName, lab.CodexHostModelIDs(), lab.CodexHostModelName))
 	cmd.Flags().StringToStringVar(&codingImages, "coding-images", nil, "the image of a coding Harness the chart has none of its own for, <runtime>=<image@sha256:digest> (repeatable): "+config.CodingRuntimeOmp+"=<the kagent line's omp-harness, runtimeImages.ompHarness.digest of the release's chart>; a dev image (platform.devImages "+config.DevImageOmpHarness+") wins; an empty map clears it")
 	cmd.Flags().StringVar(&workspacesProvider, "workspaces-provider", "", "the workspace-manager's provider instances: github (a GitHub App of the lab's own, the default, docs/workspaces.md), gitlab (a GitLab's OAuth application, docs/workspaces.md) or both, github,gitlab")
-	cmd.Flags().StringVar(&workspacesGrantProvider, "workspaces-grant-provider", "", "the provider instance whose App muster pins the workspace-manager to, the one App a person grants (platform.workspaces.grantProvider): one of --workspaces-provider, such as gitlab for 'workspaces-test --part gitlab'; \"\" returns to the first instance")
+	cmd.Flags().StringVar(&workspacesGrantProvider, "workspaces-grant-provider", "", "the provider instance whose App muster pins the workspace-manager to, the one App a person grants (platform.workspaces.grantProvider): one of --workspaces-provider, such as gitlab for 'workspaces-test --part gitlab', or "+config.WorkspaceGrantProviderApps+" to pin none: muster keeps one provider App per instance side by side, each granted once (core_auth_login app=<instance>; two or more instances); \"\" returns to the first instance")
 	cmd.Flags().BoolVar(&workspacesCSICompanion, "workspaces-csi-companion", false, "with workspaces on, the connectivity chart's CSI companion is Substrate's workspace driver: its efs preset running the lab's NFS plugin, the lab's NFS driver serving the volumes under the preset's driver name — the lab path for proving a companion chart change (docs/workspaces.md); --workspaces-csi-companion=false returns to the lab's own registration")
 	cmd.Flags().StringVar(&workspacesCleanupAfter, "workspaces-cleanup-after", "", "how long a Session's directory on a workspace volume outlives its last turn, a Go duration (the workspace-manager's sessions.cleanupAfter); \"\" returns to the chart's 30 days")
 	cmd.Flags().StringVar(&workspacesRefreshAfter, "workspaces-refresh-after", "", "the refresh threshold, a Go duration (the workspace-manager's sync.refreshAfter): a Session started on a workspace whose last sync is older requests a sync; \"\" returns to the manager's 1h")
@@ -1401,6 +1401,9 @@ func printSaved(cfg *config.Config, disc *lab.Discovery) {
 	}
 	if grant := cfg.WorkspaceGrantProvider(); grant != "" {
 		fmt.Printf("  ws-grant   muster pins a workspace-manager of 0.10.0 or newer to the App of %s: each person grants it once (core_auth_login)\n", grant)
+	}
+	if cfg.WorkspaceProviderApps() {
+		fmt.Printf("  ws-grant   no pin: muster keeps a provider App of each of %s side by side for a workspace-manager of 0.10.0 or newer; each person grants each once (core_auth_login app=<instance>)\n", strings.Join(cfg.WorkspaceProviders(), ", "))
 	}
 	if cfg.VMManagerEnabled() {
 		fmt.Printf("  vm-manager the platform's VM provisioner as a pod of the node, registered with muster as x_vm-manager_* (%s)\n",

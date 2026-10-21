@@ -563,7 +563,12 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 		return err
 	}
 	workspaceGrant := workspaceGrantFor(cfg, workspaceProviders)
-	if err := ensureWorkspaceGrantClientID(ctx, workspaceGrant, workspaceProviders); err != nil {
+	workspaceApps := workspaceProviderAppsFor(cfg, workspaceProviders)
+	signIns := workspaceApps
+	if workspaceGrant != nil {
+		signIns = []string{workspaceGrant.Provider}
+	}
+	if err := ensureWorkspaceGrantClientIDs(ctx, signIns, workspaceProviders); err != nil {
 		return err
 	}
 	// The dev images a Harness runs (`harness`, `<runtime>-harness`), in the
@@ -577,6 +582,7 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 		t.WorkerPoolArch = workerArch
 		t.WorkspaceProviders = workspaceProviders
 		t.WorkspaceGrant = workspaceGrant
+		t.WorkspaceProviderApps = workspaceApps
 		registryImages.pin(cfg, t)
 	}
 

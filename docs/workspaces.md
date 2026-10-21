@@ -202,11 +202,21 @@ export is one node's disk.
 `agentlab workspaces-test --part gitlab [email]` proves
 [the provider instance `gitlab`](#the-provider-instance-gitlab) end to end
 against a real GitLab, with muster pinning the workspace-manager to the
-GitLab OAuth application (`platform.workspaces.grantProvider: gitlab`), as the
-admin (granting it as `platform.workspaces.gitlab.person`) and `[email]`
-(default `dev@lab.local`, never granting it). Without the instance, any of
-its settings or the pin, every stage skips with the reason and the part
-passes: it never fails for a lab that has no GitLab.
+GitLab OAuth application (`platform.workspaces.grantProvider: gitlab`), or
+keeping one provider App per instance, GitLab's beside GitHub's
+(`grantProvider: apps`, [provider Apps side by side](#provider-apps-side-by-side)),
+as the admin (granting it as `platform.workspaces.gitlab.person`) and
+`[email]` (default `dev@lab.local`, never granting it). Without the
+instance, any of its settings, or with the pin on another instance, every
+stage skips with the reason and the part passes: it never fails for a lab
+that has no GitLab. With `apps`, the part grants and drops GitLab's App by
+its name (`core_auth_login` / `core_auth_logout` with `app=gitlab`): the
+second person's `list_providers` shows `gitlab` not connected and
+`core_auth_login app=gitlab` answers the sign-in link; the admin's
+`list_providers` after the grant lists every instance with its own status
+(`github` connected too when the admin granted the GitHub App in a
+browser); after the drop `gitlab` is not connected and every other instance
+reads as before.
 
 1. **Preconditions**: the workspace-manager reachable through muster and
    pinned to the instance's application, the
@@ -430,6 +440,22 @@ pin's OAuth client is the instance's Secret, which carries the client id
 under `client-id` for muster beside `client-secret`: the lab writes it into
 `workspace-github` or `workspace-gitlab` ahead of the install. The App's callback URL is muster's,
 `https://muster.<domain>:<gatewayPort>/oauth/proxy/callback`.
+
+#### Provider Apps side by side
+
+`platform.workspaces.grantProvider: apps` (`agentlab configure
+--workspaces-grant-provider apps`, two or more instances) pins nothing: the
+lab renders no `muster.mcpServer.auth.provider`, and an agent-platform chart
+that keeps one muster provider App per instance
+(`agent-platform.workspaceManager.providerApps`) derives an App of each
+instance with person sign-in, GitHub's and GitLab's side by side, and the
+registration's `providerApps` naming them all. A person grants each App once
+by name (`core_auth_login app=<instance>`), `list_providers` lists each
+instance connected or not, and `core_auth_logout app=<instance>` drops one
+App's grant and no other. The lab writes `client-id` into every instance's
+Secret. On a chart without provider Apps the registration falls back to the
+chart's single-App pin; `workspaces-test --part gitlab` then fails its
+preconditions naming the MCPServer's `providerApps`.
 
 A person's grant of a GitHub App takes github.com's sign-in in a person's
 browser: the real GitHub App login, through a browser worker with an SSO
