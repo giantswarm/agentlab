@@ -1768,7 +1768,7 @@ func workspacesTestCmd() *cobra.Command {
 	var opts lab.WorkspacesTestOptions
 	cmd := &cobra.Command{
 		Use:   "workspaces-test [email]",
-		Short: "Headless workspace storage proof: the NFS server, the CSI driver and the class in place -> a read-write-many claim bound -> a bare mirror seeded -> two pods on their own session sub-paths with a shared clone each, modes and links intact, isolated, the mirrors read-only -> the whole volume read-only -> the controller endpoint refused without Substrate's client certificate -> the actor-level mount (skipped until the Substrate line carries it) -> a claude Harness Session admitted on the volume with a workspace grant the manager's key set verifies, one headless turn in its own directory (not with --storage-only) -> everything removed. --part gitlab instead proves the provider instance gitlab against a real GitLab as the admin and [email] (default dev@lab.local): the picker, connect_provider through GitLab's sign-in, the token exchange, a workspace's mirror, start_session with the clone and no token in the Session, disconnect_provider; it skips without the instance. Lab only: the whole command, [email] included, runs against the lab",
+		Short: "Headless workspace storage proof: the NFS server, the CSI driver and the class in place -> a read-write-many claim bound -> a bare mirror seeded -> two pods on their own session sub-paths with a shared clone each, modes and links intact, isolated, the mirrors read-only -> the whole volume read-only -> the controller endpoint refused without Substrate's client certificate -> the actor-level mount (skipped until the Substrate line carries it) -> a Session admitted on the volume with a workspace grant the manager's key set verifies, one headless turn in its own directory listing the setup clones (on the claude Harness, or --harness codex with --model-config; not with --storage-only) -> everything removed. --part gitlab instead proves the provider instance gitlab against a real GitLab as the admin and [email] (default dev@lab.local): the picker, connect_provider through GitLab's sign-in, the token exchange, a workspace's mirror, start_session with the clone and no token in the Session, disconnect_provider; it skips without the instance. Lab only: the whole command, [email] included, runs against the lab",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadProofLab()
@@ -1781,7 +1781,9 @@ func workspacesTestCmd() *cobra.Command {
 			return lab.WorkspacesTest(cfg, opts)
 		},
 	}
-	cmd.Flags().BoolVar(&opts.StorageOnly, "storage-only", false, "prove the storage alone, without the claude Session admitted on the volume")
+	cmd.Flags().BoolVar(&opts.StorageOnly, "storage-only", false, "prove the storage alone, without the Session admitted on the volume")
+	cmd.Flags().StringVar(&opts.Harness, "harness", "", "the Harness the Session on the volume runs on: claude (default) or a coding Harness the lab renders (platform.coding.harnesses), such as codex")
+	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the Session's Agent runs on (default on claude default-model-config); required with --harness other than claude, such as the lab's ChatGPT-login ModelConfig on codex")
 	cmd.Flags().StringVar(&opts.Part, "part", "", "run one part instead of the storage proof: "+strings.Join(lab.WorkspacesParts, ", ")+" (gitlab: the provider instance gitlab end to end, as the admin and [email], default dev@lab.local; skipped without one)")
 	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", lab.DefaultWorkspacesReadyTimeout, "how long each wait may take: the storage's rollouts, a claim bound, a pod finished, a volume gone, a sync cycle")
 	return cmd
