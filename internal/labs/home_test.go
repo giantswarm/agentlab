@@ -1,8 +1,10 @@
 package labs
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/giantswarm/agentlab/internal/config"
@@ -182,5 +184,83 @@ func TestSettleRefusesANameThatIsNoClusterName(t *testing.T) {
 	}
 	if fi, err := os.Lstat(filepath.Join(cwd, config.File)); err != nil || !fi.Mode().IsRegular() {
 		t.Errorf("agentlab.yaml moved: %v", err)
+	}
+}
+
+// A lab whose agentlab.yaml is a file of its own in its Home — the layout
+// before the configuration folder, or a save of an older release over the
+// link — settles in place by itself, whatever is in the configuration
+// folder: the file moves there byte for byte, an equal copy gives way to
+// the link, and a different one is refused with both files untouched.
+func TestSettleAdoptsTheAgentlabYAMLOfAHome(t *testing.T) {
+	const content = "clusterName: lab\n# a comment and trailing spaces  \n"
+	for _, tc := range []struct {
+		name     string
+		inConfig string // the configuration folder's file, "" none
+		inHome   string // the Home's own file, "" the link alone
+		refused  bool
+	}{
+		{name: "old layout: the file in the Home only", inHome: content},
+		{name: "new layout: the link in the Home", inConfig: content},
+		{name: "both, equal", inConfig: content, inHome: content},
+		{name: "both, different", inConfig: content, inHome: "clusterName: lab\nplatform: {}\n", refused: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setup(t)
+			home, _ := Home("lab")
+			cfgFile, _ := ConfigFile("lab")
+			at := filepath.Join(home, config.File)
+			for _, d := range []string{home, filepath.Dir(cfgFile)} {
+				if err := os.MkdirAll(d, 0o750); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.inConfig != "" {
+				if err := os.WriteFile(cfgFile, []byte(tc.inConfig), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.inHome != "" {
+				if err := os.WriteFile(at, []byte(tc.inHome), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.Symlink(cfgFile, at); err != nil {
+				t.Fatal(err)
+			}
+
+			got, err := Settle("lab", home)
+			if tc.refused {
+				var conflict *ConfigConflictError
+				if !errors.As(err, &conflict) {
+					t.Fatalf("Settle = %v, want a *ConfigConflictError", err)
+				}
+				for _, path := range []string{at, cfgFile} {
+					if !strings.Contains(err.Error(), path) {
+						t.Errorf("the refusal %q does not name %s", err, path)
+					}
+				}
+				if fi, err := os.Lstat(at); err != nil || !fi.Mode().IsRegular() {
+					t.Errorf("the Home's file changed although Settle refused: %v", err)
+				}
+				for path, want := range map[string]string{at: tc.inHome, cfgFile: tc.inConfig} {
+					if b, err := os.ReadFile(filepath.Clean(path)); err != nil || string(b) != want {
+						t.Errorf("%s = %q, %v; want it untouched", path, b, err)
+					}
+				}
+				return
+			}
+			if err != nil || got != home {
+				t.Fatalf("Settle = %s, %v; want %s", got, err, home)
+			}
+			if dest, err := os.Readlink(at); err != nil || dest != cfgFile {
+				t.Errorf("%s links to %q (%v), want %s", at, dest, err, cfgFile)
+			}
+			if b, err := os.ReadFile(filepath.Clean(cfgFile)); err != nil || string(b) != content {
+				t.Errorf("%s = %q, %v; want the lab's file byte for byte", cfgFile, b, err)
+			}
+			if again, err := Settle("lab", home); err != nil || again != home {
+				t.Errorf("a second Settle = %s, %v", again, err)
+			}
+		})
 	}
 }

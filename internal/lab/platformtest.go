@@ -459,15 +459,11 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 		p.leaveOut(reason, stageWorkspaceManager)
 	} else {
 		p.begin(stageWorkspaceManager, "The workspace-manager: registered with muster, Ready, list_providers as the admin, the lab's Organization")
-		providers, err := proveWorkspaceManager(cfg)
+		proof, err := proveWorkspaceManager(cfg)
 		if err != nil {
 			return "", err
 		}
-		cleanup := ", cleans session directories up from kagent's Sessions,"
-		if !cfg.Platform.Agents {
-			cleanup = " (no kagent: the agents are off)"
-		}
-		verdict += fmt.Sprintf("\nPASS: the workspace-manager is registered with muster (MCPServer %s Connected)%s and lists its %d provider instances to the admin: %s; list_workspaces for Organization %s answers a member and refuses a viewer", workspaceManagerMCPServer, cleanup, len(providers), strings.Join(providers, ", "), config.WorkspaceOrganization)
+		verdict += workspaceManagerVerdict(proof, cfg.Platform.Agents)
 	}
 
 	// The per-server sign-in path: muster as OAuth client, challenged by the

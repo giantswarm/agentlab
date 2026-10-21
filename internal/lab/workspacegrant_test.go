@@ -218,6 +218,23 @@ func TestSignWorkspaceGrant(t *testing.T) {
 	}
 }
 
+// A grant signed without a claim lacks it and keeps the others.
+func TestSignGrantWithout(t *testing.T) {
+	grant := newWorkspaceGrant("https://wm.example", testPortalUser, "ws", workspaceVolume{Driver: workspacesCSIDriver, Handle: "h#2"}, time.Now(), 5*time.Minute)
+	token, err := signGrantWithout(testGrantKey(t), "kid-1", grant, "agent_namespace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var claims map[string]any
+	decodeSegment(t, strings.Split(token, ".")[1], &claims)
+	if _, ok := claims["agent_namespace"]; ok {
+		t.Errorf("agent_namespace = %v, want absent", claims["agent_namespace"])
+	}
+	if claims["sub"] != testPortalUser || claims["volume"] == nil {
+		t.Errorf("claims = %v, want the others kept", claims)
+	}
+}
+
 // The kagent controller's admission settings match the rig's, or every
 // difference is named.
 func TestAdmissionMatches(t *testing.T) {

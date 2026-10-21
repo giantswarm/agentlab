@@ -1,6 +1,7 @@
 package labs
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -91,7 +92,9 @@ func (e *CrossDeviceError) Error() string {
 // certs/ and state/node by their old absolute paths and resolves them again
 // on a restart, and an older agentlab run in the old directory finds its
 // lab there. A move across file systems is refused before anything moves
-// (*CrossDeviceError); a failure halfway moves back what had moved.
+// (*CrossDeviceError); a failure halfway moves back what had moved. An
+// agentlab.yaml that is a file of its own in Home moves to ConfigFile, a
+// link in its place (adoptConfig).
 func Settle(name, dir string) (string, error) {
 	home, err := Home(name)
 	if err != nil {
@@ -124,7 +127,61 @@ func Settle(name, dir string) (string, error) {
 			return "", err
 		}
 	}
+	if err := adoptConfig(filepath.Join(home, config.File), cfgFile); err != nil {
+		return "", err
+	}
 	return home, link(cfgFile, filepath.Join(home, config.File))
+}
+
+// ConfigConflictError is Settle's refusal to choose between two different
+// agentlab.yaml files of one lab: a file of its own in the lab's Home and
+// the one in the configuration folder. Both stay as they are.
+type ConfigConflictError struct {
+	Name, Home, Config, Newer string
+}
+
+func (e *ConfigConflictError) Error() string {
+	return fmt.Sprintf("lab %s has two different agentlab.yaml files, %s and %s (the newer: %s); keep the one you want at %s and move the other aside, then the lab's link is made",
+		e.Name, e.Home, e.Config, e.Newer, e.Config)
+}
+
+// adoptConfig gives the link to cfgFile its place at at, the agentlab.yaml
+// of the lab's Home, when a file of its own is there: a lab settled in its
+// Home before its agentlab.yaml had the configuration folder, or one an
+// older release saved over the link. With no cfgFile yet the file moves
+// there by a rename, its content byte for byte; a copy equal to cfgFile
+// byte for byte goes, the link takes its place. One that differs is
+// refused (*ConfigConflictError) and nothing changes: neither is the lab's
+// configuration for certain.
+func adoptConfig(at, cfgFile string) error {
+	if fi, err := os.Lstat(at); err != nil || !fi.Mode().IsRegular() {
+		return nil
+	}
+	if !exists(cfgFile) {
+		return os.Rename(at, cfgFile)
+	}
+	inHome, err := os.ReadFile(filepath.Clean(at))
+	if err != nil {
+		return err
+	}
+	inConfig, err := os.ReadFile(filepath.Clean(cfgFile))
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(inHome, inConfig) {
+		return &ConfigConflictError{Name: filepath.Base(filepath.Dir(at)), Home: at, Config: cfgFile, Newer: newer(at, cfgFile)}
+	}
+	return os.Remove(at)
+}
+
+// newer is whichever of the two files was modified last.
+func newer(a, b string) string {
+	fa, errA := os.Stat(a)
+	fb, errB := os.Stat(b)
+	if errA == nil && errB == nil && fb.ModTime().After(fa.ModTime()) {
+		return b
+	}
+	return a
 }
 
 // move carries the lab files of dir into home and its agentlab.yaml to

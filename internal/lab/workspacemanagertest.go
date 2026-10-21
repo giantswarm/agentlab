@@ -73,9 +73,23 @@ func (s workspaceProviderStatus) String() string {
 	return fmt.Sprintf("%s (%s, %s)", s.Name, s.Kind, connected)
 }
 
-// proveWorkspaceManager runs the stage and returns the instances as
-// list_providers worded them.
-func proveWorkspaceManager(cfg *config.Config) ([]string, error) {
+// workspaceManagerProof is what the stage ran: the instances as
+// list_providers worded them, or, when a person had not granted the pinned
+// provider App, where it stopped instead (ungranted, non-nil), before
+// list_providers and list_workspaces.
+type workspaceManagerProof struct {
+	providers []string
+	ungranted *workspaceGrantStop
+}
+
+// workspaceGrantStop is the person without the pinned provider App's grant
+// and muster's sign-in link asserted for them.
+type workspaceGrantStop struct {
+	pinned, email, link string
+}
+
+// proveWorkspaceManager runs the stage and returns what it proved.
+func proveWorkspaceManager(cfg *config.Config) (*workspaceManagerProof, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	defer cancel()
 	mcpServers, err := gvrFor(musterMCPServerResource)
@@ -133,8 +147,8 @@ func proveWorkspaceManager(cfg *config.Config) ([]string, error) {
 		return nil, err
 	}
 	if pinned, err := workspaceManagerPinnedProvider(cfg); err == nil {
-		if done, err := grantForStage(pinned, adminPerson, viewerPerson); err != nil || done != nil {
-			return done, err
+		if stop, err := grantForStage(pinned, adminPerson, viewerPerson); err != nil || stop != nil {
+			return &workspaceManagerProof{ungranted: stop}, err
 		}
 	}
 	session := adminPerson.session
@@ -184,13 +198,13 @@ func proveWorkspaceManager(cfg *config.Config) ([]string, error) {
 		return nil, fmt.Errorf("list_workspaces for %s as %s answered %.300q, want a refusal as not a member: the viewers are outside the lab's Organization", config.WorkspaceOrganization, viewer.Email, env.Content[0].Text)
 	}
 	note("list_workspaces for %s as %s refused: %.200s", config.WorkspaceOrganization, viewer.Email, env.Content[0].Text)
-	return worded, nil
+	return &workspaceManagerProof{providers: worded}, nil
 }
 
 // grantForStage asks whether the people hold the grant of the pinned
 // provider App, which only a person in a browser makes: one without it ends
-// the stage (done, non-nil) with muster's sign-in link asserted for them.
-func grantForStage(pinned string, people ...*workspacePerson) (done []string, err error) {
+// the stage (stop, non-nil) with muster's sign-in link asserted for them.
+func grantForStage(pinned string, people ...*workspacePerson) (stop *workspaceGrantStop, err error) {
 	for _, p := range people {
 		link, err := p.grantLink()
 		if err != nil {
@@ -198,10 +212,26 @@ func grantForStage(pinned string, people ...*workspacePerson) (done []string, er
 		}
 		if link != "" {
 			note("pinned to the App of %s, which no headless walk grants: muster's sign-in link for %s is %s", pinned, p.user.Email, excerpt(link, 100))
-			return []string{pinned + " (pinned, its App not granted by " + p.user.Email + ")"}, nil
+			return &workspaceGrantStop{pinned: pinned, email: p.user.Email, link: link}, nil
 		}
 	}
 	return nil, nil // granted in an earlier sign-in: the stage goes on
+}
+
+// workspaceManagerVerdict is the stage's lines in platform-test's verdict,
+// claiming only what ran: a stop at the grant passes the registration and
+// the sign-in link and skips list_providers and list_workspaces, with why.
+func workspaceManagerVerdict(proof *workspaceManagerProof, agents bool) string {
+	cleanup := ", cleans session directories up from kagent's Sessions,"
+	if !agents {
+		cleanup = " (no kagent: the agents are off)"
+	}
+	registered := fmt.Sprintf("\nPASS: the workspace-manager is registered with muster (MCPServer %s Connected)%s", workspaceManagerMCPServer, cleanup)
+	if g := proof.ungranted; g != nil {
+		return registered + fmt.Sprintf(" and asserts muster's sign-in link for %s, who has not granted the pinned App of %s", g.email, g.pinned) +
+			fmt.Sprintf("\nSKIP: the workspace-manager's list_providers and list_workspaces for Organization %s — %s has not granted the pinned App of %s, which only a person in a browser grants (muster's sign-in link: %s)", config.WorkspaceOrganization, g.email, g.pinned, excerpt(g.link, 100))
+	}
+	return registered + fmt.Sprintf(" and lists its %d provider instances to the admin: %s; list_workspaces for Organization %s answers a member and refuses a viewer", len(proof.providers), strings.Join(proof.providers, ", "), config.WorkspaceOrganization)
 }
 
 // callServerStructured runs an aggregated server tool through muster and

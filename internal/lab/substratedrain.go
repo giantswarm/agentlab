@@ -490,10 +490,12 @@ func offsetWorded(d time.Duration) string {
 
 // goldenSet is the golden of every ActorTemplate of the lab in ate-api, by
 // template: its tag, the snapshot layout it records (currentSnapshotLayout),
-// and the terminal error a template records.
+// and the terminal error a template records; templates names every
+// ActorTemplate ate-api lists, with a golden or without.
 type goldenSet struct {
 	golden, failure map[string]string
 	layout          map[string]int32
+	templates       map[string]bool
 }
 
 // readGoldens reads every ActorTemplate of the kagent atespace in ate-api.
@@ -506,9 +508,10 @@ func readGoldens() (goldenSet, error) {
 	}
 	defer api.Close()
 	templates, err := ateTemplates(ctx, api, func(string) bool { return true })
-	set := goldenSet{golden: map[string]string{}, failure: map[string]string{}, layout: map[string]int32{}}
+	set := goldenSet{golden: map[string]string{}, failure: map[string]string{}, layout: map[string]int32{}, templates: map[string]bool{}}
 	for _, t := range templates {
 		name := t.GetMetadata().GetName()
+		set.templates[name] = true
 		status := t.GetStatus().GetGoldenSnapshotStatus()
 		if tag := status.GetGoldenTag(); tag.GetName() != "" {
 			set.golden[name] = tag.GetAtespace() + "/" + tag.GetName()
@@ -522,12 +525,17 @@ func readGoldens() (goldenSet, error) {
 }
 
 // goldensOff words what keeps the goldens after a step from passing: every
-// template that had a golden before must hold one in the layout the
-// candidate writes (goldenOff), and no template may record a terminal error.
+// template that had a golden before and still exists must hold one in the
+// layout the candidate writes (goldenOff), and no template may record a
+// terminal error. A template ate-api no longer lists is a superseded
+// revision kagent deleted during the run, with nothing left to take again.
 // Empty when they pass.
 func goldensOff(before, after goldenSet, want int32) []string {
 	var off []string
 	for _, name := range slices.Sorted(maps.Keys(before.golden)) {
+		if !after.templates[name] {
+			continue
+		}
 		if o := goldenOff(before.golden[name], after.golden[name], after.layout[name], want); o != "" {
 			off = append(off, name+" "+o)
 		}
@@ -577,7 +585,8 @@ func awaitGoldensCurrent(before goldenSet, want int32, timeout time.Duration) (g
 }
 
 // goldensWorded words the goldens after the step: each template's golden
-// kept in its layout, or the one before and the one taken again.
+// kept in its layout, the one before and the one taken again, or the
+// template deleted during the run.
 func goldensWorded(before, after goldenSet) string {
 	names := slices.Sorted(maps.Keys(before.golden))
 	if len(names) == 0 {
@@ -586,6 +595,10 @@ func goldensWorded(before, after goldenSet) string {
 	pairs := make([]string, 0, len(names))
 	for _, name := range names {
 		was, now := before.golden[name], after.golden[name]
+		if !after.templates[name] {
+			pairs = append(pairs, fmt.Sprintf("%s deleted during the run (was %s)", name, was))
+			continue
+		}
 		if now == was {
 			pairs = append(pairs, fmt.Sprintf("%s keeps %s (layout %d)", name, now, after.layout[name]))
 			continue
