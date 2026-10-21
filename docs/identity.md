@@ -78,8 +78,8 @@ tenant, as on an installation.
 
 With `platform.tenants` on, muster serves the `MCPServer`s of the
 organization namespaces (`org-…`) next to its own namespace's
-(`muster.muster.mcpServersInAllNamespaces`, muster 5.48.0 or later; the lab
-pins 5.48.0, HACKS.md U38). What `tenants-test` asserts (the
+(`muster.muster.mcpServersInAllNamespaces`, muster 5.48.0 or later, where the
+chart's range starts from agent-platform 4.157.1 on). What `tenants-test` asserts (the
 agent-permissions plan's D9):
 
 - **Kubernetes RBAC decides what a person sees.** muster lists the

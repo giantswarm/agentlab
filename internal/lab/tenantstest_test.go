@@ -199,8 +199,9 @@ func TestPlatformValuesTenants(t *testing.T) {
 		t.Errorf("the rendered policy leaves %v uncovered for tenants-test", got)
 	}
 
-	// muster: the setting and the release that tenants-test needs with the
-	// tenants on, neither off (an older muster chart refuses the key); the
+	// muster: the setting tenants-test needs with the tenants on, not off (an
+	// older muster chart refuses the key), and no version of the lab's own:
+	// the chart's range starts at the muster tenants-test needs; the
 	// audience the lab's API server trusts either way, or every listing as
 	// the caller fails closed.
 	musterOf := func(values map[string]any) (component, chart map[string]any) {
@@ -209,8 +210,8 @@ func TestPlatformValuesTenants(t *testing.T) {
 		return component, chart
 	}
 	component, chart := musterOf(on)
-	if component["versionRange"] != "5.48.0" || chart["mcpServersInAllNamespaces"] != true {
-		t.Errorf("with tenants: components.muster.versionRange=%v, muster.muster.mcpServersInAllNamespaces=%v, want 5.48.0 and true", component["versionRange"], chart["mcpServersInAllNamespaces"])
+	if component["versionRange"] != nil || chart["mcpServersInAllNamespaces"] != true {
+		t.Errorf("with tenants: components.muster.versionRange=%v, muster.muster.mcpServersInAllNamespaces=%v, want the chart's range and true", component["versionRange"], chart["mcpServersInAllNamespaces"])
 	}
 	offComponent, offChart := musterOf(off)
 	if offComponent["versionRange"] != nil || offChart["mcpServersInAllNamespaces"] != nil {

@@ -151,9 +151,6 @@ type tmplData struct {
 	// (tenantstest.go).
 	TenantsEnabled        bool
 	TenantsTestNamespaces []string
-	// TenantsMusterVersion is the muster the lab pins with the tenants on
-	// (tenantsMusterVersion, tenantstest_muster.go).
-	TenantsMusterVersion string
 	// CodingHarnesses are the lab's coding Harnesses (coding.go), rendered
 	// as kagent.harnesses; none with coding agents and the workspaces off.
 	CodingHarnesses []codingHarness
@@ -335,7 +332,6 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		WorkspaceAdmission:           workspaceAdmissionValuesFor(cfg, workspacesChart.Carries),
 		TenantsEnabled:               cfg.TenantsEnabled(),
 		TenantsTestNamespaces:        tenantsTestNamespaces[:],
-		TenantsMusterVersion:         tenantsMusterVersion,
 		CodingHarnesses:              codingHarnessesFor(cfg, workspaceAdmissionValuesFor(cfg, workspacesChart.Carries), nil),
 		CertsDir:                     certsDir,
 		NodeFilesDir:                 nodeFiles,
