@@ -40,6 +40,13 @@ type WorkspacesTestOptions struct {
 	// Email is the GitLab part's second user beside the admin, a member of
 	// the lab's Organization (default dev@lab.local).
 	Email string
+	// Harness is the Harness the harness stage's Session runs on: claude
+	// (the default) or another coding Harness the lab renders, such as codex.
+	Harness string
+	// ModelConfig is the kagent ModelConfig the stage's Agent runs on:
+	// default-model-config on claude; required on another Harness, whose
+	// runtime needs a model of its own (codex: a Responses API one).
+	ModelConfig string
 }
 
 // WorkspacesParts are the parts `workspaces-test --part` takes.
@@ -48,14 +55,24 @@ var WorkspacesParts = []string{WorkspacesPartGitLab}
 // validate refuses a part workspaces-test does not have, and the flags and
 // argument of one run given to the other.
 func (o WorkspacesTestOptions) validate() error {
+	sessionFlags := o.Harness != "" || o.ModelConfig != ""
 	switch o.Part {
 	case "":
 		if o.Email != "" {
 			return fmt.Errorf("the storage proof signs in as nobody: [email] names the user of a part (--part %s)", strings.Join(WorkspacesParts, ", "))
 		}
+		if o.StorageOnly && sessionFlags {
+			return errors.New("--harness and --model-config choose the Session's; --storage-only runs none")
+		}
+		if o.Harness != "" && o.Harness != claudeHarness && o.ModelConfig == "" {
+			return fmt.Errorf("--harness %s needs --model-config: the default ModelConfig is the claude Harness's", o.Harness)
+		}
 	case WorkspacesPartGitLab:
 		if o.StorageOnly {
 			return fmt.Errorf("--storage-only is the storage proof's; --part %s proves no storage", o.Part)
+		}
+		if sessionFlags {
+			return fmt.Errorf("--harness and --model-config are the storage proof's; --part %s runs the claude Session", o.Part)
 		}
 	default:
 		return fmt.Errorf("no part %q of workspaces-test: --part takes %s", o.Part, strings.Join(WorkspacesParts, ", "))
@@ -105,6 +122,10 @@ func WorkspacesTest(cfg *config.Config, opts WorkspacesTestOptions) error {
 	}
 	if err := opts.validate(); err != nil {
 		return err
+	}
+	session := workspacesSessionHarnessFor(opts.Harness, opts.ModelConfig)
+	if session.name != claudeHarness && !cfg.CodingHarnessRendered(session.name) {
+		return fmt.Errorf("the lab renders no Harness %s: add it to platform.coding.harnesses in %s, then `agentlab platform`", session.name, config.File)
 	}
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
@@ -198,7 +219,7 @@ func WorkspacesTest(cfg *config.Config, opts WorkspacesTestOptions) error {
 
 	harness := ""
 	if !opts.StorageOnly {
-		if harness, err = proveWorkspacesHarnessSession(cfg, timeout); err != nil {
+		if harness, err = proveWorkspacesHarnessSession(cfg, session, timeout); err != nil {
 			return err
 		}
 	}
