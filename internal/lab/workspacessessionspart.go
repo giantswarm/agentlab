@@ -340,7 +340,7 @@ func (sp *sessionsProof) preconditions(instance string) error {
 				return err
 			}
 		}
-		if _, err := applyManifests(ctx, []byte(workspacesAgentManifest(h.agent, harness))); err != nil {
+		if _, err := applyManifests(ctx, []byte(workspacesAgentManifest(h.agent, harness, defaultModelConfig, fmt.Sprintf(workspacesHarnessSystemPrompt, "Bash tool")))); err != nil {
 			return fmt.Errorf("applying the Agent %s: %w", h.agent, err)
 		}
 		boot, err := waitAgentReadyOn(h.agent, harness, sp.timeout)

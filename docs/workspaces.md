@@ -58,6 +58,7 @@ good, a node that can then be neither stopped nor removed.
 agentlab configure --workspaces   # with --agents (on by default); without, see below
 agentlab up                       # or `agentlab platform` on a running lab
 agentlab workspaces-test          # --storage-only: the storage alone
+agentlab workspaces-test --harness codex --model-config <name> # the Session on the codex Harness
 agentlab workspaces-test --part sync     # every kind of sync cycle on the github instance's proof repositories
 agentlab workspaces-test --part sessions # Sessions on both Harnesses with a requested sync cycle
 agentlab workspaces-test --part gitlab   # the provider instance gitlab, end to end (skips without one)
