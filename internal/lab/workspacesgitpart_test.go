@@ -78,12 +78,13 @@ func TestJudgeGitBare(t *testing.T) {
 }
 
 // runGitShell runs a part's command in dir with HOME at home and returns
-// its marker lines.
-func runGitShell(t *testing.T, dir, home, command string) map[string]string {
+// its marker lines. Its environment is PATH, git's identity and env alone:
+// a CI runner's own GitHub token is not the sandbox's.
+func runGitShell(t *testing.T, dir, home, command string, env ...string) map[string]string {
 	t.Helper()
 	cmd := exec.Command("sh", "-c", command) // #nosec G204 -- the part's own command
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "HOME="+home, "GIT_CONFIG_GLOBAL=/dev/null", "GIT_AUTHOR_NAME=a", "GIT_AUTHOR_EMAIL=a@lab.local", "GIT_COMMITTER_NAME=a", "GIT_COMMITTER_EMAIL=a@lab.local")
+	cmd.Env = append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "GIT_CONFIG_GLOBAL=/dev/null", "GIT_AUTHOR_NAME=a", "GIT_AUTHOR_EMAIL=a@lab.local", "GIT_COMMITTER_NAME=a", "GIT_COMMITTER_EMAIL=a@lab.local"}, env...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("the command failed: %v\n%s", err, out)
@@ -136,8 +137,7 @@ func TestGitShellTokenScan(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, "hosts.yml"), []byte("oauth_token: "+token+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("AGENTLAB_TEST_LEAK", token)
-	found := runGitShell(t, dir, home, gitShell+`true`)
+	found := runGitShell(t, dir, home, gitShell+`true`, "AGENTLAB_TEST_LEAK="+token)
 	if found[gitProbeTokenEnv] != "AGENTLAB_TEST_LEAK" || !strings.Contains(found[gitProbeTokenFiles], "hosts.yml") {
 		t.Fatalf("the scan found %v, want the variable and the file", found)
 	}
