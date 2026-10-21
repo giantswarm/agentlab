@@ -22,16 +22,21 @@ import (
 // `agentlab workspaces-test --part gitlab`: the workspace-manager's provider
 // instance gitlab against a real GitLab (platform.workspaces.gitlab), with
 // muster pinning the manager's registration to the GitLab OAuth
-// application (platform.workspaces.grantProvider: gitlab), as the lab's
-// admin, whose GitLab account is the configured person, and the second user,
-// who has not granted it. Without the instance or the pin the part skips
-// every stage, naming why, and passes. The steps:
+// application (platform.workspaces.grantProvider: gitlab), or keeping one
+// provider App per instance, GitLab's beside GitHub's, with no pin
+// (grantProvider: apps), as the lab's admin, whose GitLab account is the
+// configured person, and the second user, who has not granted it. Without
+// the instance, or with the pin on another instance, the part skips every
+// stage, naming why, and passes. The steps:
 //
 //   - the second user, who has not granted GitLab's application in muster:
-//     the manager's tools answer muster's sign-in link;
+//     the manager's tools answer muster's sign-in link; with no pin,
+//     list_providers shows gitlab not connected and core_auth_login
+//     app=gitlab answers the link;
 //   - the admin grants it: muster's link walked through GitLab's sign-in and
 //     the application's consent to muster's callback, list_providers showing
-//     gitlab connected;
+//     gitlab connected, with no pin beside every other instance as the
+//     admin's grants of their Apps stand;
 //   - the editor's picker: list_repositories lists the group's projects;
 //   - a workspace over the project: its first cycle mirrors it, the mirror on
 //     the volume at the manifest's head;
@@ -47,8 +52,10 @@ import (
 //     deleted;
 //   - a Session without a workspace holds no GitLab credential: no
 //     credential in its environment, and git refused at GitLab;
-//   - the admin drops the grant in muster (core_auth_logout): the manager's
-//     tools answer muster's sign-in link again.
+//   - the admin drops the grant in muster (core_auth_logout, app=gitlab with
+//     no pin): the manager's tools answer muster's sign-in link again; with
+//     no pin, list_providers shows gitlab not connected and every other
+//     instance as it was.
 
 // WorkspacesPartGitLab is the GitLab part of workspaces-test.
 const WorkspacesPartGitLab = "gitlab"
@@ -126,8 +133,8 @@ func gitlabSkip(cfg *config.Config) string {
 		return fmt.Sprintf("platform.workspaces.provider %q configures no instance %s (`agentlab configure --defaults --workspaces-provider github,%s` and platform.workspaces.gitlab, docs/workspaces.md)", cfg.Platform.Workspaces.Provider, config.WorkspaceProviderGitLab, config.WorkspaceProviderGitLab)
 	case len(missing) > 0:
 		return "the instance gitlab lacks " + strings.Join(missing, ", ")
-	case cfg.WorkspaceGrantProvider() != config.WorkspaceProviderGitLab:
-		return fmt.Sprintf("muster pins the workspace-manager to the App of %s: the part grants GitLab's application (platform.workspaces.grantProvider: %s)", cfg.WorkspaceGrantProvider(), config.WorkspaceProviderGitLab)
+	case cfg.WorkspaceGrantProvider() != config.WorkspaceProviderGitLab && !cfg.WorkspaceProviderApps():
+		return fmt.Sprintf("muster pins the workspace-manager to the App of %s: the part grants GitLab's application (platform.workspaces.grantProvider: %s, or %s for one App per instance)", cfg.WorkspaceGrantProvider(), config.WorkspaceProviderGitLab, config.WorkspaceGrantProviderApps)
 	}
 	return ""
 }
@@ -202,7 +209,7 @@ func (gp *gitlabProof) preconditions(email string) error {
 	if err := waitMCPServerReachable(workspaceManagerMCPServer); err != nil {
 		return fmt.Errorf("the workspace-manager is not reachable through muster: %w", err)
 	}
-	if _, err := workspaceManagerPinnedProvider(cfg); err != nil {
+	if err := workspaceManagerReceives(cfg, config.WorkspaceProviderGitLab); err != nil {
 		return err
 	}
 	gp.adminUser, gp.secondUser = cfg.AdminUser(), cfg.FindUser(email)
@@ -330,14 +337,31 @@ func (gp *gitlabProof) picker() error {
 }
 
 // notConnected proves the second user, who has not granted GitLab's
-// application, gets muster's sign-in link from the workspace-manager.
+// application, gets muster's sign-in link: from the workspace-manager's
+// tools when the registration is pinned to it; with no pin, list_providers
+// answers the person, gitlab not connected, and core_auth_login app=gitlab
+// answers the link.
 func (gp *gitlabProof) notConnected() error {
 	gp.second.disconnect(config.WorkspaceProviderGitLab)
-	link, err := gp.second.grantRequired("list_providers", nil)
+	if !gp.second.perApp {
+		link, err := gp.second.grantRequired("list_providers", nil)
+		if err != nil {
+			return err
+		}
+		note("list_providers as %s: muster's sign-in link %s", gp.secondUser.Email, excerpt(link, 120))
+		return nil
+	}
+	if err := gp.second.notConnectedTo(config.WorkspaceProviderGitLab); err != nil {
+		return err
+	}
+	link, err := gp.second.grantLink(config.WorkspaceProviderGitLab)
 	if err != nil {
 		return err
 	}
-	note("list_providers as %s: muster's sign-in link %s", gp.secondUser.Email, excerpt(link, 120))
+	if link == "" {
+		return fmt.Errorf("core_auth_login app=%s as %s answered a held grant right after core_auth_logout dropped it", config.WorkspaceProviderGitLab, gp.secondUser.Email)
+	}
+	note("core_auth_login app=%s as %s: muster's sign-in link %s", config.WorkspaceProviderGitLab, gp.secondUser.Email, excerpt(link, 120))
 	return nil
 }
 
@@ -357,7 +381,11 @@ func (gp *gitlabProof) connect() error {
 	if status.Kind != providerKindGitLab {
 		return fmt.Errorf("list_providers lists %s with kind %q, want %s", config.WorkspaceProviderGitLab, status.Kind, providerKindGitLab)
 	}
-	note("list_providers as %s: %s", gp.adminUser.Email, status)
+	listed, err := gp.admin.providerStatuses()
+	if err != nil {
+		return err
+	}
+	note("list_providers as %s: %s", gp.adminUser.Email, workspaceProviderStatusesWorded(listed))
 	return gp.sp.removeLeftovers()
 }
 
@@ -705,18 +733,32 @@ func gitlabCredentialEnv(names, gitlabToken string) []string {
 // disconnect drops the admin's grant of GitLab's application in muster and
 // proves the workspace-manager's tools answer muster's sign-in link again.
 func (gp *gitlabProof) disconnect() error {
-	env, err := gp.admin.session.callToolEnvelope("core_auth_logout", map[string]any{serverKey: workspaceManagerMCPServer})
+	var before []workspaceProviderStatus
+	if gp.admin.perApp {
+		var err error
+		if before, err = gp.admin.providerStatuses(); err != nil {
+			return err
+		}
+	}
+	args := gp.admin.grantArgs(config.WorkspaceProviderGitLab)
+	env, err := gp.admin.session.callToolEnvelope("core_auth_logout", args)
 	if err != nil {
 		return err
 	}
 	if env.IsError {
-		return fmt.Errorf("core_auth_logout %s as %s refused: %.300s", workspaceManagerMCPServer, gp.adminUser.Email, env.Content[0].Text)
+		return fmt.Errorf("core_auth_logout %v as %s refused: %.300s", args, gp.adminUser.Email, env.Content[0].Text)
 	}
-	link, err := gp.admin.grantRequired("list_providers", nil)
-	if err != nil {
-		return err
+	if gp.admin.perApp {
+		if err := gp.admin.othersUnchanged(config.WorkspaceProviderGitLab, before); err != nil {
+			return err
+		}
+	} else {
+		link, err := gp.admin.grantRequired("list_providers", nil)
+		if err != nil {
+			return err
+		}
+		note("list_providers as %s after core_auth_logout: muster's sign-in link %s", gp.adminUser.Email, excerpt(link, 120))
 	}
-	note("list_providers as %s after core_auth_logout: muster's sign-in link %s", gp.adminUser.Email, excerpt(link, 120))
 	// The cleanup removes the workspace as the admin, through the manager.
 	if _, err := connectWorkspaceProvider(gp.cfg, gp.admin, config.WorkspaceProviderGitLab, gp.login); err != nil {
 		return fmt.Errorf("granting GitLab's application again for the cleanup: %w", err)

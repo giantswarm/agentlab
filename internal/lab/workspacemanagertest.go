@@ -206,7 +206,7 @@ func proveWorkspaceManager(cfg *config.Config) (*workspaceManagerProof, error) {
 // the stage (stop, non-nil) with muster's sign-in link asserted for them.
 func grantForStage(pinned string, people ...*workspacePerson) (stop *workspaceGrantStop, err error) {
 	for _, p := range people {
-		link, err := p.grantLink()
+		link, err := p.grantLink(pinned)
 		if err != nil {
 			return nil, err
 		}

@@ -81,3 +81,16 @@ func TestJudgeSessionMergeRequest(t *testing.T) {
 		}
 	}
 }
+
+// The part runs with the registration pinned to GitLab's application or
+// with one App per instance, and skips with the pin on GitHub's.
+func TestGitLabSkip(t *testing.T) {
+	cfg := workspaceLab(config.WorkspaceProviderGitHub + "," + config.WorkspaceProviderGitLab)
+	cfg.Platform.Workspaces.GitLab = testWorkspaceGitLab(testGrantClientID)
+	for grant, runs := range map[string]bool{"": false, config.WorkspaceProviderGitHub: false, config.WorkspaceProviderGitLab: true, config.WorkspaceGrantProviderApps: true} {
+		cfg.Platform.Workspaces.GrantProvider = grant
+		if skip := gitlabSkip(cfg); (skip == "") != runs {
+			t.Errorf("grantProvider %q: gitlabSkip = %q, want the part to run: %t", grant, skip, runs)
+		}
+	}
+}

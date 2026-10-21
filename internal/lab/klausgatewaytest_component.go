@@ -330,7 +330,7 @@ func grantWorkspaceManager(cfg *config.Config, user *config.User) (string, error
 	if err != nil {
 		return "", err
 	}
-	link, err := p.grantLink()
+	link, err := p.grantLink(pinned)
 	if err != nil {
 		return "", err
 	}

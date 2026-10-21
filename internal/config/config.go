@@ -657,6 +657,10 @@ type Workspaces struct {
 	// grants that App once in muster, and muster attaches the person's token
 	// for it to every call of the manager's tools. Empty is the first
 	// instance of Provider, in the order WorkspaceProviders gives them.
+	// WorkspaceGrantProviderApps pins nothing: muster keeps one provider
+	// App per instance, side by side (WorkspaceProviderApps), and a person
+	// grants each once (core_auth_login app=<instance>); it takes two or
+	// more instances.
 	GrantProvider string `yaml:"grantProvider,omitempty"`
 	// GitHub is the App behind the provider instance github.
 	GitHub WorkspaceGitHub `yaml:"github,omitempty"`
@@ -794,6 +798,10 @@ const (
 	WorkspaceGitLabTokenKey      = "token"            // #nosec G101 -- Secret KEY name, not a credential
 	WorkspaceGitLabPasswordKey   = "person-password"  // #nosec G101 -- Secret KEY name, not a credential
 )
+
+// WorkspaceGrantProviderApps is the grantProvider that pins no instance:
+// one muster provider App per instance, side by side.
+const WorkspaceGrantProviderApps = "apps"
 
 // workspaceProviderNames are the instances platform.workspaces.provider may
 // name, in the order the workspace-manager gets them.
@@ -2236,8 +2244,10 @@ func (c *Config) Validate() error {
 	}
 	if names, err := parseWorkspaceProviders(c.Platform.Workspaces.Provider); err != nil {
 		return err
-	} else if grant := c.Platform.Workspaces.GrantProvider; grant != "" && !slices.Contains(names, grant) {
-		return fmt.Errorf("platform.workspaces.grantProvider %q names no instance of platform.workspaces.provider (%s)", grant, strings.Join(names, ", "))
+	} else if grant := c.Platform.Workspaces.GrantProvider; grant == WorkspaceGrantProviderApps && len(names) < 2 {
+		return fmt.Errorf("platform.workspaces.grantProvider %q keeps one muster provider App per instance, side by side, and takes two or more instances of platform.workspaces.provider (%s): `agentlab configure --workspaces-provider %s,%s`", grant, strings.Join(names, ", "), WorkspaceProviderGitHub, WorkspaceProviderGitLab)
+	} else if grant != "" && grant != WorkspaceGrantProviderApps && !slices.Contains(names, grant) {
+		return fmt.Errorf("platform.workspaces.grantProvider %q names no instance of platform.workspaces.provider (%s), nor %q (one muster provider App per instance)", grant, strings.Join(names, ", "), WorkspaceGrantProviderApps)
 	}
 	if after := c.Platform.Workspaces.SessionsCleanupAfter; after != "" {
 		if d, err := time.ParseDuration(after); err != nil || d <= 0 {
@@ -2484,16 +2494,25 @@ func (c *Config) WorkspaceProviders() []string {
 
 // WorkspaceGrantProvider is the instance muster pins the workspace-manager's
 // registration to: platform.workspaces.grantProvider, or the first instance;
-// "" with workspaces off.
+// "" with workspaces off and with WorkspaceProviderApps, which pins none.
 func (c *Config) WorkspaceGrantProvider() string {
 	names := c.WorkspaceProviders()
-	if len(names) == 0 {
+	if len(names) == 0 || c.WorkspaceProviderApps() {
 		return ""
 	}
 	if grant := c.Platform.Workspaces.GrantProvider; slices.Contains(names, grant) {
 		return grant
 	}
 	return names[0]
+}
+
+// WorkspaceProviderApps reports whether muster keeps one provider App per
+// instance, side by side, with the workspace-manager's registration pinned
+// to none (platform.workspaces.grantProvider: WorkspaceGrantProviderApps):
+// the meta chart derives the Apps, and a person grants each once
+// (core_auth_login app=<instance>).
+func (c *Config) WorkspaceProviderApps() bool {
+	return c.Platform.Workspaces.GrantProvider == WorkspaceGrantProviderApps && len(c.WorkspaceProviders()) > 1
 }
 
 // WorkspaceGitHubProvider reports whether the workspace-manager gets the
