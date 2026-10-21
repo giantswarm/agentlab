@@ -215,13 +215,13 @@ func TestWorkspaceProviderApps(t *testing.T) {
 
 func TestValidateProofRepositories(t *testing.T) {
 	const key = "platform.workspaces.github.proofRepositories"
-	for _, ok := range [][]string{nil, {"giantswarm/workspace-proof", "giantswarm/agent-sandbox"}, {"workspaces/sub/a", "workspaces/sub/b"}} {
+	for _, ok := range [][]string{nil, {"example-org/workspace-proof", "example-org/other-repo"}, {"workspaces/sub/a", "workspaces/sub/b"}} {
 		if err := ValidateProofRepositories(key, ok); err != nil {
 			t.Errorf("%v: %v", ok, err)
 		}
 	}
 	for name, bad := range map[string][]string{
-		"one":      {"giantswarm/workspace-proof"},
+		"one":      {"example-org/workspace-proof"},
 		"three":    {"p/q", "c/d", "e/f"},
 		"no owner": {"workspace-proof", "a/b"},
 		"a URL":    {"https://github.com/a/b", "g/h"},

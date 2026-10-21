@@ -296,8 +296,8 @@ platform:
   workspaces:
     github:
       proofRepositories:
-        - giantswarm/workspace-proof   # pushed to: its scratch branch only
-        - giantswarm/agent-sandbox     # left as it is
+        - example-org/workspace-proof  # pushed to: its scratch branch only
+        - example-org/other-repo       # left as it is
     gitlab:
       proofRepositories:               # <group>/<project>, nested groups too
         - workspaces/workspace-proof

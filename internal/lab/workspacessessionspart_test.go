@@ -58,13 +58,13 @@ func TestJudgeFirstTurns(t *testing.T) {
 	stale := ok("c")
 	stale.Branches[proofPushed] = "old"
 	extra := ok("d")
-	extra.Heads["giantswarm/other"] = "x"
+	extra.Heads["example-org/third"] = "x"
 	elsewhere := ok("e")
 	elsewhere.Directory = "/data/workspace"
 	moved := ok("f")
 	moved.Heads[proofStill] = "moved"
 	err := judgeFirstTurns([]*sessionRun{ok("a"), ok("a"), stale, extra, elsewhere, moved}, heads, proofPushed, "pushed")
-	for _, w := range []string{"Session a started twice", "c's clone " + proofPushed + " has origin/" + proofBranch + " at \"old\"", "d holds a clone giantswarm/other", "e works in /data/workspace", "f's clone " + proofStill + " is at \"moved\""} {
+	for _, w := range []string{"Session a started twice", "c's clone " + proofPushed + " has origin/" + proofBranch + " at \"old\"", "d holds a clone example-org/third", "e works in /data/workspace", "f's clone " + proofStill + " is at \"moved\""} {
 		if err == nil || !strings.Contains(err.Error(), w) {
 			t.Errorf("judgeFirstTurns = %v, want %q", err, w)
 		}

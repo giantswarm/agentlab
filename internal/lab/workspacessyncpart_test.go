@@ -13,8 +13,8 @@ import (
 )
 
 const (
-	proofPushed = "giantswarm/workspace-proof"
-	proofStill  = "giantswarm/agent-sandbox"
+	proofPushed = "example-org/workspace-proof"
+	proofStill  = "example-org/other-repo"
 )
 
 func TestJudgeNoOp(t *testing.T) {
@@ -120,11 +120,11 @@ func TestSyncStampScriptOnMirrors(t *testing.T) {
 func TestProofReposSources(t *testing.T) {
 	pr := &proofRepos{instance: config.WorkspaceProviderGitHub, pushed: proofPushed, still: "teemow/other"}
 	got := pr.sources(pr.repos()...)
-	if len(got) != 2 || got[0][wmOwnerArg] != "giantswarm" || got[1][wmOwnerArg] != "teemow" || got[0][wmProviderArg] != config.WorkspaceProviderGitHub {
+	if len(got) != 2 || got[0][wmOwnerArg] != "example-org" || got[1][wmOwnerArg] != "teemow" || got[0][wmProviderArg] != config.WorkspaceProviderGitHub {
 		t.Fatalf("sources = %v", got)
 	}
 	if names := got[0][repositoriesKey].([]string); !slices.Equal(names, []string{"workspace-proof"}) {
-		t.Fatalf("giantswarm's repositories = %v", names)
+		t.Fatalf("example-org's repositories = %v", names)
 	}
 	same := (&proofRepos{instance: config.WorkspaceProviderGitLab}).sources("workspaces/sub/a", "workspaces/sub/b")
 	if len(same) != 1 || same[0][wmOwnerArg] != "workspaces/sub" || !slices.Equal(same[0][repositoriesKey].([]string), []string{"a", "b"}) {
