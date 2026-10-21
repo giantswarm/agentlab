@@ -79,6 +79,28 @@ field for it), and `Ollama` requires one (its `host`) and is keyless. An
 entries carry), rendered as the ModelConfig's `openAI.apiFormat` — `responses`
 for a model a codex agent uses, since the codex runtime speaks the Responses
 API only and its compiler refuses any other OpenAI option, `tls` included;
+an `OpenAI` entry may set `credentialType: chatgptOAuth` (kagent 1.21.0 or
+newer), rendered as the ModelConfig's `openAI.credentialType`: the model runs
+on a ChatGPT subscription login instead of an API key, for codex alone, so
+the entry needs `apiFormat: responses` and takes no `apiKeyEnv` and no
+`baseUrl` (kagent calls the ChatGPT Codex backend). Its Secret
+`kagent/kagent-<name>` holds the keys `access_token`, `refresh_token` and
+`account_id` of one `codex login --device-auth` of the lab's own (the
+`tokens` of its `auth.json`), placed with the operator's secret tooling;
+agentlab never creates or reads it, renders the ModelConfig without
+`apiKeySecretKey`, labels the Secret `kagent.dev/chatgpt-login: "true"` for
+kagent's refresher, which rotates the tokens in place, and keeps it when the
+entry is pruned. While it is not placed the run goes on and says so, the
+ModelConfig waiting for it:
+
+```yaml
+    - name: chatgpt-login
+      provider: OpenAI
+      model: gpt-5.6-luna
+      apiFormat: responses
+      credentialType: chatgptOAuth
+```
+
 an `Ollama` entry may set `think` (`true` or
 `false`, kagent 1.0.3 or newer), rendered as the ModelConfig's
 `ollama.think`; `reasoningEffort: none` and `think: false` switch a local

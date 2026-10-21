@@ -238,17 +238,24 @@ reads as before.
    audience `gitlab` and no token; `start_session` through agent-manager
    creates the Session on the volume, whose turn works in its directory with
    the clone at the mirrored head and holds no credential beyond the
-   platform's own variables (`GH_TOKEN`, the Harness's inert placeholder the
-   egress gateway replaces, is one of them).
-7. **Push from the Session**: the Session pushes an empty commit to a proof
-   branch and deletes the branch again. It holds no GitLab credential, so
-   GitLab accepts both only through Substrate's egress gateway, which fetches
-   the person's token from muster for a Session bound to them and sends it as
-   Basic with the user `oauth2` (muster's `credentialProvider.gitUsers`,
-   `gitlab: oauth2`).
+   platform's own variables (`GH_TOKEN` and `GITLAB_TOKEN`, the Harness's
+   inert placeholder the egress gateway replaces, `GLAB_IS_OAUTH2` and
+   `GLAB_CONFIG_DIR`, glab's configuration naming the workspace's GitLab
+   hosts, are among them; a `GITLAB_TOKEN` of any other value is a credential).
+7. **Push and merge request from the Session**: the Session pushes an empty
+   commit to a proof branch and deletes the branch again. It holds no GitLab
+   credential, so GitLab accepts both only through Substrate's egress
+   gateway, which fetches the person's token from muster for a Session bound
+   to them and sends it as Basic with the user `oauth2` (muster's
+   `credentialProvider.gitUsers`, `gitlab: oauth2`). Between the two, on a
+   Harness that gives `glab` its placeholder (`GITLAB_TOKEN` set to kagent's inert placeholder, sent as an
+   OAuth2 bearer through `GLAB_IS_OAUTH2`), `glab api user` names the person
+   and `glab mr create` opens a merge request of the branch authored by them,
+   which the Session closes before it deletes the branch; on an older Harness
+   the stage reports glab's answer and leaves the merge request unjudged.
 8. **No workspace**: a Session started without a workspace works in the
-   default directory, holds no credential beyond the platform's own, and
-   `git ls-remote` of the private project is refused.
+   default directory, holds no credential beyond the platform's own and no
+   `GITLAB_TOKEN`, and `git ls-remote` of the private project is refused.
 9. **Disconnect**: the admin drops the grant in muster (`core_auth_logout`),
    and `list_providers` answers muster's sign-in link again; the admin grants
    it once more for the restore.
@@ -561,9 +568,11 @@ id and the first two keys are in place; the part's person needs the third.
 GitLab's side, set up once by an administrator of the instance:
 
 - An instance-wide **OAuth application** (Admin Area, Applications), scopes
-  `api read_user read_repository write_repository`, redirect URI each lab's
+  `api read_user read_repository write_repository`, redirect URIs each lab's
   muster callback `https://muster.<domain>:<gatewayPort>/oauth/proxy/callback`
-  (`agentlab configure` prints it), confidential.
+  (`agentlab configure` prints it), confidential. A lab with a new muster host
+  adds its callback to the application before its first connect; GitLab
+  answers any other with "The redirect URI included is not valid".
 - A **group access token** of the group, role Reporter, scopes `read_api
   read_repository`: the sync lists the group's projects and mirrors them over
   HTTPS with it.

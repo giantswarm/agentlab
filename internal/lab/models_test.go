@@ -34,6 +34,7 @@ func TestExtraModelsTemplate(t *testing.T) {
 		{Name: "gpt-low", Provider: config.ProviderOpenAI, Model: "gpt-5", ReasoningEffort: "low"},
 		{Name: "gpt-codex", Provider: config.ProviderOpenAI, Model: "gpt-5-codex", APIFormat: "responses"},
 		{Name: "ollama-native", Provider: config.ProviderOllama, Model: "qwen3.5:2b", BaseURL: "http://172.21.0.1:11434", Think: new(false)},
+		chatGPTLoginModel("chatgpt-login"),
 	}
 	raw, err := renderTemplate(cfg, "extra-models.yaml.tmpl", nil)
 	if err != nil {
@@ -76,8 +77,14 @@ func TestExtraModelsTemplate(t *testing.T) {
 	if !strings.Contains(out, "model: gpt-5-codex\n  apiKeySecret: kagent-gpt-codex\n  apiKeySecretKey: OPENAI_API_KEY\n  openAI:\n    apiFormat: responses") {
 		t.Errorf("an OpenAI entry's apiFormat must render under openAI, with or without an endpoint:\n%s", out)
 	}
-	if strings.Count(out, "apiFormat:") != 1 {
+	if strings.Count(out, "apiFormat:") != 2 {
 		t.Errorf("apiFormat rendered for entries that set none:\n%s", out)
+	}
+	if !strings.Contains(out, "model: gpt-5.6-luna\n  apiKeySecret: kagent-chatgpt-login\n  openAI:\n    apiFormat: responses\n    credentialType: chatgptOAuth\n") {
+		t.Errorf("a ChatGPT login must name its Secret without apiKeySecretKey and render its credentialType under openAI:\n%s", out)
+	}
+	if strings.Count(out, "credentialType:") != 1 {
+		t.Errorf("credentialType rendered for entries that set none:\n%s", out)
 	}
 	if !strings.Contains(out, "ollama:\n    host: http://172.21.0.1:11434\n    think: false") {
 		t.Errorf("an Ollama entry's think must render under ollama:\n%s", out)
@@ -212,18 +219,23 @@ func TestWaitModelConfigAccepted(t *testing.T) {
 }
 
 // TestPruneExtraModels: lab-labelled ModelConfigs not among the wanted
-// entries go, with their key Secrets; the wanted ones and the chart's own
-// unlabelled default stay.
+// entries go, with their key Secrets but a ChatGPT login; the wanted ones and
+// the chart's own unlabelled default stay.
 func TestPruneExtraModels(t *testing.T) {
 	f := newFakeLab(t,
-		labelledModelConfig("keep"), labelledModelConfig("drop"),
+		labelledModelConfig("keep"), labelledModelConfig("drop"), labelledModelConfig("login"),
 		customObject(gvkModelConfig, kagentNamespace, "default-model-config", nil),
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "kagent-keep", Namespace: kagentNamespace}},
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "kagent-drop", Namespace: kagentNamespace}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "kagent-login", Namespace: kagentNamespace, Labels: map[string]string{config.ChatGPTLoginLabel: config.ChatGPTLoginLabelValue}}},
 	)
 	if err := pruneExtraModels([]config.ExtraModel{{Name: "keep"}}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := f.dyn.Tracker().Get(gvrModelConfigs, kagentNamespace, "login"); !apierrors.IsNotFound(err) {
+		t.Errorf("the removed ChatGPT-login ModelConfig still there: %v", err)
+	}
+	f.stored(t, gvrSecrets, kagentNamespace, "kagent-login")
 	if _, err := f.dyn.Tracker().Get(gvrModelConfigs, kagentNamespace, "drop"); !apierrors.IsNotFound(err) {
 		t.Errorf("drop still there: %v", err)
 	}
@@ -267,6 +279,42 @@ func TestEnsureModelKeySecret(t *testing.T) {
 	}
 	if _, err := f.dyn.Tracker().Get(gvrSecrets, kagentNamespace, "kagent-ollama"); !apierrors.IsNotFound(err) {
 		t.Errorf("a keyless provider must get no Secret: %v", err)
+	}
+}
+
+// chatGPTLoginModel is an extraModels entry on a ChatGPT login.
+func chatGPTLoginModel(name string) config.ExtraModel {
+	return config.ExtraModel{Name: name, Provider: config.ProviderOpenAI, Model: "gpt-5.6-luna",
+		APIFormat: config.APIFormatResponses, CredentialType: config.CredentialTypeChatGPT}
+}
+
+// TestEnsureChatGPTLogin: agentlab never creates a ChatGPT login — an absent
+// one leaves the ModelConfig waiting; a placed one is labelled for kagent's
+// refresher, its data untouched; one lacking a login key is refused by name.
+func TestEnsureChatGPTLogin(t *testing.T) {
+	keys := map[string][]byte{"access_token": []byte("a"), "refresh_token": []byte("r"), "account_id": []byte("i")}
+	f := newFakeLab(t,
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "kagent-placed", Namespace: kagentNamespace}, Data: keys},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "kagent-partial", Namespace: kagentNamespace}, Data: map[string][]byte{"access_token": []byte("a")}},
+	)
+	if placed, err := ensureChatGPTLogin(chatGPTLoginModel("absent")); err != nil || placed {
+		t.Errorf("absent login: placed %v, err %v; want waiting without an error", placed, err)
+	}
+	if _, err := f.dyn.Tracker().Get(gvrSecrets, kagentNamespace, "kagent-absent"); !apierrors.IsNotFound(err) {
+		t.Errorf("agentlab created a login Secret: %v", err)
+	}
+	if placed, err := ensureChatGPTLogin(chatGPTLoginModel("placed")); err != nil || !placed {
+		t.Fatalf("placed login: placed %v, err %v", placed, err)
+	}
+	stored := f.stored(t, gvrSecrets, kagentNamespace, "kagent-placed")
+	if !config.IsChatGPTLoginSecret(stored.GetLabels()) {
+		t.Errorf("placed login not labelled: %v", stored.GetLabels())
+	}
+	if got, _, _ := unstructured.NestedString(stored.Object, "data", "refresh_token"); got != "cg==" {
+		t.Errorf("the login's data was rewritten: refresh_token %q", got)
+	}
+	if _, err := ensureChatGPTLogin(chatGPTLoginModel("partial")); err == nil || !strings.Contains(err.Error(), "lacks refresh_token, account_id") {
+		t.Errorf("partial login: %v", err)
 	}
 }
 
