@@ -10,7 +10,7 @@ require (
 	charm.land/huh/v2 v2.0.3
 	github.com/BurntSushi/toml v1.6.0
 	github.com/Masterminds/semver/v3 v3.5.0
-	github.com/a2aproject/a2a-go/v2 v2.6.0
+	github.com/a2aproject/a2a-go/v2 v2.7.0
 	github.com/charmbracelet/x/ansi v0.11.9
 	github.com/giantswarm/go-selfupdate v1.6.6
 	github.com/giantswarm/klaus-gateway v1.21.0
