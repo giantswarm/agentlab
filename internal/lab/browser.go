@@ -12,6 +12,8 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/giantswarm/pagekit"
+
 	"github.com/giantswarm/agentlab/internal/config"
 )
 
@@ -32,22 +34,7 @@ func BrowserLogin(cfg *config.Config) error {
 
 	codeCh := make(chan string, 1)
 	mux := http.NewServeMux()
-	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
-		q := r.URL.Query()
-		if q.Get(oauthCodeParam) == "" {
-			http.Error(w, "no code in callback", http.StatusBadRequest)
-			return
-		}
-		if q.Get("state") != state {
-			http.Error(w, "state mismatch", http.StatusBadRequest)
-			return
-		}
-		w.Header().Set("Content-Type", "text/html")
-		_, _ = fmt.Fprint(w, "<html><body style='font-family:sans-serif;padding:3rem'>"+
-			"<h2>Logged in.</h2><p>You can close this tab and go back to the terminal.</p>"+
-			"</body></html>")
-		codeCh <- q.Get(oauthCodeParam)
-	})
+	mux.HandleFunc("/callback", browserCallback(state, codeCh))
 
 	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", config.BrowserCallbackPort))
 	if err != nil {
@@ -86,6 +73,48 @@ func BrowserLogin(cfg *config.Config) error {
 		return fmt.Errorf("token exchange failed: %w", err)
 	}
 	return saveLoginArtifacts(cfg, token)
+}
+
+// browserCallback answers Dex's redirect: it hands a code that comes with
+// the expected state to codeCh and shows the outcome in the browser.
+func browserCallback(state string, codeCh chan<- string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if e := q.Get("error"); e != "" {
+			renderBrowserFailure(w, "The sign-in was denied or failed", e)
+			return
+		}
+		if q.Get("state") != state {
+			renderBrowserFailure(w, "The sign-in response could not be verified", "")
+			return
+		}
+		if q.Get(oauthCodeParam) == "" {
+			renderBrowserFailure(w, "The sign-in response is incomplete", "")
+			return
+		}
+		select {
+		case codeCh <- q.Get(oauthCodeParam):
+		default: // a repeated load of the callback; the first code counts
+		}
+		pagekit.Render(w, http.StatusOK, pagekit.Page{
+			Title:   "Signed in to agentlab",
+			Heading: "Signed in",
+			Summary: "agentlab is now signed in",
+			Message: "You can close this tab and return to the terminal.",
+		})
+	}
+}
+
+// renderBrowserFailure writes the page for a failed sign-in. errorCode is
+// shown only when it is a registered OAuth error code.
+func renderBrowserFailure(w http.ResponseWriter, summary, errorCode string) {
+	pagekit.Render(w, http.StatusBadRequest, pagekit.Page{
+		Title:   "Sign-in to agentlab failed",
+		Heading: "Sign-in failed",
+		Summary: summary,
+		Message: "You can close this tab and run the login again in the terminal.",
+		Detail:  pagekit.OAuthErrorCode(errorCode),
+	})
 }
 
 // OpenBrowser hands a URL (or, on macOS/Linux, any path) to the OS opener.
