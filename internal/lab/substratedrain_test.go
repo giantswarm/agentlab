@@ -53,7 +53,7 @@ func TestDrainablePods(t *testing.T) {
 // the retry.
 func TestGoldensOff(t *testing.T) {
 	const a, b, c, aBefore, bBefore = "tmpl-a", "tmpl-b", "tmpl-c", "kagent/a-uid", "kagent/b-uid"
-	const perVolume, next = snapshotLayoutPerVolume, snapshotLayoutPerVolume + 1
+	const perVolume, next = snapshotLayoutPerVolume, snapshotLayoutGVisorNightly20260909
 	before := goldenSet{
 		golden:  map[string]string{a: aBefore, b: bBefore},
 		layout:  map[string]int32{a: perVolume, b: snapshotLayoutUnrecorded},
