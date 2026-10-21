@@ -715,6 +715,10 @@ type WorkspaceGitLab struct {
 	TokenSource        string `yaml:"tokenSource,omitempty"`
 	ClientSecretSource string `yaml:"clientSecretSource,omitempty"`
 	PasswordSource     string `yaml:"passwordSource,omitempty"`
+	// ProofRepositories are the two projects, <group>/<project>, the
+	// workspaces sync and sessions parts mirror on this instance
+	// (ValidateProofRepositories); the person pushes to the first.
+	ProofRepositories []string `yaml:"proofRepositories,omitempty"`
 }
 
 // Validate checks the URL and the sources.
@@ -737,7 +741,7 @@ func (g WorkspaceGitLab) Validate() error {
 			return fmt.Errorf("platform.workspaces.gitlab.%s %q: %w", s.name, s.source, err)
 		}
 	}
-	return nil
+	return ValidateProofRepositories("platform.workspaces.gitlab.proofRepositories", g.ProofRepositories)
 }
 
 // WorkspaceGitHub is the GitHub App of the workspace-manager's
@@ -759,6 +763,12 @@ type WorkspaceGitHub struct {
 	// manual step; empty, the Secret is placed by hand.
 	PrivateKeySource   string `yaml:"privateKeySource,omitempty"`
 	ClientSecretSource string `yaml:"clientSecretSource,omitempty"`
+	// ProofRepositories are the two repositories, <owner>/<name>, the
+	// workspaces sync and sessions parts mirror on this instance through
+	// the App (ValidateProofRepositories): the person pushes and
+	// force-pushes to a scratch branch of the first with their own git
+	// credentials; the second stays as it is.
+	ProofRepositories []string `yaml:"proofRepositories,omitempty"`
 }
 
 // Validate checks the two sources: each a secret reference when set.
@@ -773,6 +783,27 @@ func (g WorkspaceGitHub) Validate() error {
 		if err := ValidateSecretSource(s.source); err != nil {
 			return fmt.Errorf("platform.workspaces.github.%s %q: %w", s.name, s.source, err)
 		}
+	}
+	return ValidateProofRepositories("platform.workspaces.github.proofRepositories", g.ProofRepositories)
+}
+
+// ValidateProofRepositories checks an instance's proof repositories: none,
+// or two distinct <owner>/<name> paths, key naming the field.
+func ValidateProofRepositories(key string, repos []string) error {
+	if len(repos) == 0 {
+		return nil
+	}
+	if len(repos) != 2 {
+		return fmt.Errorf("%s: want two repositories, <owner>/<name>: the one the proof pushes to, then one it leaves as it is (got %d)", key, len(repos))
+	}
+	for _, r := range repos {
+		owner, name, ok := strings.Cut(r, "/")
+		if !ok || owner == "" || name == "" || strings.ContainsAny(r, " \t\n:@") || strings.HasSuffix(r, ".git") {
+			return fmt.Errorf("%s: %q is no <owner>/<name>", key, r)
+		}
+	}
+	if strings.EqualFold(repos[0], repos[1]) {
+		return fmt.Errorf("%s: %s twice, want two repositories", key, repos[0])
 	}
 	return nil
 }

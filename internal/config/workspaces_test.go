@@ -212,3 +212,24 @@ func TestWorkspaceProviderApps(t *testing.T) {
 		t.Error("apps beside one instance: WorkspaceProviderApps() = true, want false")
 	}
 }
+
+func TestValidateProofRepositories(t *testing.T) {
+	const key = "platform.workspaces.github.proofRepositories"
+	for _, ok := range [][]string{nil, {"example-org/workspace-proof", "example-org/other-repo"}, {"workspaces/sub/a", "workspaces/sub/b"}} {
+		if err := ValidateProofRepositories(key, ok); err != nil {
+			t.Errorf("%v: %v", ok, err)
+		}
+	}
+	for name, bad := range map[string][]string{
+		"one":      {"example-org/workspace-proof"},
+		"three":    {"p/q", "c/d", "e/f"},
+		"no owner": {"workspace-proof", "a/b"},
+		"a URL":    {"https://github.com/a/b", "g/h"},
+		".git":     {"a/b.git", "i/j"},
+		"repeated": {"x/y", "X/Y"},
+	} {
+		if err := ValidateProofRepositories(key, bad); err == nil || !strings.Contains(err.Error(), key) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}

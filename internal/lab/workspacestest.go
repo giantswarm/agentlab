@@ -34,9 +34,17 @@ type WorkspacesTestOptions struct {
 	// ReadyTimeout bounds each wait: the storage's rollouts, a claim bound,
 	// a pod finished, a volume gone, a sync cycle.
 	ReadyTimeout time.Duration
-	// Part runs one part instead of the storage proof: WorkspacesPartGitLab
+	// Part runs one part instead of the storage proof: WorkspacesPartSync
+	// (workspacessyncpart.go), WorkspacesPartSessions
+	// (workspacessessionspart.go) or WorkspacesPartGitLab
 	// (workspacesgitlab.go). "" is the storage proof.
 	Part string
+	// Provider is the provider instance the sync and sessions parts run on,
+	// github (the default) or gitlab.
+	Provider string
+	// Sessions is how many Sessions the sessions part starts, alternating
+	// the claude and the kagent Harness; zero is DefaultWorkspacesSessions.
+	Sessions int
 	// Email is the GitLab part's second user beside the admin, a member of
 	// the lab's Organization (default dev@lab.local).
 	Email string
@@ -50,7 +58,7 @@ type WorkspacesTestOptions struct {
 }
 
 // WorkspacesParts are the parts `workspaces-test --part` takes.
-var WorkspacesParts = []string{WorkspacesPartGitLab}
+var WorkspacesParts = []string{WorkspacesPartSync, WorkspacesPartSessions, WorkspacesPartGitLab}
 
 // validate refuses a part workspaces-test does not have, and the flags and
 // argument of one run given to the other.
@@ -67,15 +75,32 @@ func (o WorkspacesTestOptions) validate() error {
 		if o.Harness != "" && o.Harness != claudeHarness && o.ModelConfig == "" {
 			return fmt.Errorf("--harness %s needs --model-config: the default ModelConfig is the claude Harness's", o.Harness)
 		}
-	case WorkspacesPartGitLab:
+	case WorkspacesPartSync, WorkspacesPartSessions, WorkspacesPartGitLab:
 		if o.StorageOnly {
 			return fmt.Errorf("--storage-only is the storage proof's; --part %s proves no storage", o.Part)
 		}
 		if sessionFlags {
-			return fmt.Errorf("--harness and --model-config are the storage proof's; --part %s runs the claude Session", o.Part)
+			sessions := "runs the claude Session"
+			if o.Part != WorkspacesPartGitLab {
+				sessions = "chooses its own Sessions"
+			}
+			return fmt.Errorf("--harness and --model-config are the storage proof's; --part %s %s", o.Part, sessions)
+		}
+		if o.Part != WorkspacesPartGitLab && o.Email != "" {
+			return fmt.Errorf("--part %s works as the admin: it takes no [email]", o.Part)
 		}
 	default:
 		return fmt.Errorf("no part %q of workspaces-test: --part takes %s", o.Part, strings.Join(WorkspacesParts, ", "))
+	}
+	switch {
+	case o.Provider != "" && o.Part != WorkspacesPartSync && o.Part != WorkspacesPartSessions:
+		return fmt.Errorf("--provider names the instance of the sync and sessions parts (--part %s or %s)", WorkspacesPartSync, WorkspacesPartSessions)
+	case o.Provider != "" && o.Provider != config.WorkspaceProviderGitHub && o.Provider != config.WorkspaceProviderGitLab:
+		return fmt.Errorf("--provider %q: %s or %s", o.Provider, config.WorkspaceProviderGitHub, config.WorkspaceProviderGitLab)
+	case o.Sessions != 0 && o.Part != WorkspacesPartSessions:
+		return fmt.Errorf("--sessions is the sessions part's (--part %s)", WorkspacesPartSessions)
+	case o.Sessions != 0 && o.Sessions < workspacesMinSessions:
+		return fmt.Errorf("--sessions %d: the sessions part needs %d or more, so a Session per Harness is left after one is deleted", o.Sessions, workspacesMinSessions)
 	}
 	return nil
 }
@@ -135,8 +160,14 @@ func WorkspacesTest(cfg *config.Config, opts WorkspacesTestOptions) error {
 	if err != nil {
 		return err
 	}
-	if opts.Part == WorkspacesPartGitLab {
+	provider := cmpOr(opts.Provider, config.WorkspaceProviderGitHub)
+	switch opts.Part {
+	case WorkspacesPartGitLab:
 		return workspacesGitLabPart(cfg, opts.Email, opts.ReadyTimeout)
+	case WorkspacesPartSync:
+		return workspacesSyncPart(cfg, provider, opts.ReadyTimeout)
+	case WorkspacesPartSessions:
+		return workspacesSessionsPart(cfg, provider, opts.Sessions, opts.ReadyTimeout)
 	}
 	ctx := context.Background()
 	timeout := opts.ReadyTimeout
