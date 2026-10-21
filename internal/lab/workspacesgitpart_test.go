@@ -96,8 +96,13 @@ func TestGitPauseAndResumeCommands(t *testing.T) {
 		t.Skip("no git")
 	}
 	dir := t.TempDir()
-	clone := filepath.Join(dir, "o", "r")
-	for _, args := range [][]string{{"init", "-q", "-b", "trunk", clone}, {"-C", clone, "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "seed"}} {
+	// The Harness's clone: a clone with no working tree whose local branch
+	// is deleted, origin/HEAD its only head.
+	origin, clone := filepath.Join(t.TempDir(), "origin"), filepath.Join(dir, "o", "r")
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "trunk", origin}, {"-C", origin, "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "seed"},
+		{"clone", "-q", "--no-checkout", origin, clone}, {"-C", clone, "update-ref", "-d", "refs/heads/trunk"},
+	} {
 		cmd := exec.Command("git", args...) // #nosec G204 -- the test's own git arguments
 		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_AUTHOR_NAME=a", "GIT_AUTHOR_EMAIL=a@lab.local", "GIT_COMMITTER_NAME=a", "GIT_COMMITTER_EMAIL=a@lab.local")
 		if out, err := cmd.CombinedOutput(); err != nil {

@@ -56,6 +56,8 @@ const (
 	gitProbeClone       = "clone"
 	gitProbePush        = "push"
 	gitProbeCommitter   = "committer"
+	gitProbeStart       = "start"
+	gitProbeParent      = "parent"
 	gitProbeGHUser      = "gh-user"
 	gitProbePRCreate    = "pr-create"
 	gitProbePRAuthor    = "pr-author"
@@ -294,6 +296,7 @@ func (gp *gitProof) write(harness, agent string) error {
 	if err != nil {
 		return err
 	}
+	note("%s on %s: the clone at start %s; the commit's parent %s", id, harness, v[gitProbeStart], v[gitProbeParent])
 	note("%s on %s: clone %s; push %s; committer %s; gh api user %s; gh pr create %s; author %s; push actor %s; close %s; GH_TOKEN %s",
 		id, harness, v[gitProbeClone], v[gitProbePush], v[gitProbeCommitter], v[gitProbeGHUser], v[gitProbePRCreate], v[gitProbePRAuthor], v[gitProbePushActor], v[gitProbePRClose], v[gitProbeGHToken])
 	login, pr, err := judgeGitWrite(v, gp.pr.pushed, gp.email)
@@ -339,7 +342,7 @@ const gitShell = `m() { echo "` + probeMarker + ` $1=$(printf '%s' "$2" | tr '\n
 	`m ` + gitProbeTokenFiles + ` "$(grep -rlaE --exclude-dir=.git '` + gitHubTokenPattern + `' /data /workspace "$PWD" "$HOME" 2>/dev/null | sort -u | head -n 5)"; `
 
 // gitWriteCommand is the write turn: in the Session's clone of repo a
-// branch, a commit, the push; gh's user, the pull request opened, its author
+// branch from origin/HEAD, a commit, the push; gh's user, the pull request opened, its author
 // and the push's actor read back from GitHub; the pull request closed with
 // its branch deleted.
 func gitWriteCommand(repo, branch string) string {
@@ -347,8 +350,9 @@ func gitWriteCommand(repo, branch string) string {
 		`m pwd "$(pwd)"; ` +
 		`if [ ! -d './` + repo + `/.git' ]; then m ` + gitProbeClone + ` ` + probeNone + `; m ` + gitProbePRClose + ` skipped; exit 0; fi; m ` + gitProbeClone + ` './` + repo + `'; ` +
 		`cd './` + repo + `'; base=$(git symbolic-ref --short refs/remotes/origin/HEAD | sed 's|^origin/||'); ` +
-		`git switch -q -c '` + branch + `' && date -u > ` + gitProofFile + ` && git add ` + gitProofFile + ` && git -c commit.gpgsign=false commit -qm 'agentlab workspaces-test --part git'; ` +
-		`m ` + gitProbeCommitter + ` "$(git log -1 --format=%ce)"; ` +
+		`m ` + gitProbeStart + ` "head=$(git rev-parse -q --verify HEAD || echo ` + probeNone + `) origin=$(git rev-parse -q --verify origin/HEAD || echo ` + probeNone + `) base=$base branch=$(git branch --show-current) shallow=$(git rev-parse --is-shallow-repository)"; ` +
+		`git switch -q -c '` + branch + `' origin/HEAD && date -u > ` + gitProofFile + ` && git add ` + gitProofFile + ` && git -c commit.gpgsign=false commit -qm 'agentlab workspaces-test --part git'; ` +
+		`m ` + gitProbeCommitter + ` "$(git log -1 --format=%ce)"; m ` + gitProbeParent + ` "$(git rev-parse -q --verify HEAD^ || echo ` + probeNone + `)"; ` +
 		`try ` + gitProbePush + ` env GIT_TERMINAL_PROMPT=0 timeout 60 git push -q origin 'HEAD:refs/heads/` + branch + `'; ` +
 		`try ` + gitProbeGHUser + ` ghc api user --jq '.login+" "+.type'; ` +
 		`try ` + gitProbePRCreate + ` ghc pr create --repo '` + repo + `' --head '` + branch + `' --base "$base" --title 'agentlab workspaces-test --part git' --body 'Opened by agentlab workspaces-test --part git as the person; closed at once.'; ` +
@@ -368,8 +372,11 @@ func gitBareCommand(repo, branch string) string {
 }
 
 // gitPauseCommand leaves a file uncommitted on a new branch of the clone.
+// Like every branch of the part's, it starts at origin/HEAD: the Harness
+// clones with no working tree and no local branch, and an agent's first
+// switch creates one from origin.
 func gitPauseCommand(repo, branch, token string) string {
-	return `git -C './` + repo + `' switch -q -c '` + branch + `' && echo '` + token + `' > './` + repo + `/` + gitPauseFile + `'; ` + gitResumeCommand(repo)
+	return `git -C './` + repo + `' switch -q -c '` + branch + `' origin/HEAD && echo '` + token + `' > './` + repo + `/` + gitPauseFile + `'; ` + gitResumeCommand(repo)
 }
 
 // gitResumeCommand reads, from the Session's working directory, its clone's
