@@ -78,7 +78,10 @@ const (
 	// klausGatewayTestToolset is the toolset the fixture's muster carrier
 	// declares (X-Muster-Toolset), the fleet's read-only preset.
 	klausGatewayTestToolset = "preset:read-only"
-	klausGatewayTestPrompt  = "You are a terse assistant of the agentlab Swarmgeist proof. Answer in one short line. " +
+	// klausGatewayTestPrompt keeps answers to one line except a count: a
+	// model told to be terse otherwise declines the long turns ("No.").
+	klausGatewayTestPrompt = "You are a terse assistant of the agentlab Swarmgeist proof. Answer in one short line, " +
+		"except when the user asks you to write out numbers: then write every one of them, one per line, however long that takes. " +
 		"When the user asks you to reply with a word, reply with exactly that word and nothing else. " +
 		"When the user asks about namespaces of the cluster, use your tools to list them once and answer with their count."
 	// klausGatewayMusterURL is muster's in-cluster MCP endpoint, the
@@ -138,6 +141,11 @@ const (
 	// klausGatewayCountPrompt is step 5b's long turn: plain text that streams
 	// from its first line and runs for minutes, on a small local model too.
 	klausGatewayCountPrompt = "Without using any tools, write out every number from one to five hundred in English words, one number per line, and nothing else."
+	// klausGatewayCountMark is the line of the count a long turn's answer
+	// must reach before the proof acts on the turn: a model that complies
+	// streams it within seconds and runs on for minutes, one that declines
+	// or shortens the ask never writes it.
+	klausGatewayCountMark   = "five"
 	klausGatewayTurnTimeout = 4 * time.Minute
 	klausGatewayReplyWait   = 90 * time.Second
 	klausGatewayCancelWait  = 90 * time.Second
@@ -1837,22 +1845,66 @@ func (p *slackProof) decideUntilSettled(api *kagentAPI, session *apiv1alpha1.Ses
 	return out, nil
 }
 
-// stop posts a long question in the thread, and once its answer streams,
+// longTurn asks for a count in the thread and waits until its answer reaches
+// klausGatewayCountMark: the model complies and the turn runs on for
+// minutes, so the proof's next act meets it running. A turn that completes
+// first is the model's doing — it declined or shortened the count — and is
+// asked once more with the reason logged; a second early end fails as the
+// model's, not the gateway's. It returns the thread's length before the
+// turn's question.
+func (p *slackProof) longTurn(t *slackThread, text, purpose string) (int, error) {
+	for attempt := 1; ; attempt++ {
+		before := len(p.fake.thread(p.channel, t.ts))
+		if _, err := p.driver.mention(t.user, t.ts, text); err != nil {
+			return 0, err
+		}
+		ended := false
+		msgs, counting := waitThread(p.fake, p.channel, t.ts, klausGatewayTurnTimeout, func(msgs []slackMessage) bool {
+			if len(p.records(recordTurnDone, t.ts)) > t.turns {
+				ended = true
+				return true
+			}
+			_, answer := streamedSince(msgs, before)
+			return countReached(answer)
+		})
+		if !counting {
+			return 0, fmt.Errorf("the %s streamed no count up to %q within %s: %s", purpose, klausGatewayCountMark, klausGatewayTurnTimeout, threadLine(msgs))
+		}
+		if !ended {
+			return before, nil
+		}
+		turn, err := p.awaitTurn(t, before)
+		if err != nil {
+			return 0, err
+		}
+		if turn.record.Outcome != outcomeCompleted {
+			return 0, fmt.Errorf("the %s ended before it counted to %q: %s", purpose, klausGatewayCountMark, turnFailure(turn))
+		}
+		if attempt == 2 {
+			return 0, fmt.Errorf("the model ended the %s twice before counting to %q (last answer %q) — the model's doing, not the gateway's", purpose, klausGatewayCountMark, excerpt(turn.answer, 80))
+		}
+		note("the model ended the %s before counting to %q (answered %q) — the model's doing, not the gateway's; asking once more", purpose, klausGatewayCountMark, excerpt(turn.answer, 80))
+	}
+}
+
+// countReached is whether a count written one number per line has reached
+// klausGatewayCountMark; a numbered or bulleted list counts too.
+func countReached(answer string) bool {
+	for _, line := range strings.Split(answer, "\n") {
+		word := strings.Trim(strings.ToLower(line), " \t*-.,:;0123456789")
+		if word == klausGatewayCountMark {
+			return true
+		}
+	}
+	return false
+}
+
+// stop posts a long question in the thread, and once its count runs,
 // `stop` as a reply: the turn must end canceled with the thread told so.
 func (p *slackProof) stop(t *slackThread, text string) (*slackTurn, error) {
-	before := len(p.fake.thread(p.channel, t.ts))
-	if _, err := p.driver.mention(t.user, t.ts, text); err != nil {
+	before, err := p.longTurn(t, text, "turn to stop")
+	if err != nil {
 		return nil, err
-	}
-	msgs, streaming := waitThread(p.fake, p.channel, t.ts, klausGatewayTurnTimeout, func(msgs []slackMessage) bool {
-		if len(p.records(recordTurnDone, t.ts)) > t.turns {
-			return true // over already; reported below
-		}
-		_, answer := streamedSince(msgs, before)
-		return answer != ""
-	})
-	if !streaming {
-		return nil, fmt.Errorf("the turn to stop streamed nothing within %s: %s", klausGatewayTurnTimeout, threadLine(msgs))
 	}
 	if _, err := p.driver.reply(t.user, t.ts, slackStopWord); err != nil {
 		return nil, err
@@ -1884,22 +1936,15 @@ type resumedTurn struct {
 }
 
 // restartMidTurn asks a long question in the thread (one whose Session
-// is warm, so the answer streams soon) and, once its answer streams, restarts
+// is warm, so the answer streams soon) and, once its count runs, restarts
 // the gateway with the gate closed: the stopping process
 // leaves the task running and promises the post, the new one cannot reach the
 // controller for klausGatewayGateClosed. Once the gate opens again, the
 // thread must get the rest of the answer with no message from the person.
 func (p *slackProof) restartMidTurn(gw *gatewayProcess, gate *tcpGate, t *slackThread, text string) (*resumedTurn, error) {
-	asked := len(p.fake.thread(p.channel, t.ts))
-	if _, err := p.driver.mention(t.user, t.ts, text); err != nil {
+	asked, err := p.longTurn(t, text, "turn to restart under")
+	if err != nil {
 		return nil, err
-	}
-	msgs, streaming := waitThread(p.fake, p.channel, t.ts, klausGatewayTurnTimeout, func(msgs []slackMessage) bool {
-		_, answer := streamedSince(msgs, asked)
-		return answer != ""
-	})
-	if !streaming {
-		return nil, fmt.Errorf("the turn to restart under streamed nothing within %s: %s", klausGatewayTurnTimeout, threadLine(msgs))
 	}
 	if err := gw.stop(); err != nil {
 		return nil, err
@@ -1907,7 +1952,7 @@ func (p *slackProof) restartMidTurn(gw *gatewayProcess, gate *tcpGate, t *slackT
 	if len(p.records(recordLeftRunning, t.ts)) == 0 {
 		return nil, fmt.Errorf("the stopping gateway left no task running for thread %s (no %s record)", t.ts, recordLeftRunning)
 	}
-	msgs = p.fake.thread(p.channel, t.ts)
+	msgs := p.fake.thread(p.channel, t.ts)
 	if _, ok := findMessage(msgs[asked:], slackRestartPromise); !ok {
 		return nil, fmt.Errorf("the stopping gateway did not promise the post (%q): %s", slackRestartPromise, threadLine(msgs))
 	}
