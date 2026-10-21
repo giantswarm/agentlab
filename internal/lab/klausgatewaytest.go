@@ -206,6 +206,9 @@ type KlausGatewayTestOptions struct {
 	// RunDir holds the stores, the keys and the gateway's log; empty picks
 	// a temporary directory removed at the end.
 	RunDir string
+	// RefusalOnly runs the component's egress refusal notice step alone
+	// (klausgatewaytest_refusal.go): no host gateway, no fixture.
+	RefusalOnly bool
 }
 
 // KlausGatewayTest is the headless Swarmgeist proof: klaus-gateway against
@@ -221,6 +224,9 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	user := cfg.FindUser(email)
 	if user == nil {
 		return fmt.Errorf("no user %q in %s", email, config.File)
+	}
+	if opts.RefusalOnly && !cfg.KlausGatewayEnabled() {
+		return fmt.Errorf("--refusal-only proves the meta chart's klaus-gateway component, which is off in this lab (platform.klausGateway; `agentlab configure --klaus-gateway` turns it on)")
 	}
 	opts.Port = cmp.Or(opts.Port, gatewayTestPort(cfg))
 	opts = opts.withDefaults()
@@ -298,6 +304,10 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 		}
 		defer f.close()
 		fake = f
+	}
+
+	if opts.RefusalOnly {
+		return klausGatewayRefusalOnly(cfg, token, user, fake, emails)
 	}
 
 	step("Applying the fixtures in namespace %s: Agent %s on Harness %s (muster carrier %s with %s, requireApproval on the binding) and Agent %s on a Harness that does not exist (%s)",
@@ -558,8 +568,12 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	// above, its Slack Web API the same fake, and the session its turn
 	// creates is removed by the cleanup.
 	var component *componentOutcome
+	var egressRefusal *refusalOutcome
 	if cfg.KlausGatewayEnabled() {
 		if component, err = klausGatewayComponentProof(cfg, token, identity, user, fake, people.component); err != nil {
+			return err
+		}
+		if egressRefusal, err = klausGatewayRefusalProof(cfg, token, user, fake, emails); err != nil {
 			return err
 		}
 	} else {
@@ -598,6 +612,9 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 		fmt.Printf("PASS: two links written through pkg/auth/musterlink with the lab's store-key survived the loss of pod %s: %s was Ready %s after the deletion and read %d links (%d before the proof), both read back unchanged, the proof's records removed\n",
 			component.pod, component.replacement, component.elapsed, component.links, component.baseline)
 		fmt.Printf("PASS: one Slack turn through the component (%s, the in-cluster target %s) as %s answered %q in the fake thread\n", component.version, klausGatewayInClusterTarget, user.Email, excerpt(component.answer, 40))
+	}
+	if egressRefusal != nil {
+		egressRefusal.printPass(user.Email)
 	}
 	fmt.Printf("PASS: nothing left behind — the Agents, the AgentTemplates, the RemoteMCPServer, the Sessions, the gateway process and its stores are gone\n")
 	return nil
@@ -876,9 +893,10 @@ const klausGatewayNoHarness = "agentlab-no-such-harness"
 
 // klausGatewayCleanup removes what the proof creates: the Sessions of the
 // fixture (the controller's, listed as the person), the Agents, the
-// AgentTemplates and the RemoteMCPServer. Best effort; klausGatewayLeftovers
-// reports what stayed.
+// AgentTemplates and the RemoteMCPServer, and the refusal step's agents.
+// Best effort; klausGatewayLeftovers reports what stayed.
 func klausGatewayCleanup(api *kagentAPI) {
+	removeRefusalAgents()
 	listCtx, listCancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	sessions, err := fixtureSessions(listCtx, api)
 	listCancel()
@@ -928,6 +946,9 @@ func klausGatewayLeftovers(api *kagentAPI) []string {
 		if exists, _ := objectExists(ctx, gvr, kagentNamespace, obj.name); exists {
 			left = append(left, obj.resource+" "+obj.name)
 		}
+	}
+	for _, name := range refusalAgents() {
+		left = append(left, "agent "+name)
 	}
 	return left
 }

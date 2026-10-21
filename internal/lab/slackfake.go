@@ -453,11 +453,8 @@ func (f *fakeSlack) answer(method string, params map[string]any) map[string]any 
 			"profile": map[string]any{"email": f.emails[id], "display_name": name, "real_name": name},
 		}}
 	case slackUsersByEmail:
-		email := paramString(params, "email")
-		for id, e := range f.emails {
-			if e == email {
-				return map[string]any{"ok": true, slackKeyUser: map[string]any{"id": id, slackKeyTeamID: slackFakeTeam}}
-			}
+		if id, found := slackUserByEmail(f.emails, paramString(params, "email")); found {
+			return map[string]any{"ok": true, slackKeyUser: map[string]any{"id": id, slackKeyTeamID: slackFakeTeam}}
 		}
 		return map[string]any{"ok": false, "error": "users_not_found"}
 	case slackViewsOpen, slackViewsUpdate:
@@ -510,6 +507,19 @@ func (f *fakeSlack) answer(method string, params map[string]any) map[string]any 
 	}
 	ok[slackKeyTS] = f.nextTSLocked()
 	return ok
+}
+
+// slackUserByEmail is the Slack user users.lookupByEmail answers for an
+// e-mail: the lowest of the ids carrying it, so the proof knows whose direct
+// message a notice to that address lands in when several of its people share
+// one lab user.
+func slackUserByEmail(emails map[string]string, email string) (string, bool) {
+	for _, id := range slices.Sorted(maps.Keys(emails)) {
+		if emails[id] == email {
+			return id, true
+		}
+	}
+	return "", false
 }
 
 // directChannel is the conversation a post lands in: a post addressed to a

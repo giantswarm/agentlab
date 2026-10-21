@@ -1143,6 +1143,17 @@ func TestPlatformValuesKlausGateway(t *testing.T) {
 	if at(block, "agentgatewayRoute") != nil {
 		t.Errorf("the edge route for the channels stays the meta chart's default (off): %v", at(block, "agentgatewayRoute"))
 	}
+	// The refusal notices: the interval alone, the chart derives the rest;
+	// a chart before the notices' floor gets no refusals block, which its
+	// klaus-gateway's closed schema would refuse.
+	if refusals, _ := at(block, "refusals").(map[string]any); len(refusals) != 1 || refusals["interval"] != "10s" {
+		t.Errorf("klausGateway.refusals = %v, want the interval 10s alone", at(block, "refusals"))
+	}
+	older := *cfg
+	older.Platform.ChartVersion = "4.153.0"
+	if got := render(&older)(block, "refusals"); got != nil {
+		t.Errorf("klausGateway.refusals on agent-platform 4.153.0 = %v, want none", got)
+	}
 
 	// A dev image rides the component's postRenderers as a kustomize image
 	// override on the chart's image name, with the pull-policy patch on the

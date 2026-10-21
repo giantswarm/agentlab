@@ -1605,8 +1605,10 @@ API the same fake through the lab's Service): 6. the render — the Role scoped
 to the link Secret, no store volume, the lab's Slack Web API base; 7. two
 links written through the gateway's store package, the person's with the
 id_token; 8. the pod deleted and its replacement Ready with the same links
-within seconds; 9. one Slack turn through the pod over the in-cluster target.
-The details, the dev-image loop and what stays out of reach (a real OBO
+within seconds; 9. one Slack turn through the pod over the in-cluster target;
+10. an agent whose egress declares one origin fetches an undeclared host,
+and the component sends its creator one direct message naming the refused
+host and port as plain text (mrkdwn `verbatim`). The details, the dev-image loop and what stays out of reach (a real OBO
 sign-in, a link's refresh) are in [klaus-gateway](klaus-gateway.md).
 
 The controller reads go over gRPC-Web through the same edge

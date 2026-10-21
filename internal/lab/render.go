@@ -100,6 +100,9 @@ type tmplData struct {
 	// `klausGateway:` block needs.
 	KlausGatewayEnabled bool
 	KlausGateway        klausGatewayValues
+	// RefusalNotices mirrors cfg.RefusalNoticesChart(): the chart takes the
+	// `klausGateway.refusals` block, whose interval the lab shortens.
+	RefusalNotices bool
 	// ClusterManagerEnabled mirrors cfg.ClusterManagerEnabled(): the chart's
 	// cluster-manager component on, because platform.devImages names its
 	// image — the roster block renders then, with its patches.
@@ -316,6 +319,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		VMManagerEnabled:             cfg.VMManagerEnabled(),
 		VMManagerGuestImage:          vmManagerGuestImage,
 		KlausGatewayEnabled:          cfg.KlausGatewayEnabled(),
+		RefusalNotices:               cfg.RefusalNoticesChart(),
 		KlausGateway:                 klausGatewayValuesFor(cfg),
 		ClusterManagerEnabled:        cfg.ClusterManagerEnabled(),
 		AgentgatewayDevImage:         agentgatewayDevImage(cfg),

@@ -312,6 +312,22 @@ var servingChartFloor = semver.MustParse("4.44.0")
 // kagent.harnesses, the kagent chart's further Harnesses.
 var codingChartFloor = semver.MustParse("4.110.0")
 
+// refusalNoticesChartFloor is the first agent-platform release that runs
+// klaus-gateway's egress refusal notices (klausGateway.refusals, on by
+// default where Slack, kagent and Substrate are) and admits the gateway as
+// the kagent controller's session reader. An older release forwards a
+// klausGateway.refusals block to a klaus-gateway whose closed schema
+// refuses it.
+var refusalNoticesChartFloor = semver.MustParse("4.154.0")
+
+// RefusalNoticesChart reports whether the lab's meta chart runs the egress
+// refusal notices: a released chart from refusalNoticesChartFloor on, a
+// chart directory, a branch build.
+func (c *Config) RefusalNoticesChart() bool {
+	_, below := c.chartBelow(refusalNoticesChartFloor)
+	return !below
+}
+
 // familiesChartFloor is the first agent-platform release whose connectivity
 // chart registers the bundled mcp-kubernetes as a kubernetes family member
 // (mcp-kubernetes.mcpServer.managementCluster, giantswarm/agent-platform#403).
