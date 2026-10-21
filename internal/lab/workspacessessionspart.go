@@ -329,28 +329,8 @@ func (sp *sessionsProof) preconditions(instance string) error {
 		return err
 	}
 	sp.set = &sessionSet{api: sp.api, manager: sp.admin.session}
-	harnesses := map[string]string{claudeHarness: rig.ClaudeHarness, kagentHarness: kagentHarness}
-	for _, h := range sessionsHarnesses {
-		harness := harnesses[h.harness]
-		if err := waitHarnessReady(ctx, harness, sp.timeout); err != nil {
-			return err
-		}
-		if agentExists(h.agent) {
-			if err := removeAgent(h.agent); err != nil {
-				return err
-			}
-		}
-		if _, err := applyManifests(ctx, []byte(workspacesAgentManifest(h.agent, harness, defaultModelConfig, fmt.Sprintf(workspacesHarnessSystemPrompt, "Bash tool")))); err != nil {
-			return fmt.Errorf("applying the Agent %s: %w", h.agent, err)
-		}
-		boot, err := waitAgentReadyOn(h.agent, harness, sp.timeout)
-		if err != nil {
-			return err
-		}
-		if !boot.ready {
-			return fmt.Errorf("the Agent %s is not Ready on Harness %s after %s: %s", h.agent, harness, boot.elapsed.Round(time.Second), boot.reason)
-		}
-		note("the Agent %s Ready on Harness %s in %s", h.agent, harness, boot.elapsed.Round(time.Second))
+	if err := readySessionsAgents(ctx, rig, sp.timeout); err != nil {
+		return err
 	}
 	if res := sideloadImages(cfg, hostPullImages([]string{workspacesTestGitImage})); res.n > 0 {
 		note("side-loaded the volume probes' git image (%s)", res.d)
@@ -373,6 +353,68 @@ func (sp *sessionsProof) preconditions(instance string) error {
 	sp.report.Pushed = sp.pr.pushed
 	note("%s cloned on this host at %s, to push to its scratch branch %s; %s stays as it is", sp.pr.pushed, shortSHA(sp.pr.start), proofBranch, sp.pr.still)
 	return nil
+}
+
+// readySessionsAgents applies an Agent on each of sessionsHarnesses, an
+// earlier run's removed first, and waits for each to be Ready.
+func readySessionsAgents(ctx context.Context, rig *workspaceAdmissionValues, timeout time.Duration) error {
+	harnesses := map[string]string{claudeHarness: rig.ClaudeHarness, kagentHarness: kagentHarness}
+	for _, h := range sessionsHarnesses {
+		harness := harnesses[h.harness]
+		if err := waitHarnessReady(ctx, harness, timeout); err != nil {
+			return err
+		}
+		if agentExists(h.agent) {
+			if err := removeAgent(h.agent); err != nil {
+				return err
+			}
+		}
+		if _, err := applyManifests(ctx, []byte(workspacesAgentManifest(h.agent, harness, defaultModelConfig, fmt.Sprintf(workspacesHarnessSystemPrompt, "Bash tool")))); err != nil {
+			return fmt.Errorf("applying the Agent %s: %w", h.agent, err)
+		}
+		boot, err := waitAgentReadyOn(h.agent, harness, timeout)
+		if err != nil {
+			return err
+		}
+		if !boot.ready {
+			return fmt.Errorf("the Agent %s is not Ready on Harness %s after %s: %s", h.agent, harness, boot.elapsed.Round(time.Second), boot.reason)
+		}
+		note("the Agent %s Ready on Harness %s in %s", h.agent, harness, boot.elapsed.Round(time.Second))
+	}
+	return nil
+}
+
+// removeSessionsAgents removes the Agents readySessionsAgents applied.
+func removeSessionsAgents() []error {
+	var errs []error
+	for _, h := range sessionsHarnesses {
+		if agentExists(h.agent) {
+			errs = append(errs, removeAgent(h.agent))
+		}
+	}
+	return errs
+}
+
+// startAgentSession starts a Session of the Agent through agent-manager's
+// start_session as the person ms signs in as, with the grant when one is
+// given, and returns its id.
+func startAgentSession(ms *musterSession, agent, grant string) (string, error) {
+	args := map[string]any{nameKey: agent, namespaceKey: kagentNamespace, startSessionRequestIDArg: uuid.NewString()}
+	if grant != "" {
+		args[startSessionGrantArg] = grant
+	}
+	env, err := ms.callToolEnvelope(agentManagerToolPrefix+"start_session", args)
+	if err != nil {
+		return "", err
+	}
+	if env.IsError {
+		return "", fmt.Errorf("start_session on %s refused: %.400s", agent, env.Content[0].Text)
+	}
+	var started accessStarted
+	if err := json.Unmarshal([]byte(env.Content[0].Text), &started); err != nil || started.Session.ID == "" {
+		return "", fmt.Errorf("start_session answered no session: %.400s", env.Content[0].Text)
+	}
+	return started.Session.ID, nil
 }
 
 // createWorkspace defines the workspace as the admin and waits for its
@@ -952,22 +994,13 @@ func judgeMirrorsKept(before, after map[string]map[string]string) error {
 // its working directory is empty and it sees no mirrors.
 func (sp *sessionsProof) noWorkspace() error {
 	for _, h := range sessionsHarnesses {
-		env, err := sp.admin.session.callToolEnvelope(agentManagerToolPrefix+"start_session", map[string]any{
-			nameKey: h.agent, namespaceKey: kagentNamespace, startSessionRequestIDArg: uuid.NewString(),
-		})
+		id, err := startAgentSession(sp.admin.session, h.agent, "")
 		if err != nil {
-			return err
+			return fmt.Errorf("without a workspace: %w", err)
 		}
-		if env.IsError {
-			return fmt.Errorf("start_session without a workspace on %s refused: %.400s", h.agent, env.Content[0].Text)
-		}
-		var started accessStarted
-		if err := json.Unmarshal([]byte(env.Content[0].Text), &started); err != nil || started.Session.ID == "" {
-			return fmt.Errorf("start_session answered no session: %.400s", env.Content[0].Text)
-		}
-		sp.set.add(started.Session.ID)
+		sp.set.add(id)
 		ctx, cancel := context.WithTimeout(context.Background(), sp.timeout)
-		ks, err := sp.api.getSession(ctx, started.Session.ID)
+		ks, err := sp.api.getSession(ctx, id)
 		if err != nil {
 			cancel()
 			return err
@@ -1151,11 +1184,7 @@ func (sp *sessionsProof) cleanup() {
 	if sp.set != nil {
 		errs = append(errs, sp.set.removeAllNow())
 	}
-	for _, h := range sessionsHarnesses {
-		if agentExists(h.agent) {
-			errs = append(errs, removeAgent(h.agent))
-		}
-	}
+	errs = append(errs, removeSessionsAgents()...)
 	errs = append(errs, sp.sp.restore())
 	if sp.pr != nil {
 		errs = append(errs, sp.pr.restore())

@@ -57,7 +57,7 @@ type proofRepos struct {
 	pushes []string
 }
 
-// proofReposSkip says why the lab runs no sync or sessions part on the
+// proofReposSkip says why the lab runs no sync, sessions or git part on the
 // instance, "" when it does.
 func proofReposSkip(cfg *config.Config, instance string) string {
 	ws := cfg.Platform.Workspaces
