@@ -2,6 +2,8 @@ module github.com/giantswarm/agentlab
 
 go 1.26.3
 
+toolchain go1.27.3
+
 require (
 	buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go v1.36.12-20260825204119-511051f7f437.2
 	charm.land/bubbletea/v2 v2.1.0
@@ -10,7 +12,7 @@ require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/a2aproject/a2a-go/v2 v2.6.0
 	github.com/charmbracelet/x/ansi v0.11.9
-	github.com/giantswarm/go-selfupdate v1.6.5
+	github.com/giantswarm/go-selfupdate v1.6.6
 	github.com/giantswarm/klaus-gateway v1.21.0
 	github.com/giantswarm/selfupdate-cosign v0.3.8
 	github.com/giantswarm/telemetrydeck-go v0.3.7

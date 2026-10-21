@@ -495,7 +495,17 @@ var musterSignInLinkRe = regexp.MustCompile(`https?://[^\s"'\\]*` + regexp.Quote
 // link, which it returns. Any other answer is an error.
 func (p *workspacePerson) grantRequired(tool string, args map[string]any) (string, error) {
 	env, err := p.session.callToolEnvelope(workspaceManagerToolPrefix+tool, args)
-	var text string
+	link, text := musterSignInLink(env, err)
+	if link != "" {
+		return link, nil
+	}
+	return "", fmt.Errorf("%s as %s, who has not granted the workspace-manager's App, answered no muster sign-in link: %.400s", tool, p.user.Email, text)
+}
+
+// musterSignInLink is muster's sign-in link in a tool call's answer (its
+// authUrl, or the link in its text or error), "" when there is none, and the
+// text it was read from.
+func musterSignInLink(env *toolEnvelope, err error) (link, text string) {
 	switch {
 	case err != nil:
 		text = err.Error()
@@ -504,10 +514,7 @@ func (p *workspacePerson) grantRequired(tool string, args map[string]any) (strin
 	default:
 		text = env.Content[0].Text
 	}
-	if link := musterSignInLinkRe.FindString(text); link != "" {
-		return link, nil
-	}
-	return "", fmt.Errorf("%s as %s, who has not granted the workspace-manager's App, answered no muster sign-in link: %.400s", tool, p.user.Email, text)
+	return musterSignInLinkRe.FindString(text), text
 }
 
 // workspaceManagerPinnedProvider is the instance whose App the live
