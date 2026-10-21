@@ -30,6 +30,9 @@ const (
 	// proofGrantWait bounds the wait for a person's grant of a GitHub App,
 	// which only a browser signed in to GitHub gives.
 	proofGrantWait = 15 * time.Minute
+	// proofGrantPoll is how often the wait asks list_providers: each call
+	// before the grant is an authentication attempt muster rate-limits.
+	proofGrantPoll = 30 * time.Second
 	// proofGrantFile is where a part writes muster's sign-in link it waits
 	// on, in the state directory, for a browser to open.
 	proofGrantFile = "workspaces-grant-%s.url"
@@ -306,7 +309,7 @@ func grantProofProvider(cfg *config.Config, p *workspacePerson, instance string,
 	note("%s grants the App of %s in a browser signed in to GitHub: open muster's sign-in link (also in %s); waiting up to %s\n  %s", p.user.Email, instance, path, wait, link)
 	ctx, cancel := context.WithTimeout(context.Background(), wait)
 	defer cancel()
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(proofGrantPoll)
 	defer ticker.Stop()
 	for {
 		status, err := p.providerStatus(instance)
