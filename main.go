@@ -2050,6 +2050,7 @@ func klausGatewayTestCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the fixture runs on (default: default-model-config, the Anthropic one the lab renders)")
 	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", 0, "how long the fixture's golden boot may take to reach Ready on the Harness (default 10m)")
 	cmd.Flags().StringVar(&opts.RunDir, "run-dir", "", "directory for the gateway's stores, keys and log, kept afterwards (default: a temporary directory, removed)")
+	cmd.Flags().BoolVar(&opts.RefusalOnly, "refusal-only", false, "run the component's egress refusal notice step alone: the fake Slack, an agent that fetches an undeclared host, one direct message to its creator naming the host as plain text (needs platform.klausGateway)")
 	return cmd
 }
 

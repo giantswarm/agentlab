@@ -80,7 +80,7 @@ func klausGatewayRefusalProof(cfg *config.Config, token string, user *config.Use
 		return nil, fmt.Errorf("reading %s: %w", describe(gvrDeployments, platformNamespace, klausGatewayComponent), err)
 	}
 	env := containerEnv(deploy.Spec.Template.Spec.Containers, klausGatewayComponent)
-	if env[refusalsEnabledEnv] != "true" {
+	if on, _ := strconv.ParseBool(env[refusalsEnabledEnv]); !on {
 		if !cfg.RefusalNoticesChart() {
 			note("the lab's meta chart predates the egress refusal notices (agent-platform 4.154.0): step 10 skipped")
 			return nil, nil
@@ -176,6 +176,32 @@ func klausGatewayRefusalProof(cfg *config.Config, token string, user *config.Use
 	out.notice = notices[0].shown()
 	note("one notice in %s %s after the turn: %q", dm, out.elapsed, excerpt(strings.ReplaceAll(out.notice, "\n", " "), 200))
 	return out, nil
+}
+
+// printPass is the refusal half's line of the summary.
+func (o *refusalOutcome) printPass(creator string) {
+	fmt.Printf("PASS: the egress refused %s for agent %s (Session %s); the component (interval %s) sent %s one direct message %s after the turn, naming %s as plain text (mrkdwn verbatim); the agent and its Session removed\n",
+		egressTestUndeclaredURL, o.agent, o.session, o.interval, creator, o.elapsed, o.destination)
+}
+
+// klausGatewayRefusalOnly is `klaus-gateway-test --refusal-only`: the
+// refusal half alone on the fake the caller started, its agent and Session
+// removed and checked gone. A chart without the notices fails it: there is
+// nothing else to prove.
+func klausGatewayRefusalOnly(cfg *config.Config, token string, user *config.User, fake slackWorkspace, emails map[string]string) error {
+	out, err := klausGatewayRefusalProof(cfg, token, user, fake, emails)
+	if err != nil {
+		return err
+	}
+	if out == nil {
+		return fmt.Errorf("--refusal-only needs agent-platform %s or newer, which runs the egress refusal notices", "4.154.0")
+	}
+	if left := refusalAgents(); len(left) > 0 {
+		return fmt.Errorf("left behind: agent %s", strings.Join(left, ", agent "))
+	}
+	fmt.Println()
+	out.printPass(user.Email)
+	return nil
 }
 
 // refusalTurn starts a Session of the agent and runs one turn whose bash

@@ -206,6 +206,9 @@ type KlausGatewayTestOptions struct {
 	// RunDir holds the stores, the keys and the gateway's log; empty picks
 	// a temporary directory removed at the end.
 	RunDir string
+	// RefusalOnly runs the component's egress refusal notice step alone
+	// (klausgatewaytest_refusal.go): no host gateway, no fixture.
+	RefusalOnly bool
 }
 
 // KlausGatewayTest is the headless Swarmgeist proof: klaus-gateway against
@@ -221,6 +224,9 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	user := cfg.FindUser(email)
 	if user == nil {
 		return fmt.Errorf("no user %q in %s", email, config.File)
+	}
+	if opts.RefusalOnly && !cfg.KlausGatewayEnabled() {
+		return fmt.Errorf("--refusal-only proves the meta chart's klaus-gateway component, which is off in this lab (platform.klausGateway; `agentlab configure --klaus-gateway` turns it on)")
 	}
 	opts.Port = cmp.Or(opts.Port, gatewayTestPort(cfg))
 	opts = opts.withDefaults()
@@ -298,6 +304,10 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 		}
 		defer f.close()
 		fake = f
+	}
+
+	if opts.RefusalOnly {
+		return klausGatewayRefusalOnly(cfg, token, user, fake, emails)
 	}
 
 	step("Applying the fixtures in namespace %s: Agent %s on Harness %s (muster carrier %s with %s, requireApproval on the binding) and Agent %s on a Harness that does not exist (%s)",
@@ -604,8 +614,7 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 		fmt.Printf("PASS: one Slack turn through the component (%s, the in-cluster target %s) as %s answered %q in the fake thread\n", component.version, klausGatewayInClusterTarget, user.Email, excerpt(component.answer, 40))
 	}
 	if egressRefusal != nil {
-		fmt.Printf("PASS: the egress refused %s for agent %s (Session %s); the component (interval %s) sent %s one direct message %s after the turn, naming %s as plain text (mrkdwn verbatim); the agent and its Session removed\n",
-			egressTestUndeclaredURL, egressRefusal.agent, egressRefusal.session, egressRefusal.interval, user.Email, egressRefusal.elapsed, egressRefusal.destination)
+		egressRefusal.printPass(user.Email)
 	}
 	fmt.Printf("PASS: nothing left behind — the Agents, the AgentTemplates, the RemoteMCPServer, the Sessions, the gateway process and its stores are gone\n")
 	return nil

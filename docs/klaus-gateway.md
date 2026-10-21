@@ -171,7 +171,8 @@ and, on a lab with the component, continues on it:
     same name would rewrite the last run's message instead of posting. The
     agent and its Session are removed, and an aborted run's
     `agentlab-refusal-*` agents first. On an older meta chart the step is
-    skipped with a note.
+    skipped with a note. `agentlab klaus-gateway-test --refusal-only` runs
+    this step alone, without the host gateway and its fixture.
 
 Then the proof's records are removed (the count is back where it was), and
 the host-mode cleanup takes the fixtures and the Sessions with it. On a

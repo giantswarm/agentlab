@@ -26,32 +26,32 @@ func refusalNoticeBlocks(agent, destination string, verbatim bool) []any {
 // notice posted to that user lands in their direct message with its blocks
 // as sent, verbatim flag included, and the proof's readers find exactly it.
 func TestFakeSlackRefusalNotice(t *testing.T) {
-	const email = "person@lab.local"
-	emails := map[string]string{"UTESTP": email, "UTESTC": email, "UTESTS": "stranger@lab.local"}
+	const email, lowest = "person@lab.local", "UTESTC"
+	emails := map[string]string{"UTESTP": email, lowest: email, "UTESTS": "stranger@lab.local"}
 	f := startTestFake(t, emails)
 
-	got := callFake(t, f, slackUsersByEmail, url.Values{"email": {email}}, nil)
+	got := callFake(t, f, slackUsersByEmail, url.Values{emailClaim: {email}}, nil)
 	user, _ := got[slackKeyUser].(map[string]any)
-	if got["ok"] != true || user["id"] != "UTESTC" {
+	if got["ok"] != true || user["id"] != lowest {
 		t.Fatalf("users.lookupByEmail = %v, want UTESTC, the lowest id carrying %s", got, email)
 	}
-	if id, ok := slackUserByEmail(emails, email); !ok || id != "UTESTC" {
+	if id, ok := slackUserByEmail(emails, email); !ok || id != lowest {
 		t.Fatalf("slackUserByEmail = %q %v, want the id the fake answers", id, ok)
 	}
-	if got := callFake(t, f, slackUsersByEmail, url.Values{"email": {"nobody@lab.local"}}, nil); got["ok"] != false || got["error"] != "users_not_found" {
+	if got := callFake(t, f, slackUsersByEmail, url.Values{emailClaim: {"nobody@lab.local"}}, nil); got["ok"] != false || got["error"] != "users_not_found" {
 		t.Fatalf("users.lookupByEmail of an unknown address = %v", got)
 	}
 
 	const agent, destination = "agentlab-refusal-x1", "proxy.golang.org:443"
 	posted := callFake(t, f, slackPostMessage, nil, map[string]any{
-		slackKeyChannel: "UTESTC", slackKeyText: refusalNoticeTitle + agent + ": proxy.golang.org", slackKeyBlocks: refusalNoticeBlocks(agent, destination, true),
+		slackKeyChannel: lowest, slackKeyText: refusalNoticeTitle + agent + ": proxy.golang.org", slackKeyBlocks: refusalNoticeBlocks(agent, destination, true),
 	})
 	if posted[slackKeyChannel] != "DTESTC" {
 		t.Fatalf("a post to UTESTC answered channel %v, want its direct message DTESTC", posted[slackKeyChannel])
 	}
-	callFake(t, f, slackPostMessage, nil, map[string]any{slackKeyChannel: "UTESTC", slackKeyText: "something else"})
+	callFake(t, f, slackPostMessage, nil, map[string]any{slackKeyChannel: lowest, slackKeyText: "something else"})
 
-	notices := refusalNotices(f.thread(directChannel("UTESTC"), ""), agent)
+	notices := refusalNotices(f.thread(directChannel(lowest), ""), agent)
 	if len(notices) != 1 {
 		t.Fatalf("refusal notices in DTESTC = %d, want 1: %s", len(notices), threadLine(f.thread("DTESTC", "")))
 	}
