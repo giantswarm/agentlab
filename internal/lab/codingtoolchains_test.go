@@ -50,13 +50,13 @@ func TestJudgeToolchainCheck(t *testing.T) {
 	ghVersion := toolchainsProbeVersion + "-" + toolchainGitHub
 	good := codingProbe{
 		toolchainsProbeTools: "github go ", toolchainsProbeBuilt: toolchainsFixtureOutput,
-		toolchainsProbeOnPath + "-go": "yes", toolchainsProbePath + "-go": "/opt/kagent/tools/go/bin/go", toolchainsProbeVersion + "-go": "go version go1.26.10 linux/amd64",
-		ghOnPath: "yes", ghPath: "/opt/kagent/tools/github/bin/gh", ghVersion: "gh version 2.83.0 (2025-11-04)",
+		toolchainsProbeOnPath + "-go": toolchainsOnPath, toolchainsProbePath + "-go": "/opt/kagent/tools/go/bin/go", toolchainsProbeVersion + "-go": "go version go1.26.10 linux/amd64",
+		ghOnPath: toolchainsOnPath, ghPath: "/opt/kagent/tools/github/bin/gh", ghVersion: "gh version 2.83.0 (2025-11-04)",
 	}
 	if _, err := judgeToolchainCheck(good, []string{toolchainGo, toolchainGitHub}); err != nil {
 		t.Fatalf("the good readings: %v", err)
 	}
-	ghOnly := codingProbe{toolchainsProbeTools: toolchainGitHub, ghOnPath: "yes", ghPath: good[ghPath], ghVersion: good[ghVersion], toolchainsProbeBuilt: "no go toolchain"}
+	ghOnly := codingProbe{toolchainsProbeTools: toolchainGitHub, ghOnPath: toolchainsOnPath, ghPath: good[ghPath], ghVersion: good[ghVersion], toolchainsProbeBuilt: "no go toolchain"}
 	if _, err := judgeToolchainCheck(ghOnly, []string{toolchainGitHub}); err != nil {
 		t.Fatalf("github alone, no build: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestToolchainsCheckCommandBuildsTheFixture(t *testing.T) {
 	}
 	root := t.TempDir()
 	bin := filepath.Join(root, toolchainGo, "bin")
-	if err := os.MkdirAll(bin, 0o755); err != nil {
+	if err := os.MkdirAll(bin, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(goBin, filepath.Join(bin, toolchainGo)); err != nil {
@@ -124,7 +124,7 @@ func TestToolchainsCheckCommandBuildsTheFixture(t *testing.T) {
 		t.Fatalf("the script: %v: %s", err, out)
 	}
 	probe := parseCodingProbe(string(out))
-	if strings.TrimSpace(probe[toolchainsProbeTools]) != toolchainGo || probe[toolchainsProbeOnPath+"-go"] != "yes" ||
+	if strings.TrimSpace(probe[toolchainsProbeTools]) != toolchainGo || probe[toolchainsProbeOnPath+"-go"] != toolchainsOnPath ||
 		!strings.HasPrefix(probe[toolchainsProbeVersion+"-go"], "go version go") || probe[toolchainsProbeBuilt] != toolchainsFixtureOutput {
 		t.Fatalf("readings %v from %s", probe, out)
 	}

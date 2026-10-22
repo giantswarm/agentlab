@@ -63,9 +63,12 @@ const (
 	agentManagerToolchainsCapability = "toolchains"
 	// The check's lines: the mount's listing, and per toolchain its tool's
 	// path and version (<line>-<toolchain>); the fixture's build.
-	toolchainsProbeTools   = "mounted"
-	toolchainsProbePath    = "path"
-	toolchainsProbeOnPath  = "onpath"
+	toolchainsProbeTools  = "mounted"
+	toolchainsProbePath   = "path"
+	toolchainsProbeOnPath = "onpath"
+	// toolchainsOnPath is the onpath line of a toolchain whose bin/ is on
+	// the PATH.
+	toolchainsOnPath       = "yes"
 	toolchainsProbeVersion = "version"
 	toolchainsProbeBuilt   = "built"
 )
@@ -269,7 +272,7 @@ echo "$P ` + toolchainsProbeTools + `=$(ls ` + toolchainsMountRoot + ` 2>/dev/nu
 for t in $(ls ` + toolchainsMountRoot + ` 2>/dev/null); do
   case "$t" in ` + tools.String() + `*) b="$t";; esac
   m="` + toolchainsMountRoot + `/$t/bin/$b"
-  case ":$PATH:" in *":` + toolchainsMountRoot + `/$t/bin:"*) o=yes;; *) o=no;; esac
+  case ":$PATH:" in *":` + toolchainsMountRoot + `/$t/bin:"*) o=` + toolchainsOnPath + `;; *) o=no;; esac
   echo "$P ` + toolchainsProbeOnPath + `-$t=$o"
   echo "$P ` + toolchainsProbePath + `-$t=$(command -v "$b")"
   if [ ! -x "$m" ]; then v="no $m"; elif [ "$b" = go ]; then v=$("$m" version 2>&1); else v=$("$m" --version 2>&1 | head -n 1); fi
@@ -300,7 +303,7 @@ func judgeToolchainCheck(probe codingProbe, want []string) (string, error) {
 		path := toolchainsMountRoot + "/" + name + "/bin/" + toolchainTool(name)
 		got, version := probe[toolchainsProbePath+"-"+name], probe[toolchainsProbeVersion+"-"+name]
 		switch {
-		case probe[toolchainsProbeOnPath+"-"+name] != "yes":
+		case probe[toolchainsProbeOnPath+"-"+name] != toolchainsOnPath:
 			return "", fmt.Errorf("%s/%s/bin is not on the PATH (%s=%q)", toolchainsMountRoot, name, toolchainsProbeOnPath, probe[toolchainsProbeOnPath+"-"+name])
 		case version == "" || strings.HasPrefix(version, "no ") || strings.Contains(version, "not found"):
 			return "", fmt.Errorf("%s's version answered %q", path, version)
