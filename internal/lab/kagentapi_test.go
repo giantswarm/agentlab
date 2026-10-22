@@ -624,6 +624,14 @@ func fakeAgent(t *testing.T, name, template, harness string, annotations map[str
 	}
 }
 
+// withLatestSuccessfulRevision records the revision the controller keeps
+// serving while a newer one prepares.
+func withLatestSuccessfulRevision(agent *apiv1alpha1.Agent, revision string) *apiv1alpha1.Agent {
+	status := agent.GetResource().GetValue().GetFields()[fieldStatus].GetStructValue()
+	status.Fields[latestSuccessfulRevisionKey] = structpb.NewStringValue(revision)
+	return agent
+}
+
 // fakeReady is an Agent's Ready condition as the controller writes it.
 func fakeReady(ready bool, message string) []any {
 	st := condFalseStatus
@@ -985,10 +993,11 @@ func TestListingOf(t *testing.T) {
 		fakeAgent(t, "compiling", "compiling", kagentHarness, nil, fakeReady(false, "waiting for the ActorTemplate golden snapshot")),
 		fakeAgent(t, "annotated", "compiling", testOtherHarness, annotations, fakeReady(true, "")),
 		fakeAgent(t, "no-status-yet", "compiling", kagentHarness, nil, nil),
+		withLatestSuccessfulRevision(fakeAgent(t, "updating", "compiling", kagentHarness, nil, fakeReady(false, "waiting for the ActorTemplate golden snapshot")), "rev-1"),
 	}
 	api := f.serve(t, fakeToken)
 	agents, templates, err := api.roster(t.Context())
-	if err != nil || len(agents) != 4 || len(templates) != 2 {
+	if err != nil || len(agents) != 5 || len(templates) != 2 {
 		t.Fatalf("listed %d agents, %d templates: %v", len(agents), len(templates), err)
 	}
 	for _, method := range []string{"ListAgents", "ListAgentTemplates"} {
@@ -1016,6 +1025,11 @@ func TestListingOf(t *testing.T) {
 		if err != nil || !strings.Contains(l.Unavailable, reason) {
 			t.Errorf("%s: %+v %v", name, l, err)
 		}
+	}
+	// A newer revision preparing keeps the Agent selectable: kagent starts
+	// its conversations on the latest successful revision meanwhile.
+	if updating, err := findListing(agents, templates, "updating"); err != nil || updating.Unavailable != "" {
+		t.Errorf("an Agent with a latest successful revision: %+v %v", updating, err)
 	}
 	if _, err := findListing(agents, templates, "nobody"); err == nil || !strings.Contains(err.Error(), "does not list nobody") {
 		t.Errorf("an unknown Agent: %v", err)

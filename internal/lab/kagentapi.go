@@ -103,6 +103,9 @@ const (
 	crSpec       = "spec"
 	crStatus     = "status"
 	crConditions = "conditions"
+	// The revision an Agent's new conversations start on, set once one
+	// golden snapshot was ready and kept while a newer revision prepares.
+	latestSuccessfulRevisionKey = "latestSuccessfulRevision"
 
 	// A tool result's text parts as omp reports them: {content: [{type:
 	// text, text}]}.
@@ -536,8 +539,10 @@ type agentListing struct {
 // listingOf derives the roster entry from a listed Agent: the references
 // from its spec, the annotations from its metadata (the AgentTemplate's when
 // the Agent carries none, templates being the namespace's by name), the
-// readiness from status.conditions. An Agent is selectable when it reports
-// Ready=True.
+// readiness from its status. An Agent is selectable once it has a
+// latestSuccessfulRevision: kagent starts new conversations on that revision
+// while a newer one prepares (Ready=False, ActorTemplatePending), as the
+// kagent UI does; one without falls back to Ready=True.
 func listingOf(agent *apiv1alpha1.Agent, templates map[string]*apiv1alpha1.AgentTemplate) agentListing {
 	resource := agent.GetResource().GetValue().AsMap()
 	spec := nestedMap(resource, crSpec)
@@ -563,7 +568,11 @@ func listingOf(agent *apiv1alpha1.Agent, templates map[string]*apiv1alpha1.Agent
 	if l.Description == "" {
 		l.Description = stringOf(nestedMap(spec, "template")[descriptionKey])
 	}
-	conditions, _ := nestedMap(resource, crStatus)[crConditions].([]any)
+	status := nestedMap(resource, crStatus)
+	if stringOf(status[latestSuccessfulRevisionKey]) != "" {
+		return l
+	}
+	conditions, _ := status[crConditions].([]any)
 	if ready, reason := readyConditionOf(conditions); !ready {
 		l.Unavailable = fmt.Sprintf("Agent %s has not compiled a ready revision: %s", l.Name, reason)
 	}
