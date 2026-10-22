@@ -260,8 +260,14 @@ func CodingTest(cfg *config.Config, opts CodingTestOptions) error {
 			return fmt.Errorf("--toolchains is the toolchains part's (--part %s)", CodingPartToolchains)
 		}
 	case CodingPartDevctl:
-		if opts.Harness != "" && opts.Harness != config.CodingRuntimeClaude || opts.ModelConfig != "" || opts.Email != "" || len(opts.MusterTools) > 0 || len(opts.Toolchains) > 0 {
-			return fmt.Errorf("--part %s runs a claude agent of its own as the admin, on agent-manager's default model: it takes no [email], --harness, --model-config, --muster-tools or --toolchains", CodingPartDevctl)
+		rt, ok := codingRuntimes[cmp.Or(opts.Harness, config.CodingRuntimeClaude)]
+		switch {
+		case !ok:
+			return fmt.Errorf("--harness %q: --part %s proves %s", opts.Harness, CodingPartDevctl, strings.Join(slices.Sorted(maps.Keys(codingRuntimes)), ", "))
+		case opts.Email != "" || len(opts.MusterTools) > 0 || len(opts.Toolchains) > 0:
+			return fmt.Errorf("--part %s runs an agent of its own as the admin: it takes no [email], --muster-tools or --toolchains", CodingPartDevctl)
+		case rt.claude && opts.ModelConfig != "":
+			return fmt.Errorf("--part %s on claude runs on agent-manager's default model: --model-config is codex's and omp's", CodingPartDevctl)
 		}
 		return codingDevctlPart(cfg, opts)
 	default:
@@ -289,17 +295,11 @@ func CodingTest(cfg *config.Config, opts CodingTestOptions) error {
 		p.toolchains = DefaultCodingToolchains
 	}
 	if opts.ModelConfig == "" && rt.name == config.CodingRuntimeCodex {
-		p.mockBinary = opts.MockLLMBinary
-		if p.mockBinary == "" {
-			exe, err := os.Executable()
-			if err != nil {
-				return fmt.Errorf("locating this binary for the mockllm's container: %w (pass --mockllm-binary)", err)
-			}
-			p.mockBinary = exe
-		}
-		if err := linuxStaticBinary(p.mockBinary, mockLLMWhat, "--mockllm-binary"); err != nil {
+		binary, err := mockLLMBinary(opts.MockLLMBinary)
+		if err != nil {
 			return err
 		}
+		p.mockBinary = binary
 	}
 	defer p.cleanup()
 	run := p.run
@@ -311,6 +311,20 @@ func CodingTest(cfg *config.Config, opts CodingTestOptions) error {
 		err = fmt.Errorf("%w\nthe mockllm's requests, the tools and the last input item of each:\n%s", err, p.mock.logTail())
 	}
 	return p.stages.close(err)
+}
+
+// mockLLMBinary is the static linux agentlab binary the mockllm's container
+// runs: flag (--mockllm-binary), else this one.
+func mockLLMBinary(flag string) (string, error) {
+	binary := flag
+	if binary == "" {
+		exe, err := os.Executable()
+		if err != nil {
+			return "", fmt.Errorf("locating this binary for the mockllm's container: %w (pass --mockllm-binary)", err)
+		}
+		binary = exe
+	}
+	return binary, linuxStaticBinary(binary, mockLLMWhat, "--mockllm-binary")
 }
 
 // codingProof is one run's state.
@@ -626,7 +640,7 @@ func (p *codingProof) startMock() error {
 	if err != nil {
 		return err
 	}
-	if p.mock, err = startMockLLM(p.cfg, p.mockBinary, t.mcpServer(), []string{pluginExampleSkill}); err != nil {
+	if p.mock, err = startMockLLM(p.cfg, p.mockBinary, t.mcpServer(), "", []string{pluginExampleSkill}); err != nil {
 		return err
 	}
 	note("the mockllm serves %s for the MCP tools of %s", mockLLMURL(), t.mcpServer())

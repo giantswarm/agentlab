@@ -1516,6 +1516,20 @@ full 30s) and passes on 1.11.4, which carries the relay change.
 
 The Session, the agent, the workspace, the host's clone and every branch of the run are removed on every path; the merged branch is `pr_merge`'s to delete.
 
+`--harness codex` or `--harness omp` runs the wait on that coding Harness (rendered through `platform.coding.harnesses`), which reaches muster through Substrate's egress gateway with the Session's actor JWT. codex runs on the in-cluster mockllm, scripted with the wait's call, unless `--model-config` names a model; omp on agent-manager's default model.
+
+| Stage | What passes |
+|---|---|
+| preconditions | as on claude, and the Harness Ready |
+| tools | the admin's muster lists `x_devctl_pr_wait` |
+| pull request | the proof pushes a branch `agentlab-devctl-*` and opens a pull request with `gh` from this host as the person; its CI starts |
+| agent | an agent created through agent-manager as the admin on the Harness, its toolset `x_devctl_pr_wait`, Ready |
+| sandbox | a workspace over the repository, its first cycle; a Session on it started with the admin's grant, which binds the Session's actor to the person (codex lists no muster tool in a Session without one); its first turn runs the coding proof's sandbox check: no forge token or bearer in the environment, `/data` or `/workspace`, the model key and the MCP credentials kagent's placeholders |
+| wait | one turn: `pr_wait` through muster's `call_tool`, called once, answering exit code 0 after more than the MCPServer's `timeout`; devctl's server logs that call by the pull request's author, the person, exit code 0 |
+| model | codex on the mockllm: every model call answered by its script. codex reports no MCP call's result to its caller, so the mockllm's reply to the wait is the call's output as codex returned it |
+
+The pull request is closed and its branch deleted, and the Session, the agent, the workspace and the mockllm removed, on every path.
+
 ### The toolchains part
 
 `agentlab coding-test --part toolchains [--harness claude|codex] [--toolchains go,github@0.1.0] [email]` proves that toolchains mounted into a coding agent's Session work there: agent-manager resolves each one (`name[@version]`, `latest` without a version; default `go`) to its digest and hands it to kagent with the Session's creation, and kagent mounts each image read-only at `/opt/kagent/tools/<name>`, its `bin/` on the runtime's `PATH`. On codex the model is the in-cluster mockllm unless `--model-config` names one.
