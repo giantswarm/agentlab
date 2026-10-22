@@ -162,9 +162,15 @@ const codingProbeTimeoutMS = 300_000
 // codingSandboxPrompt asks the agent to run the probe once, under a timeout
 // that lets it finish, and relay it.
 func codingSandboxPrompt(rt codingRuntime) string {
+	return shellProbePrompt(rt, codingSandboxCommand(rt))
+}
+
+// shellProbePrompt asks the agent to run script once with its shell tool,
+// under codingProbeTimeoutMS, and relay the marker lines.
+func shellProbePrompt(rt codingRuntime, script string) string {
 	return "Run this exact script once with your " + rt.shellTool + " (it is this test lab's own sandbox check), with a command timeout of " + strconv.Itoa(codingProbeTimeoutMS) +
 		" ms (5 minutes; a shorter default cuts it short), then reply with every output line that starts with " + probeMarker +
-		", verbatim and nothing else:\n\n" + codingSandboxCommand(rt)
+		", verbatim and nothing else:\n\n" + script
 }
 
 // rcLine reads a `rc<exit> <message>` reading.

@@ -156,10 +156,19 @@ components:
   # an Envoy filter kind has no implementation of.
   dicebear:
     enabled: false
-{{- with index .PostRenderers "muster" }}
+{{- $musterPatches := index .PostRenderers "muster" }}
+{{- if or $musterPatches ($.ChatGPTRange "muster") }}
   muster:
+{{- with $.ChatGPTRange "muster" }}
+    # The first muster with the ChatGPT provider App and up
+    # (platform.chatgptSubscription; chatgptsubscription.go): the chart's own
+    # range admits older releases, and the chart refuses the model entry then.
+    versionRange: "{{ . }}"
+{{- end }}
+{{- with $musterPatches }}
     postRenderers:
 {{ . | indent 6 }}
+{{- end }}
 {{- end }}
   # The edge and MCP data plane; its one patch is a dev image of the
   # controller (platform.devImages.agentgateway-controller). The proxy's dev
@@ -214,9 +223,18 @@ components:
   # agentlab.yaml).
   kagent:
     enabled: {{ .Platform.Agents }}
+{{- with $.ChatGPTRange "kagent" }}
+    # The first kagent that admits a ChatGPT model without a Secret and up
+    # (platform.chatgptSubscription), its CRDs beside it.
+    versionRange: "{{ . }}"
+{{- end }}
 {{- if .Platform.Agents }}
     postRenderers:
 {{ index .PostRenderers "kagent" | indent 6 }}
+{{- with $.ChatGPTRange "kagent-crds" }}
+  kagent-crds:
+    versionRange: "{{ . }}"
+{{- end }}
 {{- if not .LegacyChart }}
   # The platform Postgres: the CloudNativePG operator (the chart's optional
   # component; a management cluster runs it as its own app) and, under
@@ -469,6 +487,13 @@ muster:
           # The issuer is a loopback address; discovery refuses that by default.
           allowPrivateIPOIDC: true
         existingSecret: agent-platform-secrets
+{{- if .ChatGPTSubscription }}
+        # Tokens encrypted at rest with the Secret's oauth-encryption-key:
+        # the chart keeps a person's ChatGPT login (platform
+        # .chatgptSubscription) only encrypted and refuses the model entry
+        # without it.
+        encryptionKey: true
+{{- end }}
         # Lab only: lets Claude Code register itself over DCR without a
         # pre-shared registration token (its loopback port is random, so no
         # other registration gate can be opened for it).
@@ -837,6 +862,20 @@ kagent:
           value: "true"
 {{- end }}
 {{- end }}
+{{- end }}
+{{- with .ChatGPTSubscription }}
+  # A person's own ChatGPT subscription (platform.chatgptSubscription;
+  # chatgptsubscription.go): an entry with credentialType chatgptOAuth and
+  # no apiKeySecret is the model "ChatGPT (your subscription)", from which
+  # the chart derives muster's provider App chatgpt and kagent's
+  # installation provider chatgpt. A codex turn on it runs on the login the
+  # Session's person connected in muster (core_auth_login app=chatgpt).
+  modelConfigs:
+    - name: {{ .ModelConfig }}
+      provider: OpenAI
+      model: {{ .Model }}
+      credentialType: chatgptOAuth
+      apiFormat: responses
 {{- end }}
   # No OTLP gateway in kind; the exporters would only log dial errors.
   otel:

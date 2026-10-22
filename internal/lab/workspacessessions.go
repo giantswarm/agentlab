@@ -33,8 +33,10 @@ const (
 	// workspaceStateFile is the setup's record in a session directory.
 	workspaceStateFile = ".kagent/workspace.json"
 	// startSessionRequestIDArg is start_session's idempotency key,
-	// startSessionGrantArg its workspace grant.
+	// startSessionMessageArg its first message, startSessionGrantArg its
+	// workspace grant.
 	startSessionRequestIDArg = "requestId"
+	startSessionMessageArg   = "message"
 	startSessionGrantArg     = "workspaceGrant"
 	// The probes' words: a write refused, a directory absent, a mirror's
 	// head.

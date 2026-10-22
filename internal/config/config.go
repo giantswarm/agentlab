@@ -4,6 +4,7 @@ package config
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
@@ -312,6 +313,12 @@ var servingChartFloor = semver.MustParse("4.44.0")
 // kagent.harnesses, the kagent chart's further Harnesses.
 var codingChartFloor = semver.MustParse("4.110.0")
 
+// chatgptSubscriptionChartFloor is the first agent-platform release that
+// wires a person's own ChatGPT login: a kagent.modelConfigs[] entry with
+// credentialType chatgptOAuth and no apiKeySecret derives muster's provider
+// App chatgpt and kagent's installation provider chatgpt.
+var chatgptSubscriptionChartFloor = semver.MustParse("4.164.0-0")
+
 // refusalNoticesChartFloor is the first agent-platform release that runs
 // klaus-gateway's egress refusal notices (klausGateway.refusals, on by
 // default where Slack, kagent and Substrate are) and admits the gateway as
@@ -616,6 +623,17 @@ type Platform struct {
 	// by default; --coding turns it on; needs the agents runtime. `agentlab
 	// coding-test` is the proof.
 	Coding Coding `yaml:"coding"`
+	// A person's own ChatGPT subscription as a codex model: the chart's
+	// kagent.modelConfigs[] entry ChatGPTSubscriptionModelConfig with
+	// credentialType chatgptOAuth and no apiKeySecret, from which the chart
+	// derives muster's provider App chatgpt (OpenAI's device-code sign-in)
+	// and kagent's installation provider chatgpt; muster's token encryption
+	// on. Off by default; --chatgpt-subscription turns it on; needs the codex
+	// coding Harness and the workspaces (muster's credential provider and the
+	// Session admission). `agentlab chatgpt-test` is the proof.
+	// Unset, the key is left out of the file: a lab with it off stays
+	// readable by a release before it.
+	ChatGPTSubscription ChatGPTSubscription `yaml:"chatgptSubscription,omitempty"`
 	// The Organizations' namespaces as tenants: the chart's
 	// tenants.organizations.enabled, which turns on agent-manager's tenant
 	// reconciler and admits the agent workers of every namespace labelled
@@ -646,6 +664,26 @@ type Coding struct {
 	// wins over an entry here.
 	Images map[string]string `yaml:"images,omitempty"`
 }
+
+// ChatGPTSubscription configures a person's own ChatGPT login as a codex
+// model.
+type ChatGPTSubscription struct {
+	// On, `agentlab platform` renders the model entry and muster's token
+	// encryption.
+	Enabled bool `yaml:"enabled"`
+	// Model is the ChatGPT Codex backend's model the entry runs; empty is
+	// DefaultChatGPTSubscriptionModel.
+	Model string `yaml:"model,omitempty"`
+}
+
+// ChatGPTSubscriptionModelConfig is the ModelConfig the chart renders of a
+// person's own ChatGPT login, "ChatGPT (your subscription)" in the portal.
+const ChatGPTSubscriptionModelConfig = "chatgpt-subscription"
+
+// DefaultChatGPTSubscriptionModel is the model of a person's own ChatGPT
+// login when platform.chatgptSubscription.model names none: one the ChatGPT
+// Codex backend serves to a subscription.
+const DefaultChatGPTSubscriptionModel = "gpt-5.6-luna"
 
 // Tenants configures the Organizations' namespaces as tenants.
 type Tenants struct {
@@ -2267,6 +2305,9 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("platform.coding needs agent-platform %s or newer (kagent.harnesses forwarded to the kagent chart); %s — `agentlab configure --coding=false`", codingChartFloor, chart)
 		}
 	}
+	if err := c.validateChatGPTSubscription(); err != nil {
+		return err
+	}
 	if c.Platform.Tenants.Enabled && c.Platform.Enabled && !c.Platform.Agents {
 		return fmt.Errorf("platform.tenants requires platform.agents (the tenant reconciler is agent-manager's, and a tenant's agents run on kagent)")
 	}
@@ -2496,6 +2537,43 @@ func (c *Config) CodingHarnessRendered(runtime string) bool {
 		return true
 	}
 	return runtime == CodingRuntimeClaude && c.WorkspacesEnabled()
+}
+
+// ChatGPTSubscriptionEnabled reports whether the chart renders a person's own
+// ChatGPT login as a codex model: the platform with its agents runtime, and
+// the key on (Validate requires the codex Harness and the workspaces).
+func (c *Config) ChatGPTSubscriptionEnabled() bool {
+	return c.Platform.Enabled && c.Platform.Agents && c.Platform.ChatGPTSubscription.Enabled
+}
+
+// ChatGPTSubscriptionModel is the model of a person's own ChatGPT login.
+func (c *Config) ChatGPTSubscriptionModel() string {
+	return cmp.Or(c.Platform.ChatGPTSubscription.Model, DefaultChatGPTSubscriptionModel)
+}
+
+// validateChatGPTSubscription refuses a person's own ChatGPT login the chart
+// would refuse at render: the model runs on the codex Harness alone, muster
+// releases the login through its credential provider and kagent binds it
+// through the Session admission, both of which come with the workspaces.
+func (c *Config) validateChatGPTSubscription() error {
+	if !c.Platform.ChatGPTSubscription.Enabled || !c.Platform.Enabled {
+		return nil
+	}
+	switch {
+	case !c.Platform.Agents:
+		return fmt.Errorf("platform.chatgptSubscription requires platform.agents (the model is a kagent ModelConfig)")
+	case !c.CodingHarnessRendered(CodingRuntimeCodex):
+		return fmt.Errorf("platform.chatgptSubscription runs on the codex Harness, which the lab does not render: `agentlab configure --coding --coding-harnesses %s`", strings.Join(append(slices.DeleteFunc(slices.Clone(c.CodingHarnesses()), func(h string) bool { return h == CodingRuntimeCodex }), CodingRuntimeCodex), ","))
+	case !c.Platform.Workspaces.Enabled:
+		return fmt.Errorf("platform.chatgptSubscription needs platform.workspaces: muster releases a person's login through its credential provider and kagent binds it through the Session admission, which the chart derives with the workspaces — `agentlab configure --workspaces`")
+	}
+	if strings.ContainsAny(c.Platform.ChatGPTSubscription.Model, " \t\n\"'") {
+		return fmt.Errorf("platform.chatgptSubscription.model %q is no model name", c.Platform.ChatGPTSubscription.Model)
+	}
+	if chart, below := c.chartBelow(chatgptSubscriptionChartFloor); below {
+		return fmt.Errorf("platform.chatgptSubscription needs agent-platform %s or newer (the person's ChatGPT login wired from kagent.modelConfigs); %s — `agentlab configure --chatgpt-subscription=false`", chatgptSubscriptionChartFloor, chart)
+	}
+	return nil
 }
 
 // CodexModelConfig is the lab's model for a codex agent: the first
