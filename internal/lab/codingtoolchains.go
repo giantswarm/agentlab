@@ -65,6 +65,7 @@ const (
 	// path and version (<line>-<toolchain>); the fixture's build.
 	toolchainsProbeTools   = "mounted"
 	toolchainsProbePath    = "path"
+	toolchainsProbeOnPath  = "onpath"
 	toolchainsProbeVersion = "version"
 	toolchainsProbeBuilt   = "built"
 )
@@ -252,10 +253,12 @@ func toolchainsCheckPrompt(rt codingRuntime) string {
 }
 
 // toolchainsCheckCommand lists the mounted toolchains and, per toolchain,
-// where its tool is on the PATH and its version; with go mounted it builds
-// and runs a fixture module in the Session's working directory: no
-// dependency, no module proxy, the toolchain's own Go. The script names no
-// toolchain of a run, so the mockllm's script is one for every run.
+// whether its bin/ is on the PATH, where the PATH finds its tool (the
+// image's own copy comes first, the toolchain's after it) and the version
+// the mounted tool answers; with go mounted it builds and runs a fixture
+// module in the Session's working directory with the toolchain's go: no
+// dependency, no module proxy. The script names no toolchain of a run, so
+// the mockllm's script is one for every run.
 func toolchainsCheckCommand() string {
 	var tools strings.Builder
 	for _, name := range slices.Sorted(maps.Keys(toolchainTools)) {
@@ -265,22 +268,28 @@ func toolchainsCheckCommand() string {
 echo "$P ` + toolchainsProbeTools + `=$(ls ` + toolchainsMountRoot + ` 2>/dev/null | tr '\n' ' ')"
 for t in $(ls ` + toolchainsMountRoot + ` 2>/dev/null); do
   case "$t" in ` + tools.String() + `*) b="$t";; esac
+  m="` + toolchainsMountRoot + `/$t/bin/$b"
+  case ":$PATH:" in *":` + toolchainsMountRoot + `/$t/bin:"*) o=yes;; *) o=no;; esac
+  echo "$P ` + toolchainsProbeOnPath + `-$t=$o"
   echo "$P ` + toolchainsProbePath + `-$t=$(command -v "$b")"
-  if [ "$b" = go ]; then v=$(go version 2>&1); else v=$("$b" --version 2>&1 | head -n 1); fi
+  if [ ! -x "$m" ]; then v="no $m"; elif [ "$b" = go ]; then v=$("$m" version 2>&1); else v=$("$m" --version 2>&1 | head -n 1); fi
   echo "$P ` + toolchainsProbeVersion + `-$t=$v"
 done
-if ! command -v go >/dev/null; then echo "$P ` + toolchainsProbeBuilt + `=no go"; exit 0; fi
+g="` + toolchainsMountRoot + `/go/bin/go"
+if [ ! -x "$g" ]; then echo "$P ` + toolchainsProbeBuilt + `=no go toolchain"; exit 0; fi
 d="$(pwd)/` + toolchainsFixtureDir + `"
 rm -rf "$d" && mkdir -p "$d/src" && cd "$d/src" || exit 1
 printf 'module agentlab.example/fixture\n\ngo 1.22\n' > go.mod
 printf 'package main\n\nimport "fmt"\n\nfunc main() { fmt.Println("` + toolchainsFixtureOutput + `") }\n' > main.go
 export GOCACHE="$d/cache" GOPATH="$d/gopath" GOTOOLCHAIN=local GOPROXY=off GOFLAGS=-mod=mod CGO_ENABLED=0
-if out=$(go build -o "$d/fixture" . 2>&1); then echo "$P ` + toolchainsProbeBuilt + `=$("$d/fixture")"; else echo "$P ` + toolchainsProbeBuilt + `=failed: $(printf '%s' "$out" | tail -n 3 | tr '\n' ' ')"; fi`
+if out=$("$g" build -o "$d/fixture" . 2>&1); then echo "$P ` + toolchainsProbeBuilt + `=$("$d/fixture")"; else echo "$P ` + toolchainsProbeBuilt + `=failed: $(printf '%s' "$out" | tail -n 3 | tr '\n' ' ')"; fi`
 }
 
 // judgeToolchainCheck is the verdict on the check's lines: the mount lists
-// exactly the toolchains, each one's tool on the PATH from its mount and
-// answering its version; with go, the fixture built and ran.
+// exactly the toolchains, each one's bin/ on the PATH and its tool
+// answering its version; with go, the fixture built and ran. Where the PATH
+// finds a tool is said, not judged: an image's own copy of a tool comes
+// before the toolchain's by the mount's contract.
 func judgeToolchainCheck(probe codingProbe, want []string) (string, error) {
 	listed := strings.Fields(probe[toolchainsProbeTools])
 	if !sameNames(listed, want) {
@@ -291,14 +300,18 @@ func judgeToolchainCheck(probe codingProbe, want []string) (string, error) {
 		path := toolchainsMountRoot + "/" + name + "/bin/" + toolchainTool(name)
 		got, version := probe[toolchainsProbePath+"-"+name], probe[toolchainsProbeVersion+"-"+name]
 		switch {
-		case got != path:
-			return "", fmt.Errorf("%s on the PATH is %q, wanted %s", toolchainTool(name), got, path)
-		case version == "" || strings.Contains(version, "not found"):
+		case probe[toolchainsProbeOnPath+"-"+name] != "yes":
+			return "", fmt.Errorf("%s/%s/bin is not on the PATH (%s=%q)", toolchainsMountRoot, name, toolchainsProbeOnPath, probe[toolchainsProbeOnPath+"-"+name])
+		case version == "" || strings.HasPrefix(version, "no ") || strings.Contains(version, "not found"):
 			return "", fmt.Errorf("%s's version answered %q", path, version)
 		case name == toolchainGo && !strings.HasPrefix(version, "go version go"):
 			return "", fmt.Errorf("go version answered %q", version)
 		}
-		found = append(found, path+": "+version)
+		resolved := "the PATH finds it"
+		if got != path {
+			resolved = fmt.Sprintf("the PATH finds %s at %q first, the image's own", toolchainTool(name), got)
+		}
+		found = append(found, path+": "+version+" ("+resolved+")")
 	}
 	verdict := toolchainsMountRoot + " lists [" + strings.Join(listed, " ") + "]; " + strings.Join(found, "; ")
 	if !slices.Contains(want, toolchainGo) {

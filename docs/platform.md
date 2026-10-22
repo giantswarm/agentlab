@@ -1542,7 +1542,7 @@ The part needs agent-manager's `toolchains.repository` (its `get_info` then repo
 | capability | agent-manager's `get_info` reports `toolchains` |
 | agent | a coding agent created through agent-manager as the person, Ready on the Harness |
 | start | `start_session` as the person with the toolchains: the answer mounts exactly those, each image pinned by digest |
-| tools | one turn: `ls /opt/kagent/tools` lists exactly the toolchains; each one's tool (`gh` for `github`, `glab` for `gitlab`, `python3` for `python`, else its name) is `/opt/kagent/tools/<name>/bin/<tool>` on the `PATH` and answers its version; with `go`, a fixture module written into the Session's directory builds offline (`GOPROXY=off`, `GOTOOLCHAIN=local`) and prints its line |
+| tools | one turn: `ls /opt/kagent/tools` lists exactly the toolchains; each one's `bin/` is on the `PATH` and its tool (`gh` for `github`, `glab` for `gitlab`, `python3` for `python`, else its name) at `/opt/kagent/tools/<name>/bin/<tool>` answers its version. Where the `PATH` finds the tool is reported, not judged: a Harness image's own copy, such as claude-harness's `gh`, comes first by the mount's contract. With `go`, a fixture module written into the Session's directory builds with the toolchain's `go` offline (`GOPROXY=off`, `GOTOOLCHAIN=local`) and prints its line |
 | model | on the mockllm: every model call answered by its script |
 
 The agent and its Session are removed on every path.

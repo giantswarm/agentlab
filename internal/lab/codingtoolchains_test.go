@@ -46,32 +46,43 @@ func TestJudgeStartedToolchains(t *testing.T) {
 
 func TestJudgeToolchainCheck(t *testing.T) {
 	ghPath := toolchainsProbePath + "-" + toolchainGitHub
+	ghOnPath := toolchainsProbeOnPath + "-" + toolchainGitHub
+	ghVersion := toolchainsProbeVersion + "-" + toolchainGitHub
 	good := codingProbe{
 		toolchainsProbeTools: "github go ", toolchainsProbeBuilt: toolchainsFixtureOutput,
-		toolchainsProbePath + "-go": "/opt/kagent/tools/go/bin/go", toolchainsProbeVersion + "-go": "go version go1.26.10 linux/amd64",
-		ghPath: "/opt/kagent/tools/github/bin/gh", toolchainsProbeVersion + "-" + toolchainGitHub: "gh version 2.83.0 (2025-11-04)",
+		toolchainsProbeOnPath + "-go": "yes", toolchainsProbePath + "-go": "/opt/kagent/tools/go/bin/go", toolchainsProbeVersion + "-go": "go version go1.26.10 linux/amd64",
+		ghOnPath: "yes", ghPath: "/opt/kagent/tools/github/bin/gh", ghVersion: "gh version 2.83.0 (2025-11-04)",
 	}
-	if _, err := judgeToolchainCheck(good, []string{"go", toolchainGitHub}); err != nil {
+	if _, err := judgeToolchainCheck(good, []string{toolchainGo, toolchainGitHub}); err != nil {
 		t.Fatalf("the good readings: %v", err)
 	}
-	ghOnly := codingProbe{toolchainsProbeTools: toolchainGitHub, ghPath: good[ghPath], toolchainsProbeVersion + "-" + toolchainGitHub: good[toolchainsProbeVersion+"-"+toolchainGitHub], toolchainsProbeBuilt: "no go"}
+	ghOnly := codingProbe{toolchainsProbeTools: toolchainGitHub, ghOnPath: "yes", ghPath: good[ghPath], ghVersion: good[ghVersion], toolchainsProbeBuilt: "no go toolchain"}
 	if _, err := judgeToolchainCheck(ghOnly, []string{toolchainGitHub}); err != nil {
 		t.Fatalf("github alone, no build: %v", err)
 	}
+	imageFirst := codingProbe{}
+	for k, v := range good {
+		imageFirst[k] = v
+	}
+	imageFirst[ghPath] = "/usr/local/bin/gh"
+	verdict, err := judgeToolchainCheck(imageFirst, []string{toolchainGo, toolchainGitHub})
+	if err != nil || !strings.Contains(verdict, "/usr/local/bin/gh") {
+		t.Fatalf("the image's own gh ahead of the toolchain's: verdict %q, err %v, wanted it said, not judged", verdict, err)
+	}
 	for key, value := range map[string]string{
 		toolchainsProbeTools:           toolchainGitHub,
-		toolchainsProbePath + "-go":    "/usr/local/go/bin/go",
+		toolchainsProbeOnPath + "-go":  "no",
 		toolchainsProbeVersion + "-go": "sh: go: not found",
-		ghPath:                         "/usr/bin/gh",
-		toolchainsProbeVersion + "-" + toolchainGitHub: "",
-		toolchainsProbeBuilt:                           "failed: go: cannot find main module",
+		ghOnPath:                       "no",
+		ghVersion:                      "no /opt/kagent/tools/github/bin/gh",
+		toolchainsProbeBuilt:           "failed: go: cannot find main module",
 	} {
 		bad := codingProbe{}
 		for k, v := range good {
 			bad[k] = v
 		}
 		bad[key] = value
-		if _, err := judgeToolchainCheck(bad, []string{"go", toolchainGitHub}); err == nil {
+		if _, err := judgeToolchainCheck(bad, []string{toolchainGo, toolchainGitHub}); err == nil {
 			t.Errorf("%s=%q judged good", key, value)
 		}
 	}
@@ -89,22 +100,32 @@ func TestJudgeGitGH(t *testing.T) {
 	}
 }
 
-// TestToolchainsCheckCommandBuildsTheFixture runs the check's script with
-// this host's go: nothing is mounted here, so the listing is empty, and the
-// fixture module builds offline.
+// TestToolchainsCheckCommandBuildsTheFixture runs the check's script on a
+// mount root of its own whose go toolchain is this host's go: the listing,
+// the PATH, the version and the fixture module built offline.
 func TestToolchainsCheckCommandBuildsTheFixture(t *testing.T) {
 	goBin, err := exec.LookPath("go")
 	if err != nil {
 		t.Skip("no go on this host's PATH")
 	}
-	cmd := exec.Command("sh", "-c", toolchainsCheckCommand()) // #nosec G204 -- the proof's own constant script
+	root := t.TempDir()
+	bin := filepath.Join(root, toolchainGo, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(goBin, filepath.Join(bin, toolchainGo)); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sh", "-c", strings.ReplaceAll(toolchainsCheckCommand(), toolchainsMountRoot, root)) // #nosec G204 -- the proof's own constant script
 	cmd.Dir = t.TempDir()
-	cmd.Env = append(os.Environ(), "PATH="+filepath.Dir(goBin)+":/usr/bin:/bin")
+	cmd.Env = append(os.Environ(), "PATH=/usr/bin:/bin:"+bin)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("the script: %v: %s", err, out)
 	}
-	if probe := parseCodingProbe(string(out)); probe[toolchainsProbeBuilt] != toolchainsFixtureOutput {
+	probe := parseCodingProbe(string(out))
+	if strings.TrimSpace(probe[toolchainsProbeTools]) != toolchainGo || probe[toolchainsProbeOnPath+"-go"] != "yes" ||
+		!strings.HasPrefix(probe[toolchainsProbeVersion+"-go"], "go version go") || probe[toolchainsProbeBuilt] != toolchainsFixtureOutput {
 		t.Fatalf("readings %v from %s", probe, out)
 	}
 }
