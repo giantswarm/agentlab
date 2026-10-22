@@ -1084,6 +1084,47 @@ reach the gateway refused, or denies one it made, changes no outcome.
 entry and the same origin probed; its `declared` stage fails, so the reach is
 the declaration's. The agent and its Session are removed on every exit path.
 
+### The ChatGPT subscription proof
+
+`platform.chatgptSubscription` (`agentlab configure --chatgpt-subscription`;
+agent-platform 4.164.0 or newer, the codex coding Harness and the
+workspaces beside it) runs codex on a person's own ChatGPT subscription the
+way an installation does, from the chart's values: the lab renders the
+`kagent.modelConfigs[]` entry `chatgpt-subscription` (`credentialType:
+chatgptOAuth`, `apiFormat: responses`, no `apiKeySecret`; the model
+`gpt-5.6-luna` unless `--chatgpt-subscription-model` names another), muster's
+token encryption (`muster.muster.oauth.server.encryptionKey`, the key
+`oauth-encryption-key` of `agent-platform-secrets`), and, where the chart's
+own ranges admit older releases, kagent and its CRDs at `>=1.24.0 <1.25.0`
+and muster at `>=5.51.0 <6.0.0`. The chart derives the rest: muster's
+provider App `chatgpt` (OpenAI's device-code sign-in), kagent's installation
+provider `chatgpt` (`chatgpt.com`, `/backend-api/codex/`, Bearer) and the
+ModelConfig "ChatGPT (your subscription)". Nothing is applied by hand.
+
+`agentlab chatgpt-test` proves it with a real ChatGPT login. The admin
+connects it once: `agentlab chatgpt-test --connect` starts the sign-in and
+prints OpenAI's page and a one-time code, which the person enters there
+signed in to ChatGPT; the run waits `--connect-wait` (default 15m, the
+code's lifetime) or, with `--connect-wait 0`, ends after printing it while
+muster keeps waiting for the code. Every verdict on the backend is read from
+Substrate's egress gateway's record of the Session's actor, as in
+[the egress proof](#the-egress-proof); the Sessions start through
+agent-manager's `start_session`, which binds them to the person in muster.
+
+| Stage | What passes |
+|---|---|
+| values | the ModelConfig `chatgpt-subscription` Accepted, `chatgptOAuth` without `apiKeySecret`, no Secret `kagent-chatgpt-subscription`; `core_auth_status` lists the App `chatgpt` for the admin |
+| connection | the admin holds the App's grant |
+| connected turn | a codex agent created through agent-manager as the admin on the model; its Session's turn completes, and the gateway forwarded the actor's requests under `chatgpt.com/backend-api/codex/`, refusing none |
+| sandbox | that turn's shell probe: no token-shaped value in the environment, `/data` or `/workspace`, no file with a `refresh_token` value, no variable named for one, the model key kagent's placeholder (counts, never values) |
+| second person refused | a developer, who has not connected ChatGPT, starts a Session of the same agent: the gateway answered its backend requests with 403 and the credential provider's denial, forwarded none, and the turn did not complete |
+| non-codex agent refused | an agent of the admin on the platform Harness: its `bash` tool's request to `https://chatgpt.com/backend-api/codex/responses` answered 403 by the egress gate (`actor egress policy denied`), forwarded none |
+| disconnect | `core_auth_logout app=chatgpt` drops the grant, the status reads `auth_required`, and the admin's next Session is refused like the developer's |
+
+`--unconnected` runs the values and the two refusals alone. The agents and
+Sessions are removed on every exit path; a full run ends with the admin
+disconnected, so the next one connects again.
+
 ### The coding agents proof
 
 A coding agent is an agent whose Agent names a coding Harness: a coding CLI

@@ -40,6 +40,7 @@ const (
 	componentMuster        = "muster"
 	componentBackstage     = "backstage"
 	componentKagent        = "kagent"
+	componentKagentCRDs    = "kagent-crds"
 	componentMCPKubernetes = "mcp-kubernetes"
 	clusterManager         = config.DevImageClusterManager
 	workspaceManager       = config.DevImageWorkspaceManager
