@@ -968,6 +968,10 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	if err := ensureGitHubMCP(cfg); err != nil {
 		return err
 	}
+	// devctl's MCP server (devctl.go), off by default; same CRD reason.
+	if err := ensureDevctl(cfg); err != nil {
+		return err
+	}
 	// The agents' model key. The default ModelConfig (rendered by the kagent
 	// chart from providers.anthropic) references this secret; agent pods
 	// mount it at run time, so it can land after the install — which it must,
@@ -1098,7 +1102,8 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 %s
 %s
 %s
-%s%s`, header, reach, usersBlock(cfg), backstageHint, claudeCodeHint(cfg), agentsHint, modelManagerHint(cfg, backendEndpoints), servingHint(cfg), workspacesHint(cfg, workspacesChart, workspacesRegistrant), vmManagerHint(cfg), klausGatewayHint(cfg), obsHint, devImagesHint(cfg, dev), tryItBlock(cfg))
+%s
+%s%s`, header, reach, usersBlock(cfg), backstageHint, claudeCodeHint(cfg), agentsHint, modelManagerHint(cfg, backendEndpoints), servingHint(cfg), workspacesHint(cfg, workspacesChart, workspacesRegistrant), vmManagerHint(cfg), klausGatewayHint(cfg), devctlHint(cfg), obsHint, devImagesHint(cfg, dev), tryItBlock(cfg))
 	// A field a hand wrote on a platform workload outlives this run, which
 	// installs only what the releases render: kubectl's edits are put back
 	// to the render (handfields.go), any other writer's named last, where the

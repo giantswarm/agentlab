@@ -100,6 +100,10 @@ type tmplData struct {
 	// `klausGateway:` block needs.
 	KlausGatewayEnabled bool
 	KlausGateway        klausGatewayValues
+	// DevctlEnabled adds the github instance's App to the workspace-manager
+	// registration's providerApps beside its pin, the grant devctl's MCP
+	// server takes (devctl.go).
+	DevctlEnabled bool
 	// RefusalNotices mirrors cfg.RefusalNoticesChart(): the chart takes the
 	// `klausGateway.refusals` block, whose interval the lab shortens.
 	RefusalNotices bool
@@ -322,6 +326,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		VMManagerEnabled:             cfg.VMManagerEnabled(),
 		VMManagerGuestImage:          vmManagerGuestImage,
 		KlausGatewayEnabled:          cfg.KlausGatewayEnabled(),
+		DevctlEnabled:                cfg.DevctlEnabled(),
 		RefusalNotices:               cfg.RefusalNoticesChart(),
 		KlausGateway:                 klausGatewayValuesFor(cfg),
 		ClusterManagerEnabled:        cfg.ClusterManagerEnabled(),

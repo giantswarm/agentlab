@@ -1,6 +1,9 @@
 package lab
 
 import (
+	"bufio"
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -135,11 +138,7 @@ func (s *musterSession) callTool(name string, args map[string]any) (map[string]a
 	if args == nil {
 		args = map[string]any{}
 	}
-	s.seq++
-	payload, err := json.Marshal(map[string]any{
-		"jsonrpc": "2.0", "id": s.seq, "method": "tools/call",
-		"params": map[string]any{nameKey: name, argumentsKey: args},
-	})
+	payload, err := s.toolsCall(name, args, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -162,6 +161,17 @@ func (s *musterSession) callTool(name string, args map[string]any) (map[string]a
 		return nil, fmt.Errorf("muster %s: %v", name, rpcErr["message"])
 	}
 	return parsed, nil
+}
+
+// toolsCall is the session's next tools/call request of name with args, and
+// meta as the request's _meta when given.
+func (s *musterSession) toolsCall(name string, args, meta map[string]any) ([]byte, error) {
+	s.seq++
+	params := map[string]any{nameKey: name, argumentsKey: args}
+	if meta != nil {
+		params["_meta"] = meta
+	}
+	return json.Marshal(map[string]any{"jsonrpc": "2.0", "id": s.seq, "method": "tools/call", "params": params})
 }
 
 // musterHTTPError is muster's non-2xx answer to a tools/call: the status and
@@ -281,6 +291,107 @@ func (s *musterSession) callServerTool(name string, args map[string]any) (string
 		return "", fmt.Errorf("%s failed: %.300s", name, env.Content[0].Text)
 	}
 	return env.Content[0].Text, nil
+}
+
+// progressNote is one notifications/progress the session received for a
+// call: its progress, its message and when it arrived.
+type progressNote struct {
+	Progress float64
+	Message  string
+	At       time.Time
+}
+
+// callToolProgress runs one tool through muster's call_tool with a
+// progressToken in the request's _meta, so muster relays the tool's
+// notifications/progress to this session, and reads the answer's event stream
+// until the result: the tool's envelope and every progress notification of
+// the call, in order. The call is bounded by ctx alone — a wait kept alive by
+// progress outlasts any client timeout the session's other calls use.
+func (s *musterSession) callToolProgress(ctx context.Context, name string, args map[string]any, token string) (*toolEnvelope, []progressNote, error) {
+	payload, err := s.toolsCall(musterCallTool, map[string]any{nameKey: name, argumentsKey: args}, map[string]any{"progressToken": token})
+	if err != nil {
+		return nil, nil, err
+	}
+	if s.renew != nil {
+		if s.token, err = s.renew(); err != nil {
+			return nil, nil, err
+		}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.url, bytes.NewReader(payload))
+	if err != nil {
+		return nil, nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+s.token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("Mcp-Session-Id", s.id)
+	for header, value := range s.headers {
+		req.Header.Set(header, value)
+	}
+	client := *s.client
+	client.Timeout = 0
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		raw, _ := io.ReadAll(resp.Body)
+		return nil, nil, &musterHTTPError{tool: name, status: resp.StatusCode, body: strings.TrimSpace(string(raw))}
+	}
+	var notes []progressNote
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	for scanner.Scan() {
+		data, ok := strings.CutPrefix(strings.TrimSpace(scanner.Text()), "data:")
+		if !ok {
+			// A plain JSON answer is no event stream: one line, the result.
+			data = scanner.Text()
+		}
+		var frame struct {
+			Method string `json:"method"`
+			Params struct {
+				ProgressToken any     `json:"progressToken"`
+				Progress      float64 `json:"progress"`
+				Message       string  `json:"message"`
+			} `json:"params"`
+			Result *struct {
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
+				IsError bool `json:"isError"`
+			} `json:"result"`
+			Error *struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if json.Unmarshal([]byte(strings.TrimSpace(data)), &frame) != nil {
+			continue
+		}
+		switch {
+		case frame.Method == "notifications/progress" && fmt.Sprint(frame.Params.ProgressToken) == token:
+			notes = append(notes, progressNote{Progress: frame.Params.Progress, Message: frame.Params.Message, At: time.Now()})
+		case frame.Error != nil:
+			return nil, notes, fmt.Errorf("muster %s: %s", name, frame.Error.Message)
+		case frame.Result != nil:
+			if len(frame.Result.Content) == 0 {
+				return nil, notes, fmt.Errorf("%s: %w", name, errEmptyToolAnswer)
+			}
+			var env toolEnvelope
+			if err := json.Unmarshal([]byte(frame.Result.Content[0].Text), &env); err != nil || len(env.Content) == 0 {
+				// muster's own refusal: plain text, no inner envelope.
+				env = toolEnvelope{IsError: frame.Result.IsError}
+				env.Content = append(env.Content, struct {
+					Text string `json:"text"`
+				}{Text: frame.Result.Content[0].Text})
+			}
+			return &env, notes, nil
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, notes, fmt.Errorf("reading muster's answer to %s after %d progress notifications: %w", name, len(notes), err)
+	}
+	return nil, notes, fmt.Errorf("muster's answer to %s ended after %d progress notifications without a result", name, len(notes))
 }
 
 // toolAnnotations are the MCP tool annotations muster forwards from the

@@ -1465,6 +1465,14 @@ workspace-manager:
     mcpServer:
       auth:
         provider: {{ .Provider }}
+{{- if and $.DevctlEnabled (eq .Provider "github") }}
+        # devctl's MCP server (platform.devctl; devctl.go) takes the same
+        # grant: muster keeps the pinned App as the provider App github, with
+        # the pin's issuer and client Secret, so a grant made stands, and
+        # attaches it to every registration that names it — the shape
+        # gazelle's configuration declares.
+        providerApps: [github]
+{{- end }}
         authorizationServer:
           issuer: {{ .Issuer }}
           expectedIssuer: "{{ .ExpectedIssuer }}"

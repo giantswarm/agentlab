@@ -228,6 +228,12 @@ type CodingTestOptions struct {
 	// muster's meta-tools; MusterMetaTools names all of them. Empty binds
 	// muster without a selection.
 	MusterTools []string
+	// Part runs one part instead of the coding agents proof: CodingPartDevctl
+	// (codingdevctl.go). "" is the proof.
+	Part string
+	// Repository is the devctl part's proof repository, owner/name; empty is
+	// DefaultDevctlProofRepository.
+	Repository string
 }
 
 // MusterMetaTools are muster's meta-tools, the selection a platform coding
@@ -236,14 +242,27 @@ var MusterMetaTools = []string{"list_tools", "describe_tool", "list_core_tools",
 
 // CodingTest is the coding agents proof (the stages above).
 func CodingTest(cfg *config.Config, opts CodingTestOptions) error {
-	if !cfg.CodingEnabled() {
-		return fmt.Errorf("platform.coding is off in %s — `agentlab configure --coding` turns it on, then `agentlab platform`", config.File)
-	}
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
 	}
 	if opts.ReadyTimeout <= 0 {
 		opts.ReadyTimeout = DefaultCodingReadyTimeout
+	}
+	switch opts.Part {
+	case "":
+		if opts.Repository != "" {
+			return fmt.Errorf("--repository is the devctl part's (--part %s)", CodingPartDevctl)
+		}
+	case CodingPartDevctl:
+		if opts.Harness != "" && opts.Harness != config.CodingRuntimeClaude || opts.ModelConfig != "" || opts.Email != "" || len(opts.MusterTools) > 0 {
+			return fmt.Errorf("--part %s runs a claude agent of its own as the admin, on agent-manager's default model: it takes no [email], --harness, --model-config or --muster-tools", CodingPartDevctl)
+		}
+		return codingDevctlPart(cfg, opts)
+	default:
+		return fmt.Errorf("no part %q of coding-test: --part takes %s", opts.Part, strings.Join(CodingParts, ", "))
+	}
+	if !cfg.CodingEnabled() {
+		return fmt.Errorf("platform.coding is off in %s — `agentlab configure --coding` turns it on, then `agentlab platform`", config.File)
 	}
 	rt, ok := codingRuntimes[cmp.Or(opts.Harness, config.CodingRuntimeClaude)]
 	if !ok {

@@ -599,7 +599,14 @@ func (gp *gitProof) noWorkspace(harness, agent string) error {
 // deleteRunBranches deletes every branch of the part's prefix on the pushed
 // repository, with the person's own git credentials, and names them.
 func (gp *gitProof) deleteRunBranches() ([]string, error) {
-	out, err := gp.pr.git(gp.pr.dir, "ls-remote", gitOrigin, "refs/heads/"+gitBranchPrefix+"*")
+	return deleteBranchesWithPrefix(gp.pr, gitBranchPrefix)
+}
+
+// deleteBranchesWithPrefix deletes every branch of prefix on the pushed
+// repository of pr's clone, with the person's own git credentials, and names
+// them.
+func deleteBranchesWithPrefix(pr *proofRepos, prefix string) ([]string, error) {
+	out, err := pr.git(pr.dir, "ls-remote", gitOrigin, "refs/heads/"+prefix+"*")
 	if err != nil {
 		return nil, err
 	}
@@ -616,7 +623,7 @@ func (gp *gitProof) deleteRunBranches() ([]string, error) {
 	for _, b := range branches {
 		args = append(args, "refs/heads/"+b)
 	}
-	if _, err := gp.pr.git(gp.pr.dir, args...); err != nil {
+	if _, err := pr.git(pr.dir, args...); err != nil {
 		return nil, err
 	}
 	return branches, nil
