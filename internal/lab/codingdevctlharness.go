@@ -40,8 +40,8 @@ import (
 //     answers exit 0, green, and devctl's server logs the call by the
 //     person's GitHub login, the pull request's author.
 //
-// The Session, the agent, the mockllm, the pull request, its branch and the
-// host clone are removed on every path.
+// The Session, the agent, the workspace, the mockllm, the pull request, its
+// branch and the host clone are removed on every path.
 
 // devctlHarnessProof is the part's state on a Harness other than claude.
 type devctlHarnessProof struct {
@@ -82,7 +82,7 @@ func codingDevctlHarnessPart(cfg *config.Config, opts CodingTestOptions, rt codi
 	err := hp.run(p)
 	hp.cleanup()
 	if err == nil {
-		fmt.Printf("\ncoding-test --part devctl --harness %s passed on GitHub: a %s agent waited for the CI of pull request #%d on %s with one x_devctl_pr_wait call through muster, devctl acting as %s, with no muster or GitHub token in its sandbox.\n",
+		fmt.Printf("\ncoding-test --part devctl --harness %s passed on GitHub: an agent on the %s Harness waited for the CI of pull request #%d on %s with one x_devctl_pr_wait call through muster, devctl acting as %s, with no muster or GitHub token in its sandbox.\n",
 			rt.name, rt.name, hp.number, hp.repository, hp.login)
 	}
 	return p.close(err)

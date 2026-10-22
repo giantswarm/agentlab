@@ -1524,11 +1524,11 @@ The Session, the agent, the workspace, the host's clone and every branch of the 
 | tools | the admin's muster lists `x_devctl_pr_wait` |
 | pull request | the proof pushes a branch `agentlab-devctl-*` and opens a pull request with `gh` from this host as the person; its CI starts |
 | agent | an agent created through agent-manager as the admin on the Harness, its toolset `x_devctl_pr_wait`, Ready |
-| sandbox | a Session without a workspace; its first turn runs the coding proof's sandbox check: no forge token or bearer in the environment, `/data` or `/workspace`, the model key and the MCP credentials kagent's placeholders |
+| sandbox | a workspace over the repository, its first cycle; a Session on it started with the admin's grant, which binds the Session's actor to the person (codex lists no muster tool in a Session without one); its first turn runs the coding proof's sandbox check: no forge token or bearer in the environment, `/data` or `/workspace`, the model key and the MCP credentials kagent's placeholders |
 | wait | one turn: `pr_wait` through muster's `call_tool`, called once, answering exit code 0 after more than the MCPServer's `timeout`; devctl's server logs that call by the pull request's author, the person, exit code 0 |
-| model | codex on the mockllm: every model call answered by its script |
+| model | codex on the mockllm: every model call answered by its script. codex reports no MCP call's result to its caller, so the mockllm's reply to the wait is the call's output as codex returned it |
 
-The pull request is closed and its branch deleted, and the Session, the agent and the mockllm removed, on every path.
+The pull request is closed and its branch deleted, and the Session, the agent, the workspace and the mockllm removed, on every path.
 
 ### The Swarmgeist proof (klaus-gateway on kagent API v2)
 
