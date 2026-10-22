@@ -190,7 +190,7 @@ func slackFakeCmd() *cobra.Command {
 // mockLLMCmd is the scripted model coding-test runs a codex agent on, in a
 // container on the kind network: plumbing, hidden, never typed by a person.
 func mockLLMCmd() *cobra.Command {
-	var listen, mcpServer string
+	var listen, mcpServer, devctlArguments string
 	var watch []string
 	cmd := &cobra.Command{
 		Use:    "mockllm",
@@ -200,11 +200,12 @@ func mockLLMCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
-			return lab.ServeMockLLM(ctx, listen, mcpServer, watch)
+			return lab.ServeMockLLM(ctx, listen, mcpServer, devctlArguments, watch)
 		},
 	}
 	cmd.Flags().StringVar(&listen, "listen", "0.0.0.0:8080", "address to serve the Responses API on (under /v1)")
 	cmd.Flags().StringVar(&mcpServer, "mcp-server", "", "the RemoteMCPServer whose tools the script's MCP call names")
+	cmd.Flags().StringVar(&devctlArguments, "devctl-arguments", "", "call_tool's arguments of coding-test --part devctl's wait, a JSON object: adds that turn to the script")
 	cmd.Flags().StringArrayVar(&watch, "watch", nil, "a name to record each request carrying (repeatable): a skill the runtime presents to the model")
 	return cmd
 }
@@ -1745,7 +1746,7 @@ func codingTestCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the agent runs on (default on codex the in-cluster mockllm, "+lab.MockLLMModelConfig+", else agent-manager's default one); codex needs an OpenAI Responses API or Bedrock gpt-* ModelConfig, such as the codex host model configure adds")
 	cmd.Flags().StringVar(&opts.MockLLMBinary, "mockllm-binary", "", "the static linux agentlab binary the mockllm's container runs (default this one)")
 	cmd.Flags().StringSliceVar(&opts.MusterTools, "muster-tools", nil, "the agent's tool selection on its muster binding (the Generic chart's muster.tools), as a platform agent binds muster: tool names, or meta for muster's "+strconv.Itoa(len(lab.MusterMetaTools))+" meta-tools (default none: muster bound whole)")
-	cmd.Flags().StringVar(&opts.Part, "part", "", "run one part instead of the proof: "+lab.CodingPartDevctl+" (platform.devctl: a claude agent opens a pull request on --repository as the person, waits for its CI with one x_devctl_pr_wait call, merges it with x_devctl_pr_merge and waits for its release with x_devctl_release_wait, beside it one pr_wait with a progressToken; real GitHub and CircleCI, the person's grant of the workspaces' github instance App)")
+	cmd.Flags().StringVar(&opts.Part, "part", "", "run one part instead of the proof: "+lab.CodingPartDevctl+" (platform.devctl: a claude agent opens a pull request on --repository as the person, waits for its CI with one x_devctl_pr_wait call, merges it with x_devctl_pr_merge and waits for its release with x_devctl_release_wait, beside it one pr_wait with a progressToken; with --harness codex or omp the proof opens the pull request from this host as the person and a codex (the mockllm unless --model-config) or omp agent waits for its CI with one x_devctl_pr_wait call through Substrate's egress gateway, devctl's server logging the call as the person and no muster or GitHub token in the sandbox; real GitHub and CircleCI, the person's grant of the workspaces' github instance App)")
 	cmd.Flags().StringVar(&opts.Repository, "repository", "", "the devctl part's proof repository, owner/name (default "+lab.DefaultDevctlProofRepository+"): generated CI with a job that takes ten minutes on a pull request's head, Auto Release, the github instance's App installed")
 	return cmd
 }

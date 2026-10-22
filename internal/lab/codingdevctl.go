@@ -49,7 +49,8 @@ import (
 //     pr_merge's answer.
 //
 // The Session, the agent, the workspace, the host clone and every branch of
-// the run are removed on every path.
+// the run are removed on every path. On the codex and omp Harnesses the part
+// is codingdevctlharness.go's.
 
 // CodingPartDevctl is the devctl part of coding-test.
 const CodingPartDevctl = "devctl"
@@ -135,11 +136,10 @@ func codingDevctlPart(cfg *config.Config, opts CodingTestOptions) error {
 	if !cfg.DevctlEnabled() {
 		return fmt.Errorf("platform.devctl is off in %s — `agentlab configure --devctl` turns it on, then `agentlab platform`", config.File)
 	}
-	timeout := opts.ReadyTimeout
-	dp := &devctlProof{
-		cfg: cfg, repository: cmp.Or(opts.Repository, DefaultDevctlProofRepository), timeout: timeout,
-		sp: newSyncProof(cfg, timeout, devctlProofWorkspace), branch: devctlBranchPrefix + randomHex(4),
+	if rt := codingRuntimes[cmp.Or(opts.Harness, config.CodingRuntimeClaude)]; !rt.claude {
+		return codingDevctlHarnessPart(cfg, opts, rt)
 	}
+	dp := newDevctlProof(cfg, opts)
 	p := newProofStages()
 	err := dp.run(p)
 	dp.cleanup()
@@ -148,6 +148,15 @@ func codingDevctlPart(cfg *config.Config, opts CodingTestOptions) error {
 			dp.number, dp.repository, dp.login, dp.login)
 	}
 	return p.close(err)
+}
+
+// newDevctlProof is the part's state before its run: the repository, a
+// fresh branch.
+func newDevctlProof(cfg *config.Config, opts CodingTestOptions) *devctlProof {
+	return &devctlProof{
+		cfg: cfg, repository: cmp.Or(opts.Repository, DefaultDevctlProofRepository), timeout: opts.ReadyTimeout,
+		sp: newSyncProof(cfg, opts.ReadyTimeout, devctlProofWorkspace), branch: devctlBranchPrefix + randomHex(4),
+	}
 }
 
 func (dp *devctlProof) run(p *proofStages) error {
@@ -311,24 +320,13 @@ func (dp *devctlProof) workspace() error {
 // openPullRequest starts the Session with the admin's grant and has the
 // agent push a branch and open a pull request as the person.
 func (dp *devctlProof) openPullRequest() (*apiv1alpha1.Session, error) {
-	a, err := dp.admin.authorizeWorkspace(devctlProofWorkspace)
+	session, err := dp.startSession()
 	if err != nil {
 		return nil, err
 	}
-	if a.Outcome != authorizeGranted || a.Grant == "" {
-		return nil, fmt.Errorf("authorize_workspace answered %s (%q), want granted", a.Outcome, a.Reason)
-	}
-	id, err := startAgentSession(dp.admin.session, devctlProofAgent, a.Grant)
-	if err != nil {
-		return nil, err
-	}
-	dp.set.add(id)
+	id := session.GetId()
 	ctx, cancel := context.WithTimeout(context.Background(), dp.timeout)
 	defer cancel()
-	session, err := dp.api.getSession(ctx, id)
-	if err != nil {
-		return nil, err
-	}
 	var v map[string]string
 	if _, _, err := probeTurnWith(ctx, dp.api, session, devctlPullRequestCommand(dp.repository, dp.branch), "", devctlPurpose, func(reply string) error {
 		v = parseProbeLines(reply)
@@ -346,6 +344,26 @@ func (dp *devctlProof) openPullRequest() (*apiv1alpha1.Session, error) {
 	dp.login, dp.number = login, number
 	note("%s: gh api user %s; push %s; gh pr create %s; #%d by %s", id, v[devctlProbeUser], v[devctlProbePush], v[devctlProbePRCreate], number, login)
 	return session, nil
+}
+
+// startSession starts a Session of the agent on the workspace with the
+// admin's grant, tracked for removal: the Session's actor is the person.
+func (dp *devctlProof) startSession() (*apiv1alpha1.Session, error) {
+	a, err := dp.admin.authorizeWorkspace(devctlProofWorkspace)
+	if err != nil {
+		return nil, err
+	}
+	if a.Outcome != authorizeGranted || a.Grant == "" {
+		return nil, fmt.Errorf("authorize_workspace answered %s (%q), want granted", a.Outcome, a.Reason)
+	}
+	id, err := startAgentSession(dp.admin.session, devctlProofAgent, a.Grant)
+	if err != nil {
+		return nil, err
+	}
+	dp.set.add(id)
+	ctx, cancel := context.WithTimeout(context.Background(), dp.timeout)
+	defer cancel()
+	return dp.api.getSession(ctx, id)
 }
 
 // devctlPurpose says what the part's first command does, for the model
