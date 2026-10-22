@@ -115,7 +115,11 @@ The lab installs it in its **lab shape**:
   overlay's version and a new chart apply, and a proof in the same process
   holds again on what the install left running. A release that must reach
   the lab mid-lease comes by `agentlab platform`; otherwise it lands after
-  the proof.
+  the proof, and the proof waits for it: when a resumed source's artifact
+  moved, the proof returns only once every HelmRelease on it is Ready at the
+  new chart (Helm's wait rolled its workloads, up to 10 minutes; a release
+  that does not get there is a warning naming it), so the command after a
+  proof never meets the roll. An interrupt resumes without waiting.
 - A field a hand wrote on a platform workload — `kubectl patch` of muster's
   `hostNetwork`, a `kubectl set env` on Backstage — is no release's: Helm and
   helm-controller's drift correction own and correct only the fields the
@@ -817,7 +821,12 @@ verifying every bearer against the lab Dex (its JWKS over TLS at
 `dex.dex.svc.cluster.local:5556/dex/keys`) and setting `x-user-id` from the
 verified email claim — replacing whatever the client sent — and the
 controller runs `auth.mode: trusted-proxy`, re-deriving the caller from the
-same bearer. `agentlab platform-test` proves both halves: a call without a
+same bearer. From kagent 1.24.1 the controller also verifies that bearer's
+signature, issuer and expiry before it reads a claim, against Dex's key set
+in plain http (`dex-keys.dex.svc.cluster.local:5557/dex/keys`,
+`kagent.controller.auth.jwksURL` with `jwksAllowHTTP`): it trusts the system
+roots only, not the lab CA, as an installation's controller reads its Dex's
+in-cluster Service. `agentlab platform-test` proves both halves: a call without a
 token is refused at the edge, a call with a valid token and a forged
 `x-user-id` is attributed to the token's subject by the controller, and the
 same forged header changes nothing at muster and agent-manager, which read
@@ -1984,6 +1993,7 @@ data the page reads — see [The muster plugin](backstage.md#the-muster-plugin).
 | The `dex-localhost` sidecar on every Deployment told the lab Dex's address — mcp-kubernetes, the managers (model-manager, agent-manager, vm-manager, cluster-manager) and mcp-prometheus | Those servers validate the forwarded Dex token themselves and must reach the issuer URL `https://localhost:32000/dex`, but all listen on `:8080` and cannot share the host network. A socat sidecar on the pod's own loopback forwards `:32000` to the Dex Service (HACKS.md U13) — a `postRenderers` patch on each component, and on the lab's own mcp-prometheus `HelmRelease`. The targets are a rule over the component renders (a Deployment whose containers are told the address through a name they dial it by — `--dex-issuer-url`, `DEX_ISSUER_URL`, `OIDC_ISSUER_URL` — or that the `agentlab.giantswarm.io/dex-localhost` annotation selects; an identity-only variable such as `OAUTH_AUTHORIZATION_SERVER` selects nothing), not a list: a component the chart turns on by default or an overlay turns on is covered without a lab release, and the roster's trailing range renders `components.<name>.postRenderers` for one the lab names no block for. `agentlab platform-test` asserts the sidecar, a clean rollout with no container restarted since the release — a kind node restart, which restarts every container once together, is history, not a crash loop — and the MCPServer reachable (Connected, Awaiting Session or Auth Required) on every such Deployment, naming the key each was selected by; `agentlab platform` rolls such a Deployment once when it crash-looped since its release. |
 | `components.kagent.enabled` from `platform.agents`; kagent ServiceMonitor + OTel off | Agents are part of what the lab tests, so kagent is on by default (the chart defaults it off) but optional — `platform.agents: false` skips the runtime. The controller's authentication is the fleet's (`trusted-proxy` behind the JWT `Strict` policy on the controller route); the kagent line serves no /metrics and there is no OTLP gateway in kind. See [Agents (kagent)](agents.md). |
 | `kagent.controllerRoute.jwtAuthentication.jwks` = the lab Dex (`dex.dex.svc.cluster.local:5556/dex/keys` over TLS) | The chart's default JWKS source is a Giant Swarm Dex; the policy itself (`Strict`, the identity transformation) is the chart's default, unchanged. |
+| `kagent.controller.auth.jwksURL` = `http://dex-keys.dex.svc.cluster.local:5557/dex/keys`, `jwksAllowHTTP: true` | The meta chart derives the controller's key set from the route's JWKS and refuses one served under a private CA (the controller trusts the system roots only); the lab Dex serves its keys in plain http on `:5557` too, the `dex-keys` ClusterIP Service. |
 | `kagent.harness.snapshotLocation: s3://ate-snapshots/kagent` + `substrate.rustfs.enabled: true` | An installation names its own snapshot bucket (S3 with IRSA on CAPA); the lab's store is the substrate chart's bundled in-cluster RustFS. |
 | `postgres`: one instance, a 2Gi claim, no backups | The fleet's CNPG `Cluster` runs three instances on 20Gi with Barman backups; the lab keeps the shape (the same operand and pgvector images, the same `Database` CRs and derived Secrets) on one kind node. |
 | `kagent.ui.service.type: NodePort`, nodePort 30880 pinned by the kagent `postRenderers` patch | On a real MC the UI sits behind the agentgateway edge; this lab publishes it through the kind port mapping instead (host side `platform.agentsPort`, default 8081). The chart's Service template renders no `nodePort` field, so the fixed node port is a patch (HACKS.md U9). |
