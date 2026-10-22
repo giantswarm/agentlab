@@ -368,7 +368,7 @@ func (p *chatgptProof) createAgent(name, harness, modelConfig string, egress []s
 	if !boot.ready {
 		return fmt.Errorf("agent %s is not Ready after %s: %s", name, boot.elapsed.Round(time.Second), boot.reason)
 	}
-	note("%s Ready on Harness %s in %s (model %s)", name, cmp.Or(harness, kagentHarness), boot.elapsed.Round(time.Second), cmp.Or(modelConfig, "agent-manager's default"))
+	note("%s Ready on Harness %s in %s (model %s)", name, cmp.Or(harness, kagentHarness), boot.elapsed.Round(time.Second), modelConfig)
 	return nil
 }
 
@@ -536,7 +536,7 @@ func judgeRefusedTurn(t *chatgptTurn) (string, error) {
 // provePlainAgentRefused is the platform Harness agent's request to the
 // backend, refused at its egress policy.
 func (p *chatgptProof) provePlainAgentRefused() error {
-	if err := p.createAgent(chatgptTestPlainAgent, "", "", nil); err != nil {
+	if err := p.createAgent(chatgptTestPlainAgent, "", defaultModelConfig, nil); err != nil {
 		return err
 	}
 	target := egressProbeTarget{undeclared: chatgptBackendURL}
