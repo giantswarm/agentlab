@@ -55,7 +55,7 @@ import (
 const CodingPartDevctl = "devctl"
 
 // CodingParts are the parts `coding-test --part` takes.
-var CodingParts = []string{CodingPartDevctl}
+var CodingParts = []string{CodingPartDevctl, CodingPartToolchains}
 
 // DefaultDevctlProofRepository is the repository the part opens and merges
 // pull requests on: generated CI with a job that takes ten minutes on a pull

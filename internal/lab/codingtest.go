@@ -249,7 +249,7 @@ func CodingTest(cfg *config.Config, opts CodingTestOptions) error {
 		opts.ReadyTimeout = DefaultCodingReadyTimeout
 	}
 	switch opts.Part {
-	case "":
+	case "", CodingPartToolchains:
 		if opts.Repository != "" {
 			return fmt.Errorf("--repository is the devctl part's (--part %s)", CodingPartDevctl)
 		}
@@ -293,7 +293,11 @@ func CodingTest(cfg *config.Config, opts CodingTestOptions) error {
 		}
 	}
 	defer p.cleanup()
-	err := p.run()
+	run := p.run
+	if opts.Part == CodingPartToolchains {
+		run = p.runToolchains
+	}
+	err := run()
 	if err != nil && p.mock != nil {
 		err = fmt.Errorf("%w\nthe mockllm's requests, the tools and the last input item of each:\n%s", err, p.mock.logTail())
 	}
@@ -362,36 +366,16 @@ func (p *codingProof) run() error {
 		note("Harness %s/%s Ready", kagentNamespace, harness)
 	}
 
-	token, err := passwordGrant(p.cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret, p.user.Email, p.user.Password, musterLoginScopes)
-	if err != nil {
+	if err := p.connect(ctx); err != nil {
 		return err
 	}
-	if p.muster, err = openMusterSession(p.cfg, token, "coding-test"); err != nil {
-		return err
-	}
-	if p.api, err = dialKagentAPI(p.cfg, token); err != nil {
-		return err
-	}
-	p.sessions = &sessionSet{api: p.api}
-	p.line = p.releases(ctx)
-	note("the line: %s", p.line)
 	if !p.anyToolset {
 		note("agent-manager below %s holds a coding agent to read-only tools: the write tool's refusal is expected", agentManagerAnyToolsetFloor)
 	}
-	modelConfig := p.modelConfig
-	if p.mockBinary != "" {
-		if err := ensureMockLLMModelConfig(); err != nil {
-			return err
-		}
-		modelConfig = MockLLMModelConfig
-		note("the model: the in-cluster mockllm (ModelConfig %s, %s at %s), scripted for this proof's turns; --model-config runs a real model", MockLLMModelConfig, mockLLMModel, mockLLMURL())
+	modelConfig, err := p.model()
+	if err != nil {
+		return err
 	}
-	if modelConfig == "" {
-		if modelConfig, err = agentManagerModelConfig(p.muster); err != nil {
-			return err
-		}
-	}
-	p.setTurnBudget(modelConfig)
 	p.removeAgents()
 	if p.harnesses, err = namespaceHarnesses(ctx); err != nil {
 		return err
@@ -583,6 +567,45 @@ func (p *codingProof) run() error {
 
 	p.stages.begin("model", "The %s turns ran on the in-cluster mockllm: every model call answered by its script", harness)
 	return p.mockAnswered()
+}
+
+// connect signs the person in to muster and kagent and reads the line.
+func (p *codingProof) connect(ctx context.Context) error {
+	token, err := passwordGrant(p.cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret, p.user.Email, p.user.Password, musterLoginScopes)
+	if err != nil {
+		return err
+	}
+	if p.muster, err = openMusterSession(p.cfg, token, "coding-test"); err != nil {
+		return err
+	}
+	if p.api, err = dialKagentAPI(p.cfg, token); err != nil {
+		return err
+	}
+	p.sessions = &sessionSet{api: p.api}
+	p.line = p.releases(ctx)
+	note("the line: %s", p.line)
+	return nil
+}
+
+// model is the ModelConfig the agent runs on, placing the mockllm's where
+// the agent runs on it, and sets the turn budget by it.
+func (p *codingProof) model() (string, error) {
+	modelConfig := p.modelConfig
+	if p.mockBinary != "" {
+		if err := ensureMockLLMModelConfig(); err != nil {
+			return "", err
+		}
+		modelConfig = MockLLMModelConfig
+		note("the model: the in-cluster mockllm (ModelConfig %s, %s at %s), scripted for this proof's turns; --model-config runs a real model", MockLLMModelConfig, mockLLMModel, mockLLMURL())
+	}
+	if modelConfig == "" {
+		var err error
+		if modelConfig, err = agentManagerModelConfig(p.muster); err != nil {
+			return "", err
+		}
+	}
+	p.setTurnBudget(modelConfig)
+	return modelConfig, nil
 }
 
 // startMock runs the mockllm for the agent's MCP binding, whose server the

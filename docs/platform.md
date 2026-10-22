@@ -1516,6 +1516,23 @@ full 30s) and passes on 1.11.4, which carries the relay change.
 
 The Session, the agent, the workspace, the host's clone and every branch of the run are removed on every path; the merged branch is `pr_merge`'s to delete.
 
+### The toolchains part
+
+`agentlab coding-test --part toolchains [--harness claude|codex] [email]` proves that a toolchain mounted into a coding agent's Session works there: agent-manager resolves `go` at its latest version to its digest and hands it to kagent with the Session's creation, and kagent mounts the image read-only at `/opt/kagent/tools/go`, its `bin/` on the runtime's `PATH`. On codex the model is the in-cluster mockllm unless `--model-config` names one.
+
+The part needs agent-manager's `toolchains.repository` (its `get_info` then reports the capability `toolchains`) and a kagent controller that mounts session tool images and admits that repository in `KAGENT_SESSION_TOOL_IMAGE_REPOSITORIES`, both through a `platform.valuesFiles` overlay (`agent-manager.toolchains.repository`, `kagent.controller.env`). A kagent line without session tool images refuses the start as unsupported; its controller and coding Harness images then come from a build that has them (`platform.devImages`: the controller, `claude-harness`, `codex-harness`).
+
+| Stage | What passes |
+|---|---|
+| harness | the coding Harness Ready from the values |
+| capability | agent-manager's `get_info` reports `toolchains` |
+| agent | a coding agent created through agent-manager as the person, Ready on the Harness |
+| start | `start_session` as the person with `toolchains: [go]`: the answer mounts exactly `go`, its image pinned by digest |
+| go | one turn: `ls /opt/kagent/tools` lists `go`, `command -v go` is `/opt/kagent/tools/go/bin/go`, `go version` answers, and a fixture module written into the Session's directory builds offline (`GOPROXY=off`, `GOTOOLCHAIN=local`) and prints its line |
+| model | on the mockllm: every model call answered by its script |
+
+The agent and its Session are removed on every path.
+
 ### The Swarmgeist proof (klaus-gateway on kagent API v2)
 
 `agentlab klaus-gateway-test` is the lab carrier of
