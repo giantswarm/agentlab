@@ -1813,10 +1813,11 @@ func pickerOptions(view map[string]any) []string {
 	return refs
 }
 
-// pickerRef is the agent ref the picker offers for the Agent name.
+// pickerRef is the agent ref the picker offers for the Agent name: the bare
+// name for an agent of the gateway's namespace, else <namespace>/<name>.
 func pickerRef(view map[string]any, name string) (string, bool) {
 	for _, ref := range pickerOptions(view) {
-		if strings.HasSuffix(ref, "/"+name) {
+		if ref == name || strings.HasSuffix(ref, "/"+name) {
 			return ref, true
 		}
 	}

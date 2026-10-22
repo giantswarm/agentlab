@@ -1192,4 +1192,10 @@ func TestPickerValues(t *testing.T) {
 	}}}}, klausGatewayTestAgent); !ok || ref != "kagent/"+klausGatewayTestAgent {
 		t.Errorf("pickerRef = %q %v", ref, ok)
 	}
+	// The gateway's own namespace offers its agents by their bare name.
+	if ref, ok := pickerRef(map[string]any{slackKeyBlocks: []any{map[string]any{slackKeyBlockID: slackPickerAgentBlock, slackKeyElement: map[string]any{
+		slackKeyOptions: []any{map[string]any{slackKeyValue: "codex-operator"}, map[string]any{slackKeyValue: klausGatewayTestAgent}},
+	}}}}, klausGatewayTestAgent); !ok || ref != klausGatewayTestAgent {
+		t.Errorf("pickerRef of a bare name = %q %v", ref, ok)
+	}
 }

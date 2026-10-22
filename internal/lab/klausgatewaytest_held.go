@@ -76,7 +76,11 @@ func (p *slackProof) restartMidSignIn(gw *gatewayProcess, linksPath string, key 
 	if !ok {
 		return nil, fmt.Errorf("the message parked before the restart was not replayed: %s got no access prompt for %s within %s; the thread shows: %s", owner.user, user, klausGatewayReplyWait, threadLine(msgs))
 	}
+	// The owner's thread went through restarts before (5b's ends its turn
+	// left running with a shutdown record), so the turn to wait for is the
+	// first one recorded after the Allow.
 	before := len(p.fake.thread(p.channel, owner.ts))
+	owner.turns = len(p.records(recordTurnDone, owner.ts))
 	if err := p.driver.click(owner.user, consent, slackAccessAllow); err != nil {
 		return nil, err
 	}
