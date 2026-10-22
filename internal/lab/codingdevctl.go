@@ -258,14 +258,19 @@ func (dp *devctlProof) tools() error {
 	return nil
 }
 
-// agent creates the coding agent through agent-manager as the admin, its
-// toolset the part's devctl tools, and waits for it.
+// agent creates the coding agent through agent-manager as the admin, on
+// agent-manager's default ModelConfig, its toolset the part's devctl tools,
+// and waits for it.
 func (dp *devctlProof) agent() error {
 	var toolset []string
 	for _, command := range devctlCommandOrder {
 		toolset = append(toolset, "tool:"+devctlProofTools[command])
 	}
-	spec := agentSpec{Name: devctlProofAgent, Harness: dp.harness, Toolset: toolset, SystemMessage: devctlSystemPrompt,
+	modelConfig, err := agentManagerModelConfig(dp.admin.session)
+	if err != nil {
+		return err
+	}
+	spec := agentSpec{Name: devctlProofAgent, ModelConfig: modelConfig, Harness: dp.harness, Toolset: toolset, SystemMessage: devctlSystemPrompt,
 		Description: "Throwaway agent of agentlab coding-test --part devctl; deleted by the same run."}
 	written, err := (agentManagerWriter{dp.admin.session}).createAgent(spec)
 	if err != nil {
