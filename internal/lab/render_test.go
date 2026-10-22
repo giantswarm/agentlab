@@ -856,6 +856,12 @@ func TestPlatformValuesLegacyChartShape(t *testing.T) {
 		currentAuthz["usernamePrefix"] != apiserverUserPrefix || currentAuthz["groupsPrefix"] != apiserverUserPrefix {
 		t.Errorf("4.x shape: kagent.controller.authorization = %v, want mode kubernetes, groupsClaim groups, usernamePrefix and groupsPrefix oidc:", currentAuthz)
 	}
+	// The 4.x controller verifies people's tokens against Dex's plain-http
+	// key set: the meta chart refuses the TLS one under the lab CA.
+	currentAuth := currentValues["kagent"].(map[string]any)["controller"].(map[string]any)["auth"].(map[string]any)
+	if want := "http://dex-keys.dex.svc.cluster.local:5557/dex/keys"; currentAuth["jwksURL"] != want || currentAuth["jwksAllowHTTP"] != true {
+		t.Errorf("4.x shape: kagent.controller.auth = %v, want jwksURL %s and jwksAllowHTTP true", currentAuth, want)
+	}
 	if got := controller["auth"].(map[string]any)["mode"]; got != "unsecure" {
 		t.Errorf("3.x shape: kagent.controller.auth.mode = %v, want unsecure (no JWT policy in front)", got)
 	}
@@ -884,7 +890,10 @@ func TestPlatformValuesLegacyChartShape(t *testing.T) {
 	delete(expectedKagent["controller"].(map[string]any), "volumes")
 	delete(expectedKagent["controller"].(map[string]any), "volumeMounts")
 	delete(expectedKagent["controller"].(map[string]any), "authorization")
-	expectedKagent["controller"].(map[string]any)["auth"].(map[string]any)["mode"] = "unsecure"
+	expectedAuth := expectedKagent["controller"].(map[string]any)["auth"].(map[string]any)
+	expectedAuth["mode"] = "unsecure"
+	delete(expectedAuth, "jwksURL")
+	delete(expectedAuth, "jwksAllowHTTP")
 	expectedKagent["serviceMonitor"].(map[string]any)["enabled"] = legacy.Platform.Observability
 	dropOverlayChecksum(t, expected)
 	if !reflect.DeepEqual(expected, legacyValues) {

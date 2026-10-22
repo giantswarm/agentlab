@@ -359,6 +359,11 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 // platform domain through (platform.tls; dex.yaml.tmpl, coredns.yaml.tmpl).
 const dexIssuerService = "dex-issuer"
 
+const (
+	dexKeysService = "dex-keys"
+	dexKeysPort    = 5557
+)
+
 // DexIssuerService is dexIssuerService for the templates.
 func (t *tmplData) DexIssuerService() string { return dexIssuerService }
 
@@ -380,6 +385,17 @@ func (t *tmplData) DexJWKSPort() int {
 	}
 	return 5556
 }
+
+// DexKeysService, DexKeysHost and DexKeysPort are Dex's plain-http listener
+// in the cluster, where the kagent controller fetches the key set it verifies
+// people's tokens against (the controller trusts no private CA).
+func (t *tmplData) DexKeysService() string { return dexKeysService }
+
+// DexKeysHost: see DexKeysService.
+func (t *tmplData) DexKeysHost() string { return dexKeysService + ".dex.svc.cluster.local" }
+
+// DexKeysPort: see DexKeysService.
+func (t *tmplData) DexKeysPort() int { return dexKeysPort }
 
 // ExtraPostRenderers is the part of PostRenderers the values template's
 // roster does not render under these settings: the components it names no

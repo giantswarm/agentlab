@@ -731,6 +731,15 @@ kagent:
       # above) — the second of the two authentication layers. A caller that
       # bypasses the edge sends no verified bearer and is nobody.
       mode: trusted-proxy
+      # From kagent 1.24.1 the controller verifies a person's token against
+      # the issuer's keys before it reads a claim. The meta chart derives the
+      # key set from controllerRoute.jwtAuthentication.jwks, which the lab
+      # serves over TLS under the lab CA that the controller does not trust,
+      # and refuses that render; the controller reads Dex's plain-http
+      # Service instead, as an installation's does. An earlier kagent chart
+      # ignores both keys.
+      jwksURL: http://{{ .DexKeysHost }}:{{ .DexKeysPort }}/dex/keys
+      jwksAllowHTTP: true
     # The controller's Kubernetes RBAC authorizer (kubernetes mode, the
     # chart's default from agent-platform 4.151 on kagent 1.19, pinned here so
     # a chart default that moves cannot leave the lab on noop) reviews each
