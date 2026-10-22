@@ -4,6 +4,9 @@ import (
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"github.com/giantswarm/agentlab/internal/config"
 )
 
@@ -56,5 +59,30 @@ func TestWorkspacesSessionHarnessFor(t *testing.T) {
 	}
 	if !strings.Contains(workspacesHarnessProbePrompt(codex.shellTool), "with your shell tool,") {
 		t.Errorf("the codex prompt does not name its shell tool")
+	}
+}
+
+func TestSplitWorkspacesExportDirs(t *testing.T) {
+	pv := func(name, class, claimNS, claim string) corev1.PersistentVolume {
+		v := corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: name}, Spec: corev1.PersistentVolumeSpec{StorageClassName: class}}
+		if claim != "" {
+			v.Spec.ClaimRef = &corev1.ObjectReference{Namespace: claimNS, Name: claim}
+		}
+		return v
+	}
+	pvs := []corev1.PersistentVolume{
+		pv("pvc-ws", workspacesStorageClass, "kagent", "workspace-ws-2866-proof"),
+		pv("pvc-released", workspacesStorageClass, "", ""),
+		pv("pvc-other-class", "standard", "default", "data"),
+	}
+	live, left := splitWorkspacesExportDirs([]string{"pvc-ws", "pvc-proof", "pvc-released", "pvc-other-class"}, pvs)
+	if want := []string{"pvc-ws (kagent/workspace-ws-2866-proof)", "pvc-released (unclaimed)"}; strings.Join(live, ",") != strings.Join(want, ",") {
+		t.Errorf("live = %q, want %q", live, want)
+	}
+	if want := []string{"pvc-proof", "pvc-other-class"}; strings.Join(left, ",") != strings.Join(want, ",") {
+		t.Errorf("left = %q, want %q", left, want)
+	}
+	if live, left := splitWorkspacesExportDirs(nil, pvs); len(live)+len(left) != 0 {
+		t.Errorf("an empty export: live %q, left %q", live, left)
 	}
 }

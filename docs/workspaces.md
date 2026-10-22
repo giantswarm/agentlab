@@ -195,7 +195,10 @@ workspace volumes with it, and installs it under the new name.
      controller's version.
    - The Sessions and the Agent removed.
 10. Everything removed: the proof's namespace `agentlab-workspaces-test` with
-    its claim, and the volume's directory gone from the export.
+    its claim, and the volume's directory gone from the export. A
+    directory a live PersistentVolume of the class still backs (another
+    Workspace's) is named and left in place; one no volume backs fails the
+    run.
 
 `--ready-timeout` bounds each wait (default 5m). A resume on
 another node is proven on a cloud installation, not in the lab: the lab's

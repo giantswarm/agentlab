@@ -445,7 +445,9 @@ func waitWorkspacesVolumesGone(ctx context.Context, timeout time.Duration) error
 }
 
 // proveWorkspacesVolumeGone is the end: no PersistentVolume of the proof,
-// and no directory of it in the export on the node.
+// and no directory in the export on the node that no PersistentVolume backs.
+// A directory still backing a live volume (another Workspace's) is left in
+// place and named.
 func proveWorkspacesVolumeGone(ctx context.Context, node string, timeout time.Duration) error {
 	if err := waitWorkspacesVolumesGone(ctx, timeout); err != nil {
 		return fmt.Errorf("a PersistentVolume of the proof is still there %s after its claim went: `kubectl get pv`, the provisioner's log in %s", timeout, workspacesNamespace)
@@ -454,10 +456,47 @@ func proveWorkspacesVolumeGone(ctx context.Context, node string, timeout time.Du
 	if err != nil {
 		return fmt.Errorf("reading the export on %s: %w", node, err)
 	}
-	if left := strings.Fields(out); len(left) > 0 {
-		return fmt.Errorf("the export on %s still holds %d volume directories after the proof: %s", node, len(left), strings.Join(left, ", "))
+	k, err := labKube()
+	if err != nil {
+		return err
+	}
+	pvs, err := k.clientset.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("listing the PersistentVolumes: %w", err)
+	}
+	live, left := splitWorkspacesExportDirs(strings.Fields(out), pvs.Items)
+	if len(live) > 0 {
+		note("left in place on the export, still backing a live volume: %s", strings.Join(live, ", "))
+	}
+	if len(left) > 0 {
+		return fmt.Errorf("the export on %s still holds %d volume directories no PersistentVolume backs after the proof: %s", node, len(left), strings.Join(left, ", "))
 	}
 	return nil
+}
+
+// splitWorkspacesExportDirs splits the export's volume directories into
+// those a PersistentVolume of the class still backs, named with its claim,
+// and those left behind.
+func splitWorkspacesExportDirs(dirs []string, pvs []corev1.PersistentVolume) (live, left []string) {
+	claims := map[string]string{}
+	for _, pv := range pvs {
+		if pv.Spec.StorageClassName != workspacesStorageClass {
+			continue
+		}
+		claim := "unclaimed"
+		if ref := pv.Spec.ClaimRef; ref != nil {
+			claim = ref.Namespace + "/" + ref.Name
+		}
+		claims[pv.Name] = claim
+	}
+	for _, d := range dirs {
+		if claim, ok := claims[d]; ok {
+			live = append(live, d+" ("+claim+")")
+			continue
+		}
+		left = append(left, d)
+	}
+	return live, left
 }
 
 // proveWorkspacesProxyRefuses opens the proxy's port as a client without
