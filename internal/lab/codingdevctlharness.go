@@ -11,8 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/giantswarm/agentlab/internal/config"
 	apiv1alpha1 "github.com/giantswarm/agentlab/internal/kagent/gen/kagent/api/v1alpha1"
 )
@@ -33,7 +31,9 @@ import (
 //  4. The agent: created through agent-manager as the admin on the Harness,
 //     its toolset x_devctl_pr_wait (codex on the in-cluster mockllm unless
 //     --model-config names a model; omp on agent-manager's default).
-//  5. The sandbox: a Session's first turn probes its sandbox: no forge token
+//  5. The sandbox: a Session on a workspace over the proof repository, with
+//     the admin's grant that binds its actor to the person; its first turn
+//     probes its sandbox: no forge token
 //     or bearer in its environment, /data or /workspace, the model key and
 //     MCP credentials kagent's placeholders.
 //  6. The wait: the next turn calls x_devctl_pr_wait once; its document
@@ -115,11 +115,11 @@ func (hp *devctlHarnessProof) run(p *proofStages) error {
 		return err
 	}
 
+	p.begin("devctl: sandbox", "A Session on workspace %s with the admin's grant; its sandbox holds no muster or GitHub token: no forge token or bearer in its environment, /data or /workspace, the model key and MCP credentials placeholders", devctlProofWorkspace)
 	session, err := hp.session()
 	if err != nil {
 		return err
 	}
-	p.begin("devctl: sandbox", "The Session's sandbox holds no muster or GitHub token: no forge token or bearer in its environment, /data or /workspace, the model key and MCP credentials placeholders")
 	if err := hp.sandbox(session); err != nil {
 		return err
 	}
@@ -253,16 +253,19 @@ func (hp *devctlHarnessProof) waitArguments() (string, error) {
 	return string(b), err
 }
 
-// session starts a Session of the agent as the admin, without a workspace:
-// the agent reaches GitHub only through devctl's tools.
+// session defines the workspace over the proof repository and starts a
+// Session of the agent on it with the admin's grant: the grant binds the
+// Session's actor to the person, whom the egress gateway names to muster.
 func (hp *devctlHarnessProof) session() (*apiv1alpha1.Session, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), hp.timeout)
-	defer cancel()
-	session, err := hp.api.createSession(ctx, devctlProofAgent, uuid.NewString())
-	if session != nil && session.GetId() != "" {
-		hp.set.add(session.GetId())
+	if err := hp.workspace(); err != nil {
+		return nil, err
 	}
-	return session, err
+	session, err := hp.startSession()
+	if err != nil {
+		return nil, err
+	}
+	note("Session %s on workspace %s with the admin's grant", session.GetId(), devctlProofWorkspace)
+	return session, nil
 }
 
 // sandbox runs the coding proof's sandbox check in the Session and judges
@@ -304,11 +307,20 @@ func (hp *devctlHarnessProof) wait(session *apiv1alpha1.Session) error {
 	elapsed := time.Since(start)
 	note("the wait's turn ended after %s", elapsed.Round(time.Second))
 	calls := devctlCalls(t.tools)
+	if len(t.tools) == 0 && hp.mock != nil {
+		// codex reports no MCP call's result to its caller; the mockllm's
+		// reply is the call's output item as codex returned it.
+		calls = devctlCalls([]harnessToolResult{{name: musterCallTool, output: reply}})
+	}
 	for _, c := range calls {
 		note("the agent called %s: exitCode %d, verdict %s", c.command, c.exitCode, c.verdict)
 	}
 	if err := judgeDevctlHarnessWait(calls, elapsed, hp.musterTimeout); err != nil {
-		return fmt.Errorf("the agent's turn: %w\nits reply: %s", err, excerpt(reply, 600))
+		err = fmt.Errorf("the agent's turn: %w\nits reply: %s\nits tools: %s", err, excerpt(reply, 600), toolResultsExcerpt(t.tools))
+		if hp.mock != nil {
+			err = fmt.Errorf("%w\nthe mockllm's requests:\n%s", err, hp.mock.logTail())
+		}
+		return err
 	}
 	logCtx, logCancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	defer logCancel()
@@ -322,6 +334,19 @@ func (hp *devctlHarnessProof) wait(session *apiv1alpha1.Session) error {
 	}
 	note("devctl's server logged the call: %s", logged)
 	return nil
+}
+
+// toolResultsExcerpt names a turn's tool results and the start of each
+// output, for a verdict that found no devctl document among them.
+func toolResultsExcerpt(tools []harnessToolResult) string {
+	if len(tools) == 0 {
+		return "no tool results"
+	}
+	parts := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		parts = append(parts, fmt.Sprintf("%s: %s", tool.name, excerpt(tool.output, 300)))
+	}
+	return strings.Join(parts, "; ")
 }
 
 // devctlHarnessWaitPrompt is the wait's turn: one call of x_devctl_pr_wait

@@ -100,3 +100,34 @@ func TestJudgeDevctlCallLog(t *testing.T) {
 		t.Fatalf("another repository's call: got %v, want none found", err)
 	}
 }
+
+// The devctl wait's reply is the tool's output item as the runtime returned
+// it, so a runtime that reports no tool results still relays the document.
+func TestMockLLMEchoesTheDevctlWaitOutput(t *testing.T) {
+	hp := &devctlHarnessProof{devctlProof: &devctlProof{repository: DefaultDevctlProofRepository, number: 7}}
+	arguments, err := hp.waitArguments()
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, _, err := mockLLMHandler("agentlab-devctl-muster", arguments, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+	prompt := devctlHarnessWaitPrompt(DefaultDevctlProofRepository, 7)
+	search := mockLLMCall(t, srv, userItem(prompt))
+	call := mockLLMCall(t, srv, userItem(prompt), search, outputOf(search))
+	doc := `{"command":"pr wait","exitCode":0,"verdict":"green"}`
+	output := testInputItem{Type: mockLLMFunctionCallOutput, CallID: call.CallID, Output: doc}
+	reply := mockLLMCall(t, srv, userItem(prompt), call, output)
+	raw, _ := json.Marshal(reply.Content)
+	var content []mockLLMContent
+	if err := json.Unmarshal(raw, &content); err != nil || len(content) != 1 {
+		t.Fatalf("the reply's content %s: %v", raw, err)
+	}
+	calls := devctlCalls([]harnessToolResult{{name: musterCallTool, output: content[0].Text}})
+	if len(calls) != 1 || calls[0].command != devctlCommandPRWait || calls[0].exitCode != 0 || calls[0].verdict != "green" {
+		t.Fatalf("the reply %s read as %+v, want the pr wait document", content[0].Text, calls)
+	}
+}

@@ -320,24 +320,13 @@ func (dp *devctlProof) workspace() error {
 // openPullRequest starts the Session with the admin's grant and has the
 // agent push a branch and open a pull request as the person.
 func (dp *devctlProof) openPullRequest() (*apiv1alpha1.Session, error) {
-	a, err := dp.admin.authorizeWorkspace(devctlProofWorkspace)
+	session, err := dp.startSession()
 	if err != nil {
 		return nil, err
 	}
-	if a.Outcome != authorizeGranted || a.Grant == "" {
-		return nil, fmt.Errorf("authorize_workspace answered %s (%q), want granted", a.Outcome, a.Reason)
-	}
-	id, err := startAgentSession(dp.admin.session, devctlProofAgent, a.Grant)
-	if err != nil {
-		return nil, err
-	}
-	dp.set.add(id)
+	id := session.GetId()
 	ctx, cancel := context.WithTimeout(context.Background(), dp.timeout)
 	defer cancel()
-	session, err := dp.api.getSession(ctx, id)
-	if err != nil {
-		return nil, err
-	}
 	var v map[string]string
 	if _, _, err := probeTurnWith(ctx, dp.api, session, devctlPullRequestCommand(dp.repository, dp.branch), "", devctlPurpose, func(reply string) error {
 		v = parseProbeLines(reply)
@@ -355,6 +344,26 @@ func (dp *devctlProof) openPullRequest() (*apiv1alpha1.Session, error) {
 	dp.login, dp.number = login, number
 	note("%s: gh api user %s; push %s; gh pr create %s; #%d by %s", id, v[devctlProbeUser], v[devctlProbePush], v[devctlProbePRCreate], number, login)
 	return session, nil
+}
+
+// startSession starts a Session of the agent on the workspace with the
+// admin's grant, tracked for removal: the Session's actor is the person.
+func (dp *devctlProof) startSession() (*apiv1alpha1.Session, error) {
+	a, err := dp.admin.authorizeWorkspace(devctlProofWorkspace)
+	if err != nil {
+		return nil, err
+	}
+	if a.Outcome != authorizeGranted || a.Grant == "" {
+		return nil, fmt.Errorf("authorize_workspace answered %s (%q), want granted", a.Outcome, a.Reason)
+	}
+	id, err := startAgentSession(dp.admin.session, devctlProofAgent, a.Grant)
+	if err != nil {
+		return nil, err
+	}
+	dp.set.add(id)
+	ctx, cancel := context.WithTimeout(context.Background(), dp.timeout)
+	defer cancel()
+	return dp.api.getSession(ctx, id)
 }
 
 // devctlPurpose says what the part's first command does, for the model

@@ -81,6 +81,10 @@ type mockLLMTurn struct {
 	// with arguments, a JSON object.
 	command, tool, arguments string
 	reply                    string
+	// echo replies with the tool's output item as the runtime returned it
+	// instead of reply: a runtime that reports no tool results to its
+	// caller (codex's MCP calls) still relays the tool's own answer.
+	echo bool
 }
 
 // mockLLMScript is the script of the proof's codex turns. The prompts are
@@ -91,7 +95,7 @@ func mockLLMScript(devctlArguments string) []mockLLMTurn {
 	codex := codingRuntimes[config.CodingRuntimeCodex]
 	var devctl []mockLLMTurn
 	if devctlArguments != "" {
-		devctl = append(devctl, mockLLMTurn{name: "devctl", prompt: devctlHarnessPrompt, tool: musterCallTool, arguments: devctlArguments, reply: "The wait answered; its document is the call's output."})
+		devctl = append(devctl, mockLLMTurn{name: "devctl", prompt: devctlHarnessPrompt, tool: musterCallTool, arguments: devctlArguments, echo: true})
 	}
 	return append(devctl, []mockLLMTurn{
 		{name: "sandbox", prompt: "own sandbox check", command: codingSandboxCommand(codex), reply: "The sandbox check ran; its readings are the command's output."},
@@ -112,6 +116,8 @@ type (
 		match    string
 		command  string
 		response mockLLMResponse
+		// echo answers with the last input item as the reply's text.
+		echo bool
 	}
 	mockLLMResponse struct {
 		ID                string           `json:"id"`
@@ -229,10 +235,12 @@ func mockLLMConfig(mcpServer, devctlArguments string) ([]mockLLMScriptEntry, err
 					CallID: callID, Namespace: namespace, Name: turn.tool, Arguments: turn.arguments,
 				}))
 		}
-		entries = append(entries, mockLLMEntry(turn.name+"_reply", callID, mockLLMItem{
+		reply := mockLLMEntry(turn.name+"_reply", callID, mockLLMItem{
 			ID: "msg_agentlab_" + turn.name, Type: mockLLMMessage, Status: mockLLMItemDone, Role: "assistant",
 			Content: []mockLLMContent{{Type: mockLLMOutputText, Text: turn.reply, Annotations: []any{}}},
-		}))
+		})
+		reply.echo = turn.echo
+		entries = append(entries, reply)
 	}
 	return entries, nil
 }
@@ -261,10 +269,23 @@ func mockLLMMatch(script []mockLLMScriptEntry, last string, tools []string) (moc
 	}
 	for _, entry := range script {
 		if strings.Contains(last, entry.match) {
+			if entry.echo {
+				return entry.echoed(last), true
+			}
 			return entry.onShellTool(tools), true
 		}
 	}
 	return mockLLMResponse{}, false
+}
+
+// echoed is the entry's reply with last, the tool's output item, as its
+// text.
+func (e mockLLMScriptEntry) echoed(last string) mockLLMResponse {
+	response := e.response
+	message := response.Output[0]
+	message.Content = []mockLLMContent{{Type: mockLLMOutputText, Text: last, Annotations: []any{}}}
+	response.Output = []mockLLMItem{message}
+	return response
 }
 
 // onShellTool is the entry's response with its shell call on the tool the
