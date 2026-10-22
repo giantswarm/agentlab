@@ -61,7 +61,7 @@ agentlab workspaces-test          # --storage-only: the storage alone
 agentlab workspaces-test --harness codex --model-config <name> # the Session on the codex Harness
 agentlab workspaces-test --part sync     # every kind of sync cycle on the github instance's proof repositories
 agentlab workspaces-test --part sessions # Sessions on both Harnesses with a requested sync cycle
-agentlab workspaces-test --part git      # git and gh as the person from a Session on both Harnesses, on GitHub
+agentlab workspaces-test --part git      # git and gh as the person from a Session on both Harnesses, on GitHub (--toolchains github: gh from the toolchain)
 agentlab workspaces-test --part gitlab   # the provider instance gitlab, end to end (skips without one)
 ```
 
@@ -327,6 +327,13 @@ GitHub.
 5. **No workspace**, per Harness: a Session started without a grant;
    `gh api user` and a `git push` to the pushed repository are refused, and
    no GitHub token is anywhere it looks.
+
+`--toolchains github[@<version>],…` starts every Session of the part with
+those toolchains through `start_session` (agent-manager's toolchains, see
+[The toolchains part](platform.md#the-toolchains-part) for what the lab
+needs). With `github` the write turn's `gh` must be the toolchain's,
+`/opt/kagent/tools/github/bin/gh`: the part then proves the workspace's git
+and `gh` work on a Harness image that ships no `gh` of its own.
 
 The Sessions, the Agents, the workspace and every branch of the run are
 removed on every path.

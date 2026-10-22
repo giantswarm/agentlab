@@ -60,6 +60,7 @@ const (
 	gitProbeStart        = "start"
 	gitProbeParent       = "parent"
 	gitProbeGHUser       = "gh-user"
+	gitProbeGHPath       = "gh-path"
 	gitProbePRCreate     = "pr-create"
 	gitProbePRAuthor     = "pr-author"
 	gitProbePushActor    = "push-actor"
@@ -109,12 +110,15 @@ type gitProof struct {
 	volume  workspaceVolume
 	run     string
 	runs    []*gitHarnessRun
+	// toolchains are mounted into every Session, name[@version] each;
+	// with github the write turn's gh is the toolchain's.
+	toolchains []string
 }
 
 // workspacesGitPart runs the part in stages, as the admin.
-func workspacesGitPart(cfg *config.Config, timeout time.Duration) error {
+func workspacesGitPart(cfg *config.Config, timeout time.Duration, toolchains []string) error {
 	p := newProofStages()
-	gp := &gitProof{sp: newSyncProof(cfg, timeout, gitWorkspace), timeout: timeout, run: randomHex(4)}
+	gp := &gitProof{sp: newSyncProof(cfg, timeout, gitWorkspace), timeout: timeout, run: randomHex(4), toolchains: toolchains}
 	err := gp.runStages(p)
 	gp.cleanup()
 	if err == nil && gp.pr != nil {
@@ -278,7 +282,7 @@ func (gp *gitProof) write(harness, agent string) error {
 	if a.Outcome != authorizeGranted || a.Grant == "" {
 		return fmt.Errorf("authorize_workspace answered %s (%q, unreadable %v, connect %v), want granted", a.Outcome, a.Reason, a.Unreadable, a.Connect)
 	}
-	id, err := startAgentSession(gp.admin.session, agent, a.Grant)
+	id, err := startAgentSession(gp.admin.session, agent, a.Grant, gp.toolchains...)
 	if err != nil {
 		return err
 	}
@@ -303,6 +307,9 @@ func (gp *gitProof) write(harness, agent string) error {
 		id, harness, v[gitProbeClone], v[gitProbePush], v[gitProbeCommitter], v[gitProbeGHUser], v[gitProbePRCreate], v[gitProbePRAuthor], v[gitProbePushActor], v[gitProbePRClose], v[gitProbeGHToken])
 	login, pr, err := judgeGitWrite(v, gp.pr.pushed, gp.email)
 	if err != nil {
+		return fmt.Errorf("the Session %s: %w", id, err)
+	}
+	if err := judgeGitGH(v[gitProbeGHPath], gp.toolchains); err != nil {
 		return fmt.Errorf("the Session %s: %w", id, err)
 	}
 	r.login, r.pr, r.directory = login, pr, v["pwd"]
@@ -353,7 +360,7 @@ const gitShell = `m() { echo "` + probeMarker + ` $1=$(printf '%s' "$2" | tr '\n
 // its branch deleted.
 func gitWriteCommand(repo, branch string) string {
 	return gitShell +
-		`m pwd "$(pwd)"; ` +
+		`m pwd "$(pwd)"; m ` + gitProbeGHPath + ` "$(command -v gh)"; ` +
 		`if [ ! -d './` + repo + `/.git' ]; then m ` + gitProbeClone + ` ` + probeNone + `; m ` + gitProbePRClose + ` skipped; exit 0; fi; m ` + gitProbeClone + ` './` + repo + `'; ` +
 		`cd './` + repo + `'; base=$(git symbolic-ref --short refs/remotes/origin/HEAD | sed 's|^origin/||'); ` +
 		`m ` + gitProbeStart + ` "head=$(git rev-parse -q --verify HEAD || echo ` + probeNone + `) origin=$(git rev-parse -q --verify origin/HEAD || echo ` + probeNone + `) base=$base branch=$(git branch --show-current) shallow=$(git rev-parse --is-shallow-repository)"; ` +
@@ -571,7 +578,7 @@ func (gp *gitProof) setUp(id string) (time.Time, error) {
 // noWorkspace starts the Harness's Session without a grant and runs the
 // bare turn.
 func (gp *gitProof) noWorkspace(harness, agent string) error {
-	id, err := startAgentSession(gp.admin.session, agent, "")
+	id, err := startAgentSession(gp.admin.session, agent, "", gp.toolchains...)
 	if err != nil {
 		return err
 	}
@@ -654,4 +661,18 @@ func (gp *gitProof) cleanup() {
 	if err := errors.Join(errs...); err != nil {
 		warn("removing what the part left: %v", err)
 	}
+}
+
+// judgeGitGH is the verdict on where the write turn's gh came from: with the
+// github toolchain mounted, from its mount.
+func judgeGitGH(path string, toolchains []string) error {
+	names, err := toolchainNames(toolchains)
+	if err != nil || !slices.Contains(names, toolchainGitHub) {
+		return err
+	}
+	if want := toolchainsMountRoot + "/" + toolchainGitHub + "/bin/" + toolchainTool(toolchainGitHub); path != want {
+		return fmt.Errorf("gh on the PATH is %q, wanted the github toolchain's %s", path, want)
+	}
+	note("gh is the github toolchain's: %s", path)
+	return nil
 }

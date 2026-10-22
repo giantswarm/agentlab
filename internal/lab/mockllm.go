@@ -104,6 +104,7 @@ func mockLLMScript(devctlArguments string) []mockLLMTurn {
 		{name: "heartbeat-read", prompt: "Read this test lab's heartbeat", command: codingHeartbeatReadCommand(), reply: "The heartbeat's ticks are the command's output."},
 		{name: "codeword", prompt: "Remember the code word", command: codingCodeWordCommand(), reply: "The file is written."},
 		{name: "resume", prompt: "the code word I asked you to remember", command: codingResumeCommand(), reply: probeMarker + " code-word=" + codingTestCodeWord},
+		{name: "toolchain", prompt: toolchainsPrompt, command: toolchainsCheckCommand(), reply: "The toolchain check ran; its readings are the command's output."},
 	}...)
 }
 
