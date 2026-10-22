@@ -260,7 +260,8 @@ func toolchainsCheckPrompt(rt codingRuntime) string {
 // image's own copy comes first, the toolchain's after it) and the version
 // the mounted tool answers; with go mounted it builds and runs a fixture
 // module in the Session's working directory with the toolchain's go: no
-// dependency, no module proxy. The script names no toolchain of a run, so
+// dependency, no module proxy, and no rm, which codex refuses (the files are
+// written over). The script names no toolchain of a run, so
 // the mockllm's script is one for every run.
 func toolchainsCheckCommand() string {
 	var tools strings.Builder
@@ -281,7 +282,7 @@ done
 g="` + toolchainsMountRoot + `/go/bin/go"
 if [ ! -x "$g" ]; then echo "$P ` + toolchainsProbeBuilt + `=no go toolchain"; exit 0; fi
 d="$(pwd)/` + toolchainsFixtureDir + `"
-rm -rf "$d" && mkdir -p "$d/src" && cd "$d/src" || exit 1
+mkdir -p "$d/src" && cd "$d/src" || exit 1
 printf 'module agentlab.example/fixture\n\ngo 1.22\n' > go.mod
 printf 'package main\n\nimport "fmt"\n\nfunc main() { fmt.Println("` + toolchainsFixtureOutput + `") }\n' > main.go
 export GOCACHE="$d/cache" GOPATH="$d/gopath" GOTOOLCHAIN=local GOPROXY=off GOFLAGS=-mod=mod CGO_ENABLED=0
