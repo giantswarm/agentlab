@@ -97,6 +97,12 @@ func TestDevctlCalls(t *testing.T) {
 	if c := devctlCalls([]harnessToolResult{{output: devctlDoc(t, map[string]any{testDevctlCommand: "pr merge", "mergedBy": map[string]any{"login": testDevctlLogin}})}}); len(c) != 1 || c[0].mergedBy != testDevctlLogin {
 		t.Errorf("a merger as a user object: %+v", c)
 	}
+	// A nested object opens before "command" (encoding/json sorts the keys):
+	// the call is the document's, not the check's.
+	nested := devctlDoc(t, map[string]any{"checks": []map[string]any{{"name": "ci/circleci: slow-ci", "state": "failure"}}, testDevctlCommand: "pr wait", testDevctlExitCode: 1, testDevctlVerdict: "red"})
+	if c := devctlCalls([]harnessToolResult{{output: nested}}); len(c) != 1 || c[0] != (devctlCall{command: devctlCommandPRWait, exitCode: 1, verdict: "red"}) {
+		t.Errorf("a document with a nested object before its command: %+v", c)
+	}
 }
 
 // The turn passes with each tool once, in order, exit 0 each, merged by the

@@ -507,22 +507,29 @@ func devctlCalls(tools []harnessToolResult) []devctlCall {
 		if m == nil {
 			continue
 		}
-		start := strings.LastIndex(doc[:m[0]], "{")
-		var c devctlCall
+		calls = append(calls, devctlDocument(doc, m[0]))
+	}
+	return calls
+}
+
+// devctlDocument decodes the devctl document whose "command" key starts at
+// key: the object that owns the key, found by walking back over the opening
+// braces before it, since a nested object (a check, a release) may open
+// between the document's start and its "command".
+func devctlDocument(doc string, key int) devctlCall {
+	want := devctlEnvelope.FindStringSubmatch(doc[key:])[1]
+	for start := strings.LastIndex(doc[:key], "{"); start >= 0; start = strings.LastIndex(doc[:start], "{") {
 		var env struct {
 			Command  string `json:"command"`
 			ExitCode int    `json:"exitCode"`
 			Verdict  string `json:"verdict"`
 			MergedBy any    `json:"mergedBy"`
 		}
-		if start >= 0 && json.NewDecoder(strings.NewReader(doc[start:])).Decode(&env) == nil {
-			c = devctlCall{command: env.Command, exitCode: env.ExitCode, verdict: env.Verdict, mergedBy: loginOf(env.MergedBy)}
-		} else {
-			c = devctlCall{command: devctlEnvelope.FindStringSubmatch(doc)[1], exitCode: -1}
+		if json.NewDecoder(strings.NewReader(doc[start:])).Decode(&env) == nil && env.Command == want {
+			return devctlCall{command: env.Command, exitCode: env.ExitCode, verdict: env.Verdict, mergedBy: loginOf(env.MergedBy)}
 		}
-		calls = append(calls, c)
 	}
-	return calls
+	return devctlCall{command: want, exitCode: -1}
 }
 
 // unquoteJSON undoes the string quoting a JSON document gets when a tool
