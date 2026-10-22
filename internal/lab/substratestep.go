@@ -302,7 +302,7 @@ func (r *substrateStepRun) seed(email string) error {
 	if _, err := r.turn(ctx, session, codewordPrompt(r.codeword)); err != nil {
 		return fmt.Errorf("turn 1 (the codeword): %w", err)
 	}
-	reply, err := r.turn(ctx, session, writeMarkerPrompt(r.marker))
+	reply, err := r.turn(ctx, session, writeMarkerPrompt(substrateStepDir, substrateStepFile, r.marker))
 	if err != nil {
 		return fmt.Errorf("turn 2 (the file): %w", err)
 	}
@@ -472,7 +472,7 @@ func (r *substrateStepRun) resume() error {
 		return fmt.Errorf("%s: %w", r.restoreCause(session), err)
 	}
 	note("Session %s resumed: %s", r.session, sessionState(session))
-	reply, err := r.turn(ctx, session, resumePrompt)
+	reply, err := r.turn(ctx, session, resumePrompt(substrateStepFile))
 	if err != nil {
 		return fmt.Errorf("the turn after the resume: %w (%s)", err, r.restoreCause(nil))
 	}
@@ -1278,16 +1278,22 @@ const (
 	newConversationPrompt = "Reply with the single word " + newConversationAnswer + "."
 )
 
-var resumePrompt = "What is the codeword I gave you at the start of our conversation? Then run this exact command once with your bash tool: cat " + substrateStepFile +
-	" — and reply in one line: the codeword, then the command's output verbatim."
+// resumePrompt is the turn after a step's resume: the codeword of the first
+// turn and the file on the durable volume read back.
+func resumePrompt(file string) string {
+	return "What is the codeword I gave you at the start of our conversation? Then run this exact command once with your bash tool: cat " + file +
+		" — and reply in one line: the codeword, then the command's output verbatim."
+}
 
 func codewordPrompt(codeword string) string {
 	return "Remember this codeword for later in our conversation: " + codeword + ". Reply with OK only."
 }
 
-func writeMarkerPrompt(marker string) string {
+// writeMarkerPrompt is the turn that writes the marker to the file in dir on
+// the durable volume and reads it back.
+func writeMarkerPrompt(dir, file, marker string) string {
 	return fmt.Sprintf("Run this exact command once with your bash tool, then reply with its output verbatim and nothing else:\n\nmkdir -p %s && printf '%%s\\n' '%s' > %s && cat %s",
-		substrateStepDir, marker, substrateStepFile, substrateStepFile)
+		dir, marker, file, file)
 }
 
 // resumedReplyProves judges the turn after the resume: the codeword of the
@@ -1297,10 +1303,7 @@ func resumedReplyProves(reply, codeword, marker string) (conversation, volume bo
 }
 
 // substrateStepTemplate is the proof's AgentTemplate on the platform
-// Harness and its Agent. The template carries the skills proof's public
-// skill for its side effect: the Go ADK gives an agent its execution tools —
-// bash, which writes and reads the file on the durable volume — only with
-// skills.
+// Harness, with the bash tool (bashToolSkills), and its Agent.
 func substrateStepTemplate(modelConfig string) string {
 	return fmt.Sprintf(`apiVersion: %[1]s
 kind: AgentTemplate
@@ -1314,15 +1317,22 @@ spec:
   modelConfig:
     name: %[6]s
   systemPrompt: %[7]q
-  skills:
-    - name: %[8]s
+%[8]s---
+%[9]s`, agentTemplateAPIVersion, substrateStepAgent, kagentNamespace, managedByLabel, managedByAgentlabValue, modelConfig, substrateStepSystemMsg,
+		bashToolSkills(), agentManifest(substrateStepAgent, substrateStepAgent, kagentHarness, nil))
+}
+
+// bashToolSkills is the skills block of a step proof's AgentTemplate spec:
+// the skills proof's public skill, carried for its side effect — the Go ADK
+// gives an agent its execution tools (bash, which writes and reads the file
+// on the durable volume) only with skills.
+func bashToolSkills() string {
+	return fmt.Sprintf(`  skills:
+    - name: %[1]s
       source:
         git:
-          url: %[9]s
-          commit: %[10]s
-        path: %[8]s
----
-%[11]s`, agentTemplateAPIVersion, substrateStepAgent, kagentNamespace, managedByLabel, managedByAgentlabValue, modelConfig, substrateStepSystemMsg,
-		skillsTestSkill, skillsTestRepo, skillsTestCommit,
-		agentManifest(substrateStepAgent, substrateStepAgent, kagentHarness, nil))
+          url: %[2]s
+          commit: %[3]s
+        path: %[1]s
+`, skillsTestSkill, skillsTestRepo, skillsTestCommit)
 }

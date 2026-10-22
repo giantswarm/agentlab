@@ -1978,7 +1978,7 @@ func kagentStepTestCmd() *cobra.Command {
 	var opts lab.KagentStepOptions
 	cmd := &cobra.Command{
 		Use:   "kagent-step-test [email]",
-		Short: "Headless kagent step proof: an agent on the kagent release the lab runs with a conversation of one turn, suspended -> the kagent and kagent-crds components pinned to --to, the meta chart moved to the candidate --chart, or both, and the platform upgraded in place under it -> the conversation resumes, a turn on it answers the codeword of its first turn, it suspends and resumes again, and the conversation and the agent delete; the kagent line before and after and PASS per step, or FAIL naming the step, the resume, the turn, the suspend or the delete with the cause, then the lab back on its own configuration",
+		Short: "Headless kagent step proof: an agent on the kagent release the lab runs with a conversation of two turns (a codeword, a file on its durable volume), suspended -> the kagent and kagent-crds components pinned to --to, the meta chart moved to the candidate --chart, or both, and the platform upgraded in place under it -> the conversation resumes, a turn on it answers the codeword of its first turn and reads the file back unchanged, it suspends and resumes again, and the conversation and the agent delete; the kagent line before and after and PASS per step, or FAIL naming the step, the resume, the turn, the suspend or the delete with the cause, then the lab back on its own configuration",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadProofLab()

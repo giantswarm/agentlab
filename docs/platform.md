@@ -1352,8 +1352,8 @@ line, not a change of agentlab. The unit tests of every piece it adds run in
 
 ### The kagent step proof (conversations across a kagent step)
 
-`agentlab kagent-step-test` proves that an agent and its conversation
-survive a step of the kagent line under them, the way
+`agentlab kagent-step-test` proves that an agent, its conversation and its
+durable volume survive a step of the kagent line under them, the way
 `substrate-step-test` proves a Substrate step. It names the step in one of
 two shapes, or both:
 
@@ -1374,10 +1374,14 @@ two shapes, or both:
 The run, on the static binary (no scratch driver): the kagent line before
 the step read off the meta chart, the kagent HelmRelease's applied chart and
 the controller's image; an agent on the platform Harness with a
-conversation of one turn (a random codeword), suspended; the platform
+conversation of two turns (a random codeword, then a random marker written
+with the agent's bash tool to `/data/agentlab-kagent-step/marker` on the
+actor's durable volume), suspended; the platform
 upgraded in place onto the step and the kagent controller rolled out; then
 the conversation from before the step resumed (`resume`), a turn on it that
-must answer the codeword (`turn`), a suspend and a resume more on the new
+must answer the codeword and read the file back with the marker unchanged
+(`turn`; a lost file or a volume not re-attached fails it, its own `volume
+check` PASS line otherwise), a suspend and a resume more on the new
 controller (`suspend`), and the conversation and the agent deleted, the
 Session gone and Substrate holding nothing of the agent (`delete`). Each
 PASS line names what it proved; a failure's FAIL line starts with the stage
