@@ -68,15 +68,20 @@ const (
 	slackThreadPath = "/state/thread"
 	// slackViewsPath reads the opened and redrawn modals back, likewise.
 	slackViewsPath = "/state/views"
+	// slackResponsesPath reads the bodies posted to response_url back,
+	// likewise.
+	slackResponsesPath = "/state/responses"
 )
 
 // slackWorkspace is the fake Slack of one run as the proof uses it: the Web
 // API base a gateway on this host calls, the threads and modals the fake
-// recorded, fresh timestamps for the people's messages, and its end.
+// recorded, the private answers posted to an interaction's response_url,
+// fresh timestamps for the people's messages, and its end.
 type slackWorkspace interface {
 	baseURL() string
 	thread(channel, threadTS string) []slackMessage
 	openedViews() []map[string]any
+	responses() []string
 	nextTS() string
 	close()
 }
@@ -139,7 +144,9 @@ const (
 	slackKeyBlockID    = "block_id"
 	slackKeyOptions    = "options"
 	slackKeyTriggerID  = "trigger_id"
-	slackKeyElement    = "element"
+	// slackKeyResponseURL is where an interaction's private answers go.
+	slackKeyResponseURL = "response_url"
+	slackKeyElement     = "element"
 )
 
 // The gateway's Block Kit action ids and texts the proof reads.
@@ -181,6 +188,22 @@ const (
 	slackPickerAgentAction    = "agent"
 	slackPickerQuestionBlock  = "ask_agent_question"
 	slackPickerQuestionAction = "question"
+	// slackPickerWorkspaceBlock prefixes the optional Workspace input's
+	// block_id (a revision follows it); a submission that leaves it empty
+	// picks No workspace.
+	slackPickerWorkspaceBlock  = "ask_agent_workspace"
+	slackPickerWorkspaceAction = "workspace"
+)
+
+// The "Ask an agent here" message shortcut: invoked on a message, it opens the
+// agent picker for that message's thread, whose submission opens the
+// conversation there — with the slash command the only way a conversation
+// opens (klaus-gateway 4.13.0 and later answer a mention outside one with the
+// help). A person with no link is told to sign in first with `@bot login`.
+const (
+	slackShortcutAskAgent = "ask_agent_here"
+	slackLoginWord        = "login"
+	slackSignInFirst      = "sign in first"
 )
 
 // slackMessage is one message of a fake thread as it stands: posted,
@@ -244,8 +267,8 @@ type fakeSlack struct {
 	messages []*slackMessage
 	byTS     map[string]*slackMessage
 	calls    map[string]int
-	// responses are the bodies posted to response_url.
-	responses []string
+	// posted are the bodies posted to response_url.
+	posted []string
 	// views are the modals views.open and views.update were asked for, in
 	// order: an update is the modal as the gateway redrew it.
 	views []map[string]any
@@ -267,6 +290,7 @@ func startFakeSlack(addr string, emails map[string]string) (*fakeSlack, error) {
 		writeSlackJSON(w, f.thread(r.URL.Query().Get(slackKeyChannel), r.URL.Query().Get(slackKeyTS)))
 	})
 	mux.HandleFunc("GET "+slackViewsPath, func(w http.ResponseWriter, _ *http.Request) { writeSlackJSON(w, f.openedViews()) })
+	mux.HandleFunc("GET "+slackResponsesPath, func(w http.ResponseWriter, _ *http.Request) { writeSlackJSON(w, f.responses()) })
 	f.server = &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	go func() { _ = f.server.Serve(l) }()
 	return f, nil
@@ -391,6 +415,13 @@ func (c *slackFakeContainer) openedViews() []map[string]any {
 	var views []map[string]any
 	c.read(slackViewsPath, &views)
 	return views
+}
+
+// responses reads the response_url bodies back; a failed read is none.
+func (c *slackFakeContainer) responses() []string {
+	var bodies []string
+	c.read(slackResponsesPath, &bodies)
+	return bodies
 }
 
 // read decodes what the fake serves at path into v, leaving v as it is when
@@ -544,9 +575,16 @@ func (f *fakeSlack) openedViews() []map[string]any {
 func (f *fakeSlack) serveResponse(w http.ResponseWriter, r *http.Request) {
 	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	f.mu.Lock()
-	f.responses = append(f.responses, string(body))
+	f.posted = append(f.posted, string(body))
 	f.mu.Unlock()
 	w.WriteHeader(http.StatusOK)
+}
+
+// responses are the bodies posted to response_url, in order.
+func (f *fakeSlack) responses() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.posted)
 }
 
 // slackParams reads a Web API call's parameters, form or JSON.
@@ -754,12 +792,12 @@ func (d *slackDriver) pick(user string, msg slackMessage, actionID, value string
 func (d *slackDriver) onMessage(user string, msg slackMessage, action map[string]any) error {
 	return d.interaction(map[string]any{
 		fieldTypeKey: "block_actions", slackKeyUser: map[string]any{"id": user}, slackKeyTeam: map[string]any{"id": slackFakeTeam},
-		slackKeyChannel:   map[string]any{"id": msg.Channel},
-		"container":       map[string]any{fieldTypeKey: slackKeyMessage, "message_ts": msg.TS, "channel_id": msg.Channel, slackKeyThreadTS: msg.ThreadTS},
-		slackKeyMessage:   map[string]any{slackKeyTS: msg.TS, slackKeyThreadTS: msg.ThreadTS, slackKeyBlocks: msg.Blocks},
-		slackBlockActions: []any{action},
-		slackKeyTriggerID: "trigger-" + randomSuffix(),
-		"response_url":    d.responseURL(),
+		slackKeyChannel:     map[string]any{"id": msg.Channel},
+		"container":         map[string]any{fieldTypeKey: slackKeyMessage, "message_ts": msg.TS, "channel_id": msg.Channel, slackKeyThreadTS: msg.ThreadTS},
+		slackKeyMessage:     map[string]any{slackKeyTS: msg.TS, slackKeyThreadTS: msg.ThreadTS, slackKeyBlocks: msg.Blocks},
+		slackBlockActions:   []any{action},
+		slackKeyTriggerID:   "trigger-" + randomSuffix(),
+		slackKeyResponseURL: d.responseURL(),
 	})
 }
 
@@ -797,9 +835,28 @@ func (d *slackDriver) interaction(body map[string]any) error {
 func (d *slackDriver) slashCommand(user, text string) error {
 	form := url.Values{
 		"command": {slackCommand}, slackKeyText: {text}, "user_id": {user}, "channel_id": {d.channel}, slackKeyTeamID: {slackFakeTeam},
-		slackKeyTriggerID: {"trigger-" + randomSuffix()}, "response_url": {d.responseURL()},
+		slackKeyTriggerID: {"trigger-" + randomSuffix()}, slackKeyResponseURL: {d.responseURL()},
 	}
 	return d.post(slackCommandsPath, "application/x-www-form-urlencoded", []byte(form.Encode()))
+}
+
+// shortcut is a person invoking the message shortcut with the callback id on
+// the message msgTS, a reply in threadTS or, with threadTS empty, a lone
+// top-level message: Slack's message_action payload, with a trigger to open
+// a modal on and a response_url for private answers.
+func (d *slackDriver) shortcut(user, callbackID, msgTS, threadTS string) error {
+	msg := map[string]any{slackKeyTS: msgTS, slackKeyUser: user}
+	if threadTS != "" {
+		msg[slackKeyThreadTS] = threadTS
+	}
+	return d.interaction(map[string]any{
+		fieldTypeKey: "message_action", slackKeyCallbackID: callbackID,
+		slackKeyUser: map[string]any{"id": user}, slackKeyTeam: map[string]any{"id": slackFakeTeam},
+		slackKeyChannel:     map[string]any{"id": d.channel},
+		slackKeyMessage:     msg,
+		slackKeyTriggerID:   "trigger-" + randomSuffix(),
+		slackKeyResponseURL: d.responseURL(),
+	})
 }
 
 // submitView is a person submitting a modal the gateway opened: a

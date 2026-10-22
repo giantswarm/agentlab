@@ -54,7 +54,9 @@ import (
 // The proof: `@bot agents` lists the proof's AgentTemplate and hides one no
 // Harness admits, which the agent picker its Select button opens hides too, and
 // a selection of it is refused with the reason; a person with no
-// link is asked to sign in and reaches no controller; a turn streams under the
+// link is asked to sign in and reaches no controller; every conversation opens
+// the way a person opens one, through the Ask an agent here shortcut and the
+// picker (a mention outside a conversation gets the help); a turn streams under the
 // template's display name and icon, attributed to the person at muster; a tool
 // call bound with requireApproval pauses the task at input-required, Approve
 // resumes it in place and Deny ends another without the call; `stop` cancels
@@ -379,8 +381,8 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 		logs: func() (string, error) { return gw.logs(), nil },
 	}
 
-	step("1. Discovery: `@bot %s` as %s lists %q and hides %s; its Select button opens the picker, which hides it too, and a submitted selection of it is refused with the reason and starts nothing; %s, who has no link, is asked to sign in and reaches no controller",
-		slackAgentsWord, user.Email, klausGatewayTestDisplay, klausGatewayTestUnadmitted, people.stranger)
+	step("1. Discovery: `@bot %s` as %s lists %q and hides %s; its Select button opens the picker, which hides it too, and a submitted selection of it is refused with the reason and starts nothing; %s, who has no link, invokes the Ask an agent here shortcut, is told to sign in first, gets the Sign in button from `@bot %s` and reaches no controller",
+		slackAgentsWord, user.Email, klausGatewayTestDisplay, klausGatewayTestUnadmitted, people.stranger, slackLoginWord)
 	roster, err := p.roster(people.person)
 	if err != nil {
 		return fmt.Errorf("discovery: %w", err)
@@ -396,17 +398,17 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	if err := assertNoSessions(api, klausGatewayTestUnadmitted); err != nil {
 		return err
 	}
-	signIn, err := p.signInPrompt(people.stranger, klausGatewayWordPrompt)
+	signInFirst, signIn, err := p.signInPrompt(people.stranger)
 	if err != nil {
 		return err
 	}
 	if err := assertNoSessions(api, klausGatewayTestAgent); err != nil {
-		return fmt.Errorf("after the unlinked person's message: %w", err)
+		return fmt.Errorf("after the unlinked person's shortcut and login: %w", err)
 	}
-	note("roster: %s; %s refused: %q; %s asked to sign in (%s), no Session of either Agent",
-		strings.Join(names, ", "), klausGatewayTestUnadmitted, excerpt(refusal, 160), people.stranger, excerpt(signIn, 80))
+	note("roster: %s; %s refused: %q; %s's shortcut answered %q, `@bot %s` offered the Sign in button (%s); no Session of either Agent",
+		strings.Join(names, ", "), klausGatewayTestUnadmitted, excerpt(refusal, 160), people.stranger, excerpt(signInFirst, 120), slackLoginWord, excerpt(signIn, 80))
 
-	step("2. One streamed turn as %s: the thread's first turn creates the Session, the answer carries the Agent's display name and icon", user.Email)
+	step("2. One streamed turn as %s: the Ask an agent here shortcut on a message opens the picker, its submission with %s opens the conversation in that message's thread, the first turn creates the Session, the answer carries the Agent's display name and icon", user.Email, klausGatewayTestAgent)
 	main := &slackThread{user: people.person}
 	turn, err := p.firstTurn(main, klausGatewayWordPrompt)
 	if err != nil {
@@ -555,8 +557,8 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	var signedIn *slackTurn
 	var approvedAfter *decisionOutcome
 	if gatewayKeepsHeld(gw.version()) {
-		step("5c. Restart mid-sign-in: %s, who has no link, asks in a new thread and is prompted to sign in; the gateway stops, the link a completed sign-in leaves is written, the gateway starts — the parked message is answered without being sent again", people.stranger)
-		if signedIn, err = p.restartMidSignIn(gw, filepath.Join(runDir, gatewayLinksFile), keys.store, people.stranger, identity.link(user.Email, token)); err != nil {
+		step("5c. Restart mid-sign-in: %s, who has no link, asks in %s's conversation and is prompted to sign in; the gateway stops, the link a completed sign-in leaves is written, the gateway starts — the parked message comes back as %s's access prompt, and after Allow it is answered without being sent again", people.stranger, user.Email, user.Email)
+		if signedIn, err = p.restartMidSignIn(gw, filepath.Join(runDir, gatewayLinksFile), keys.store, main, people.stranger, identity.link(user.Email, token)); err != nil {
 			return err
 		}
 		note("the restarted gateway replayed the message parked before the restart: answered %q", excerpt(signedIn.answer, 40))
@@ -603,16 +605,16 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	note("nothing left in the kagent namespace; gateway stopped, run directory %s", runDirFate)
 
 	fmt.Println()
-	fmt.Printf("PASS: klaus-gateway %s ran on the host against %s (TLS with the lab CA, JWT validated at the edge) with Slack in events mode on a fake Web API; `@bot agents` as %s listed %q and hid %s, as did the picker its Select button opened, and a selection of it was refused with the reason; a person with no link was asked to sign in and reached no controller\n",
+	fmt.Printf("PASS: klaus-gateway %s ran on the host against %s (TLS with the lab CA, JWT validated at the edge) with Slack in events mode on a fake Web API; `@bot agents` as %s listed %q and hid %s, as did the picker its Select button opened, and a selection of it was refused with the reason; a person with no link was told by the Ask an agent here shortcut to sign in first, got the Sign in button from `@bot login` and reached no controller\n",
 		gw.describe(), target, user.Email, klausGatewayTestDisplay, klausGatewayTestUnadmitted)
-	fmt.Printf("PASS: one streamed turn in a Slack thread, answered as %q with the Agent's icon, bound the thread to Session %s, the only session of the Agent; the gateway forwarded %s's linked id_token and muster ran the agent's tool calls under that subject\n", klausGatewayTestDisplay, sessionID, user.Email)
+	fmt.Printf("PASS: one streamed turn in a Slack thread the Ask an agent here shortcut opened, answered as %q with the Agent's icon, bound the thread to Session %s, the only session of the Agent; the gateway forwarded %s's linked id_token and muster ran the agent's tool calls under that subject\n", klausGatewayTestDisplay, sessionID, user.Email)
 	fmt.Printf("PASS: the requireApproval binding paused task %s at input-required; %d Approve click(s) on the card resumed it in place to %s; in a second thread %d Deny click(s) ended task %s (%s) without the call reaching muster\n",
 		approved.taskID, approved.rounds, approved.finalState, declined.rounds, declined.taskID, declined.finalState)
 	fmt.Printf("PASS: `stop` in the thread had the gateway cancel task %s at the controller (TASK_STATE_CANCELED); the thread took a following turn\n", canceled)
 	fmt.Printf("PASS: a gateway restart on the bolt stores kept the thread → Session mapping: the next turn continued %s and recalled the earlier word; no link refresh in the run\n", sessionID)
 	fmt.Printf("PASS: a restart in the middle of a turn, the controller out of reach for %s after it: the restarted gateway kept retrying and posted task %s's answer into its thread %s later, without a reply\n", klausGatewayGateClosed, resumed.taskID, resumed.after.Round(time.Second))
 	if signedIn != nil {
-		fmt.Printf("PASS: a restart between the sign-in prompt and the sign-in lost nothing: the restarted gateway replayed %s's parked message, answered %q\n", people.stranger, excerpt(signedIn.answer, 40))
+		fmt.Printf("PASS: a restart between the sign-in prompt and the sign-in lost nothing: the restarted gateway replayed %s's parked message, which after the owner's Allow was answered %q\n", people.stranger, excerpt(signedIn.answer, 40))
 		fmt.Printf("PASS: a restart while task %s waited on its approval card lost nothing: %d Approve click(s) after the restart resumed it in place to %s\n", approvedAfter.taskID, approvedAfter.rounds, approvedAfter.finalState)
 	}
 	if component != nil {
@@ -1500,18 +1502,128 @@ func (p *slackProof) records(kind, thread string) []gatewayRecord {
 	return threadRecords(gatewayRecords(logs, kind), thread)
 }
 
-// say posts text as a mention in the thread (its first message opens it)
-// and waits for the turn's end.
+// say posts text as a mention in the thread and waits for the turn's end; a
+// thread not opened yet is opened through the shortcut (open).
 func (p *slackProof) say(t *slackThread, text string) (*slackTurn, error) {
+	if t.ts == "" {
+		return p.open(t, text)
+	}
 	before := len(p.fake.thread(p.channel, t.ts))
-	ts, err := p.driver.mention(t.user, t.ts, text)
+	if _, err := p.driver.mention(t.user, t.ts, text); err != nil {
+		return nil, err
+	}
+	return p.awaitTurn(t, before)
+}
+
+// open starts a conversation in a new thread the way a person does: the "Ask
+// an agent here" shortcut on a message of theirs in the channel opens the
+// agent picker for that message's thread, and the picker submitted with the
+// fixture and the question posts the question there and runs the thread's
+// first turn. A mention outside a conversation gets the help, so this is the
+// only opener besides the slash command.
+func (p *slackProof) open(t *slackThread, text string) (*slackTurn, error) {
+	root := p.fake.nextTS()
+	picker, err := p.shortcutPicker(t.user, root)
 	if err != nil {
 		return nil, err
 	}
-	if t.ts == "" {
-		t.ts, before = ts, 0
+	ref, ok := pickerRef(picker, klausGatewayTestAgent)
+	if !ok {
+		return nil, fmt.Errorf("the picker the shortcut opened offers %s, not %s", strings.Join(pickerOptions(picker), ", "), klausGatewayTestAgent)
 	}
+	t.ts = root
+	if err := p.driver.submitView(t.user, picker, pickerValues(picker, ref, text)); err != nil {
+		return nil, err
+	}
+	return p.awaitPastWorkspace(t, 0)
+}
+
+// shortcutPicker invokes the shortcut as user on the lone message ts and
+// returns the agent picker it opened; a private answer instead is the error.
+func (p *slackProof) shortcutPicker(user, ts string) (map[string]any, error) {
+	picker, answer, err := p.invokeShortcut(user, ts)
+	switch {
+	case err != nil:
+		return nil, err
+	case picker == nil:
+		return nil, fmt.Errorf("the %s shortcut opened no picker for %s but answered %q", slackShortcutAskAgent, user, excerpt(answer, 300))
+	case picker[slackKeyCallbackID] != slackPickerCallback:
+		return nil, fmt.Errorf("the %s shortcut opened modal %v, not the agent picker %s", slackShortcutAskAgent, picker[slackKeyCallbackID], slackPickerCallback)
+	}
+	return picker, nil
+}
+
+// shortcutRefused invokes the shortcut as user on the lone message ts and
+// returns the private answer it got; a picker opening is the error.
+func (p *slackProof) shortcutRefused(user, ts string) (string, error) {
+	picker, answer, err := p.invokeShortcut(user, ts)
+	if err != nil {
+		return "", err
+	}
+	if picker != nil {
+		return "", fmt.Errorf("the %s shortcut opened modal %v for %s instead of answering", slackShortcutAskAgent, picker[slackKeyCallbackID], user)
+	}
+	return answer, nil
+}
+
+// invokeShortcut invokes the "Ask an agent here" shortcut as user on the lone
+// message ts and returns what came of it: the modal it opened, or the answer
+// posted to the person alone through its response_url. Neither within
+// klausGatewayReplyWait is the error.
+func (p *slackProof) invokeShortcut(user, ts string) (map[string]any, string, error) {
+	views, answers := len(p.fake.openedViews()), len(p.fake.responses())
+	if err := p.driver.shortcut(user, slackShortcutAskAgent, ts, ""); err != nil {
+		return nil, "", err
+	}
+	var view map[string]any
+	var answer string
+	if !waitFor(int(klausGatewayReplyWait/slackPoll), slackPoll, func() bool {
+		if opened := p.fake.openedViews(); len(opened) > views {
+			view = opened[len(opened)-1]
+		} else if posted := p.fake.responses(); len(posted) > answers {
+			answer = responseText(posted[len(posted)-1])
+		}
+		return view != nil || answer != ""
+	}) {
+		return nil, "", fmt.Errorf("the %s shortcut as %s opened no modal and got no answer within %s", slackShortcutAskAgent, user, klausGatewayReplyWait)
+	}
+	return view, answer, nil
+}
+
+// awaitPastWorkspace waits for the thread's next turn; a workspace prompt
+// the gateway posts first (the person has workspaces the picker did not
+// list in time — whatever an earlier proof left in their name) is answered
+// with No workspace, since the turn proves the gateway, not a workspace.
+func (p *slackProof) awaitPastWorkspace(t *slackThread, before int) (*slackTurn, error) {
+	var prompt slackMessage
+	var asked bool
+	waitFor(int(klausGatewayReplyWait/slackPoll), slackPoll, func() bool {
+		if prompt, asked = workspacePromptIn(p.fake.thread(p.channel, t.ts)); asked {
+			return true
+		}
+		return len(p.records(recordTurnDone, t.ts)) > t.turns
+	})
+	if !asked {
+		return p.awaitTurn(t, before)
+	}
+	before = len(p.fake.thread(p.channel, t.ts))
+	if err := p.driver.click(t.user, prompt, slackWorkspaceNone); err != nil {
+		return nil, fmt.Errorf("answering the workspace prompt with No workspace: %w", err)
+	}
+	note("asked for a workspace (%q); answered No workspace", excerpt(prompt.shown(), 60))
 	return p.awaitTurn(t, before)
+}
+
+// responseText is the text of a body the gateway posted to a response_url
+// (JSON with a text field), or the body as it came.
+func responseText(body string) string {
+	var msg struct {
+		Text string `json:"text"`
+	}
+	if json.Unmarshal([]byte(body), &msg) == nil && msg.Text != "" {
+		return msg.Text
+	}
+	return body
 }
 
 // slackPoll is how often the proof reads the gateway's log for a turn's end:
@@ -1660,10 +1772,7 @@ func (p *slackProof) refusal(user string, roster slackMessage, question string) 
 		return "", fmt.Errorf("the picker offers %s; wanted %s and not %s", strings.Join(offered, ", "), ref, unadmitted)
 	}
 	shown := len(p.fake.thread(p.channel, roster.ThreadTS))
-	if err := p.driver.submitView(user, picker, map[string]any{
-		slackPickerAgentBlock:    map[string]any{slackPickerAgentAction: map[string]any{fieldTypeKey: slackStaticSelect, slackSelectedOption: map[string]any{slackKeyValue: unadmitted}}},
-		slackPickerQuestionBlock: map[string]any{slackPickerQuestionAction: map[string]any{fieldTypeKey: slackPlainTextInput, slackKeyValue: question}},
-	}); err != nil {
+	if err := p.driver.submitView(user, picker, pickerValues(picker, unadmitted, question)); err != nil {
 		return "", err
 	}
 	msgs, ok := waitThread(p.fake, p.channel, roster.ThreadTS, klausGatewayReplyWait, func(msgs []slackMessage) bool {
@@ -1704,18 +1813,69 @@ func pickerOptions(view map[string]any) []string {
 	return refs
 }
 
-// signInPrompt posts a message as a person with no link and returns the
-// sign-in link: the Sign in button (obo_sign_in) the gateway shows that
-// person alone, pointing at its link route. The prose around it is the
-// gateway's to word.
-func (p *slackProof) signInPrompt(user, text string) (string, error) {
-	ts, err := p.driver.mention(user, "", text)
-	if err != nil {
-		return "", err
+// pickerRef is the agent ref the picker offers for the Agent name: the bare
+// name for an agent of the gateway's namespace, else <namespace>/<name>.
+func pickerRef(view map[string]any, name string) (string, bool) {
+	for _, ref := range pickerOptions(view) {
+		if ref == name || strings.HasSuffix(ref, "/"+name) {
+			return ref, true
+		}
 	}
+	return "", false
+}
+
+// pickerValues is a submission's state.values for the picker: the agent ref
+// selected, the question typed and, where the picker carries the optional
+// Workspace input, that input left empty — No workspace.
+func pickerValues(view map[string]any, ref, question string) map[string]any {
+	values := map[string]any{
+		slackPickerAgentBlock:    map[string]any{slackPickerAgentAction: map[string]any{fieldTypeKey: slackStaticSelect, slackSelectedOption: map[string]any{slackKeyValue: ref}}},
+		slackPickerQuestionBlock: map[string]any{slackPickerQuestionAction: map[string]any{fieldTypeKey: slackPlainTextInput, slackKeyValue: question}},
+	}
+	blocks, _ := view[slackKeyBlocks].([]any)
+	for _, b := range blocks {
+		block, _ := b.(map[string]any)
+		if id, _ := block[slackKeyBlockID].(string); strings.HasPrefix(id, slackPickerWorkspaceBlock+".") {
+			values[id] = map[string]any{slackPickerWorkspaceAction: map[string]any{fieldTypeKey: slackStaticSelect}}
+		}
+	}
+	return values
+}
+
+// signInPrompt is what a person with no link meets: the shortcut on a
+// message of theirs opens no picker — the agents are listed with the
+// person's permissions — and answers them privately to sign in first with
+// `@bot login`; `@bot login` in that message's thread then shows them alone
+// the Sign in button (obo_sign_in) pointing at the gateway's link route. It
+// returns the shortcut's answer and the link; the prose is the gateway's to
+// word.
+func (p *slackProof) signInPrompt(user string) (string, string, error) {
+	ts := p.fake.nextTS()
+	answer, err := p.shortcutRefused(user, ts)
+	if err != nil {
+		return "", "", err
+	}
+	if !strings.Contains(answer, slackSignInFirst) || !strings.Contains(answer, slackLoginWord) {
+		return "", "", fmt.Errorf("the unlinked %s's shortcut was answered %q, not told to %s with %s", user, excerpt(answer, 300), slackSignInFirst, slackLoginWord)
+	}
+	if _, err := p.driver.mention(user, ts, slackLoginWord); err != nil {
+		return "", "", err
+	}
+	link, _, err := p.awaitSignIn(user, ts, 0)
+	if err != nil {
+		return "", "", fmt.Errorf("after `@bot %s`: %w", slackLoginWord, err)
+	}
+	first, _, _ := strings.Cut(answer, "\n")
+	return first, link, nil
+}
+
+// awaitSignIn waits for the Sign in button (obo_sign_in) the gateway shows
+// user in the thread past its first from messages, and returns the button's
+// link — the gateway's link route — and the thread as it then stood.
+func (p *slackProof) awaitSignIn(user, threadTS string, from int) (string, []slackMessage, error) {
 	var button map[string]any
-	msgs, ok := waitThread(p.fake, p.channel, ts, klausGatewayReplyWait, func(msgs []slackMessage) bool {
-		for _, m := range msgs {
+	msgs, ok := waitThread(p.fake, p.channel, threadTS, klausGatewayReplyWait, func(msgs []slackMessage) bool {
+		for _, m := range msgs[min(from, len(msgs)):] {
 			if b, found := m.action(slackActionSignIn); found && (m.Recipient == user || m.Method == slackPostMessage) {
 				button = b
 				return true
@@ -1724,13 +1884,13 @@ func (p *slackProof) signInPrompt(user, text string) (string, error) {
 		return false
 	})
 	if !ok {
-		return "", fmt.Errorf("the unlinked %s got no sign-in prompt (a %s button shown to them) within %s; the thread shows: %s", user, slackActionSignIn, klausGatewayReplyWait, threadLine(msgs))
+		return "", msgs, fmt.Errorf("the unlinked %s got no sign-in prompt (a %s button shown to them) within %s; the thread shows: %s", user, slackActionSignIn, klausGatewayReplyWait, threadLine(msgs))
 	}
 	link, _ := button[slackKeyURL].(string)
 	if !strings.Contains(link, musterlink.LinkPath) {
-		return "", fmt.Errorf("the sign-in button points at %q, not the gateway's %s route", link, musterlink.LinkPath)
+		return "", msgs, fmt.Errorf("the sign-in button points at %q, not the gateway's %s route", link, musterlink.LinkPath)
 	}
-	return link, nil
+	return link, msgs, nil
 }
 
 // boundSession is the Session the gateway bound the thread to (its
