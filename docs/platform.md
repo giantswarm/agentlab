@@ -1093,6 +1093,47 @@ reach the gateway refused, or denies one it made, changes no outcome.
 entry and the same origin probed; its `declared` stage fails, so the reach is
 the declaration's. The agent and its Session are removed on every exit path.
 
+### The ChatGPT subscription proof
+
+`platform.chatgptSubscription` (`agentlab configure --chatgpt-subscription`;
+agent-platform 4.164.0 or newer, the codex coding Harness and the
+workspaces beside it) runs codex on a person's own ChatGPT subscription the
+way an installation does, from the chart's values: the lab renders the
+`kagent.modelConfigs[]` entry `chatgpt-subscription` (`credentialType:
+chatgptOAuth`, `apiFormat: responses`, no `apiKeySecret`; the model
+`gpt-5.6-luna` unless `--chatgpt-subscription-model` names another), muster's
+token encryption (`muster.muster.oauth.server.encryptionKey`, the key
+`oauth-encryption-key` of `agent-platform-secrets`), and, where the chart's
+own ranges admit older releases, kagent and its CRDs at `>=1.24.0 <1.25.0`
+and muster at `>=5.51.0 <6.0.0`. The chart derives the rest: muster's
+provider App `chatgpt` (OpenAI's device-code sign-in), kagent's installation
+provider `chatgpt` (`chatgpt.com`, `/backend-api/codex/`, Bearer) and the
+ModelConfig "ChatGPT (your subscription)". Nothing is applied by hand.
+
+`agentlab chatgpt-test` proves it with a real ChatGPT login. The admin
+connects it once: `agentlab chatgpt-test --connect` starts the sign-in and
+prints OpenAI's page and a one-time code, which the person enters there
+signed in to ChatGPT; the run waits `--connect-wait` (default 15m, the
+code's lifetime) or, with `--connect-wait 0`, ends after printing it while
+muster keeps waiting for the code. Every verdict on the backend is read from
+Substrate's egress gateway's record of the Session's actor, as in
+[the egress proof](#the-egress-proof); the Sessions start through
+agent-manager's `start_session`, which binds them to the person in muster.
+
+| Stage | What passes |
+|---|---|
+| values | the ModelConfig `chatgpt-subscription` Accepted, `chatgptOAuth` without `apiKeySecret`, no Secret `kagent-chatgpt-subscription`; `core_auth_status` lists the App `chatgpt` for the admin |
+| connection | the admin holds the App's grant |
+| connected turn | a codex agent created through agent-manager as the admin on the model; its Session's turn completes, and the gateway forwarded the actor's requests under `chatgpt.com/backend-api/codex/`, refusing none |
+| sandbox | that turn's shell probe: no token-shaped value in the environment, `/data` or `/workspace`, no file with a `refresh_token` value, no variable named for one, the model key kagent's placeholder (counts, never values) |
+| second person refused | a developer, who has not connected ChatGPT, starts a Session of the same agent: the gateway answered its backend requests with 403 and the credential provider's denial, forwarded none, and the turn did not complete |
+| non-codex agent refused | an agent of the admin on the platform Harness: its `bash` tool's request to `https://chatgpt.com/backend-api/codex/responses` answered 403 by the egress gate (`actor egress policy denied`), forwarded none |
+| disconnect | `core_auth_logout app=chatgpt` drops the grant, the status reads `auth_required`, and the admin's next Session is refused like the developer's |
+
+`--unconnected` runs the values and the two refusals alone. The agents and
+Sessions are removed on every exit path; a full run ends with the admin
+disconnected, so the next one connects again.
+
 ### The coding agents proof
 
 A coding agent is an agent whose Agent names a coding Harness: a coding CLI
@@ -1461,6 +1502,20 @@ The actor and its template are removed by the same run, and an earlier run's
 first. On a lab the case fails on Substrate 1.11.3 (the call waits the
 full 30s) and passes on 1.11.4, which carries the relay change.
 
+### The devctl part
+
+`agentlab coding-test --part devctl [--repository <owner/name>]` proves that a coding agent waits for a pull request, merges it and waits for its release through devctl's tools (`platform.devctl`), headless, on the real GitHub and CircleCI as the person. Its repository (default `giantswarm/devctl-mcp-proof`, a repository of no value) has generated CI with a job that takes ten minutes on a pull request's head, Auto Release, and the `github` instance's App installed. The admin grants that App once (muster's sign-in link, also written to `state/`; the part waits for it).
+
+| Stage | What passes |
+|---|---|
+| preconditions | `devctl` reachable through muster; the admin holding the `github` instance's grant; the repository cloned on this host with your git credentials and the branches `agentlab-devctl-*` an interrupted run left deleted |
+| tools | the admin's muster lists `x_devctl_pr_wait`, `x_devctl_pr_merge` and `x_devctl_release_wait` |
+| agent and workspace | a claude agent created through agent-manager as the admin, its toolset those three tools, Ready on the workspace-admitting claude Harness; a workspace over the repository, its first cycle |
+| pull request | a Session started with the admin's grant; one turn pushes a branch and opens a pull request with `gh`; `gh api user` a person, the pull request's author that person |
+| waits | while the head's CI runs, one turn: `pr_wait`, then `pr_merge` with `noReleaseWait`, then `release_wait` by the pull request, each through muster's `call_tool`, each once and each only after the verdict before it, each answering exit code 0; the merge record read back with `gh` as the person: `MERGED`, merged by that person, as `pr_merge` names them too. Beside the turn the proof calls `pr_wait` on the same head through muster as the admin with a `progressToken`: one call, its green verdict after more than the MCPServer's `timeout`, the progress notifications delivered with progress rising |
+
+The Session, the agent, the workspace, the host's clone and every branch of the run are removed on every path; the merged branch is `pr_merge`'s to delete.
+
 ### The Swarmgeist proof (klaus-gateway on kagent API v2)
 
 `agentlab klaus-gateway-test` is the lab carrier of
@@ -1763,6 +1818,14 @@ beekeeper secret copy op://<vault>/<item>/client-secret --to-secret kind-agentla
 Each person signs in once (`core_auth_login` with `server: github` through muster, or the portal's Sign in). An agent calling a GitHub tool before that gets muster's sign-in challenge, which it cannot follow itself. muster keeps one pinned client per issuer string, so a second MCPServer pinning `https://github.com/login/oauth` with another client would take over this one's grants.
 
 A personal access token does not fit: muster sends only literal headers, so the token would sit in the MCPServer spec.
+
+## devctl's MCP server (`platform.devctl`)
+
+Off by default. On (`agentlab configure --devctl`), `agentlab platform` installs devctl's own released chart (`oci://gsoci.azurecr.io/charts/giantswarm/devctl`, `platform.devctl.version`, default the release agentlab names, `--devctl-version`) into the platform namespace, the way gazelle runs it: never part of the meta chart. Its values register the server with muster as the MCPServer `devctl` (tools `x_devctl_<tool>`: `pr_wait`, `pr_merge`, `release_wait`, the reservation tools and the rest of `devctl serve`), unpinned with `forwardToken`, its `timeout` restarted by every progress notification up to `progress.maxDuration`.
+
+The server acts on GitHub as the calling person, with their token of the workspaces' `github` instance App: muster keeps that App as the provider App `github` and attaches the person's grant to every devctl call (`X-Muster-Grant-github`). With the workspace-manager pinned to the `github` instance, the lab adds `providerApps: [github]` beside the pin (`workspace-manager.muster.mcpServer.auth`), gazelle's shape: the App keeps the pin's issuer and client Secret, so a grant made stands. With one provider App per instance (`grantProvider: apps`) the chart derives it. The server holds no GitHub or CircleCI credential of its own; its waits read CircleCI through GitHub's commit statuses. It needs `platform.agents` and the workspaces with the `github` instance, pinned or side by side; `configure` refuses it otherwise. Off again, the run uninstalls the release.
+
+`agentlab coding-test --part devctl` is the proof: see [The devctl part](#the-devctl-part).
 
 ## The workspace-manager's provider instances (`platform.workspaces.provider`)
 

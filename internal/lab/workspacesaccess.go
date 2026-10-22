@@ -104,7 +104,7 @@ type accessStarted struct {
 // startSession calls agent-manager's start_session as the person, with the
 // grant when one is given.
 func startSession(p *workspacePerson, grant string) (*toolEnvelope, error) {
-	args := map[string]any{nameKey: workspacesHarnessAgent, namespaceKey: kagentNamespace, "message": accessFirstMessage, startSessionRequestIDArg: uuid.NewString()}
+	args := map[string]any{nameKey: workspacesHarnessAgent, namespaceKey: kagentNamespace, startSessionMessageArg: accessFirstMessage, startSessionRequestIDArg: uuid.NewString()}
 	if grant != "" {
 		args[startSessionGrantArg] = grant
 	}

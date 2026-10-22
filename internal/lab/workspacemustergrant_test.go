@@ -266,3 +266,30 @@ func TestWorkspaceProviderApps(t *testing.T) {
 		t.Errorf("apps: the values carry a token exchange:\n%s", raw)
 	}
 }
+
+// With devctl's server on, the pin to the github instance names that
+// instance in providerApps beside it, the grant muster attaches to devctl's
+// calls (gazelle's shape); off, the pin stands alone.
+func TestWorkspaceGrantValuesDevctlProviderApp(t *testing.T) {
+	stubWorkspacesProbe(t, true)
+	cfg := workspaceGitHubLab()
+	cfg.Platform.Workspaces.GitHub = config.WorkspaceGitHub{AppID: testGrantAppID, ClientID: testGrantClientID}
+	grant := workspaceGrantOf(workspaceProviderValues{Name: config.WorkspaceProviderGitHub, Kind: providerKindGitHub, AppID: testGrantAppID, ClientID: testGrantClientID, Secret: config.WorkspaceGitHubSecretName})
+	for _, on := range []bool{false, true} {
+		values, raw, _, _ := renderWorkspaceTemplates(t, cfg, func(d *tmplData) { d.WorkspaceGrant, d.DevctlEnabled = grant, on })
+		wm, _ := workspaceManagerBlock(t, values)
+		muster, _ := wm["muster"].(map[string]any)
+		server, _ := muster["mcpServer"].(map[string]any)
+		auth, _ := server["auth"].(map[string]any)
+		apps, listed := auth["providerApps"].([]any)
+		if auth["provider"] != config.WorkspaceProviderGitHub {
+			t.Errorf("devctl %v: the pin is gone: %v", on, auth)
+		}
+		switch {
+		case on && (len(apps) != 1 || apps[0] != devctlGrantApp):
+			t.Errorf("devctl on: providerApps %v, want [%s] beside the pin:\n%s", auth["providerApps"], devctlGrantApp, raw)
+		case !on && listed:
+			t.Errorf("devctl off: providerApps %v, want none", apps)
+		}
+	}
+}

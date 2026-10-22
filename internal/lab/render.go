@@ -100,6 +100,10 @@ type tmplData struct {
 	// `klausGateway:` block needs.
 	KlausGatewayEnabled bool
 	KlausGateway        klausGatewayValues
+	// DevctlEnabled adds the github instance's App to the workspace-manager
+	// registration's providerApps beside its pin, the grant devctl's MCP
+	// server takes (devctl.go).
+	DevctlEnabled bool
 	// RefusalNotices mirrors cfg.RefusalNoticesChart(): the chart takes the
 	// `klausGateway.refusals` block, whose interval the lab shortens.
 	RefusalNotices bool
@@ -157,6 +161,9 @@ type tmplData struct {
 	// CodingHarnesses are the lab's coding Harnesses (coding.go), rendered
 	// as kagent.harnesses; none with coding agents and the workspaces off.
 	CodingHarnesses []codingHarness
+	// ChatGPTSubscription is a person's own ChatGPT login as a codex model
+	// (chatgptsubscription.go), nil with platform.chatgptSubscription off.
+	ChatGPTSubscription *chatgptSubscriptionValues
 	// PostRenderers is the lab's per-component `postRenderers` list as
 	// indented YAML, keyed by agent-platform component name
 	// (postrenderers.go): the hostNetwork, sidecar and nodePort patches plus
@@ -319,6 +326,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		VMManagerEnabled:             cfg.VMManagerEnabled(),
 		VMManagerGuestImage:          vmManagerGuestImage,
 		KlausGatewayEnabled:          cfg.KlausGatewayEnabled(),
+		DevctlEnabled:                cfg.DevctlEnabled(),
 		RefusalNotices:               cfg.RefusalNoticesChart(),
 		KlausGateway:                 klausGatewayValuesFor(cfg),
 		ClusterManagerEnabled:        cfg.ClusterManagerEnabled(),
@@ -337,6 +345,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		TenantsEnabled:               cfg.TenantsEnabled(),
 		TenantsTestNamespaces:        tenantsTestNamespaces[:],
 		CodingHarnesses:              codingHarnessesFor(cfg, workspaceAdmissionValuesFor(cfg, workspacesChart.Carries), nil),
+		ChatGPTSubscription:          chatgptSubscriptionValuesFor(cfg),
 		CertsDir:                     certsDir,
 		NodeFilesDir:                 nodeFiles,
 		MusterNodePort:               config.MusterNodePort,

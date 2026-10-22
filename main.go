@@ -134,6 +134,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		inGroup(groupTesting, workspacesMeasureCmd()),
 		inGroup(groupTesting, codingTestCmd()),
 		inGroup(groupTesting, egressTestCmd()),
+		inGroup(groupTesting, chatgptTestCmd()),
 		inGroup(groupTesting, skillsTestCmd()),
 		inGroup(groupTesting, substrateStepTestCmd()),
 		inGroup(groupTesting, kagentStepTestCmd()),
@@ -1011,8 +1012,10 @@ var formTerminal = func() bool {
 
 func configureCmd() *cobra.Command {
 	var defaults, accessible bool
-	var platform, agents, observability, backstage, modelManager, vmManager, klausGateway, musterPodNetwork, alertmanager, installationsPage bool
-	var serving, workspaces, workspacesCSICompanion, coding, tenants, github, githubSignIn bool
+	var platform, agents, observability, backstage, modelManager, vmManager, klausGateway, devctl, musterPodNetwork, alertmanager, installationsPage bool
+	var devctlVersion string
+	var serving, workspaces, workspacesCSICompanion, coding, tenants, github, githubSignIn, chatgptSubscription bool
+	var chatgptSubscriptionModel string
 	var githubSignInClientID string
 	var codingHarnesses []string
 	var codingImages map[string]string
@@ -1155,6 +1158,12 @@ func configureCmd() *cobra.Command {
 			if cmd.Flags().Changed("klaus-gateway") {
 				cfg.Platform.KlausGateway.Enabled = klausGateway
 			}
+			if cmd.Flags().Changed("devctl") {
+				cfg.Platform.Devctl.Enabled = devctl
+			}
+			if cmd.Flags().Changed("devctl-version") {
+				cfg.Platform.Devctl.Version = devctlVersion
+			}
 			if cmd.Flags().Changed("muster-pod-network") {
 				cfg.Platform.MusterPodNetwork = musterPodNetwork
 			}
@@ -1194,6 +1203,12 @@ func configureCmd() *cobra.Command {
 			}
 			if cmd.Flags().Changed("tenants") {
 				cfg.Platform.Tenants.Enabled = tenants
+			}
+			if cmd.Flags().Changed("chatgpt-subscription") {
+				cfg.Platform.ChatGPTSubscription.Enabled = chatgptSubscription
+			}
+			if cmd.Flags().Changed("chatgpt-subscription-model") {
+				cfg.Platform.ChatGPTSubscription.Model = chatgptSubscriptionModel
 			}
 			if cmd.Flags().Changed("tenants") && tenants {
 				// tenants-test's tenant users, one per organization, in a
@@ -1315,6 +1330,8 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&vmManager, "vm-manager", false, "run the platform's VM provisioner (vm-manager) as a pod of the node; --vm-manager=false turns it off (needs /dev/kvm and /dev/vhost-vsock on this machine)")
 	cmd.Flags().StringVar(&vmManagerImageDir, "vm-manager-image-dir", "", "a local guest image build the vm-manager pod boots instead of its release's: a vm-manager checkout's images/build after `make -C images`, pushed into the lab registry at `agentlab platform` (empty for the release's)")
 	cmd.Flags().BoolVar(&klausGateway, "klaus-gateway", false, "run Swarmgeist (klaus-gateway) as the meta chart's in-cluster component: A2A on the in-cluster controller target, Slack on a placeholder Secret (its Web API the proof's fake), the OBO link store in a Secret (needs agents); --klaus-gateway=false turns it off")
+	cmd.Flags().BoolVar(&devctl, "devctl", false, "run devctl's MCP server from its released chart, registered with muster (x_devctl_*), acting on GitHub as the person with their grant of the workspaces' github instance App (needs agents and that instance); `agentlab coding-test --part devctl` proves it; --devctl=false uninstalls it")
+	cmd.Flags().StringVar(&devctlVersion, "devctl-version", "", "the devctl release --devctl installs (default "+config.DefaultDevctlVersion+"); \"\" returns to the default")
 	cmd.Flags().BoolVar(&musterPodNetwork, "muster-pod-network", false, "run muster as an installation does: on the pod network at two replicas behind the edge with a PodDisruptionBudget of minAvailable 1, the issuer reached through the dex-localhost sidecar (muster's direct debug port answers nothing then); --muster-pod-network=false returns it to the host network at one replica")
 	cmd.Flags().BoolVar(&alertmanager, "alertmanager", false, "run an Alertmanager in the observability stack with an always-firing AgentlabWatchdog alert, and point mcp-prometheus at it (ALERTMANAGER_URL) so its alert tools have alerts to read; needs platform.observability")
 	cmd.Flags().StringVar(&mcpPrometheusChartVersion, "mcp-prometheus-chart-version", "", "install this mcp-prometheus chart release (an exact version, a release candidate included) instead of the one agentlab pins, for proving a chart change the devImages swap cannot carry; \"\" returns to the pin; needs platform.observability")
@@ -1325,6 +1342,8 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&workspaces, "workspaces", false, "workspace storage: a read-write-many StorageClass that serves git — an in-cluster NFS server, the NFS CSI driver behind an mTLS proxy only Agent Substrate's API server may reach, and the StorageClass "+lab.WorkspacesStorageClass+"; with --agents=false the storage and the workspace-manager run without Agent Substrate, the shape a later --agents switches on in place; --workspaces=false turns it off")
 	cmd.Flags().BoolVar(&coding, "coding", false, "coding agents: the chart's kagent.harnesses renders the coding Harnesses (claude, Claude Code run headless, unless --coding-harnesses names others), which `agentlab coding-test` proves (needs agents); --coding=false turns it off")
 	cmd.Flags().BoolVar(&tenants, "tenants", false, "the Organizations' namespaces as tenants: the chart's tenants.organizations.enabled turns on agent-manager's tenant reconciler for every namespace labelled giantswarm.io/organization, which `agentlab tenants-test` proves (needs agents); --tenants=false turns it off")
+	cmd.Flags().BoolVar(&chatgptSubscription, "chatgpt-subscription", false, "a person's own ChatGPT subscription as a codex model: the chart's kagent.modelConfigs entry "+config.ChatGPTSubscriptionModelConfig+" (chatgptOAuth, no apiKeySecret), from which it derives muster's provider App chatgpt (OpenAI's device-code sign-in) and kagent's provider chatgpt, muster's token encryption on, which `agentlab chatgpt-test` proves (needs the codex coding Harness and --workspaces); --chatgpt-subscription=false turns it off")
+	cmd.Flags().StringVar(&chatgptSubscriptionModel, "chatgpt-subscription-model", "", "the ChatGPT Codex backend's model of --chatgpt-subscription (default "+config.DefaultChatGPTSubscriptionModel+"); \"\" returns to the default")
 	cmd.Flags().StringSliceVar(&codingHarnesses, "coding-harnesses", nil, fmt.Sprintf("the coding Harnesses rendered with --coding, by runtime (%s; each named after its runtime; default claude alone); codex needs a kagent line whose chart takes runtime codex, omp one whose chart takes runtime byo and an image from --coding-images; \"\" returns to claude alone", strings.Join(config.CodingRuntimes, ", ")))
 	cmd.Flags().BoolVar(&codexHostModel, "codex-host-model", false, fmt.Sprintf("add the extraModels entry %s for the codex Harness: the first of %s the host's Ollama has, on its Responses API (coding-test --harness codex --model-config %s); each needs more memory than a lab proof's host model gets, so configure adds none without this flag", lab.CodexHostModelName, lab.CodexHostModelIDs(), lab.CodexHostModelName))
 	cmd.Flags().StringToStringVar(&codingImages, "coding-images", nil, "the image of a coding Harness the chart has none of its own for, <runtime>=<image@sha256:digest> (repeatable): "+config.CodingRuntimeOmp+"=<the kagent line's omp-harness, runtimeImages.ompHarness.digest of the release's chart>; a dev image (platform.devImages "+config.DevImageOmpHarness+") wins; an empty map clears it")
@@ -1726,6 +1745,8 @@ func codingTestCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the agent runs on (default on codex the in-cluster mockllm, "+lab.MockLLMModelConfig+", else agent-manager's default one); codex needs an OpenAI Responses API or Bedrock gpt-* ModelConfig, such as the codex host model configure adds")
 	cmd.Flags().StringVar(&opts.MockLLMBinary, "mockllm-binary", "", "the static linux agentlab binary the mockllm's container runs (default this one)")
 	cmd.Flags().StringSliceVar(&opts.MusterTools, "muster-tools", nil, "the agent's tool selection on its muster binding (the Generic chart's muster.tools), as a platform agent binds muster: tool names, or meta for muster's "+strconv.Itoa(len(lab.MusterMetaTools))+" meta-tools (default none: muster bound whole)")
+	cmd.Flags().StringVar(&opts.Part, "part", "", "run one part instead of the proof: "+lab.CodingPartDevctl+" (platform.devctl: a claude agent opens a pull request on --repository as the person, waits for its CI with one x_devctl_pr_wait call, merges it with x_devctl_pr_merge and waits for its release with x_devctl_release_wait, beside it one pr_wait with a progressToken; real GitHub and CircleCI, the person's grant of the workspaces' github instance App)")
+	cmd.Flags().StringVar(&opts.Repository, "repository", "", "the devctl part's proof repository, owner/name (default "+lab.DefaultDevctlProofRepository+"): generated CI with a job that takes ten minutes on a pull request's head, Auto Release, the github instance's App installed")
 	return cmd
 }
 
@@ -1750,6 +1771,28 @@ func egressTestCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the agent runs on (default agent-manager's default one)")
 	cmd.Flags().StringVar(&opts.Origin, "origin", lab.DefaultEgressOrigin, "the origin the agent declares and the probe reaches")
 	cmd.Flags().BoolVar(&opts.WithoutEgress, "without-egress", false, "the control run: create the agent without its egress entry and probe the same origin; the declared stage must fail")
+	return cmd
+}
+
+func chatgptTestCmd() *cobra.Command {
+	var opts lab.ChatGPTTestOptions
+	cmd := &cobra.Command{
+		Use:   "chatgpt-test",
+		Short: "Headless proof of codex on a person's own ChatGPT subscription (platform.chatgptSubscription), judged from the egress gateway's record: the chart's ModelConfig without a Secret and muster's App chatgpt -> the admin's grant (--connect starts OpenAI's device-code sign-in and prints the code) -> a codex agent's turn as the admin completes on their login, the sandbox holding placeholders and no refresh token -> a developer's Session of the same agent refused by the credential provider -> a non-codex agent's request to the backend refused by its egress policy -> core_auth_logout, the admin's next turn refused",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadProofLab()
+			if err != nil {
+				return err
+			}
+			return lab.ChatGPTTest(cfg, opts)
+		},
+	}
+	cmd.Flags().BoolVar(&opts.Connect, "connect", false, "start the admin's device-code sign-in when they hold no grant: print OpenAI's page and the code, and wait --connect-wait for the person to enter it")
+	cmd.Flags().DurationVar(&opts.ConnectWait, "connect-wait", lab.DefaultChatGPTConnectWait, "how long --connect waits for the code; 0 prints it and ends the run (muster keeps waiting for it until it expires)")
+	cmd.Flags().BoolVar(&opts.Unconnected, "unconnected", false, "run the stages that need no ChatGPT connection alone: the values, the second person's refusal and the non-codex agent's")
+	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", lab.DefaultCodingReadyTimeout, "how long each agent's boot may take")
+	cmd.Flags().DurationVar(&opts.TurnTimeout, "turn-timeout", 0, "how long each turn may take (default 10m)")
 	return cmd
 }
 

@@ -868,6 +868,20 @@ func (a *kagentAPI) getTask(ctx context.Context, session *apiv1alpha1.Session, t
 	return task, nil
 }
 
+// fullTask is getTask with the task's whole history.
+func (a *kagentAPI) fullTask(ctx context.Context, session *apiv1alpha1.Session, taskID a2a.TaskID) (*a2a.Task, error) {
+	history := fullTaskHistory
+	task, err := a.a2a.GetTask(a.a2aCtx(ctx), &a2a.GetTaskRequest{Tenant: agentTenant(session.GetAgent()), ID: taskID, HistoryLength: &history})
+	if err != nil {
+		return nil, fmt.Errorf("GetTask %s: %w", taskID, err)
+	}
+	return task, nil
+}
+
+// fullTaskHistory is the history length fullTask asks for: more messages
+// than a proof's turn produces.
+const fullTaskHistory = 1000
+
 // listTasks is A2AService/ListTasks narrowed to the session (its context
 // id): its tasks, one page of up to 100 (a proof's session has a handful).
 func (a *kagentAPI) listTasks(ctx context.Context, session *apiv1alpha1.Session) ([]*a2a.Task, error) {
@@ -914,8 +928,11 @@ type turn struct {
 	// workspace setup's.
 	notices []string
 	// tools are the results of the tools the turn ran, in order: the
-	// harness's function_response artifacts.
-	tools []harnessToolResult
+	// harness's function_response artifacts, each once however often its
+	// artifact is delivered (streamed, then on the task); toolsSeen holds
+	// the results read.
+	tools     []harnessToolResult
+	toolsSeen map[harnessToolResult]bool
 	// approval is the tool_approval_request the task paused on at
 	// input-required, nil otherwise.
 	approval *toolApprovalRequest
@@ -1000,7 +1017,16 @@ func (t *turn) addArtifact(artifact *a2a.Artifact, appendChunk bool) {
 	if _, seen := t.artifactText[artifact.ID]; !seen {
 		t.artifactOrder = append(t.artifactOrder, artifact.ID)
 	}
-	t.tools = append(t.tools, toolResults(artifact.Parts)...)
+	for _, r := range toolResults(artifact.Parts) {
+		if t.toolsSeen[r] {
+			continue
+		}
+		if t.toolsSeen == nil {
+			t.toolsSeen = map[harnessToolResult]bool{}
+		}
+		t.toolsSeen[r] = true
+		t.tools = append(t.tools, r)
+	}
 	text := partsText(artifact.Parts)
 	if appendChunk {
 		t.artifactText[artifact.ID] += text
@@ -1047,9 +1073,11 @@ func partsText(parts a2a.ContentParts) string {
 
 // harnessToolResult is one tool's result as the harness reports it: the tool's
 // name (command_execution for a shell command, <server>.<tool> for an MCP
-// tool on codex) and its output, a command's output or the result's JSON.
+// tool on codex) and its output, a command's output or the result's JSON;
+// id is the call's, "" where the harness gives none (codex numbers its
+// items per turn, so an id alone does not tell two results apart).
 type harnessToolResult struct {
-	name, output string
+	id, name, output string
 }
 
 // toolActivityTypeKeys are the part metadata a harness types its tool
@@ -1082,7 +1110,7 @@ func toolResults(parts a2a.ContentParts) []harnessToolResult {
 			continue
 		}
 		response, _ := data["response"].(map[string]any)
-		results = append(results, harnessToolResult{name: stringOf(data["name"]), output: toolOutput(response["result"])})
+		results = append(results, harnessToolResult{id: stringOf(data["id"]), name: stringOf(data["name"]), output: toolOutput(response["result"])})
 	}
 	return results
 }
