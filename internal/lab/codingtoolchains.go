@@ -137,7 +137,7 @@ func (p *codingProof) runToolchains() error {
 		return err
 	}
 	if !info.Capabilities[agentManagerToolchainsCapability] {
-		return fmt.Errorf("agent-manager %s publishes no toolchains (capabilities %v): the part needs agent-manager.toolchains.repository and the kagent controller's KAGENT_SESSION_TOOL_IMAGE_REPOSITORIES admitting it, on a kagent line that mounts session tool images (a platform.valuesFiles overlay; %s)", info.Version, info.Capabilities, p.line)
+		return fmt.Errorf("agent-manager %s publishes no toolchains (capabilities %v): the part needs agent-manager.toolchains.repository and the kagent controller's KAGENT_SESSION_TOOL_IMAGE_REPOSITORIES admitting it and KAGENT_SESSION_TOOL_IMAGE_EGRESS_ORIGINS every origin its toolchains declare, on a kagent line that mounts session tool images (a platform.valuesFiles overlay; %s)", info.Version, info.Capabilities, p.line)
 	}
 	note("agent-manager %s publishes toolchains", info.Version)
 
