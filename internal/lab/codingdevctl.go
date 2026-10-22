@@ -291,9 +291,10 @@ func (dp *devctlProof) agent() error {
 // and waits for its first cycle.
 func (dp *devctlProof) workspace() error {
 	s := dp.sp
+	var created syncWorkspace
 	if err := s.member.createLabWorkspace(map[string]any{
 		nameKey: devctlProofWorkspace, wmOrganizationArg: config.WorkspaceOrganization, wmSourcesArg: dp.pr.sources(dp.repository),
-	}, nil); err != nil {
+	}, &created); err != nil {
 		return err
 	}
 	d, err := s.waitCycle(devctlProofWorkspace, nil)
