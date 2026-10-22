@@ -133,7 +133,8 @@ Dex headlessly, drives the real components through the same paths a person
 would, asserts the result and leaves nothing behind — with one documented
 exception, `models-test` on a server that cannot delete a model (see below).
 For its length a proof holds the platform's component version ranges, so
-Flux upgrades nothing under it (docs/platform.md, the range hold).
+Flux upgrades nothing under it, and it returns once a release published
+meanwhile has rolled (docs/platform.md, the range hold).
 Where a command takes `[email]`, that user runs the proof (default: the
 admin). They trust `certs/ca.crt` directly, so they need neither `agentlab
 trust` nor any Node setting. The agent proofs run on kagent API v2, the one

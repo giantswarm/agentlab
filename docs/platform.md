@@ -115,7 +115,11 @@ The lab installs it in its **lab shape**:
   overlay's version and a new chart apply, and a proof in the same process
   holds again on what the install left running. A release that must reach
   the lab mid-lease comes by `agentlab platform`; otherwise it lands after
-  the proof.
+  the proof, and the proof waits for it: when a resumed source's artifact
+  moved, the proof returns only once every HelmRelease on it is Ready at the
+  new chart (Helm's wait rolled its workloads, up to 10 minutes; a release
+  that does not get there is a warning naming it), so the command after a
+  proof never meets the roll. An interrupt resumes without waiting.
 - A field a hand wrote on a platform workload — `kubectl patch` of muster's
   `hostNetwork`, a `kubectl set env` on Backstage — is no release's: Helm and
   helm-controller's drift correction own and correct only the fields the

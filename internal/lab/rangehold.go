@@ -11,12 +11,14 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/Masterminds/semver/v3"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/retry"
 )
 
@@ -44,19 +46,42 @@ import (
 // platform.devImages or platform.chartPath swap, an overlay's version and a
 // new chart all apply, and the proof running in this process takes its hold
 // again on the components it installed (resumeRangeHold).
+//
+// A release published while the proof held its range rolls when the range
+// resumes. The proof does not return under that roll: its release waits until
+// every HelmRelease on a source that moved is Ready at the new chart
+// (settleResumed), so the next command meets the lab steady. An interrupt
+// resumes without waiting.
 
 const (
 	// rangeHoldAnnotation lists the proofs holding a source, comma-separated.
 	rangeHoldAnnotation = "agentlab.giantswarm.io/range-hold"
 	// rangeHoldFieldManager owns spec.suspend while a hold is on.
 	rangeHoldFieldManager = "agentlab-range-hold"
+	// helmReleaseDeployed is a Helm release snapshot's status once the
+	// upgrade succeeded.
+	helmReleaseDeployed = "deployed"
 )
+
+// rangeSettleTimeout bounds the wait for the releases a resume rolls: a
+// chart's pull and Helm's wait for its workloads. A var for the tests.
+var rangeSettleTimeout = 10 * time.Minute
 
 // RangeHold is one proof's hold on the platform's version ranges.
 type RangeHold struct {
 	holder  string
 	sources []string
+	// resumed are the sources the last drop resumed, with the artifact
+	// revision each held, for settleResumed.
+	resumed []heldSource
 	stop    func()
+}
+
+// heldSource is a source the hold resumed and the artifact revision it kept
+// while suspended.
+type heldSource struct {
+	name     string
+	revision string
 }
 
 var (
@@ -127,8 +152,9 @@ func (h *RangeHold) take(ctx context.Context) error {
 }
 
 // Release removes the proof's hold; a source no other proof holds resumes,
-// and source-controller resolves its range again. Safe to call twice and on
-// a nil hold.
+// source-controller resolves its range again, and Release returns once the
+// releases on a source that moved are Ready at its new chart. Safe to call
+// twice and on a nil hold.
 func (h *RangeHold) Release(ctx context.Context) error {
 	if h == nil {
 		return nil
@@ -142,10 +168,16 @@ func (h *RangeHold) Release(ctx context.Context) error {
 		activeHold = nil
 	}
 	activeHoldMu.Unlock()
-	return h.drop(ctx)
+	if err := h.drop(ctx); err != nil {
+		return err
+	}
+	resumed := h.resumed
+	h.resumed = nil
+	return settleResumed(ctx, resumed)
 }
 
-// drop removes the holder from the sources it held.
+// drop removes the holder from the sources it held, and records the ones it
+// resumed in h.resumed.
 func (h *RangeHold) drop(ctx context.Context) error {
 	if len(h.sources) == 0 {
 		return nil
@@ -156,12 +188,20 @@ func (h *RangeHold) drop(ctx context.Context) error {
 	}
 	var errs []error
 	for _, name := range h.sources {
-		_, err := updateHold(ctx, *gvr, name, func(holders []string, _ bool) ([]string, bool, bool) {
+		// The artifact the hold kept: what the source's HelmReleases run.
+		var revision string
+		if src, err := getObject(ctx, *gvr, platformNamespace, name); err == nil {
+			revision, _, _ = unstructured.NestedString(src.Object, "status", "artifact", "revision")
+		}
+		held, err := updateHold(ctx, *gvr, name, func(holders []string, _ bool) ([]string, bool, bool) {
 			holders = slices.DeleteFunc(holders, func(x string) bool { return x == h.holder })
 			return holders, len(holders) > 0, true
 		})
 		if err != nil && !apierrors.IsNotFound(err) {
 			errs = append(errs, err)
+		}
+		if err == nil && !held {
+			h.resumed = append(h.resumed, heldSource{name: name, revision: revision})
 		}
 	}
 	if len(errs) == 0 {
@@ -169,6 +209,144 @@ func (h *RangeHold) drop(ctx context.Context) error {
 	}
 	h.sources = nil
 	return errors.Join(errs...)
+}
+
+// settleResumed waits for what resuming the sources set off: source-controller
+// resolves each range again, and on a source whose artifact moved (a release
+// published while the proof held it) helm-controller upgrades every
+// HelmRelease whose chartRef names it. It returns once each of those is Ready
+// at the new chart — Helm's wait has rolled its workloads — so the command
+// after the proof never meets the roll. A source that did not move returns at
+// once.
+func settleResumed(ctx context.Context, resumed []heldSource) error {
+	if len(resumed) == 0 {
+		return nil
+	}
+	srcGVR, err := ociRepositoryGVR()
+	if err != nil || srcGVR == nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, rangeSettleTimeout)
+	defer cancel()
+	var errs []error
+	for _, r := range resumed {
+		revision, err := waitSourceObserved(ctx, *srcGVR, r.name)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if revision == "" || revision == r.revision {
+			continue
+		}
+		note("OCIRepository %s moved from %s to %s while the proof held it: waiting for its releases to roll", r.name, orNone(r.revision), revision)
+		if err := waitReleasesAt(ctx, r.name, revision); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// waitSourceObserved waits until source-controller has reconciled the
+// source's resumed spec, failed or not, and returns its artifact revision.
+func waitSourceObserved(ctx context.Context, gvr schema.GroupVersionResource, name string) (string, error) {
+	var revision string
+	err := wait.PollUntilContextCancel(ctx, pollInterval, true, func(ctx context.Context) (bool, error) {
+		src, err := getObject(ctx, gvr, platformNamespace, name)
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				return true, nil
+			}
+			return false, err
+		}
+		revision, _, _ = unstructured.NestedString(src.Object, "status", "artifact", "revision")
+		observed, _, _ := unstructured.NestedInt64(src.Object, "status", "observedGeneration")
+		var readyObserved int64
+		if c := condition(src, conditionReady); c != nil {
+			readyObserved, _, _ = unstructured.NestedInt64(c, "observedGeneration")
+		}
+		return max(observed, readyObserved) >= src.GetGeneration(), nil
+	})
+	if wait.Interrupted(err) {
+		return "", fmt.Errorf("OCIRepository %s/%s did not reconcile its resumed range within %s; check `kubectl -n %s describe ocirepository %s`", platformNamespace, name, rangeSettleTimeout, platformNamespace, name)
+	}
+	return revision, err
+}
+
+// waitReleasesAt waits until every HelmRelease on the source is Ready at the
+// artifact revision, and names each as it gets there. A release helm-controller
+// gave up on ends the wait with its message.
+func waitReleasesAt(ctx context.Context, source, revision string) error {
+	gvr, err := gvrFor(fluxHelmReleaseResource)
+	if err != nil {
+		return err
+	}
+	var pending []string
+	err = wait.PollUntilContextCancel(ctx, pollInterval, true, func(ctx context.Context) (bool, error) {
+		releases, err := listObjects(ctx, gvr, "", "")
+		if err != nil {
+			return false, err
+		}
+		pending = pending[:0]
+		for i := range releases {
+			hr := &releases[i]
+			if !chartRefNames(hr, source) {
+				continue
+			}
+			if suspended, _, _ := unstructured.NestedBool(hr.Object, crSpec, "suspend"); suspended {
+				continue
+			}
+			ready, message := conditionStatus(hr, conditionReady), conditionMessage(hr, conditionReady)
+			if ready == condFalseStatus && strings.Contains(message, "retries exhausted") {
+				return false, fmt.Errorf("HelmRelease %s/%s failed to roll to %s after the version ranges resumed: %s", hr.GetNamespace(), hr.GetName(), revision, message)
+			}
+			if !releaseAt(hr, revision) {
+				pending = append(pending, fmt.Sprintf("%s/%s (Ready=%s %s)", hr.GetNamespace(), hr.GetName(), orNone(ready), message))
+			}
+		}
+		return len(pending) == 0, nil
+	})
+	if wait.Interrupted(err) {
+		return fmt.Errorf("HelmRelease(s) on OCIRepository %s not Ready at %s within %s after the version ranges resumed: %s; check `kubectl -n %s describe helmrelease`", source, revision, rangeSettleTimeout, strings.Join(pending, ", "), platformNamespace)
+	}
+	if err == nil {
+		note("The releases on OCIRepository %s run %s", source, revision)
+	}
+	return err
+}
+
+// chartRefNames reports whether the HelmRelease's chart comes from the
+// platform namespace's OCIRepository of that name.
+func chartRefNames(hr *unstructured.Unstructured, source string) bool {
+	ref, _, _ := unstructured.NestedStringMap(hr.Object, crSpec, "chartRef")
+	ns := ref["namespace"]
+	if ns == "" {
+		ns = hr.GetNamespace()
+	}
+	return ref["kind"] == kindOCIRepository && ref["name"] == source && ns == platformNamespace
+}
+
+// releaseAt reports whether helm-controller has upgraded the HelmRelease to
+// the artifact revision (<version>@<digest>) and Helm deployed it: the
+// attempted chart is the artifact's, the newest snapshot is that chart
+// deployed, and Ready is True.
+func releaseAt(hr *unstructured.Unstructured, revision string) bool {
+	version, digest, _ := strings.Cut(revision, "@")
+	attempted, _, _ := unstructured.NestedString(hr.Object, "status", "lastAttemptedRevision")
+	attemptedDigest, _, _ := unstructured.NestedString(hr.Object, "status", "lastAttemptedRevisionDigest")
+	if digest != "" && attemptedDigest != digest {
+		return false
+	}
+	if attemptedVersion, _, _ := strings.Cut(attempted, "+"); attemptedVersion != strings.SplitN(version, "+", 2)[0] {
+		return false
+	}
+	history, _, _ := unstructured.NestedSlice(hr.Object, "status", "history")
+	if len(history) == 0 {
+		return false
+	}
+	latest, _ := history[0].(map[string]any)
+	chartVersion, _, _ := unstructured.NestedString(latest, "chartVersion")
+	status, _, _ := unstructured.NestedString(latest, "status")
+	return chartVersion == attempted && status == helmReleaseDeployed && conditionStatus(hr, conditionReady) == conditionTrue
 }
 
 // liftRangeHolds resumes every source a proof holds, whoever holds it: the
