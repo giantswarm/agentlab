@@ -176,13 +176,28 @@ func TestKagentStepChartOnly(t *testing.T) {
 	}
 }
 
-// TestKagentStepTemplate: the proof's agent is an AgentTemplate and an Agent
-// of the platform Harness, both labelled agentlab's.
+// TestKagentStepTemplate: the proof's agent is an AgentTemplate with the
+// bash tool's skill and an Agent of the platform Harness, both labelled
+// agentlab's.
 func TestKagentStepTemplate(t *testing.T) {
 	manifest := kagentStepTemplate(defaultModelConfig)
-	for _, want := range []string{"kind: AgentTemplate", "kind: Agent\n", "name: " + kagentStepAgent, "name: " + defaultModelConfig, "name: " + kagentHarness, managedByLabel} {
+	for _, want := range []string{"kind: AgentTemplate", "kind: Agent\n", "name: " + kagentStepAgent, "name: " + defaultModelConfig, "name: " + kagentHarness, managedByLabel, "skills:\n    - name: " + skillsTestSkill, "commit: " + skillsTestCommit} {
 		if !strings.Contains(manifest, want) {
 			t.Errorf("the manifest lacks %q:\n%s", want, manifest)
 		}
+	}
+}
+
+// TestKagentStepPrompts: the file is written to the proof's own directory on
+// the durable volume and read back from it after the step.
+func TestKagentStepPrompts(t *testing.T) {
+	write := writeMarkerPrompt(kagentStepDir, kagentStepFile, "kagent-step 00ff")
+	for _, want := range []string{"mkdir -p /data/agentlab-kagent-step", "printf '%s\\n' 'kagent-step 00ff' > /data/agentlab-kagent-step/marker", "cat /data/agentlab-kagent-step/marker"} {
+		if !strings.Contains(write, want) {
+			t.Errorf("the write prompt lacks %q:\n%s", want, write)
+		}
+	}
+	if resume := resumePrompt(kagentStepFile); !strings.Contains(resume, "cat "+kagentStepFile) {
+		t.Errorf("the resume prompt must read %s back: %s", kagentStepFile, resume)
 	}
 }

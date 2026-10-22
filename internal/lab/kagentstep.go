@@ -17,24 +17,30 @@ import (
 	apiv1alpha1 "github.com/giantswarm/agentlab/internal/kagent/gen/kagent/api/v1alpha1"
 )
 
-// The kagent step proof: an agent and its conversation survive a step of the
-// kagent line under them. An agent on the kagent release the lab runs, a
-// conversation with one turn (a codeword), suspended; the step (the kagent
+// The kagent step proof: an agent, its conversation and its durable volume
+// survive a step of the kagent line under them. An agent on the kagent
+// release the lab runs, a conversation of two turns (a codeword, a known file
+// written to the actor's durable directory), suspended; the step (the kagent
 // and kagent-crds components pinned to a kagent release through a values
 // overlay, the meta chart moved to a candidate release, or both, the platform
 // upgraded in place); then the conversation from before the step resumed, a
-// turn on it that must answer the codeword, a suspend and a resume more, and
+// turn on it that must answer the codeword and read the file back unchanged,
+// a suspend and a resume more, and
 // the conversation and the agent deleted. The lab returns to its own
 // configuration afterwards. docs/platform.md "The kagent step proof".
 
 // What the proof creates; all of it is removed by the same run.
 const (
 	kagentStepAgent = "agentlab-kagent-step"
+	// kagentStepDir is the proof's directory in the actor's durable directory
+	// (/data): what the snapshot carries as a durable volume across the step.
+	kagentStepDir  = "/data/agentlab-kagent-step"
+	kagentStepFile = kagentStepDir + "/marker"
 	// kagentStepValues is the step's values overlay, beside the lab's
 	// rendered values.
 	kagentStepValues    = "kagent-step-values.yaml"
 	kagentCRDsRelease   = componentKagent + "-crds"
-	kagentStepSystemMsg = "You are a terse assistant of the agentlab kagent step proof. Answer in one short line."
+	kagentStepSystemMsg = "You are a terse assistant of the agentlab kagent step proof. Use your bash tool when asked to run a command. Answer in one short line."
 )
 
 // The waits of the proof: the golden boot before the step, the controller's
@@ -68,7 +74,8 @@ type KagentStepOptions struct {
 
 // KagentStepTest is `agentlab kagent-step-test`. The verdict is one PASS line
 // per step and, on a failure, one FAIL line naming what failed — the step,
-// the resume, the turn, the suspend or the delete — with its cause.
+// the resume, the turn (the conversation or the volume), the suspend or the
+// delete — with its cause.
 func KagentStepTest(cfg *config.Config, email string, opts KagentStepOptions) error {
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
@@ -152,6 +159,7 @@ type kagentStepRun struct {
 	api           *kagentAPI
 	session       string
 	codeword      string
+	marker        string
 	stepTaken     bool
 	lines         []string
 }
@@ -205,7 +213,7 @@ func (r *kagentStepRun) prove(user *config.User) error {
 		}
 	}()
 
-	r.stages.begin("agent", "Step 2: an agent on kagent %s with a conversation of one turn, suspended", before.kagent)
+	r.stages.begin("agent", "Step 2: an agent on kagent %s with a conversation of two turns and a known file on its durable volume, suspended", before.kagent)
 	if err := r.seed(user.Email); err != nil {
 		return err
 	}
@@ -225,15 +233,20 @@ func (r *kagentStepRun) prove(user *config.User) error {
 	}
 	r.pass("resume: Session %s from kagent %s is %s on kagent %s", r.session, r.before.kagent, sessionState(session), r.after.kagent)
 
-	r.stages.begin("turn", "Step 5: a turn on the resumed conversation answers the codeword of its first turn")
-	reply, err := r.turn(ctx, session, recallPrompt)
+	r.stages.begin("turn", "Step 5: a turn on the resumed conversation answers the codeword of its first turn and reads the file back from the durable volume")
+	reply, err := r.turn(ctx, session, resumePrompt(kagentStepFile))
 	if err != nil {
 		return fmt.Errorf("the turn after the resume: %w", err)
 	}
-	if !strings.Contains(reply, r.codeword) {
+	conversation, volume := resumedReplyProves(reply, r.codeword, r.marker)
+	if !conversation {
 		return fmt.Errorf("the resumed conversation lost its earlier turn: the agent did not answer the codeword %s: %s", r.codeword, excerpt(reply, 200))
 	}
+	if !volume {
+		return fmt.Errorf("the durable volume lost its file across the step (its content gone or the volume not re-attached): %s does not hold %q on kagent %s: %s", kagentStepFile, r.marker, r.after.kagent, excerpt(reply, 200))
+	}
 	r.pass("turn: Session %s answered the codeword %s of its turn on kagent %s", r.session, r.codeword, r.before.kagent)
+	r.pass("volume check: %s holds %q, written on kagent %s, read on kagent %s", kagentStepFile, r.marker, r.before.kagent, r.after.kagent)
 
 	r.stages.begin("suspend", "Step 6: the conversation suspends and resumes again on kagent %s", r.after.kagent)
 	if err := r.suspendResume(ctx); err != nil {
@@ -274,8 +287,8 @@ func (r *kagentStepRun) target() string {
 	return strings.Join(parts, " with ") + devImagesNote(r.opts.DevImages)
 }
 
-// seed boots the agent, has one turn with it — a codeword — and suspends the
-// conversation.
+// seed boots the agent, has two turns with it — a codeword, a file on the
+// durable volume — and suspends the conversation.
 func (r *kagentStepRun) seed(email string) error {
 	if _, err := applyManifests(context.Background(), []byte(kagentStepTemplate(r.opts.ModelConfig))); err != nil {
 		return err
@@ -289,7 +302,7 @@ func (r *kagentStepRun) seed(email string) error {
 	}
 	note("Ready after %s: revision %.12s", boot.elapsed.Round(time.Second), boot.agent.Status.LatestSuccessfulRevision)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*kagentTurnTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*kagentTurnTimeout)
 	defer cancel()
 	session, err := r.api.createSession(ctx, kagentStepAgent, uuid.NewString())
 	if err != nil {
@@ -298,8 +311,16 @@ func (r *kagentStepRun) seed(email string) error {
 	r.session = session.GetId()
 	note("Session %s of %s as %s", r.session, kagentStepAgent, email)
 	r.codeword = "kstep-" + randHex(4)
+	r.marker = "kagent-step " + randHex(8)
 	if _, err := r.turn(ctx, session, codewordPrompt(r.codeword)); err != nil {
-		return fmt.Errorf("the turn before the step: %w", err)
+		return fmt.Errorf("turn 1 (the codeword): %w", err)
+	}
+	reply, err := r.turn(ctx, session, writeMarkerPrompt(kagentStepDir, kagentStepFile, r.marker))
+	if err != nil {
+		return fmt.Errorf("turn 2 (the file): %w", err)
+	}
+	if !strings.Contains(reply, r.marker) {
+		return fmt.Errorf("turn 2: the agent did not write %s (did it run its bash tool?): %s", kagentStepFile, excerpt(reply, 200))
 	}
 	suspended, err := r.api.suspendSession(ctx, r.session)
 	if err != nil {
@@ -308,7 +329,7 @@ func (r *kagentStepRun) seed(email string) error {
 	if suspended, err = awaitSessionSuspended(ctx, r.api, suspended); err != nil {
 		return err
 	}
-	r.pass("on kagent %s: Session %s took a turn (codeword %s) and is %s", r.before.kagent, r.session, r.codeword, sessionState(suspended))
+	r.pass("on kagent %s: Session %s took two turns (codeword %s, %s holding %q on the durable volume) and is %s", r.before.kagent, r.session, r.codeword, kagentStepFile, r.marker, sessionState(suspended))
 	return nil
 }
 
@@ -516,8 +537,8 @@ func kagentStepOverlay(to string) ([]byte, error) {
 	}})
 }
 
-// kagentStepTemplate is the proof's AgentTemplate on the platform Harness and
-// its Agent.
+// kagentStepTemplate is the proof's AgentTemplate on the platform Harness,
+// with the bash tool (bashToolSkills), and its Agent.
 func kagentStepTemplate(modelConfig string) string {
 	return fmt.Sprintf(`apiVersion: %[1]s
 kind: AgentTemplate
@@ -531,7 +552,7 @@ spec:
   modelConfig:
     name: %[6]s
   systemPrompt: %[7]q
----
-%[8]s`, agentTemplateAPIVersion, kagentStepAgent, kagentNamespace, managedByLabel, managedByAgentlabValue, modelConfig, kagentStepSystemMsg,
-		agentManifest(kagentStepAgent, kagentStepAgent, kagentHarness, nil))
+%[8]s---
+%[9]s`, agentTemplateAPIVersion, kagentStepAgent, kagentNamespace, managedByLabel, managedByAgentlabValue, modelConfig, kagentStepSystemMsg,
+		bashToolSkills(), agentManifest(kagentStepAgent, kagentStepAgent, kagentHarness, nil))
 }

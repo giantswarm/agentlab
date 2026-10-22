@@ -283,14 +283,14 @@ func TestResumedReplyProves(t *testing.T) {
 // TestSubstrateStepPrompts: the file is written to the durable directory and
 // read back from it; the marker reaches the shell quoted.
 func TestSubstrateStepPrompts(t *testing.T) {
-	write := writeMarkerPrompt("substrate-step 00ff")
+	write := writeMarkerPrompt(substrateStepDir, substrateStepFile, "substrate-step 00ff")
 	for _, want := range []string{"mkdir -p /data/agentlab-substrate-step", "printf '%s\\n' 'substrate-step 00ff' > /data/agentlab-substrate-step/marker", "cat /data/agentlab-substrate-step/marker"} {
 		if !strings.Contains(write, want) {
 			t.Errorf("the write prompt lacks %q:\n%s", want, write)
 		}
 	}
-	if !strings.Contains(resumePrompt, "cat "+substrateStepFile) {
-		t.Errorf("the resume prompt must read %s back: %s", substrateStepFile, resumePrompt)
+	if resume := resumePrompt(substrateStepFile); !strings.Contains(resume, "cat "+substrateStepFile) {
+		t.Errorf("the resume prompt must read %s back: %s", substrateStepFile, resume)
 	}
 	if !strings.Contains(codewordPrompt("step-ab"), "step-ab") {
 		t.Error("the first turn carries the codeword")
