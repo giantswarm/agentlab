@@ -1012,7 +1012,8 @@ var formTerminal = func() bool {
 
 func configureCmd() *cobra.Command {
 	var defaults, accessible bool
-	var platform, agents, observability, backstage, modelManager, vmManager, klausGateway, musterPodNetwork, alertmanager, installationsPage bool
+	var platform, agents, observability, backstage, modelManager, vmManager, klausGateway, devctl, musterPodNetwork, alertmanager, installationsPage bool
+	var devctlVersion string
 	var serving, workspaces, workspacesCSICompanion, coding, tenants, github, githubSignIn, chatgptSubscription bool
 	var chatgptSubscriptionModel string
 	var githubSignInClientID string
@@ -1156,6 +1157,12 @@ func configureCmd() *cobra.Command {
 			}
 			if cmd.Flags().Changed("klaus-gateway") {
 				cfg.Platform.KlausGateway.Enabled = klausGateway
+			}
+			if cmd.Flags().Changed("devctl") {
+				cfg.Platform.Devctl.Enabled = devctl
+			}
+			if cmd.Flags().Changed("devctl-version") {
+				cfg.Platform.Devctl.Version = devctlVersion
 			}
 			if cmd.Flags().Changed("muster-pod-network") {
 				cfg.Platform.MusterPodNetwork = musterPodNetwork
@@ -1323,6 +1330,8 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&vmManager, "vm-manager", false, "run the platform's VM provisioner (vm-manager) as a pod of the node; --vm-manager=false turns it off (needs /dev/kvm and /dev/vhost-vsock on this machine)")
 	cmd.Flags().StringVar(&vmManagerImageDir, "vm-manager-image-dir", "", "a local guest image build the vm-manager pod boots instead of its release's: a vm-manager checkout's images/build after `make -C images`, pushed into the lab registry at `agentlab platform` (empty for the release's)")
 	cmd.Flags().BoolVar(&klausGateway, "klaus-gateway", false, "run Swarmgeist (klaus-gateway) as the meta chart's in-cluster component: A2A on the in-cluster controller target, Slack on a placeholder Secret (its Web API the proof's fake), the OBO link store in a Secret (needs agents); --klaus-gateway=false turns it off")
+	cmd.Flags().BoolVar(&devctl, "devctl", false, "run devctl's MCP server from its released chart, registered with muster (x_devctl_*), acting on GitHub as the person with their grant of the workspaces' github instance App (needs agents and that instance); `agentlab coding-test --part devctl` proves it; --devctl=false uninstalls it")
+	cmd.Flags().StringVar(&devctlVersion, "devctl-version", "", "the devctl release --devctl installs (default "+config.DefaultDevctlVersion+"); \"\" returns to the default")
 	cmd.Flags().BoolVar(&musterPodNetwork, "muster-pod-network", false, "run muster as an installation does: on the pod network at two replicas behind the edge with a PodDisruptionBudget of minAvailable 1, the issuer reached through the dex-localhost sidecar (muster's direct debug port answers nothing then); --muster-pod-network=false returns it to the host network at one replica")
 	cmd.Flags().BoolVar(&alertmanager, "alertmanager", false, "run an Alertmanager in the observability stack with an always-firing AgentlabWatchdog alert, and point mcp-prometheus at it (ALERTMANAGER_URL) so its alert tools have alerts to read; needs platform.observability")
 	cmd.Flags().StringVar(&mcpPrometheusChartVersion, "mcp-prometheus-chart-version", "", "install this mcp-prometheus chart release (an exact version, a release candidate included) instead of the one agentlab pins, for proving a chart change the devImages swap cannot carry; \"\" returns to the pin; needs platform.observability")
@@ -1736,6 +1745,8 @@ func codingTestCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the agent runs on (default on codex the in-cluster mockllm, "+lab.MockLLMModelConfig+", else agent-manager's default one); codex needs an OpenAI Responses API or Bedrock gpt-* ModelConfig, such as the codex host model configure adds")
 	cmd.Flags().StringVar(&opts.MockLLMBinary, "mockllm-binary", "", "the static linux agentlab binary the mockllm's container runs (default this one)")
 	cmd.Flags().StringSliceVar(&opts.MusterTools, "muster-tools", nil, "the agent's tool selection on its muster binding (the Generic chart's muster.tools), as a platform agent binds muster: tool names, or meta for muster's "+strconv.Itoa(len(lab.MusterMetaTools))+" meta-tools (default none: muster bound whole)")
+	cmd.Flags().StringVar(&opts.Part, "part", "", "run one part instead of the proof: "+lab.CodingPartDevctl+" (platform.devctl: a claude agent opens a pull request on --repository as the person, waits for its CI with one x_devctl_pr_wait call, merges it with x_devctl_pr_merge and waits for its release with x_devctl_release_wait, beside it one pr_wait with a progressToken; real GitHub and CircleCI, the person's grant of the workspaces' github instance App)")
+	cmd.Flags().StringVar(&opts.Repository, "repository", "", "the devctl part's proof repository, owner/name (default "+lab.DefaultDevctlProofRepository+"): generated CI with a job that takes ten minutes on a pull request's head, Auto Release, the github instance's App installed")
 	return cmd
 }
 

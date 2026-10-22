@@ -1502,6 +1502,20 @@ The actor and its template are removed by the same run, and an earlier run's
 first. On a lab the case fails on Substrate 1.11.3 (the call waits the
 full 30s) and passes on 1.11.4, which carries the relay change.
 
+### The devctl part
+
+`agentlab coding-test --part devctl [--repository <owner/name>]` proves that a coding agent waits for a pull request, merges it and waits for its release through devctl's tools (`platform.devctl`), headless, on the real GitHub and CircleCI as the person. Its repository (default `giantswarm/devctl-mcp-proof`, a repository of no value) has generated CI with a job that takes ten minutes on a pull request's head, Auto Release, and the `github` instance's App installed. The admin grants that App once (muster's sign-in link, also written to `state/`; the part waits for it).
+
+| Stage | What passes |
+|---|---|
+| preconditions | `devctl` reachable through muster; the admin holding the `github` instance's grant; the repository cloned on this host with your git credentials and the branches `agentlab-devctl-*` an interrupted run left deleted |
+| tools | the admin's muster lists `x_devctl_pr_wait`, `x_devctl_pr_merge` and `x_devctl_release_wait` |
+| agent and workspace | a claude agent created through agent-manager as the admin, its toolset those three tools, Ready on the workspace-admitting claude Harness; a workspace over the repository, its first cycle |
+| pull request | a Session started with the admin's grant; one turn pushes a branch and opens a pull request with `gh`; `gh api user` a person, the pull request's author that person |
+| waits | while the head's CI runs, one turn: `pr_wait`, then `pr_merge` with `noReleaseWait`, then `release_wait` by the pull request, each through muster's `call_tool`, each once and each only after the verdict before it, each answering exit code 0; the merge record read back with `gh` as the person: `MERGED`, merged by that person, as `pr_merge` names them too. Beside the turn the proof calls `pr_wait` on the same head through muster as the admin with a `progressToken`: one call, its green verdict after more than the MCPServer's `timeout`, the progress notifications delivered with progress rising |
+
+The Session, the agent, the workspace, the host's clone and every branch of the run are removed on every path; the merged branch is `pr_merge`'s to delete.
+
 ### The Swarmgeist proof (klaus-gateway on kagent API v2)
 
 `agentlab klaus-gateway-test` is the lab carrier of
@@ -1804,6 +1818,14 @@ beekeeper secret copy op://<vault>/<item>/client-secret --to-secret kind-agentla
 Each person signs in once (`core_auth_login` with `server: github` through muster, or the portal's Sign in). An agent calling a GitHub tool before that gets muster's sign-in challenge, which it cannot follow itself. muster keeps one pinned client per issuer string, so a second MCPServer pinning `https://github.com/login/oauth` with another client would take over this one's grants.
 
 A personal access token does not fit: muster sends only literal headers, so the token would sit in the MCPServer spec.
+
+## devctl's MCP server (`platform.devctl`)
+
+Off by default. On (`agentlab configure --devctl`), `agentlab platform` installs devctl's own released chart (`oci://gsoci.azurecr.io/charts/giantswarm/devctl`, `platform.devctl.version`, default the release agentlab names, `--devctl-version`) into the platform namespace, the way gazelle runs it: never part of the meta chart. Its values register the server with muster as the MCPServer `devctl` (tools `x_devctl_<tool>`: `pr_wait`, `pr_merge`, `release_wait`, the reservation tools and the rest of `devctl serve`), unpinned with `forwardToken`, its `timeout` restarted by every progress notification up to `progress.maxDuration`.
+
+The server acts on GitHub as the calling person, with their token of the workspaces' `github` instance App: muster keeps that App as the provider App `github` and attaches the person's grant to every devctl call (`X-Muster-Grant-github`). With the workspace-manager pinned to the `github` instance, the lab adds `providerApps: [github]` beside the pin (`workspace-manager.muster.mcpServer.auth`), gazelle's shape: the App keeps the pin's issuer and client Secret, so a grant made stands. With one provider App per instance (`grantProvider: apps`) the chart derives it. The server holds no GitHub or CircleCI credential of its own; its waits read CircleCI through GitHub's commit statuses. It needs `platform.agents` and the workspaces with the `github` instance, pinned or side by side; `configure` refuses it otherwise. Off again, the run uninstalls the release.
+
+`agentlab coding-test --part devctl` is the proof: see [The devctl part](#the-devctl-part).
 
 ## The workspace-manager's provider instances (`platform.workspaces.provider`)
 

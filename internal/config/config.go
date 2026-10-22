@@ -575,6 +575,15 @@ type Platform struct {
 	// klaus-gateway-test` proves it next to the host-mode gateway
 	// (klausgateway.go).
 	KlausGateway KlausGateway `yaml:"klausGateway"`
+	// devctl's MCP server (github.com/giantswarm/devctl, `devctl serve`) the
+	// way gazelle runs it: devctl's own released chart, never the meta
+	// chart's, registered with muster as the MCPServer devctl (tools
+	// x_devctl_*), acting on GitHub as the person with their grant of the
+	// workspaces' github instance App, which muster keeps as the provider App
+	// github beside the workspace-manager's pin. Off by default; --devctl
+	// turns it on; needs the workspaces' github instance. `agentlab
+	// coding-test --part devctl` proves it (internal/lab/devctl.go).
+	Devctl Devctl `yaml:"devctl,omitempty"`
 	// MusterPodNetwork runs muster the way an installation does: on the pod
 	// network at two replicas behind the edge, a PodDisruptionBudget of
 	// minAvailable 1 — the shape muster's availability work is proven in.
@@ -934,6 +943,56 @@ type KlausGateway struct {
 	// the two Secrets the component reads: the placeholder Slack
 	// credentials and the OBO keys.
 	Enabled bool `yaml:"enabled"`
+}
+
+// DefaultDevctlVersion is the devctl release whose chart the lab installs
+// while platform.devctl.version is empty: the server and its binary share it.
+const DefaultDevctlVersion = "8.156.0"
+
+// Devctl configures devctl's MCP server in the lab.
+type Devctl struct {
+	// On, `agentlab platform` installs devctl's chart into the platform
+	// namespace with muster.mcpServer.enabled and github.grantApp the github
+	// instance, and adds that instance to the workspace-manager
+	// registration's providerApps; off, it uninstalls the release.
+	Enabled bool `yaml:"enabled"`
+	// Version is the devctl release (its chart and image), "" for
+	// DefaultDevctlVersion.
+	Version string `yaml:"version,omitempty"`
+}
+
+// DevctlEnabled reports whether the lab runs devctl's MCP server: the
+// platform, the agents and the key on (Validate requires the workspaces'
+// github instance beside them).
+func (c *Config) DevctlEnabled() bool {
+	return c.Platform.Enabled && c.Platform.Agents && c.Platform.Devctl.Enabled
+}
+
+// DevctlVersion is the devctl release the lab installs.
+func (c *Config) DevctlVersion() string {
+	return cmp.Or(c.Platform.Devctl.Version, DefaultDevctlVersion)
+}
+
+// validateDevctl refuses a devctl server no grant reaches: its tools act on
+// GitHub with the person's token of the github instance's App, which muster
+// keeps as a provider App only beside that instance (pinned to it, or one
+// App per instance).
+func (c *Config) validateDevctl() error {
+	if !c.Platform.Devctl.Enabled || !c.Platform.Enabled {
+		return nil
+	}
+	if v := c.Platform.Devctl.Version; v != "" {
+		if _, err := semver.StrictNewVersion(v); err != nil {
+			return fmt.Errorf("platform.devctl.version %q is no devctl release (X.Y.Z, such as %s)", v, DefaultDevctlVersion)
+		}
+	}
+	if !c.Platform.Agents || !c.WorkspaceGitHubProvider() {
+		return fmt.Errorf("platform.devctl acts on GitHub as the person with their grant of the workspaces' %s instance App: it needs platform.agents and platform.workspaces with that instance (`agentlab configure --workspaces --workspaces-provider %s`), or `--devctl=false`", WorkspaceProviderGitHub, WorkspaceProviderGitHub)
+	}
+	if !c.WorkspaceProviderApps() && c.WorkspaceGrantProvider() != WorkspaceProviderGitHub {
+		return fmt.Errorf("platform.devctl takes the grant of the %s instance's App, which muster keeps beside the workspace-manager's pin: platform.workspaces.grantProvider pins %s (`agentlab configure --workspaces-grant-provider %s`, or %s)", WorkspaceProviderGitHub, c.WorkspaceGrantProvider(), WorkspaceProviderGitHub, WorkspaceGrantProviderApps)
+	}
+	return nil
 }
 
 // GitHub configures the MCPServer `github` the lab registers with muster:
@@ -2306,6 +2365,9 @@ func (c *Config) Validate() error {
 		}
 	}
 	if err := c.validateChatGPTSubscription(); err != nil {
+		return err
+	}
+	if err := c.validateDevctl(); err != nil {
 		return err
 	}
 	if c.Platform.Tenants.Enabled && c.Platform.Enabled && !c.Platform.Agents {
