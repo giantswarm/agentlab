@@ -55,6 +55,9 @@ type WorkspacesTestOptions struct {
 	// default-model-config on claude; required on another Harness, whose
 	// runtime needs a model of its own (codex: a Responses API one).
 	ModelConfig string
+	// Toolchains are mounted into the git part's Sessions through
+	// start_session, name[@version] each; empty mounts none.
+	Toolchains []string
 }
 
 // WorkspacesParts are the parts `workspaces-test --part` takes.
@@ -97,6 +100,8 @@ func (o WorkspacesTestOptions) validate() error {
 		return fmt.Errorf("--provider names the instance of the sync and sessions parts (--part %s or %s)", WorkspacesPartSync, WorkspacesPartSessions)
 	case o.Provider != "" && o.Provider != config.WorkspaceProviderGitHub && o.Provider != config.WorkspaceProviderGitLab:
 		return fmt.Errorf("--provider %q: %s or %s", o.Provider, config.WorkspaceProviderGitHub, config.WorkspaceProviderGitLab)
+	case len(o.Toolchains) > 0 && o.Part != WorkspacesPartGit:
+		return fmt.Errorf("--toolchains mounts toolchains into the git part's Sessions (--part %s)", WorkspacesPartGit)
 	case o.Sessions != 0 && o.Part != WorkspacesPartSessions:
 		return fmt.Errorf("--sessions is the sessions part's (--part %s)", WorkspacesPartSessions)
 	case o.Sessions != 0 && o.Sessions < workspacesMinSessions:
@@ -169,7 +174,7 @@ func WorkspacesTest(cfg *config.Config, opts WorkspacesTestOptions) error {
 	case WorkspacesPartSessions:
 		return workspacesSessionsPart(cfg, provider, opts.Sessions, opts.ReadyTimeout)
 	case WorkspacesPartGit:
-		return workspacesGitPart(cfg, opts.ReadyTimeout)
+		return workspacesGitPart(cfg, opts.ReadyTimeout, opts.Toolchains)
 	}
 	ctx := context.Background()
 	timeout := opts.ReadyTimeout

@@ -183,7 +183,7 @@ func TestMockLLMScriptAnswersTheCodexTurns(t *testing.T) {
 	if counts.Answered != 15 || counts.Unmatched != 1 || len(counts.Log) != 16 {
 		t.Fatalf("the mock counts %d answered, %d unmatched, %d log lines; wanted 15, 1 and 16", counts.Answered, counts.Unmatched, len(counts.Log))
 	}
-	if last := counts.Log[15];!strings.HasPrefix(last, "404 ") || !strings.Contains(last, "not in the script") {
+	if last := counts.Log[15]; !strings.HasPrefix(last, "404 ") || !strings.Contains(last, "not in the script") {
 		t.Fatalf("the unmatched request logs as %q, wanted its 404 and its input", last)
 	}
 }

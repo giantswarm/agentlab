@@ -234,6 +234,9 @@ type CodingTestOptions struct {
 	// Repository is the devctl part's proof repository, owner/name; empty is
 	// DefaultDevctlProofRepository.
 	Repository string
+	// Toolchains are the toolchains part's, name[@version] each; empty is
+	// DefaultCodingToolchains.
+	Toolchains []string
 }
 
 // MusterMetaTools are muster's meta-tools, the selection a platform coding
@@ -253,9 +256,12 @@ func CodingTest(cfg *config.Config, opts CodingTestOptions) error {
 		if opts.Repository != "" {
 			return fmt.Errorf("--repository is the devctl part's (--part %s)", CodingPartDevctl)
 		}
+		if opts.Part == "" && len(opts.Toolchains) > 0 {
+			return fmt.Errorf("--toolchains is the toolchains part's (--part %s)", CodingPartToolchains)
+		}
 	case CodingPartDevctl:
-		if opts.Harness != "" && opts.Harness != config.CodingRuntimeClaude || opts.ModelConfig != "" || opts.Email != "" || len(opts.MusterTools) > 0 {
-			return fmt.Errorf("--part %s runs a claude agent of its own as the admin, on agent-manager's default model: it takes no [email], --harness, --model-config or --muster-tools", CodingPartDevctl)
+		if opts.Harness != "" && opts.Harness != config.CodingRuntimeClaude || opts.ModelConfig != "" || opts.Email != "" || len(opts.MusterTools) > 0 || len(opts.Toolchains) > 0 {
+			return fmt.Errorf("--part %s runs a claude agent of its own as the admin, on agent-manager's default model: it takes no [email], --harness, --model-config, --muster-tools or --toolchains", CodingPartDevctl)
 		}
 		return codingDevctlPart(cfg, opts)
 	default:
@@ -278,7 +284,10 @@ func CodingTest(cfg *config.Config, opts CodingTestOptions) error {
 	if user == nil {
 		return fmt.Errorf("no lab user %q in %s", opts.Email, config.File)
 	}
-	p := &codingProof{cfg: cfg, rt: rt, modelConfig: opts.ModelConfig, user: user, timeout: opts.ReadyTimeout, turnTimeout: opts.TurnTimeout, musterTools: opts.MusterTools, stages: newProofStages()}
+	p := &codingProof{cfg: cfg, rt: rt, modelConfig: opts.ModelConfig, user: user, timeout: opts.ReadyTimeout, turnTimeout: opts.TurnTimeout, musterTools: opts.MusterTools, stages: newProofStages(), toolchains: opts.Toolchains}
+	if len(p.toolchains) == 0 {
+		p.toolchains = DefaultCodingToolchains
+	}
 	if opts.ModelConfig == "" && rt.name == config.CodingRuntimeCodex {
 		p.mockBinary = opts.MockLLMBinary
 		if p.mockBinary == "" {
@@ -334,6 +343,8 @@ type codingProof struct {
 	noMCPCredential string
 	// musterTools is the agent's tool selection on muster; empty is none.
 	musterTools []string
+	// toolchains are the toolchains part's, name[@version] each.
+	toolchains []string
 	// harnesses are the Harnesses of the agents' namespace.
 	harnesses []string
 	// codexModel is the Responses API ModelConfig the codex plugin rows

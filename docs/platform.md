@@ -1518,7 +1518,7 @@ The Session, the agent, the workspace, the host's clone and every branch of the 
 
 ### The toolchains part
 
-`agentlab coding-test --part toolchains [--harness claude|codex] [email]` proves that a toolchain mounted into a coding agent's Session works there: agent-manager resolves `go` at its latest version to its digest and hands it to kagent with the Session's creation, and kagent mounts the image read-only at `/opt/kagent/tools/go`, its `bin/` on the runtime's `PATH`. On codex the model is the in-cluster mockllm unless `--model-config` names one.
+`agentlab coding-test --part toolchains [--harness claude|codex] [--toolchains go,github@0.1.0] [email]` proves that toolchains mounted into a coding agent's Session work there: agent-manager resolves each one (`name[@version]`, `latest` without a version; default `go`) to its digest and hands it to kagent with the Session's creation, and kagent mounts each image read-only at `/opt/kagent/tools/<name>`, its `bin/` on the runtime's `PATH`. On codex the model is the in-cluster mockllm unless `--model-config` names one.
 
 The part needs agent-manager's `toolchains.repository` (its `get_info` then reports the capability `toolchains`) and a kagent controller that mounts session tool images and admits that repository in `KAGENT_SESSION_TOOL_IMAGE_REPOSITORIES`, both through a `platform.valuesFiles` overlay (`agent-manager.toolchains.repository`, `kagent.controller.env`). A kagent line without session tool images refuses the start as unsupported; its controller and coding Harness images then come from a build that has them (`platform.devImages`: the controller, `claude-harness`, `codex-harness`).
 
@@ -1527,8 +1527,8 @@ The part needs agent-manager's `toolchains.repository` (its `get_info` then repo
 | harness | the coding Harness Ready from the values |
 | capability | agent-manager's `get_info` reports `toolchains` |
 | agent | a coding agent created through agent-manager as the person, Ready on the Harness |
-| start | `start_session` as the person with `toolchains: [go]`: the answer mounts exactly `go`, its image pinned by digest |
-| go | one turn: `ls /opt/kagent/tools` lists `go`, `command -v go` is `/opt/kagent/tools/go/bin/go`, `go version` answers, and a fixture module written into the Session's directory builds offline (`GOPROXY=off`, `GOTOOLCHAIN=local`) and prints its line |
+| start | `start_session` as the person with the toolchains: the answer mounts exactly those, each image pinned by digest |
+| tools | one turn: `ls /opt/kagent/tools` lists exactly the toolchains; each one's tool (`gh` for `github`, `glab` for `gitlab`, `python3` for `python`, else its name) is `/opt/kagent/tools/<name>/bin/<tool>` on the `PATH` and answers its version; with `go`, a fixture module written into the Session's directory builds offline (`GOPROXY=off`, `GOTOOLCHAIN=local`) and prints its line |
 | model | on the mockllm: every model call answered by its script |
 
 The agent and its Session are removed on every path.

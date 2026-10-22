@@ -396,12 +396,15 @@ func removeSessionsAgents() []error {
 }
 
 // startAgentSession starts a Session of the Agent through agent-manager's
-// start_session as the person ms signs in as, with the grant when one is
-// given, and returns its id.
-func startAgentSession(ms *musterSession, agent, grant string) (string, error) {
+// start_session as the person ms signs in as, with the grant and the
+// toolchains (name[@version] each) when given, and returns its id.
+func startAgentSession(ms *musterSession, agent, grant string, toolchains ...string) (string, error) {
 	args := map[string]any{nameKey: agent, namespaceKey: kagentNamespace, startSessionRequestIDArg: uuid.NewString()}
 	if grant != "" {
 		args[startSessionGrantArg] = grant
+	}
+	if len(toolchains) > 0 {
+		args[startSessionToolchainsArg] = toolchains
 	}
 	env, err := ms.callToolEnvelope(agentManagerToolPrefix+"start_session", args)
 	if err != nil {
