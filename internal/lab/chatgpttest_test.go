@@ -130,14 +130,35 @@ func TestJudgeChatGPTSandbox(t *testing.T) {
 	}
 }
 
-// The probe prints counts, never a value: the refresh_token search lists
-// file names into a count.
+// The probe prints counts and paths, never a value: the refresh_token search
+// lists file names (grep -l), counted and joined.
 func TestChatGPTSandboxCommandPrintsCounts(t *testing.T) {
 	cmd := chatgptSandboxCommand(codingRuntimes[config.CodingRuntimeCodex])
-	if !strings.Contains(cmd, `refresh-tokens=$(timeout 60 grep -rlsE`) || !strings.Contains(cmd, "wc -l") {
-		t.Errorf("the refresh_token search is not a count of files:\n%s", cmd)
+	if !strings.Contains(cmd, `refresh-tokens=$(timeout 60 grep -rlsE --exclude='*.md'`) || !strings.Contains(cmd, "| sort -u | wc -l)") || !strings.Contains(cmd, "| sort -u | xargs echo)") {
+		t.Errorf("the refresh_token search is not a count and a list of files:\n%s", cmd)
+	}
+	if strings.Contains(cmd, "${") || strings.Contains(cmd, "() {") {
+		t.Errorf("the probe carries a ${...} expansion or a shell function, which the model rewrites:\n%s", cmd)
+	}
+	if !strings.Contains(cmd, chatgptAccessTokenEnv) {
+		t.Errorf("the model key reading leaves out %s:\n%s", chatgptAccessTokenEnv, cmd)
 	}
 	if !strings.Contains(chatgptPlainProbePrompt(), chatgptBackendURL) {
 		t.Errorf("the plain agent's probe does not request %s", chatgptBackendURL)
+	}
+}
+
+// The second person is a developer other than the admin, who is in the
+// developers group too.
+func TestChatGPTSecondPersonIsNotTheAdmin(t *testing.T) {
+	users := []config.User{
+		{Email: "admin@lab.local", Groups: []string{"admins", "developers"}},
+		{Email: "dev@lab.local", Groups: []string{"developers"}},
+	}
+	if got := chatgptSecondPerson(users, &users[0]); got == nil || got.Email != "dev@lab.local" {
+		t.Errorf("second person = %v, want dev@lab.local", got)
+	}
+	if got := chatgptSecondPerson(users[:1], &users[0]); got != nil {
+		t.Errorf("second person = %v, want none when the admin is the only developer", got)
 	}
 }

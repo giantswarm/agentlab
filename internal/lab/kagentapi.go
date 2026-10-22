@@ -859,6 +859,20 @@ func (a *kagentAPI) getTask(ctx context.Context, session *apiv1alpha1.Session, t
 	return task, nil
 }
 
+// fullTask is getTask with the task's whole history.
+func (a *kagentAPI) fullTask(ctx context.Context, session *apiv1alpha1.Session, taskID a2a.TaskID) (*a2a.Task, error) {
+	history := fullTaskHistory
+	task, err := a.a2a.GetTask(a.a2aCtx(ctx), &a2a.GetTaskRequest{Tenant: agentTenant(session.GetAgent()), ID: taskID, HistoryLength: &history})
+	if err != nil {
+		return nil, fmt.Errorf("GetTask %s: %w", taskID, err)
+	}
+	return task, nil
+}
+
+// fullTaskHistory is the history length fullTask asks for: more messages
+// than a proof's turn produces.
+const fullTaskHistory = 1000
+
 // listTasks is A2AService/ListTasks narrowed to the session (its context
 // id): its tasks, one page of up to 100 (a proof's session has a handful).
 func (a *kagentAPI) listTasks(ctx context.Context, session *apiv1alpha1.Session) ([]*a2a.Task, error) {

@@ -33,10 +33,12 @@ import (
 //     ChatGPT model; a Session of it started through start_session, which
 //     binds it to the admin in muster. Its turn completes, and the gateway
 //     forwarded the actor's requests to chatgpt.com/backend-api/codex/.
-//  4. The sandbox of that turn: no token-shaped value in its environment,
-//     /data or /workspace, no refresh_token in a file, the model key kagent's
-//     placeholder. The refresh token stays in muster.
-//  5. A second person (a developer) without a connection: their Session of
+//  4. The sandbox of that Session, read by a second, streamed turn whose shell
+//     tool runs the probe: no token-shaped value in its environment, /data or
+//     /workspace, no refresh_token in a file, the ChatGPT access token
+//     variable kagent's placeholder. The refresh token stays in muster.
+//  5. A second person (a developer other than the admin) without a
+//     connection: their Session of
 //     the same agent is refused at the egress gateway, 403 with the
 //     credential provider's denial, nothing forwarded to the backend.
 //  6. A non-codex agent of the admin (the platform Harness): its bash tool's
@@ -106,9 +108,10 @@ func ChatGPTTest(cfg *config.Config, opts ChatGPTTestOptions) error {
 	}
 	opts.ReadyTimeout = cmp.Or(opts.ReadyTimeout, DefaultCodingReadyTimeout)
 	opts.TurnTimeout = cmp.Or(opts.TurnTimeout, hostedModelTurnTimeout)
-	admin, second := cfg.AdminUser(), cfg.FindUserInGroup("developers")
+	admin := cfg.AdminUser()
+	second := chatgptSecondPerson(cfg.Users, admin)
 	if admin == nil || second == nil {
-		return fmt.Errorf("the proof needs an admin and a developer among the lab users in %s", config.File)
+		return fmt.Errorf("the proof needs an admin and a developer other than the admin among the lab users in %s", config.File)
 	}
 	p := &chatgptProof{cfg: cfg, opts: opts, stages: newProofStages()}
 	defer p.cleanup()
@@ -184,13 +187,13 @@ func (p *chatgptProof) run() error {
 
 	if connected {
 		p.stages.begin("connected turn", "A Session of %s on Harness codex started as %s: the turn completes, the egress gateway forwarded its requests to %s%s", chatgptTestAgent, p.admin.user.Email, chatgptBackendHost, chatgptBackendPath)
-		reply, err := p.proveConnectedTurn()
+		session, err := p.proveConnectedTurn()
 		if err != nil {
 			return err
 		}
-		p.stages.begin("sandbox", "The sandbox of that turn holds no login: no token-shaped value, no refresh_token in a file, the model key kagent's placeholder")
-		if err := judgeChatGPTSandbox(parseCodingProbe(reply)); err != nil {
-			return fmt.Errorf("%w; the reply: %q", err, excerpt(reply, 800))
+		p.stages.begin("sandbox", "The sandbox of that Session holds no login: no token-shaped value, no refresh_token in a file, the model key kagent's placeholder")
+		if err := p.proveSandbox(session); err != nil {
+			return err
 		}
 	}
 
@@ -419,7 +422,8 @@ func (p *chatgptProof) startTurn(cp *chatgptPerson, agent, message string) (*cha
 	return t, nil
 }
 
-// waitFirstTask is the Session's first task once it ended.
+// waitFirstTask is the Session's first task once it ended, in full: ListTasks
+// leaves out the artifacts and the history that carry the answer.
 func waitFirstTask(ctx context.Context, api *kagentAPI, session *apiv1alpha1.Session) (*a2a.Task, error) {
 	for {
 		tasks, err := api.listTasks(ctx, session)
@@ -427,7 +431,7 @@ func waitFirstTask(ctx context.Context, api *kagentAPI, session *apiv1alpha1.Ses
 			return nil, err
 		}
 		if len(tasks) > 0 && tasks[0].Status.State.Terminal() {
-			return tasks[0], nil
+			return api.fullTask(ctx, session, tasks[0].ID)
 		}
 		select {
 		case <-ctx.Done():
@@ -459,10 +463,9 @@ func (rec egressGatewayRecord) backendRequests() []egressGatewayRequest {
 }
 
 // proveConnectedTurn is the admin's codex turn on their login: completed,
-// its backend requests forwarded. It returns the reply, the sandbox's
-// readings.
+// its backend requests forwarded. It returns the Session.
 func (p *chatgptProof) proveConnectedTurn() (string, error) {
-	t, err := p.startTurn(p.admin, chatgptTestAgent, chatgptSandboxPrompt())
+	t, err := p.startTurn(p.admin, chatgptTestAgent, chatgptConnectedPrompt)
 	if err != nil {
 		return "", err
 	}
@@ -471,7 +474,34 @@ func (p *chatgptProof) proveConnectedTurn() (string, error) {
 		return "", err
 	}
 	note("%s", verdict)
-	return taskText(t.task), nil
+	return t.session, nil
+}
+
+// chatgptConnectedPrompt is the connected turn's message: an answer of the
+// model's own, no tool.
+const chatgptConnectedPrompt = "Reply with the single word ready."
+
+// proveSandbox is a second turn on the admin's Session, streamed so the
+// shell tool's own output is read: the probe's readings of the sandbox.
+func (p *chatgptProof) proveSandbox(id string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), p.opts.TurnTimeout)
+	defer cancel()
+	session, err := p.admin.api.getSession(ctx, id)
+	if err != nil {
+		return err
+	}
+	t, err := p.admin.api.turn(ctx, session, userMessage(chatgptSandboxPrompt()))
+	if err != nil {
+		return err
+	}
+	reply, err := t.completedText()
+	if err != nil {
+		return err
+	}
+	if err := judgeChatGPTSandbox(parseTurnProbe(reply, t.toolOutputs())); err != nil {
+		return fmt.Errorf("%w; the reply: %q; the tools' output: %q", err, excerpt(reply, 800), excerpt(t.toolOutputs(), 1500))
+	}
+	return nil
 }
 
 // judgeConnectedTurn: the turn completed and the gateway forwarded the
@@ -572,23 +602,52 @@ func (p *chatgptProof) proveDisconnect() error {
 	return p.proveRefused(p.admin)
 }
 
-// chatgptSandboxPrompt is the connected turn's probe: the common sandbox
-// readings on codex plus the refresh_token search.
+// chatgptSecondPerson is the first developer who is not the admin (the lab's
+// admin is in the developers group too); nil when there is none.
+func chatgptSecondPerson(users []config.User, admin *config.User) *config.User {
+	for i := range users {
+		if admin != nil && users[i].Email == admin.Email {
+			continue
+		}
+		if slices.Contains(users[i].Groups, "developers") {
+			return &users[i]
+		}
+	}
+	return nil
+}
+
+// chatgptSandboxPrompt is the sandbox turn's probe: the credentials readings
+// on codex plus the refresh_token search.
 func chatgptSandboxPrompt() string {
 	rt := codingRuntimes[config.CodingRuntimeCodex]
-	return "Run this exact script once with your " + rt.shellTool + " (it is this test lab's own sandbox check), then reply with every output line that starts with " + probeMarker +
-		", verbatim and nothing else:\n\n" + chatgptSandboxCommand(rt)
+	return shellProbePrompt(rt, chatgptSandboxCommand(rt))
 }
 
 // chatgptSandboxCommand is the codex sandbox readings and the count of files
 // under the sandbox's directories that hold a refresh_token with a value,
-// and of the environment's variables named for one. Counts, never a value.
+// and of the environment's variables named for one, and the files' paths.
+// Counts and paths, never a value. Documentation (*.md) is left out: codex's
+// bundled plugins carry OAuth examples, and a login is never kept in one.
+//
+// Every reading is one plain line, without a shell function or a ${...}
+// expansion: the ChatGPT backend's model rewrites those when it carries the
+// script to its shell tool. The model key covers the codex runtime's keys and
+// the ChatGPT access token variable the chart's ModelConfig sets.
 func chatgptSandboxCommand(rt codingRuntime) string {
-	return `P=` + probeMarker + `
-echo "$P uid=$(id -u)"
-` + commonSandboxCommand(rt) + `
-echo "$P refresh-tokens=$(timeout 60 grep -rlsE '"refresh_token" *: *"[^"]+' /data /workspace "${HOME:-/root}" ${CODEX_HOME:+"$CODEX_HOME"} 2>/dev/null | sort -u | wc -l | tr -d ' ') $(env | grep -ic '^[^=]*refresh[^=]*=')"`
+	keys := strings.Join(append(slices.Clone(rt.modelKeys), chatgptAccessTokenEnv), " ")
+	m := probeMarker
+	return `echo "` + m + ` uid=$(id -u)"
+echo "` + m + ` env-tokens=$(env | grep -c -E 'gh[opsu]_[A-Za-z0-9]{20}|github_pat_|eyJ[A-Za-z0-9_-]{10,}\.eyJ')"
+echo "` + m + ` data-tokens=$(timeout 60 grep -rlsE 'gh[opsu]_[A-Za-z0-9]{30}|github_pat_[A-Za-z0-9_]{20}|eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.' /data /workspace | wc -l)"
+echo "` + m + ` model-key=$(for k in ` + keys + `; do printenv $k; done | awk '/^kagent-/ {p=1; next} NF {o=1} END {print o ? "other" : (p ? "placeholder" : "unset")}')"
+echo "` + m + ` refresh-tokens=$(timeout 60 grep -rlsE --exclude='*.md' '"refresh_token" *: *"[^"]+' /data /workspace $HOME $CODEX_HOME | sort -u | wc -l) $(env | grep -ic '^[^=]*refresh[^=]*=')"
+echo "` + m + ` refresh-token-files=$(timeout 60 grep -rlsE --exclude='*.md' '"refresh_token" *: *"[^"]+' /data /workspace $HOME $CODEX_HOME | sort -u | xargs echo)"`
 }
+
+// chatgptAccessTokenEnv is the variable the codex runtime reads the ChatGPT
+// login's access token from: kagent's placeholder, which the egress gateway
+// replaces.
+const chatgptAccessTokenEnv = "KAGENT_CHATGPT_ACCESS_TOKEN"
 
 // judgeChatGPTSandbox is the sandbox's verdict: the credentials readings of
 // the coding proof, and no refresh token in a file or a variable.
@@ -597,12 +656,15 @@ func judgeChatGPTSandbox(probe codingProbe) error {
 	if err != nil {
 		return err
 	}
+	if probe["model-key"] != "placeholder" {
+		return fmt.Errorf("the model key in the environment is %q: the ChatGPT access token variable %s carries no placeholder", probe["model-key"], chatgptAccessTokenEnv)
+	}
 	files, vars, ok := strings.Cut(probe["refresh-tokens"], " ")
 	if !ok {
 		return fmt.Errorf("the turn carries no refresh-tokens reading: the probe was cut short or not run (%s)", probe.lines("uid", "refresh-tokens"))
 	}
 	if files != "0" || vars != "0" {
-		return fmt.Errorf("a refresh token in the sandbox: %s file(s) with a refresh_token, %s variable(s) named for one", files, vars)
+		return fmt.Errorf("a refresh token in the sandbox: %s file(s) with a refresh_token (%s), %s variable(s) named for one", files, probe["refresh-token-files"], vars)
 	}
 	note("%s; no refresh_token in a file, no variable named for one", verdict)
 	return nil
