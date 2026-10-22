@@ -602,6 +602,9 @@ func (p *chatgptProof) proveDisconnect() error {
 	return p.proveRefused(p.admin)
 }
 
+// developersGroup is the lab users' group of developers.
+const developersGroup = "developers"
+
 // chatgptSecondPerson is the first developer who is not the admin (the lab's
 // admin is in the developers group too); nil when there is none.
 func chatgptSecondPerson(users []config.User, admin *config.User) *config.User {
@@ -609,7 +612,7 @@ func chatgptSecondPerson(users []config.User, admin *config.User) *config.User {
 		if admin != nil && users[i].Email == admin.Email {
 			continue
 		}
-		if slices.Contains(users[i].Groups, "developers") {
+		if slices.Contains(users[i].Groups, developersGroup) {
 			return &users[i]
 		}
 	}
@@ -647,7 +650,7 @@ echo "` + m + ` refresh-token-files=$(timeout 60 grep -rlsE --exclude='*.md' '"r
 // chatgptAccessTokenEnv is the variable the codex runtime reads the ChatGPT
 // login's access token from: kagent's placeholder, which the egress gateway
 // replaces.
-const chatgptAccessTokenEnv = "KAGENT_CHATGPT_ACCESS_TOKEN"
+const chatgptAccessTokenEnv = "KAGENT_CHATGPT_ACCESS_TOKEN" // #nosec G101 -- a variable's name, not a credential
 
 // judgeChatGPTSandbox is the sandbox's verdict: the credentials readings of
 // the coding proof, and no refresh token in a file or a variable.
@@ -656,7 +659,7 @@ func judgeChatGPTSandbox(probe codingProbe) error {
 	if err != nil {
 		return err
 	}
-	if probe["model-key"] != "placeholder" {
+	if probe["model-key"] != authPlaceholder {
 		return fmt.Errorf("the model key in the environment is %q: the ChatGPT access token variable %s carries no placeholder", probe["model-key"], chatgptAccessTokenEnv)
 	}
 	files, vars, ok := strings.Cut(probe["refresh-tokens"], " ")

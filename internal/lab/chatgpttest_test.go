@@ -152,10 +152,10 @@ func TestChatGPTSandboxCommandPrintsCounts(t *testing.T) {
 // developers group too.
 func TestChatGPTSecondPersonIsNotTheAdmin(t *testing.T) {
 	users := []config.User{
-		{Email: "admin@lab.local", Groups: []string{"admins", "developers"}},
-		{Email: "dev@lab.local", Groups: []string{"developers"}},
+		{Email: testPortalUser, Groups: []string{"admins", testDevelopers}},
+		{Email: accessDefaultSecond, Groups: []string{testDevelopers}},
 	}
-	if got := chatgptSecondPerson(users, &users[0]); got == nil || got.Email != "dev@lab.local" {
+	if got := chatgptSecondPerson(users, &users[0]); got == nil || got.Email != accessDefaultSecond {
 		t.Errorf("second person = %v, want dev@lab.local", got)
 	}
 	if got := chatgptSecondPerson(users[:1], &users[0]); got != nil {
