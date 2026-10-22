@@ -20,6 +20,7 @@ const (
 	testDevctlTimeout  = "timeout"
 	testDevctlExitCode = "exitCode"
 	testDevctlGreen    = "green"
+	testDevctlRed      = "red"
 	testDevctlVerdict  = "verdict"
 	// testDevctlCallTool is muster's call_tool as Claude Code names it.
 	testDevctlCallTool = "mcp__muster__" + musterCallTool
@@ -99,8 +100,8 @@ func TestDevctlCalls(t *testing.T) {
 	}
 	// A nested object opens before "command" (encoding/json sorts the keys):
 	// the call is the document's, not the check's.
-	nested := devctlDoc(t, map[string]any{"checks": []map[string]any{{"name": "ci/circleci: slow-ci", "state": "failure"}}, testDevctlCommand: "pr wait", testDevctlExitCode: 1, testDevctlVerdict: "red"})
-	if c := devctlCalls([]harnessToolResult{{output: nested}}); len(c) != 1 || c[0] != (devctlCall{command: devctlCommandPRWait, exitCode: 1, verdict: "red"}) {
+	nested := devctlDoc(t, map[string]any{"checks": []map[string]any{{nameKey: "ci/circleci: slow-ci", "state": "failure"}}, testDevctlCommand: "pr wait", testDevctlExitCode: 1, testDevctlVerdict: testDevctlRed})
+	if c := devctlCalls([]harnessToolResult{{output: nested}}); len(c) != 1 || c[0] != (devctlCall{command: devctlCommandPRWait, exitCode: 1, verdict: testDevctlRed}) {
 		t.Errorf("a document with a nested object before its command: %+v", c)
 	}
 }
@@ -151,7 +152,7 @@ func TestJudgeDevctlProgress(t *testing.T) {
 		pc   devctlProgressCall
 		want string
 	}{
-		"red":              {devctlProgressCall{env: env(`{"exitCode":1,"verdict":"red"}`, false), notes: notes, elapsed: time.Hour}, "want exitCode 0"},
+		testDevctlRed:      {devctlProgressCall{env: env(`{"exitCode":1,"verdict":"red"}`, false), notes: notes, elapsed: time.Hour}, "want exitCode 0"},
 		"auth required":    {devctlProgressCall{env: env(`{"exitCode":8,"verdict":"auth_required"}`, true), notes: notes, elapsed: time.Hour}, "want exitCode 0"},
 		"within a timeout": {devctlProgressCall{env: green, notes: notes, elapsed: 20 * time.Second}, "within muster's per-call timeout"},
 		"no progress":      {devctlProgressCall{env: green, elapsed: time.Hour}, "no progress notification"},

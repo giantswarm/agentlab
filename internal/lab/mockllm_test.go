@@ -227,10 +227,11 @@ func TestTurnProbeReadsTheToolOutputs(t *testing.T) {
 		Output   string `json:"output"`
 		ExitCode int    `json:"exitCode"`
 	}{"AGENTLAB_PROBE uid=1000\nAGENTLAB_PROBE file=agentlab-saffron\n", 0})}}, false)
-	tr.addArtifact(&a2a.Artifact{ID: "a3", Parts: a2a.ContentParts{upstreamResultPart("agentlab-coding-muster."+codingTestReadTool, []string{"agentlab-coding"})}}, false)
+	mcpResult := &a2a.Artifact{ID: "a3", Parts: a2a.ContentParts{upstreamResultPart("agentlab-coding-muster."+codingTestReadTool, []string{"agentlab-coding"})}}
+	tr.addArtifact(mcpResult, false)
 	tr.addArtifact(&a2a.Artifact{ID: "a4", Parts: a2a.ContentParts{a2a.NewTextPart("AGENTLAB_PROBE code-word=agentlab-saffron\nAGENTLAB_PROBE file=from-the-reply")}}, false)
 	// The task delivers the MCP call's artifact again: still one result.
-	tr.addArtifact(&a2a.Artifact{ID: "a3", Parts: a2a.ContentParts{upstreamResultPart("agentlab-coding-muster."+codingTestReadTool, []string{"agentlab-coding"})}}, false)
+	tr.addArtifact(mcpResult, false)
 
 	if len(tr.tools) != 2 {
 		t.Fatalf("the turn read %d tool results, wanted the 2 function_response parts: %+v", len(tr.tools), tr.tools)
