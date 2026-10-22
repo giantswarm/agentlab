@@ -1542,10 +1542,20 @@ directly so it depends on no chart release resolving in the lab); and
    listing and the submit) is answered, to the submitter alone, with
    `… cannot start a conversation right now: no Harness admits this
    AgentTemplate. Nothing was started.` and the controller lists no
-   `Session` of it; a person with no link is shown a Sign in button
-   (`obo_sign_in`, ephemeral) to the gateway's `/auth/slack/link` and
-   reaches no controller.
-2. **One turn**: the thread's first mention streams the answer
+   `Session` of it; a person with no link who invokes the **Ask an agent
+   here** message shortcut (`message_action`, callback `ask_agent_here`)
+   opens no picker and is told through its `response_url` to sign in first
+   with `@bot login`, which shows them a Sign in button (`obo_sign_in`,
+   ephemeral) to the gateway's `/auth/slack/link`; they reach no
+   controller.
+2. **One turn**: every conversation of the proof opens the way a person
+   opens one — klaus-gateway 4.13.0 and later answer a mention outside a
+   conversation with the help, so the picker (the slash command, the
+   shortcut) is the only opener. The person invokes the shortcut on a lone
+   message of theirs; the picker it opens is submitted with the fixture and
+   the question (the optional Workspace input left empty: No workspace), the
+   gateway echoes the question in that message's thread and binds it, and
+   the thread's first turn streams the answer
    (`chat.startStream` … `stopStream`) under the Agent's display name and
    icon; the gateway's `session_bound` record names the `Session`, and the
    controller (`ListSessions` narrowed to the Agent, as the user) lists
@@ -1593,11 +1603,14 @@ directly so it depends on no chart release resolving in the lab); and
    person and no "reply in this thread" note. The host gateway always reaches
    the edge through that gate (`--gateway-port` + 3), under the edge's own
    hostname, so TLS verifies as usual.
-   **5c. Restart mid-sign-in**: the person with no link asks in a new thread
-   and is prompted to sign in; the gateway stops, the link a completed
+   **5c. Restart mid-sign-in**: the person with no link asks in the first
+   person's conversation (a person with no link opens none) and is prompted
+   to sign in, the message parked; the gateway stops, the link a completed
    sign-in leaves is written to its link store, and the gateway starts again.
-   The parked message is answered without being sent again: the restarted
-   gateway read it back from its routing store and replayed it.
+   The parked message comes back without being sent again: the restarted
+   gateway reads it back from its routing store and replays it, which, a
+   newcomer's, asks the thread's owner to allow them; Allow runs it in the
+   thread and its answer streams.
    **5d. Restart mid-approval**: a tool call pauses a new thread's task on the
    approval card; after a restart, Approve on that card resumes the same task
    in place to `TASK_STATE_COMPLETED`. Steps 5c and 5d run on a gateway that

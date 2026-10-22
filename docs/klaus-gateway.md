@@ -136,15 +136,16 @@ and, on a lab with the component, continues on it:
    the node was gone), and its `obo link store ready` record must report the
    same link count; both records read back unchanged afterwards.
 9. **The in-cluster leg.** Through a port-forward to the replacement pod,
-   one signed `@bot` mention as the person linked in step 7 is answered in
-   the fake thread with the word, its `turn_dispatch` record under the
+   one conversation the person linked in step 7 opens through the signed
+   **Ask an agent here** shortcut and the picker is answered in the fake
+   thread with the word, its `turn_dispatch` record under the
    person's e-mail and subject — the component forwarding the link's cached
    id_token and talking to the controller over the in-cluster plaintext h2c
    target, which the host-mode gateway never touches. Its Session starts
    through agent-manager over muster's public URL, verified with the lab CA;
    a failed turn names that URL and the CA source. With the
    workspace-manager behind muster, the person holds the grant of the App
-   muster pins it to before the mention, whatever an earlier step or run
+   muster pins it to before the conversation opens, whatever an earlier step or run
    left: the gateway lists a new thread's workspaces (klaus-gateway 4.9.0 and
    later hold a listing muster refuses behind the Connect prompt). The
    person must have granted the pinned App (a GitHub App's grant takes

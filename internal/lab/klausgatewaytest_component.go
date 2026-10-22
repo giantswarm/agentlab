@@ -43,8 +43,9 @@ import (
 //     through the package unchanged; the proof's records removed, and a
 //     leftover of an aborted run removed first;
 //   - the in-cluster a2a leg: through a port-forward to the replacement pod,
-//     one signed Slack mention by the person whose link the store step
-//     wrote (the lab user's id_token as its cached token) is answered in the
+//     one conversation the person whose link the store step wrote (the lab
+//     user's id_token as its cached token) opens through the signed Ask an
+//     agent here shortcut and the picker is answered in the
 //     proof's fake thread — the component's Slack Web API is the proof's
 //     fake through a selector-less Service the proof points at this host,
 //     and it talks to the controller over the in-cluster plaintext h2c
@@ -230,7 +231,7 @@ func klausGatewayComponentProof(cfg *config.Config, token string, identity linke
 	}
 	note("pod %s Ready %s after the deletion; %s read %d links from %s at start; both records still read back unchanged", out.replacement, out.elapsed, out.version, out.links, klausGatewayLinksSecret)
 
-	step("9. One Slack turn through the component: %s holds the grant of the workspace-manager's App, a port-forward to pod %s, a signed mention as %s answered in the fake thread over the in-cluster target %s", user.Email, out.replacement, slackUser, klausGatewayInClusterTarget)
+	step("9. One Slack turn through the component: %s holds the grant of the workspace-manager's App, a port-forward to pod %s, a conversation %s opens through the Ask an agent here shortcut answered in the fake thread over the in-cluster target %s", user.Email, out.replacement, slackUser, klausGatewayInClusterTarget)
 	granted, err := grantWorkspaceManager(cfg, user)
 	if err != nil {
 		return nil, err
@@ -253,7 +254,7 @@ func klausGatewayComponentProof(cfg *config.Config, token string, identity linke
 		logs: func() (string, error) { return podLogs(ctx, platformNamespace, "pod/"+pod, klausGatewayComponent, 0) },
 	}
 	thread := &slackThread{user: slackUser}
-	turn, err := p.firstTurnBy(p.sayPastWorkspace, thread, klausGatewayWordPrompt)
+	turn, err := p.firstTurn(thread, klausGatewayWordPrompt)
 	if err != nil {
 		return nil, fmt.Errorf("the turn through the component (%s): %w", musterTrust, err)
 	}
@@ -277,36 +278,6 @@ func klausGatewayComponentProof(cfg *config.Config, token string, identity linke
 		return nil, fmt.Errorf("the link Secret holds %d entries after the proof's records were removed, want the %d it had before; the store said: %s", count, out.baseline, excerpt(storeLog.String(), 400))
 	}
 	return out, nil
-}
-
-// sayPastWorkspace is say for a new thread on a gateway that lists the
-// person's workspaces: the workspace prompt it posts while they have any
-// (whatever an earlier proof left in their name) is answered with No
-// workspace, since the turn proves the gateway, not a workspace; without a
-// prompt it is say.
-func (p *slackProof) sayPastWorkspace(t *slackThread, text string) (*slackTurn, error) {
-	ts, err := p.driver.mention(t.user, "", text)
-	if err != nil {
-		return nil, err
-	}
-	t.ts = ts
-	var prompt slackMessage
-	var asked bool
-	waitFor(int(klausGatewayReplyWait/slackPoll), slackPoll, func() bool {
-		if prompt, asked = workspacePromptIn(p.fake.thread(p.channel, ts)); asked {
-			return true
-		}
-		return len(p.records(recordTurnDone, ts)) > t.turns
-	})
-	if !asked {
-		return p.awaitTurn(t, 0)
-	}
-	before := len(p.fake.thread(p.channel, ts))
-	if err := p.driver.click(t.user, prompt, slackWorkspaceNone); err != nil {
-		return nil, fmt.Errorf("answering the workspace prompt with No workspace: %w", err)
-	}
-	note("asked for a workspace (%q); answered No workspace", excerpt(prompt.shown(), 60))
-	return p.awaitTurn(t, before)
 }
 
 // grantWorkspaceManager checks that the person whose link step 7 wrote
