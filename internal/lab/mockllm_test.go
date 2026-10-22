@@ -114,7 +114,7 @@ func userItem(text string) testInputItem {
 // outputOf is the runtime's input item returning a call's output.
 func outputOf(call mockLLMItem) testInputItem {
 	kind := mockLLMFunctionCallOutput
-	if call.Type == "tool_search_call" {
+	if call.Type == mockLLMToolSearchCall {
 		kind = "tool_search_output"
 	}
 	return testInputItem{Type: kind, CallID: call.CallID, Output: "AGENTLAB_PROBE uid=1000"}
@@ -124,7 +124,7 @@ func outputOf(call mockLLMItem) testInputItem {
 // the prompt asks for, then a reply once the tool's output is back, and
 // counts a request outside it.
 func TestMockLLMScriptAnswersTheCodexTurns(t *testing.T) {
-	handler, _, err := mockLLMHandler("agentlab-coding-muster", nil)
+	handler, _, err := mockLLMHandler("agentlab-coding-muster", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +154,7 @@ func TestMockLLMScriptAnswersTheCodexTurns(t *testing.T) {
 	}
 
 	search := mockLLMCall(t, srv, userItem(codingMCPCallPrompt()))
-	if search.Type != "tool_search_call" {
+	if search.Type != mockLLMToolSearchCall {
 		t.Fatalf("on the MCP prompt the mock answered %+v, wanted the tool search", search)
 	}
 	call := mockLLMCall(t, srv, userItem(codingMCPCallPrompt()), search, outputOf(search))
@@ -253,7 +253,7 @@ func TestTurnProbeReadsTheToolOutputs(t *testing.T) {
 // still running at the call's yield is waited for with an empty write_stdin
 // on its session, and the reply follows the command's final output.
 func TestMockLLMScriptWaitsForExecCommand(t *testing.T) {
-	handler, _, err := mockLLMHandler("agentlab-coding-muster", nil)
+	handler, _, err := mockLLMHandler("agentlab-coding-muster", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +300,7 @@ func TestMockLLMScriptWaitsForExecCommand(t *testing.T) {
 // anywhere, an earlier input item or the instructions as much as the last
 // item, and watchedSince counts them from a mark on.
 func TestMockLLMWatchesNames(t *testing.T) {
-	handler, _, err := mockLLMHandler("agentlab-coding-muster", []string{pluginExampleSkill})
+	handler, _, err := mockLLMHandler("agentlab-coding-muster", "", []string{pluginExampleSkill})
 	if err != nil {
 		t.Fatal(err)
 	}

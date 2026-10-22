@@ -49,7 +49,8 @@ import (
 //     pr_merge's answer.
 //
 // The Session, the agent, the workspace, the host clone and every branch of
-// the run are removed on every path.
+// the run are removed on every path. On the codex and omp Harnesses the part
+// is codingdevctlharness.go's.
 
 // CodingPartDevctl is the devctl part of coding-test.
 const CodingPartDevctl = "devctl"
@@ -135,11 +136,10 @@ func codingDevctlPart(cfg *config.Config, opts CodingTestOptions) error {
 	if !cfg.DevctlEnabled() {
 		return fmt.Errorf("platform.devctl is off in %s — `agentlab configure --devctl` turns it on, then `agentlab platform`", config.File)
 	}
-	timeout := opts.ReadyTimeout
-	dp := &devctlProof{
-		cfg: cfg, repository: cmp.Or(opts.Repository, DefaultDevctlProofRepository), timeout: timeout,
-		sp: newSyncProof(cfg, timeout, devctlProofWorkspace), branch: devctlBranchPrefix + randomHex(4),
+	if rt := codingRuntimes[cmp.Or(opts.Harness, config.CodingRuntimeClaude)]; !rt.claude {
+		return codingDevctlHarnessPart(cfg, opts, rt)
 	}
+	dp := newDevctlProof(cfg, opts)
 	p := newProofStages()
 	err := dp.run(p)
 	dp.cleanup()
@@ -148,6 +148,15 @@ func codingDevctlPart(cfg *config.Config, opts CodingTestOptions) error {
 			dp.number, dp.repository, dp.login, dp.login)
 	}
 	return p.close(err)
+}
+
+// newDevctlProof is the part's state before its run: the repository, a
+// fresh branch.
+func newDevctlProof(cfg *config.Config, opts CodingTestOptions) *devctlProof {
+	return &devctlProof{
+		cfg: cfg, repository: cmp.Or(opts.Repository, DefaultDevctlProofRepository), timeout: opts.ReadyTimeout,
+		sp: newSyncProof(cfg, opts.ReadyTimeout, devctlProofWorkspace), branch: devctlBranchPrefix + randomHex(4),
+	}
 }
 
 func (dp *devctlProof) run(p *proofStages) error {

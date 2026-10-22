@@ -85,16 +85,22 @@ type mockLLMTurn struct {
 
 // mockLLMScript is the script of the proof's codex turns. The prompts are
 // substrings of the proof's own (codingprobe.go) the others do not carry.
-func mockLLMScript() []mockLLMTurn {
+// devctlArguments, call_tool's arguments of `coding-test --part devctl`'s
+// wait, add that turn.
+func mockLLMScript(devctlArguments string) []mockLLMTurn {
 	codex := codingRuntimes[config.CodingRuntimeCodex]
-	return []mockLLMTurn{
+	var devctl []mockLLMTurn
+	if devctlArguments != "" {
+		devctl = append(devctl, mockLLMTurn{name: "devctl", prompt: devctlHarnessPrompt, tool: musterCallTool, arguments: devctlArguments, reply: "The wait answered; its document is the call's output."})
+	}
+	return append(devctl, []mockLLMTurn{
 		{name: "sandbox", prompt: "own sandbox check", command: codingSandboxCommand(codex), reply: "The sandbox check ran; its readings are the command's output."},
 		{name: "mcp", prompt: "Do not use a shell for this", tool: musterCallTool, arguments: musterCallToolArguments(codingTestReadTool), reply: "The tool answered; its answer is the call's output."},
 		{name: "heartbeat", prompt: "Start this test lab's heartbeat", command: codingHeartbeatCommand(), reply: "The heartbeat runs."},
 		{name: "heartbeat-read", prompt: "Read this test lab's heartbeat", command: codingHeartbeatReadCommand(), reply: "The heartbeat's ticks are the command's output."},
 		{name: "codeword", prompt: "Remember the code word", command: codingCodeWordCommand(), reply: "The file is written."},
 		{name: "resume", prompt: "the code word I asked you to remember", command: codingResumeCommand(), reply: probeMarker + " code-word=" + codingTestCodeWord},
-	}
+	}...)
 }
 
 // The script's wire form, the Responses API's own field names.
@@ -174,6 +180,8 @@ const (
 	mockLLMItemDone     = "completed"
 	mockLLMMessage      = "message"
 	mockLLMFunctionCall = "function_call"
+	// mockLLMToolSearchCall is codex's search for a deferred MCP tool.
+	mockLLMToolSearchCall = "tool_search_call"
 	// mockLLMFunctionCallOutput is the runtime's input item returning a
 	// function call's output.
 	mockLLMFunctionCallOutput = "function_call_output"
@@ -190,9 +198,9 @@ const (
 // mockLLMConfig is the script for the MCP tools on mcpServer: per turn the
 // tool call answering the prompt, then the reply answering the tool's output
 // (matched by its call id, which the runtime's last input item carries).
-func mockLLMConfig(mcpServer string) ([]mockLLMScriptEntry, error) {
+func mockLLMConfig(mcpServer, devctlArguments string) ([]mockLLMScriptEntry, error) {
 	var entries []mockLLMScriptEntry
-	for _, turn := range mockLLMScript() {
+	for _, turn := range mockLLMScript(devctlArguments) {
 		callID := "call_agentlab_" + turn.name
 		if turn.command != "" {
 			arguments, err := json.Marshal(mockLLMShellArguments{Command: turn.command, TimeoutMS: codingProbeTimeoutMS})
@@ -212,7 +220,7 @@ func mockLLMConfig(mcpServer string) ([]mockLLMScriptEntry, error) {
 			searchID := "search_agentlab_" + turn.name
 			entries = append(entries,
 				mockLLMEntry(turn.name, turn.prompt, mockLLMItem{
-					ID: "ts_agentlab_" + turn.name, Type: "tool_search_call", Status: mockLLMItemDone,
+					ID: "ts_agentlab_" + turn.name, Type: mockLLMToolSearchCall, Status: mockLLMItemDone,
 					CallID: searchID, Execution: "client",
 					Arguments: mockLLMSearchArguments{Query: namespace + " " + turn.tool, Limit: 10},
 				}),
@@ -483,8 +491,8 @@ func mockLLMRequest(body []byte) (last string, stream bool, tools []string, line
 
 // ServeMockLLM serves the script for the MCP tools on mcpServer on listen
 // until ctx ends, recording which of the watch names each request carries.
-func ServeMockLLM(ctx context.Context, listen, mcpServer string, watch []string) error {
-	handler, entries, err := mockLLMHandler(mcpServer, watch)
+func ServeMockLLM(ctx context.Context, listen, mcpServer, devctlArguments string, watch []string) error {
+	handler, entries, err := mockLLMHandler(mcpServer, devctlArguments, watch)
 	if err != nil {
 		return err
 	}
@@ -505,8 +513,8 @@ func ServeMockLLM(ctx context.Context, listen, mcpServer string, watch []string)
 // mockLLMHandler is the mockllm's API for the MCP tools on mcpServer: the
 // Responses API under /v1, its health and its request counts with the watch
 // names each request carries; entries is the script's length.
-func mockLLMHandler(mcpServer string, watch []string) (handler http.Handler, entries int, err error) {
-	script, err := mockLLMConfig(mcpServer)
+func mockLLMHandler(mcpServer, devctlArguments string, watch []string) (handler http.Handler, entries int, err error) {
+	script, err := mockLLMConfig(mcpServer, devctlArguments)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -609,10 +617,14 @@ type mockLLM struct {
 }
 
 // startMockLLM runs the mockllm for the MCP tools on mcpServer, watching
-// for the watch names, and points the Service at it, proven reachable from
-// a pod.
-func startMockLLM(cfg *config.Config, binary, mcpServer string, watch []string) (*mockLLM, error) {
+// for the watch names, its script with the devctl wait's turn when
+// devctlArguments are given, and points the Service at it, proven reachable
+// from a pod.
+func startMockLLM(cfg *config.Config, binary, mcpServer, devctlArguments string, watch []string) (*mockLLM, error) {
 	args := []string{"--mcp-server", mcpServer}
+	if devctlArguments != "" {
+		args = append(args, "--devctl-arguments", devctlArguments)
+	}
 	for _, name := range watch {
 		args = append(args, "--watch", name)
 	}
