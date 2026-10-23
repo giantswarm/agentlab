@@ -237,6 +237,10 @@ type CodingTestOptions struct {
 	// Toolchains are the toolchains part's, name[@version] each; empty is
 	// DefaultCodingToolchains.
 	Toolchains []string
+	// OtherVersion is the toolchains part's name@version of one of its
+	// toolchains at another version: a second Session starts with it and
+	// the first is suspended and resumed. Empty is neither.
+	OtherVersion string
 }
 
 // MusterMetaTools are muster's meta-tools, the selection a platform coding
@@ -256,16 +260,16 @@ func CodingTest(cfg *config.Config, opts CodingTestOptions) error {
 		if opts.Repository != "" {
 			return fmt.Errorf("--repository is the devctl part's (--part %s)", CodingPartDevctl)
 		}
-		if opts.Part == "" && len(opts.Toolchains) > 0 {
-			return fmt.Errorf("--toolchains is the toolchains part's (--part %s)", CodingPartToolchains)
+		if opts.Part == "" && (len(opts.Toolchains) > 0 || opts.OtherVersion != "") {
+			return fmt.Errorf("--toolchains and --other-version are the toolchains part's (--part %s)", CodingPartToolchains)
 		}
 	case CodingPartDevctl:
 		rt, ok := codingRuntimes[cmp.Or(opts.Harness, config.CodingRuntimeClaude)]
 		switch {
 		case !ok:
 			return fmt.Errorf("--harness %q: --part %s proves %s", opts.Harness, CodingPartDevctl, strings.Join(slices.Sorted(maps.Keys(codingRuntimes)), ", "))
-		case opts.Email != "" || len(opts.MusterTools) > 0 || len(opts.Toolchains) > 0:
-			return fmt.Errorf("--part %s runs an agent of its own as the admin: it takes no [email], --muster-tools or --toolchains", CodingPartDevctl)
+		case opts.Email != "" || len(opts.MusterTools) > 0 || len(opts.Toolchains) > 0 || opts.OtherVersion != "":
+			return fmt.Errorf("--part %s runs an agent of its own as the admin: it takes no [email], --muster-tools, --toolchains or --other-version", CodingPartDevctl)
 		case rt.claude && opts.ModelConfig != "":
 			return fmt.Errorf("--part %s on claude runs on agent-manager's default model: --model-config is codex's and omp's", CodingPartDevctl)
 		}
@@ -290,9 +294,12 @@ func CodingTest(cfg *config.Config, opts CodingTestOptions) error {
 	if user == nil {
 		return fmt.Errorf("no lab user %q in %s", opts.Email, config.File)
 	}
-	p := &codingProof{cfg: cfg, rt: rt, modelConfig: opts.ModelConfig, user: user, timeout: opts.ReadyTimeout, turnTimeout: opts.TurnTimeout, musterTools: opts.MusterTools, stages: newProofStages(), toolchains: opts.Toolchains}
+	p := &codingProof{cfg: cfg, rt: rt, modelConfig: opts.ModelConfig, user: user, timeout: opts.ReadyTimeout, turnTimeout: opts.TurnTimeout, musterTools: opts.MusterTools, stages: newProofStages(), toolchains: opts.Toolchains, otherVersion: opts.OtherVersion}
 	if len(p.toolchains) == 0 {
 		p.toolchains = DefaultCodingToolchains
+	}
+	if _, err := otherVersionToolchains(p.toolchains, p.otherVersion); err != nil {
+		return err
 	}
 	if opts.ModelConfig == "" && rt.name == config.CodingRuntimeCodex {
 		binary, err := mockLLMBinary(opts.MockLLMBinary)
@@ -357,8 +364,10 @@ type codingProof struct {
 	noMCPCredential string
 	// musterTools is the agent's tool selection on muster; empty is none.
 	musterTools []string
-	// toolchains are the toolchains part's, name[@version] each.
-	toolchains []string
+	// toolchains are the toolchains part's, name[@version] each;
+	// otherVersion is one of them at another version, name@version.
+	toolchains   []string
+	otherVersion string
 	// harnesses are the Harnesses of the agents' namespace.
 	harnesses []string
 	// codexModel is the Responses API ModelConfig the codex plugin rows

@@ -10,6 +10,9 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+
+	ateapi "github.com/giantswarm/agentlab/internal/kagent/gen"
+	apiv1alpha1 "github.com/giantswarm/agentlab/internal/kagent/gen/kagent/api/v1alpha1"
 )
 
 // `agentlab coding-test --part toolchains [--harness claude|codex]
@@ -29,7 +32,15 @@ import (
 //  5. One turn: the mount lists exactly the toolchains, the agent's shell
 //     finds each one's tool on its PATH under its mount and the tool answers
 //     its version; with go, a fixture module builds and runs offline.
-//  6. On codex without --model-config, every model call answered by the
+//  6. The Session's actor template in Substrate mounts exactly those
+//     digests.
+//  7. With --other-version name@version: a second Session of the agent
+//     starts with that toolchain at that version, a digest other than the
+//     first Session's, its actor template mounts it and a turn's check
+//     passes.
+//  8. With --other-version: the first Session suspended and resumed keeps
+//     its prepared revision and its digests, and a turn's check passes.
+//  9. On codex without --model-config, every model call answered by the
 //     in-cluster mockllm's script (mockllm.go).
 //
 // The agent and its Session are removed on every exit path.
@@ -71,6 +82,9 @@ const (
 	toolchainsOnPath       = "yes"
 	toolchainsProbeVersion = "version"
 	toolchainsProbeBuilt   = "built"
+	// toolchainVolumePrefix starts the name of the image volume kagent
+	// gives each toolchain in a Session's actor template.
+	toolchainVolumePrefix = "tool-"
 )
 
 // toolchainTools are the tools the check asks for by toolchain, where the
@@ -166,7 +180,7 @@ func (p *codingProof) runToolchains() error {
 	}
 
 	p.stages.begin("toolchains: start", "%sstart_session of %s as %s with the toolchains %s: exactly those mounted, each pinned by digest", agentManagerToolPrefix, codingTestAgent, p.user.Email, strings.Join(p.toolchains, ", "))
-	id, err := p.startToolchainSession(names)
+	id, started, err := p.startToolchainSession(p.toolchains, names)
 	if err != nil {
 		return err
 	}
@@ -182,15 +196,25 @@ func (p *codingProof) runToolchains() error {
 		built = "; a fixture module builds offline"
 	}
 	p.stages.begin("toolchains: tools", "A turn whose %s finds %s on its PATH under %s, each answering its version%s", p.rt.shellTool, strings.Join(names, ", "), toolchainsMountRoot, built)
-	turn, err := p.turn(ctx, session, toolchainsCheckPrompt(p.rt))
+	if err := p.toolchainCheck(ctx, session, names); err != nil {
+		return err
+	}
+
+	ate, err := dialAteAPI(ctx)
 	if err != nil {
 		return err
 	}
-	verdict, err := judgeToolchainCheck(turn.probe, names)
-	if err != nil {
-		return fmt.Errorf("on Harness %s: %w; the reply: %q (%s)", harness, err, excerpt(turn.reply, 1200), p.line)
+	defer ate.Close()
+	p.stages.begin("toolchains: actor", "The Session's actor template in Substrate mounts exactly the digests start_session named")
+	if err := p.actorMounts(ctx, ate, id, started); err != nil {
+		return err
 	}
-	note("%s", verdict)
+
+	if p.otherVersion != "" {
+		if err := p.otherVersionAndResume(ctx, ate, session, names, started); err != nil {
+			return err
+		}
+	}
 	if p.mock == nil {
 		return nil
 	}
@@ -200,30 +224,202 @@ func (p *codingProof) runToolchains() error {
 }
 
 // startToolchainSession starts a Session of the proof's agent as the person
-// with the proof's toolchains, tracked for removal, and judges what
-// start_session says it mounted.
-func (p *codingProof) startToolchainSession(names []string) (string, error) {
+// with the toolchains, name[@version] each, tracked for removal, judges what
+// start_session says it mounted and returns that.
+func (p *codingProof) startToolchainSession(entries, names []string) (string, []startedToolchain, error) {
 	env, err := p.muster.callToolEnvelope(agentManagerToolPrefix+"start_session", map[string]any{
 		nameKey: codingTestAgent, namespaceKey: kagentNamespace, startSessionRequestIDArg: uuid.NewString(),
-		startSessionToolchainsArg: p.toolchains,
+		startSessionToolchainsArg: entries,
 	})
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if env.IsError {
-		return "", fmt.Errorf("start_session of %s with the toolchains %s refused: %.400s (%s)", codingTestAgent, strings.Join(p.toolchains, ","), env.Content[0].Text, p.line)
+		return "", nil, fmt.Errorf("start_session of %s with the toolchains %s refused: %.400s (%s)", codingTestAgent, strings.Join(entries, ","), env.Content[0].Text, p.line)
 	}
 	var started toolchainsStarted
 	if err := json.Unmarshal([]byte(env.Content[0].Text), &started); err != nil || started.Session.ID == "" {
-		return "", fmt.Errorf("start_session answered no session: %.400s", env.Content[0].Text)
+		return "", nil, fmt.Errorf("start_session answered no session: %.400s", env.Content[0].Text)
 	}
 	p.sessions.add(started.Session.ID)
 	mounted, err := judgeStartedToolchains(started.Toolchains, names)
 	if err != nil {
-		return "", fmt.Errorf("the Session %s: %w", started.Session.ID, err)
+		return "", nil, fmt.Errorf("the Session %s: %w", started.Session.ID, err)
 	}
 	note("Session %s: %s", started.Session.ID, mounted)
-	return started.Session.ID, nil
+	return started.Session.ID, started.Toolchains, nil
+}
+
+// toolchainCheck is one turn of the Session running the toolchain check,
+// judged.
+func (p *codingProof) toolchainCheck(ctx context.Context, session *apiv1alpha1.Session, names []string) error {
+	turn, err := p.turn(ctx, session, toolchainsCheckPrompt(p.rt))
+	if err != nil {
+		return err
+	}
+	verdict, err := judgeToolchainCheck(turn.probe, names)
+	if err != nil {
+		return fmt.Errorf("on Harness %s: %w; the reply: %q (%s)", p.rt.name, err, excerpt(turn.reply, 1200), p.line)
+	}
+	note("%s", verdict)
+	return nil
+}
+
+// otherVersionAndResume starts a second Session with one toolchain at
+// another version, which mounts that version's digest, then suspends and
+// resumes the first, which keeps its revision and digests.
+func (p *codingProof) otherVersionAndResume(ctx context.Context, ate *ateAPI, first *apiv1alpha1.Session, names []string, started []startedToolchain) error {
+	entries, err := otherVersionToolchains(p.toolchains, p.otherVersion)
+	if err != nil {
+		return err
+	}
+	p.stages.begin("toolchains: other version", "A second Session of %s with %s: that version's digest, not the first Session's, in its actor template; a turn's check passes", codingTestAgent, strings.Join(entries, ", "))
+	id, other, err := p.startToolchainSession(entries, names)
+	if err != nil {
+		return err
+	}
+	changed, _, _ := strings.Cut(p.otherVersion, "@")
+	if err := judgeOtherVersion(started, other, changed); err != nil {
+		return fmt.Errorf("the Session %s: %w (%s)", id, err, p.line)
+	}
+	if err := p.actorMounts(ctx, ate, id, other); err != nil {
+		return err
+	}
+	if err := p.actorMounts(ctx, ate, first.GetId(), started); err != nil {
+		return fmt.Errorf("beside the second Session: %w", err)
+	}
+	opCtx, cancel := context.WithTimeout(ctx, p.timeout)
+	defer cancel()
+	second, err := p.api.getSession(opCtx, id)
+	if err != nil {
+		return err
+	}
+	if second.GetPreparedRevision() == first.GetPreparedRevision() {
+		return fmt.Errorf("the Sessions %s and %s of other toolchain versions share the prepared revision %s (%s)", first.GetId(), id, first.GetPreparedRevision(), p.line)
+	}
+	note("prepared revisions %s and %s", first.GetPreparedRevision(), second.GetPreparedRevision())
+	if err := p.toolchainCheck(ctx, second, names); err != nil {
+		return err
+	}
+
+	p.stages.begin("toolchains: resume", "The first Session suspended and resumed: its prepared revision and digests kept, a turn's check passes")
+	suspended, err := p.api.suspendSession(opCtx, first.GetId())
+	if err != nil {
+		return err
+	}
+	resumed, err := p.api.resumeSession(opCtx, first.GetId())
+	if err != nil {
+		return err
+	}
+	note("Session %s: %s, then %s", first.GetId(), sessionState(suspended), sessionState(resumed))
+	if resumed.GetPreparedRevision() != first.GetPreparedRevision() {
+		return fmt.Errorf("the resumed Session %s runs the prepared revision %s, it started on %s (%s)", first.GetId(), resumed.GetPreparedRevision(), first.GetPreparedRevision(), p.line)
+	}
+	if err := p.actorMounts(ctx, ate, first.GetId(), started); err != nil {
+		return fmt.Errorf("after the resume: %w", err)
+	}
+	return p.toolchainCheck(ctx, resumed, names)
+}
+
+// otherVersionToolchains are the toolchains with other, name@version, in
+// place of its toolchain's entry; empty other is none, and an other naming
+// no toolchain of the part, or no version, is refused.
+func otherVersionToolchains(entries []string, other string) ([]string, error) {
+	if other == "" {
+		return nil, nil
+	}
+	name, version, ok := strings.Cut(other, "@")
+	if !ok || version == "" || !toolchainName.MatchString(name) {
+		return nil, fmt.Errorf("--other-version %q: name@version", other)
+	}
+	out := slices.Clone(entries)
+	for i, entry := range entries {
+		if n, v, _ := strings.Cut(entry, "@"); n == name {
+			if v == version {
+				return nil, fmt.Errorf("--other-version %q: --toolchains names that version already", other)
+			}
+			out[i] = other
+			return out, nil
+		}
+	}
+	return nil, fmt.Errorf("--other-version %q: no toolchain %s in --toolchains %s", other, name, strings.Join(entries, ","))
+}
+
+// judgeOtherVersion is the second Session's verdict against the first's:
+// the changed toolchain at another digest, every other at the same.
+func judgeOtherVersion(first, second []startedToolchain, changed string) error {
+	images := make(map[string]string, len(first))
+	for _, t := range first {
+		images[t.Name] = t.Image
+	}
+	for _, t := range second {
+		switch {
+		case t.Name == changed && t.Image == images[t.Name]:
+			return fmt.Errorf("%s %s mounts %s, the first Session's digest", t.Name, t.Version, t.Image)
+		case t.Name != changed && t.Image != images[t.Name]:
+			return fmt.Errorf("%s mounts %s, the first Session's is %s", t.Name, t.Image, images[t.Name])
+		}
+	}
+	return nil
+}
+
+// actorMounts reads the Session's actor in Substrate and its template, and
+// judges the template's toolchain volumes against the started toolchains.
+func (p *codingProof) actorMounts(ctx context.Context, ate *ateAPI, session string, started []startedToolchain) error {
+	opCtx, cancel := context.WithTimeout(ctx, kubeReadTimeout)
+	defer cancel()
+	name := substrateActorName(session)
+	actor, err := ate.GetActor(opCtx, &ateapi.GetActorRequest{Actor: &ateapi.ObjectRef{Atespace: kagentNamespace, Name: name}})
+	if err != nil {
+		return fmt.Errorf("GetActor %s/%s: %w", kagentNamespace, name, err)
+	}
+	ref := actor.GetActorTemplate()
+	template, err := ate.GetActorTemplate(opCtx, &ateapi.GetActorTemplateRequest{ActorTemplate: ref})
+	if err != nil {
+		return fmt.Errorf("GetActorTemplate %s/%s of the actor %s: %w", ref.GetAtespace(), ref.GetName(), name, err)
+	}
+	mounted, err := judgeActorMounts(template, started)
+	if err != nil {
+		return fmt.Errorf("the actor %s's template %s/%s: %w (%s)", name, ref.GetAtespace(), ref.GetName(), err, p.line)
+	}
+	note("actor %s on template %s/%s: %s", name, ref.GetAtespace(), ref.GetName(), mounted)
+	return nil
+}
+
+// judgeActorMounts is the verdict on an actor template's toolchain
+// volumes: exactly the started toolchains, each at its digest-pinned image,
+// mounted under toolchainsMountRoot by a container.
+func judgeActorMounts(template *ateapi.ActorTemplate, started []startedToolchain) (string, error) {
+	want := make(map[string]string, len(started))
+	for _, t := range started {
+		want[toolchainVolumePrefix+t.Name] = t.Image
+	}
+	got := map[string]string{}
+	for _, v := range template.GetVolumes() {
+		if strings.HasPrefix(v.GetName(), toolchainVolumePrefix) && v.GetImage() != nil {
+			got[v.GetName()] = v.GetImage().GetReference()
+		}
+	}
+	if !maps.Equal(got, want) {
+		return "", fmt.Errorf("the toolchain image volumes are %v, wanted %v", got, want)
+	}
+	mountedAt := map[string]string{}
+	for _, c := range template.GetContainers() {
+		for _, m := range c.GetVolumeMounts() {
+			if _, ok := want[m.GetName()]; ok {
+				mountedAt[m.GetName()] = m.GetMountPath()
+			}
+		}
+	}
+	var mounted []string
+	for _, volume := range slices.Sorted(maps.Keys(want)) {
+		path := toolchainsMountRoot + "/" + strings.TrimPrefix(volume, toolchainVolumePrefix)
+		if mountedAt[volume] != path {
+			return "", fmt.Errorf("the volume %s is mounted at %q, wanted %s", volume, mountedAt[volume], path)
+		}
+		mounted = append(mounted, path+" from "+want[volume])
+	}
+	return strings.Join(mounted, "; "), nil
 }
 
 // judgeStartedToolchains is the start's verdict: exactly the toolchains
