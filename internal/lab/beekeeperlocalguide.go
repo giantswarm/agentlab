@@ -8,9 +8,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -52,17 +52,7 @@ func startLocalGuide(runDir, bin, ca, email, endpoint, token, run string) (*loca
 	if err != nil {
 		return nil, err
 	}
-	// The host's own chores stay off: this watch only proves the mailbox.
-	extra := fmt.Sprintf("watch: {interval: %s}\ndoctor: {goCacheMaxGiB: -1, dockerImagesMaxGiB: -1, dockerBuildCacheMaxGiB: -1, freeEvery: -1s, worktreesEvery: -1s}\n", localGuideWatchInterval)
-	f, err := os.OpenFile(cfgFile, os.O_APPEND|os.O_WRONLY, 0o600) //nolint:gosec // the run directory's own configuration
-	if err != nil {
-		return nil, err
-	}
-	if _, err := f.WriteString(extra); err != nil {
-		_ = f.Close()
-		return nil, err
-	}
-	if err := f.Close(); err != nil {
+	if err := quietWatchConfig(cfgFile); err != nil {
 		return nil, err
 	}
 	g := &localGuide{bin: bin, cfg: cfgFile, ca: ca, dir: filepath.Join(filepath.Dir(cfgFile), "session"), name: "Lab guide " + run}
@@ -100,16 +90,12 @@ func startLocalGuide(runDir, bin, ca, email, endpoint, token, run string) (*loca
 		return g, fmt.Errorf("guide %s: no first turn in %s within a minute", g.short, projects)
 	}
 	id := strings.TrimSuffix(filepath.Base(g.transcript), ".jsonl")
-	reg := exec.Command(bin, "--config", cfgFile, "agents", "register", "--name", g.name) //nolint:gosec // the proof's beekeeper
+	reg := exec.Command(bin, flagConfig, cfgFile, "agents", "register", "--name", g.name) //nolint:gosec // the proof's beekeeper
 	reg.Env = append(os.Environ(), "CLAUDE_CODE_SESSION_ID="+id, "CLAUDE_CODE_SESSION_NAME="+g.name, "SSL_CERT_FILE="+ca)
 	if out, err := reg.CombinedOutput(); err != nil {
 		return g, fmt.Errorf("agents register: %v: %s", err, excerpt(string(out), 300))
 	}
-	g.watchOut = &lockedBuffer{}
-	g.watch = exec.Command(bin, "--config", cfgFile, "watch", "--standby") //nolint:gosec // the proof's beekeeper
-	g.watch.Env = append(os.Environ(), "SSL_CERT_FILE="+ca, "CLAUDE_CODE_SESSION_ID=")
-	g.watch.Stdout, g.watch.Stderr = g.watchOut, g.watchOut
-	if err := g.watch.Start(); err != nil {
+	if g.watch, g.watchOut, err = startStandbyWatch(bin, cfgFile, ca, os.Environ()); err != nil {
 		return g, err
 	}
 	note("standby watch %d on %s", g.watch.Process.Pid, cfgFile)
@@ -135,7 +121,7 @@ func (g *localGuide) said(text string) bool {
 
 // converse runs the person's beekeeper as the guide: converse text.
 func (g *localGuide) converse(text string) (string, error) {
-	cmd := exec.Command(g.bin, "--config", g.cfg, "--as", g.name, "converse", text) //nolint:gosec // the proof's beekeeper
+	cmd := exec.Command(g.bin, flagConfig, g.cfg, "--as", g.name, "converse", text) //nolint:gosec // the proof's beekeeper
 	cmd.Env = append(os.Environ(), "SSL_CERT_FILE="+g.ca, "CLAUDE_CODE_SESSION_ID=")
 	out, err := cmd.CombinedOutput()
 	return string(out), err
@@ -143,16 +129,7 @@ func (g *localGuide) converse(text string) (string, error) {
 
 // stop ends the watch and the guide's session and takes it off the roster.
 func (g *localGuide) stop() {
-	if g.watch != nil && g.watch.Process != nil {
-		_ = g.watch.Process.Signal(syscall.SIGTERM)
-		done := make(chan struct{})
-		go func() { _ = g.watch.Wait(); close(done) }()
-		select {
-		case <-done:
-		case <-time.After(30 * time.Second):
-			_ = g.watch.Process.Kill()
-		}
-	}
+	stopWatch(g.watch)
 	if g.short != "" {
 		_ = exec.Command("claude", "stop", g.short).Run() //nolint:gosec // the proof's own guide
 	}
@@ -209,6 +186,57 @@ func (p *beekeeperProof) localGuideConversation(g *localGuide) error {
 	}
 	note("the guide's answer, from its own session, is in the same thread")
 	return nil
+}
+
+// quietWatchConfig appends to a machine's configuration a short watch
+// interval and the host's own chores off: the proof's watch only reads the
+// central instance.
+func quietWatchConfig(cfgFile string) error {
+	extra := fmt.Sprintf("watch: {interval: %s}\ndoctor: {goCacheMaxGiB: -1, dockerImagesMaxGiB: -1, dockerBuildCacheMaxGiB: -1, freeEvery: -1s, worktreesEvery: -1s}\n", localGuideWatchInterval)
+	f, err := os.OpenFile(cfgFile, os.O_APPEND|os.O_WRONLY, 0o600) //nolint:gosec // the run directory's own configuration
+	if err != nil {
+		return err
+	}
+	if _, err := f.WriteString(extra); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
+}
+
+// startStandbyWatch starts a machine's standby watch (args before the verb,
+// --as <agent> for one) with env, the person's CA trusted and outside any
+// Claude Code session; its output collects in the returned buffer.
+func startStandbyWatch(bin, cfgFile, ca string, env []string, args ...string) (*exec.Cmd, *lockedBuffer, error) {
+	out := &lockedBuffer{}
+	cmd := exec.Command(bin, append([]string{flagConfig, cfgFile}, append(args, "watch", "--standby")...)...) //nolint:gosec // the proof's beekeeper
+	cmd.Env = append(slices.Clone(env), "SSL_CERT_FILE="+ca, "CLAUDE_CODE_SESSION_ID=")
+	cmd.Stdout, cmd.Stderr = out, out
+	// Its own process group: stopWatch ends the commands it runs too.
+	ownProcessGroup(cmd)
+	if err := cmd.Start(); err != nil {
+		return nil, nil, err
+	}
+	return cmd, out, nil
+}
+
+// stopWatch ends a watch started by startStandbyWatch and the commands it
+// runs: a stop, then a kill after 30 seconds, and its process group's
+// leftovers killed.
+func stopWatch(cmd *exec.Cmd) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	signalGroup(cmd, false)
+	done := make(chan struct{})
+	go func() { _ = cmd.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		_ = cmd.Process.Kill()
+		<-done
+	}
+	signalGroup(cmd, true)
 }
 
 // output is what the watch printed so far.

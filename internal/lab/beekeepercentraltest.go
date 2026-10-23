@@ -25,11 +25,15 @@ import (
 // two people's merges into one central lane take their turns one after the
 // other; a machine's agents appear on the central roster; and a central
 // verb that cannot reach the central instance is refused with exit 69 while
-// the machine's own resources stay claimable.
+// the machine's own resources stay claimable; and a decision one person's
+// CLI files for the other is answered on the other's machine, its answer
+// printed once by the filer's watch across a restart
+// (beekeepercentralnotes.go).
 
 // BeekeeperCentralVersionDefault is the first beekeeper release whose local
-// binary reaches the central instance.
-const BeekeeperCentralVersionDefault = "v0.80.0-rc.5"
+// binary lists, answers and withdraws the central instance's notes, its
+// answers naming the answerer's verified email.
+const BeekeeperCentralVersionDefault = "v0.165.0-rc.3"
 
 // The proof's names: the installation the two machines share, its lane and
 // the repository merging into it, and the resource each machine keeps.
@@ -68,6 +72,8 @@ type BeekeeperCentralTestOptions struct {
 	// as an installation runs it (beekeepercentralchart.go); Binary then
 	// runs the two machines only.
 	Chart string
+	// Part, one of CentralParts, runs that step alone.
+	Part string
 }
 
 // BeekeeperCentralTest is the headless proof of the central resources in
@@ -78,6 +84,9 @@ func BeekeeperCentralTest(cfg *config.Config, opts BeekeeperCentralTestOptions) 
 	}
 	if !cfg.Platform.Enabled {
 		return fmt.Errorf("the platform is off in %s — the machines reach serve through its muster; enable it and run `agentlab platform` first", config.File)
+	}
+	if opts.Part != "" && !slices.Contains(CentralParts, opts.Part) {
+		return fmt.Errorf("--part %q is none of %s", opts.Part, strings.Join(CentralParts, ", "))
 	}
 	ana, pia, group, err := beekeeperUsers(cfg)
 	if err != nil {
@@ -163,6 +172,9 @@ func BeekeeperCentralTest(cfg *config.Config, opts BeekeeperCentralTestOptions) 
 		return err
 	}
 
+	if opts.Part == CentralPartNotes {
+		return m.notesStep()
+	}
 	step("1. %s's machine claims %s; %s's claim is refused with its holder, its list shows it; released, %s claims it", ana.Email, centralEnvironment, pia.Email, pia.Email)
 	if err := m.leases(); err != nil {
 		return err
@@ -187,7 +199,20 @@ func BeekeeperCentralTest(cfg *config.Config, opts BeekeeperCentralTestOptions) 
 	if err := m.notes(); err != nil {
 		return err
 	}
+	if err := m.notesStep(); err != nil {
+		return err
+	}
 	note("the central leases, holds, lanes, roster and notes proven across two machines")
+	return nil
+}
+
+// notesStep is step 7, the central notes through the CLI.
+func (p *centralProof) notesStep() error {
+	step("7. A decision %s's CLI files --for %s is listed, queued and answered on %s's machine; %s's watch prints the answer once across a restart; a second one only its filer withdraws", p.ana, p.pia, p.pia, p.ana)
+	if err := p.centralNotes(); err != nil {
+		return err
+	}
+	note("central notes proven through both machines' CLIs and the filer's watch")
 	return nil
 }
 
@@ -339,9 +364,9 @@ type centralProof struct {
 // own commands, agents register among them, refuse --as); any other as
 // --as agent.
 func (p *centralProof) beekeeper(cfgFile, agent string, args ...string) (string, int) {
-	argv, env := append([]string{"--config", cfgFile, "--as", agent}, args...), []string{"CLAUDE_CODE_SESSION_ID="}
+	argv, env := append([]string{flagConfig, cfgFile, "--as", agent}, args...), []string{"CLAUDE_CODE_SESSION_ID="}
 	if agent == centralSession {
-		argv = append([]string{"--config", cfgFile}, args...)
+		argv = append([]string{flagConfig, cfgFile}, args...)
 		env = []string{"CLAUDE_CODE_SESSION_ID=" + centralSessionID, "CLAUDE_CODE_SESSION_NAME=" + centralSession}
 	}
 	cmd := exec.Command(p.bin, argv...) //nolint:gosec // the proof's beekeeper
@@ -383,10 +408,16 @@ func (p *centralProof) expect(cfgFile, agent string, code int, args []string, wa
 
 // The beekeeper verbs the proof runs more than once.
 const (
-	verbLease   = "lease"
-	verbRelease = "release"
-	verbHold    = "hold"
-	verbClaim   = "claim"
+	verbLease         = "lease"
+	verbRelease       = "release"
+	verbHold          = "hold"
+	verbClaim         = "claim"
+	beekeeperVerbList = "list"
+	verbNote          = "note"
+	// flagConfig names a machine's configuration.
+	flagConfig = "--config"
+	// centralRollOption is the first option of the proof's decisions.
+	centralRollOption = "Roll tonight: the lane clears at 22:00"
 	// centralHoldReason is the lane hold's reason, which the other machine
 	// is told.
 	centralHoldReason = "proving window"
@@ -402,7 +433,7 @@ func (p *centralProof) leases() error {
 	}{
 		{p.anaCfg, centralAnaAgent, 0, []string{verbLease, verbClaim, centralEnvironment, "-p", purpose}, []string{"claimed " + centralEnvironment}},
 		{p.piaCfg, centralPiaAgent, exitRefused, []string{verbLease, verbClaim, centralEnvironment, "-p", "mine"}, []string{fmt.Sprintf("%s is held by %q", centralEnvironment, p.ana+"/"+centralAnaAgent), purpose}},
-		{p.piaCfg, centralPiaAgent, 0, []string{verbLease, "list"}, []string{"central (muster context " + centralContext + ")", centralEnvironment, centralAnaAgent}},
+		{p.piaCfg, centralPiaAgent, 0, []string{verbLease, beekeeperVerbList}, []string{"central (muster context " + centralContext + ")", centralEnvironment, centralAnaAgent}},
 		{p.piaCfg, centralPiaAgent, exitRefused, []string{verbLease, verbRelease, centralEnvironment}, []string{"not by you"}},
 		{p.anaCfg, centralAnaAgent, 0, []string{verbLease, verbRelease, centralEnvironment}, []string{"released " + centralEnvironment}},
 		{p.piaCfg, centralPiaAgent, 0, []string{verbLease, verbClaim, centralEnvironment, "-p", "mine"}, []string{"claimed " + centralEnvironment}},
@@ -425,7 +456,7 @@ func (p *centralProof) holds() error {
 	}{
 		{p.anaCfg, centralAnaAgent, 0, []string{verbHold, "set", "--lane", centralLane, "-r", centralHoldReason}, []string{"lane:" + centralLane}},
 		{p.piaCfg, centralPiaAgent, exitRefused, []string{verbHold, "check", pr}, []string{centralHoldReason}},
-		{p.piaCfg, centralPiaAgent, 0, []string{verbHold, "list"}, []string{"central (muster context " + centralContext + ")", centralHoldReason}},
+		{p.piaCfg, centralPiaAgent, 0, []string{verbHold, beekeeperVerbList}, []string{"central (muster context " + centralContext + ")", centralHoldReason}},
 		{p.anaCfg, centralAnaAgent, 0, []string{verbHold, "lift", "--lane", centralLane}, nil},
 		{p.piaCfg, centralPiaAgent, 0, []string{verbHold, "check", pr}, nil},
 	} {
@@ -537,7 +568,7 @@ func (p *centralProof) notes() error {
 		slackKeyText: centralQuestion, "for": "team:" + beekeeperTeam, beekeeperKeyAgent: centralAnaAgent, beekeeperKeyHost: centralContext,
 		"status_quo":    "The shared lane rolls one release a night.",
 		"why":           "Only the team picks what rolls on the shared installation.",
-		slackKeyOptions: []any{"Roll tonight: the lane clears at 22:00", "Wait: nothing rolls before Monday"},
+		slackKeyOptions: []any{centralRollOption, "Wait: nothing rolls before Monday"},
 		beekeeperKeyDue: "3h", beekeeperKeyDefault: "nothing rolls tonight",
 		"refs": []any{centralRepo + "#1"},
 	})

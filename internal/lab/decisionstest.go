@@ -440,9 +440,9 @@ func (a *decisionsAPI) post(body map[string]any) (decisionReceipt, error) {
 // answered with tool; addressee is {"team", "channel"} or {"person"}.
 func decisionBody(addressee map[string]any, question, tool string) map[string]any {
 	body := map[string]any{
-		"note":      decisionsNote,
-		"question":  question,
-		"statusQuo": "graveler and glean run the release since Tuesday without a restart.",
+		beekeeperKeyNote: decisionsNote,
+		"question":       question,
+		"statusQuo":      "graveler and glean run the release since Tuesday without a restart.",
 		"options": []any{
 			map[string]any{decisionsKeyLabel: "Roll tonight", "consequence": "The lane clears at 22:00."},
 			map[string]any{decisionsKeyLabel: "Wait for Monday", "consequence": "Nothing rolls before Monday."},
