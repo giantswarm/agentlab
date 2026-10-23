@@ -32,8 +32,9 @@ import (
 
 // BeekeeperCentralVersionDefault is the first beekeeper release whose local
 // binary lists, answers and withdraws the central instance's notes, its
-// answers naming the answerer's verified email.
-const BeekeeperCentralVersionDefault = "v0.165.0-rc.3"
+// answers naming the answerer's verified email, and parks on and folds into
+// one.
+const BeekeeperCentralVersionDefault = "v0.169.0-rc.4"
 
 // The proof's names: the installation the two machines share, its lane and
 // the repository merging into it, and the resource each machine keeps.
