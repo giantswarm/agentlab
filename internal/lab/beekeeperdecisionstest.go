@@ -484,6 +484,9 @@ func startBeekeeperServe(image, binary, run, network, runDir, serveCfg, nodeIP s
 		"-e", "BEEKEEPER_CONFIG="+mount(beekeeperConfigFile),
 		"-e", fmt.Sprintf("BEEKEEPER_DATABASE_URL=postgres://postgres@127.0.0.1:%d/postgres?sslmode=disable", pgPort),
 		"-e", "KUBECONFIG="+mount(beekeeperKubeconfig),
+		// serve's own objects (the note counter) live in the namespace the
+		// proof creates and removes.
+		"-e", "BEEKEEPER_NAMESPACE="+beekeeperNamespace,
 		"-e", "SSL_CERT_FILE="+mount(beekeeperCAFile),
 		"-e", "HOME=/tmp", "-e", "XDG_STATE_HOME=/tmp")
 	if binary != "" {
