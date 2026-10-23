@@ -218,11 +218,29 @@ func TestAgentManagerGrants(t *testing.T) {
 	if got, _ := rulesBeyondGrants(joined(tenantsRoleRows, kubernetes), withPolicy("cilium")); !reflect.DeepEqual(got, kubernetes) {
 		t.Errorf("the kubernetes policy kind with flavor cilium: %v, want it granted", got)
 	}
-	if got := agentManagerGrants(switchValues(false, false, "kagent-anthropic"), true); got != nil {
-		t.Errorf("no switch: %v, want no grants", got)
+	onlyChartSource := []saGrant{chartSourceGrant}
+	if got := agentManagerGrants(switchValues(false, false, "kagent-anthropic"), true); !reflect.DeepEqual(got, onlyChartSource) {
+		t.Errorf("no switch: %v, want only the chart-source grant", got)
 	}
-	if got := agentManagerGrants(switchValues(false, true, "kagent-anthropic"), false); got != nil {
-		t.Errorf("the tenants on, agent-manager without --multi-tenant: %v, want no grants", got)
+	if got := agentManagerGrants(switchValues(false, true, "kagent-anthropic"), false); !reflect.DeepEqual(got, onlyChartSource) {
+		t.Errorf("the tenants on, agent-manager without --multi-tenant: %v, want only the chart-source grant", got)
+	}
+	// The chart-source Role is allowed with or without a switch, required by
+	// none; a row beyond it stays granted.
+	chartSourceRow := "ocirepositories.source.toolkit.fluxcd.io  []  [agent]  [get update]"
+	for _, held := range [][]string{nil, {chartSourceRow}} {
+		if got, err := rulesBeyondGrants(held, onlyChartSource); err != nil || len(got) != 0 {
+			t.Errorf("held %v: %v, %v; want nothing granted", held, got, err)
+		}
+	}
+	for _, row := range []string{
+		"ocirepositories.source.toolkit.fluxcd.io  []  [agent other]  [get update]",
+		"ocirepositories.source.toolkit.fluxcd.io  []  [agent]  [get update delete]",
+		"ocirepositories.source.toolkit.fluxcd.io  []  []  [get]",
+	} {
+		if got, err := rulesBeyondGrants([]string{row}, onlyChartSource); err != nil || !reflect.DeepEqual(got, []string{row}) {
+			t.Errorf("%q: %v, %v; want it still granted", row, got, err)
+		}
 	}
 	if _, err := rulesBeyondGrants(nil, agentManagerGrants(switchValues(false, true, "kagent-anthropic"), false)); err != nil {
 		t.Errorf("the tenants on, agent-manager without --multi-tenant, no ClusterRole: %v", err)
