@@ -50,7 +50,7 @@ func callFake(t *testing.T, f *fakeSlack, method string, params url.Values, body
 
 func startTestFake(t *testing.T, emails map[string]string) *fakeSlack {
 	t.Helper()
-	f, err := startFakeSlack("127.0.0.1:0", emails)
+	f, err := startFakeSlack("127.0.0.1:0", emails, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,7 +367,7 @@ func TestSlackFakeContainerParts(t *testing.T) {
 	if err := linuxStaticBinary(script, "the fake Slack Web API", "--slack-fake-binary"); err == nil || !strings.Contains(err.Error(), "--slack-fake-binary") {
 		t.Errorf("a script: %v", err)
 	}
-	if err := ServeFakeSlack(t.Context(), "127.0.0.1:0", []string{"UP"}); err == nil || !strings.Contains(err.Error(), "<slack user id>=<e-mail>") {
+	if err := ServeFakeSlack(t.Context(), "127.0.0.1:0", []string{"UP"}, nil); err == nil || !strings.Contains(err.Error(), "<slack user id>=<e-mail>") {
 		t.Errorf("a person without an e-mail: %v", err)
 	}
 }
@@ -386,5 +386,24 @@ func TestSlackFakeContainerReadsViews(t *testing.T) {
 	views := c.openedViews()
 	if len(views) != 2 || views[0]["callback_id"] != "picker" || views[1]["callback_id"] != "decision" {
 		t.Errorf("views read from the container = %v", views)
+	}
+}
+
+// TestFakeSlackUserGroups: usergroups.list answers each group's handle with
+// its members' ids, sorted by handle.
+func TestFakeSlackUserGroups(t *testing.T) {
+	f, err := startFakeSlack("127.0.0.1:0", map[string]string{"UA": testUser}, map[string][]string{"team-b": {"UB"}, "team-a": {"UA", "UC"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(f.close)
+	got := callFake(t, f, slackUserGroups, url.Values{}, nil)
+	groups, _ := got["usergroups"].([]any)
+	if len(groups) != 2 {
+		t.Fatalf("usergroups.list = %v", got)
+	}
+	first, _ := groups[0].(map[string]any)
+	if users, _ := first["users"].([]any); first["handle"] != "team-a" || len(users) != 2 || users[0] != "UA" {
+		t.Errorf("first group = %v, want team-a with UA and UC", first)
 	}
 }

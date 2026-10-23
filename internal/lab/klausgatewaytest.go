@@ -296,7 +296,7 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	if cfg.KlausGatewayEnabled() {
 		step("Starting the fake Slack Web API as a container on the %s network (%s slack-fake, in %s) and pointing the component's Service %s/%s at it",
 			kindDockerNetwork, opts.SlackFakeBinary, probeImage, platformNamespace, klausGatewaySlackAPIService)
-		c, err := startSlackFakeContainer(cfg, opts.SlackFakeBinary, emails)
+		c, err := startSlackFakeContainer(cfg, opts.SlackFakeBinary, emails, nil)
 		if err != nil {
 			return err
 		}
@@ -308,7 +308,7 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 		defer removeService()
 		fake = c
 	} else {
-		f, err := startFakeSlack(net.JoinHostPort("127.0.0.1", strconv.Itoa(opts.Port+2)), emails)
+		f, err := startFakeSlack(net.JoinHostPort("127.0.0.1", strconv.Itoa(opts.Port+2)), emails, nil)
 		if err != nil {
 			return err
 		}

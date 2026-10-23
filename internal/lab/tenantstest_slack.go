@@ -157,7 +157,7 @@ func (s *tenantsSlack) run() ([]string, error) {
 		}
 		defer apis[i].close()
 	}
-	fake, err := startFakeSlack(net.JoinHostPort("127.0.0.1", strconv.Itoa(opts.Port+2)), emails)
+	fake, err := startFakeSlack(net.JoinHostPort("127.0.0.1", strconv.Itoa(opts.Port+2)), emails, nil)
 	if err != nil {
 		return nil, err
 	}

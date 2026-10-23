@@ -170,7 +170,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 // plumbing, hidden, never typed by a person.
 func slackFakeCmd() *cobra.Command {
 	var listen string
-	var emails []string
+	var emails, groups []string
 	cmd := &cobra.Command{
 		Use:    "slack-fake",
 		Short:  "Serve klaus-gateway-test's fake Slack Web API (run by the proof, in a container)",
@@ -179,11 +179,12 @@ func slackFakeCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
-			return lab.ServeFakeSlack(ctx, listen, emails)
+			return lab.ServeFakeSlack(ctx, listen, emails, groups)
 		},
 	}
 	cmd.Flags().StringVar(&listen, "listen", "0.0.0.0:8080", "address to serve the fake Slack Web API on")
 	cmd.Flags().StringArrayVar(&emails, "email", nil, "a person users.info answers for, as <slack user id>=<e-mail> (repeatable)")
+	cmd.Flags().StringArrayVar(&groups, "group", nil, "a user group usergroups.list answers, as <handle>=<slack user id>,… (repeatable)")
 	return cmd
 }
 
@@ -2144,6 +2145,7 @@ func beekeeperDecisionsTestCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.Binary, "beekeeper-binary", "", "a local linux beekeeper build to run instead of the release's binary — the proof of a branch")
 	cmd.Flags().StringVar(&opts.GatewayImage, "gateway-image", "", "the klaus-gateway image to run on the host network (default: the release the lab's meta chart runs as its klaus-gateway component)")
 	cmd.Flags().BoolVar(&opts.GuideOnly, "guide-only", false, "run the guide's conversation steps (6 to 9) without the decisions (1 to 5)")
+	cmd.Flags().BoolVar(&opts.TeamGroup, "team-group", false, "make the team's Slack user group, the asker alone, who answers its decisions (serve.groups; beekeeper with serve.groups, a klaus-gateway with GET /groups/{group}/members/{email})")
 	cmd.Flags().StringVar(&opts.LocalBeekeeper, "local-beekeeper", "", "a host beekeeper build for step 9: the person's own machine, its standby watch delivering the Slack reply into a background Claude Code guide session (claude on PATH)")
 	cmd.Flags().StringVar(&opts.GatewayBinary, "gateway-binary", "", "a local klaus-gateway build to run instead of the image")
 	cmd.Flags().IntVar(&opts.Port, "gateway-port", 0, "host port of the gateway's endpoints; the next four take its admin endpoints, the fake Slack Web API, beekeeper serve and its Postgres (default: the lab's own, 18090 plus ten per port its apiServerPort sits above 6443, so two labs never share one)")
