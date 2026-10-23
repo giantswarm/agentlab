@@ -45,11 +45,12 @@ const (
 	claudeFormatRefusal   = "is a Claude-format plugin"
 	rootManifestFix       = "plugin.json at the plugin root"
 	pluginFormatUnchecked = "its format could not be checked"
-	// kagentPluginCheck is the change that runs agent-manager's plugin
-	// check on the kagent Harness; until it is released a Claude-format
-	// plugin passes the write there, and a Harness change to kagent would
-	// write a revision that never boots.
-	kagentPluginCheck = "giantswarm/giantswarm#38689"
+	// kagentPluginCheck is the capability the kagent rows gate on, probed by
+	// validate_agent rather than read from agent-manager's version, so a
+	// dev build is judged like a release: without it a Claude-format plugin
+	// passes the write there, and a Harness change to kagent would write a
+	// revision that never boots.
+	kagentPluginCheck = "agent-manager's plugin check on Harness kagent"
 	// codingTestPluginAgent is the agent create_agent must refuse.
 	codingTestPluginAgent = "agentlab-coding-plugin"
 )
@@ -215,39 +216,55 @@ func (p *codingProof) provePluginsAccepted(spec agentSpec) error {
 	return nil
 }
 
-// proveClaudeFormatRefused is the Claude-format plugin on codex: validate_agent and
-// create_agent refuse it with the Claude-format reason naming the root
-// plugin.json, and nothing is written. An answer that the manifests could
-// not be read is GitHub's anonymous window spent: the stage skips naming
-// the credential that lifts it.
-func (p *codingProof) proveClaudeFormatRefused(spec agentSpec) error {
+// claudeFormatGate is what a Claude-format row does with validate_agent's
+// verdict on harness: go on to create_agent (run), or skip naming why; neither
+// is the row's failure. An unread manifest is GitHub's anonymous window
+// spent, the skip naming the credential that lifts it; an acceptance on
+// kagent is a line without kagentPluginCheck, the skip naming it.
+func claudeFormatGate(verdict claudeFormatVerdict, errs, harness string) (run bool, skip string) {
+	switch {
+	case verdict == claudeFormatRefused:
+		return true, ""
+	case verdict == claudeFormatUnchecked:
+		return false, fmt.Sprintf("agent-manager could not read the plugin's manifests: %s; %s", excerpt(errs, 240), uncheckedFix)
+	case verdict == claudeFormatAccepted && harness == kagentHarness:
+		return false, fmt.Sprintf("the line lacks %s: validate_agent accepted the Claude-format plugin there, which would pass the write and fail at its golden boot", kagentPluginCheck)
+	}
+	return false, ""
+}
+
+// proveClaudeFormatRefused is the Claude-format plugin on harness, written
+// with modelConfig: validate_agent and create_agent refuse it with the
+// Claude-format reason naming the root plugin.json, and nothing is written.
+// It returns why the row skips (claudeFormatGate), empty when it was proven.
+func (p *codingProof) proveClaudeFormatRefused(spec agentSpec, harness, modelConfig string) (string, error) {
 	s := spec
-	s.Name, s.Harness, s.ModelConfig = codingTestPluginAgent, config.CodingRuntimeCodex, p.codexModel
+	s.Name, s.Harness, s.ModelConfig = codingTestPluginAgent, harness, modelConfig
 	s.Toolset, s.Plugins = []string{codingTestToolset}, []agentPlugin{claudePlugin()}
 	report, err := p.validate(s, func(map[string]any) {})
 	if err != nil {
-		return err
+		return "", err
 	}
-	switch verdict, errs := judgeClaudeFormat(report.Errors); verdict {
-	case claudeFormatUnchecked:
-		p.stages.skip("agent-manager could not read the plugin's manifests: %s; %s", excerpt(errs, 240), uncheckedFix)
-		return nil
-	case claudeFormatRefused:
-		note("validate_agent refused: %s", excerpt(errs, 300))
-	default:
-		return fmt.Errorf("validate_agent on Harness codex answered valid=%v errors=%v for %s, wanted the refusal %q naming %q (%s)", report.Valid, report.Errors, claudePluginPath, claudeFormatRefusal, rootManifestFix, p.line)
+	verdict, errs := judgeClaudeFormat(report.Errors)
+	run, skip := claudeFormatGate(verdict, errs, harness)
+	switch {
+	case skip != "":
+		return skip, nil
+	case !run:
+		return "", fmt.Errorf("validate_agent on Harness %s answered valid=%v errors=%v for %s, wanted the refusal %q naming %q (%s)", harness, report.Valid, report.Errors, claudePluginPath, claudeFormatRefusal, rootManifestFix, p.line)
 	}
+	note("validate_agent refused: %s", excerpt(errs, 300))
 	_, err = (agentManagerWriter{p.muster}).createAgent(s)
 	switch {
 	case err == nil:
-		return fmt.Errorf("create_agent wrote %s on Harness codex with %s, a Claude-format plugin codex cannot load (%s)", codingTestPluginAgent, claudePluginPath, p.line)
+		return "", fmt.Errorf("create_agent wrote %s on Harness %s with %s, a Claude-format plugin %s cannot load (%s)", codingTestPluginAgent, harness, claudePluginPath, harness, p.line)
 	case !strings.Contains(err.Error(), claudeFormatRefusal) || !strings.Contains(err.Error(), rootManifestFix):
-		return fmt.Errorf("create_agent on Harness codex with %s: %w; wanted the refusal %q naming %q (%s)", claudePluginPath, err, claudeFormatRefusal, rootManifestFix, p.line)
+		return "", fmt.Errorf("create_agent on Harness %s with %s: %w; wanted the refusal %q naming %q (%s)", harness, claudePluginPath, err, claudeFormatRefusal, rootManifestFix, p.line)
 	case agentExists(codingTestPluginAgent):
-		return fmt.Errorf("create_agent refused the Claude-format plugin on codex but the HelmRelease %s exists (%s)", codingTestPluginAgent, p.line)
+		return "", fmt.Errorf("create_agent refused the Claude-format plugin on %s but the HelmRelease %s exists (%s)", harness, codingTestPluginAgent, p.line)
 	}
 	note("create_agent refused, no HelmRelease %s: %s", codingTestPluginAgent, excerpt(err.Error(), 300))
-	return nil
+	return "", nil
 }
 
 // codingPluginSkillsPrompt asks the agent which skills it has; with hook,
@@ -325,28 +342,28 @@ func judgeClaudePluginHook(probe codingProbe) (string, error) {
 }
 
 // proveHarnessChangeRefused is update_agent moving the claude agent, which
-// binds the Claude-format plugin, to codex: refused with the Claude-format reason, the
-// HelmRelease not written and the Agent still on claude. The update names
-// a Responses API ModelConfig, so the plugin check is the one left to
-// refuse it.
-func (p *codingProof) proveHarnessChangeRefused() error {
+// binds the Claude-format plugin, to target with modelConfig: refused with
+// the Claude-format reason, the HelmRelease not written and the Agent still
+// on claude. modelConfig is one target speaks (on codex a Responses API
+// one), so the plugin check is the one left to refuse it.
+func (p *codingProof) proveHarnessChangeRefused(target, modelConfig string) error {
 	before, err := readKagentFluxObject(fluxHelmReleaseResource, codingTestAgent)
 	if err != nil {
 		return err
 	}
-	_, refusal := agentManagerUpdate(p.muster, map[string]any{nameKey: codingTestAgent, harnessKey: config.CodingRuntimeCodex, modelConfigKey: p.codexModel})
+	_, refusal := agentManagerUpdate(p.muster, map[string]any{nameKey: codingTestAgent, harnessKey: target, modelConfigKey: modelConfig})
 	switch {
 	case refusal == nil:
-		return fmt.Errorf("update_agent moved %s, which binds a Claude-format plugin, to Harness codex (%s)", codingTestAgent, p.line)
+		return fmt.Errorf("update_agent moved %s, which binds a Claude-format plugin, to Harness %s (%s)", codingTestAgent, target, p.line)
 	case !strings.Contains(refusal.Error(), claudeFormatRefusal):
-		return fmt.Errorf("update_agent moving %s to codex: %w; wanted the refusal %q (%s)", codingTestAgent, refusal, claudeFormatRefusal, p.line)
+		return fmt.Errorf("update_agent moving %s to %s: %w; wanted the refusal %q (%s)", codingTestAgent, target, refusal, claudeFormatRefusal, p.line)
 	}
 	after, err := readKagentFluxObject(fluxHelmReleaseResource, codingTestAgent)
 	if err != nil {
 		return err
 	}
 	if after.GetResourceVersion() != before.GetResourceVersion() {
-		return fmt.Errorf("update_agent refused the move to codex but HelmRelease %s changed (resourceVersion %s -> %s) (%s)", codingTestAgent, before.GetResourceVersion(), after.GetResourceVersion(), p.line)
+		return fmt.Errorf("update_agent refused the move to %s but HelmRelease %s changed (resourceVersion %s -> %s) (%s)", target, codingTestAgent, before.GetResourceVersion(), after.GetResourceVersion(), p.line)
 	}
 	r, err := readAgentReadinessOn(codingTestAgent, p.rt.name)
 	if err != nil {

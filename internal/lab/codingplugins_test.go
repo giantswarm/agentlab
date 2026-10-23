@@ -3,6 +3,8 @@ package lab
 import (
 	"strings"
 	"testing"
+
+	"github.com/giantswarm/agentlab/internal/config"
 )
 
 // agent-manager's answers on a Claude-format plugin are judged by kind: the
@@ -26,6 +28,36 @@ func TestJudgeClaudeFormat(t *testing.T) {
 	} {
 		if got, _ := judgeClaudeFormat(tc.errs); got != tc.want {
 			t.Errorf("%s: judged %d, want %d", name, got, tc.want)
+		}
+	}
+}
+
+// The Claude-format rows gate on agent-manager's answer, not its version:
+// a refusal runs the row on any build, a dev one included; an acceptance
+// skips on kagent naming the missing capability and fails on codex; an
+// unread manifest skips naming the credential.
+func TestClaudeFormatGate(t *testing.T) {
+	for name, tc := range map[string]struct {
+		verdict claudeFormatVerdict
+		harness string
+		run     bool
+		skip    string
+	}{
+		"refused on kagent":   {claudeFormatRefused, kagentHarness, true, ""},
+		"refused on codex":    {claudeFormatRefused, config.CodingRuntimeCodex, true, ""},
+		"accepted on kagent":  {claudeFormatAccepted, kagentHarness, false, kagentPluginCheck},
+		"accepted on codex":   {claudeFormatAccepted, config.CodingRuntimeCodex, false, ""},
+		"unchecked on kagent": {claudeFormatUnchecked, kagentHarness, false, "githubToken.source"},
+		"other on kagent":     {claudeFormatOther, kagentHarness, false, ""},
+	} {
+		run, skip := claudeFormatGate(tc.verdict, "errs", tc.harness)
+		switch {
+		case run != tc.run:
+			t.Errorf("%s: run=%v, want %v", name, run, tc.run)
+		case tc.skip == "" && skip != "":
+			t.Errorf("%s: skips %q, want no skip", name, skip)
+		case tc.skip != "" && !strings.Contains(skip, tc.skip):
+			t.Errorf("%s: skips %q, want it naming %q", name, skip, tc.skip)
 		}
 	}
 }
