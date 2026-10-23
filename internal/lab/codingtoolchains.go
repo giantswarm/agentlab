@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -40,7 +41,11 @@ import (
 //     passes.
 //  8. With --other-version: the first Session suspended and resumed keeps
 //     its prepared revision and its digests, and a turn's check passes.
-//  9. On codex without --model-config, every model call answered by the
+//  9. With --other-version: the first Session suspended, update_agent giving
+//     the agent a new revision (its system message), and the Session resumed
+//     on a new prepared revision, the toolset revision of the agent's new
+//     revision, with its digests kept and a turn's check passing.
+// 10. On codex without --model-config, every model call answered by the
 //     in-cluster mockllm's script (mockllm.go).
 //
 // The agent and its Session are removed on every exit path.
@@ -317,6 +322,68 @@ func (p *codingProof) otherVersionAndResume(ctx context.Context, ate *ateAPI, fi
 	}
 	if err := p.actorMounts(ctx, ate, first.GetId(), started); err != nil {
 		return fmt.Errorf("after the resume: %w", err)
+	}
+	if err := p.toolchainCheck(ctx, resumed, names); err != nil {
+		return err
+	}
+
+	p.stages.begin("toolchains: new revision", "The first Session suspended, %supdate_agent giving %s a new revision, the Session resumed: on a new prepared revision with its digests kept, a turn's check passes", agentManagerToolPrefix, codingTestAgent)
+	return p.newRevisionKeepsToolchains(ctx, ate, resumed, names, started)
+}
+
+// toolsetMovePause is the wait between two resumes of a Session whose toolset
+// revision of the agent's new revision is still being prepared.
+const toolsetMovePause = 15 * time.Second
+
+// newRevisionKeepsToolchains moves the proof's agent to a new revision while
+// the Session is suspended: its resume moves it to the toolset revision of the
+// agent's new revision, prepared for the Session's own tool images, so it runs
+// a new prepared revision and mounts the same digests.
+func (p *codingProof) newRevisionKeepsToolchains(ctx context.Context, ate *ateAPI, session *apiv1alpha1.Session, names []string, started []startedToolchain) error {
+	r, err := readAgentReadinessOn(codingTestAgent, p.rt.name)
+	if err != nil {
+		return err
+	}
+	if r.agent == nil {
+		return fmt.Errorf("agent %s has no Agent to update", codingTestAgent)
+	}
+	old := r.agent.Status.LatestSuccessfulRevision
+	opCtx, cancel := context.WithTimeout(ctx, p.timeout)
+	defer cancel()
+	if _, err := p.api.suspendSession(opCtx, session.GetId()); err != nil {
+		return err
+	}
+	updated, err := agentManagerUpdate(p.muster, map[string]any{nameKey: codingTestAgent, systemMessageKey: codingTestSystemPrompt + "\n\nThis agent was given a new revision by the proof."})
+	if err != nil {
+		return err
+	}
+	note("update_agent changed %v", updated.Changed)
+	if err := p.waitReadyOnNewRevision(old); err != nil {
+		return err
+	}
+	// The first resume starts the preparation of the toolset revision and
+	// keeps the Session where it is until that revision's golden snapshot is
+	// ready; a resume after it moves the Session.
+	moveStarted := time.Now()
+	var resumed *apiv1alpha1.Session
+	for attempt := 1; ; attempt++ {
+		if resumed, err = p.api.resumeSession(opCtx, session.GetId()); err != nil {
+			return err
+		}
+		if resumed.GetPreparedRevision() != session.GetPreparedRevision() {
+			break
+		}
+		if time.Since(moveStarted)+toolsetMovePause > p.timeout {
+			return fmt.Errorf("the resumed Session %s still runs the prepared revision %s of the agent's revision before %.12s after %d resumes in %s: it did not move to the new one (%s)", session.GetId(), session.GetPreparedRevision(), old, attempt, time.Since(moveStarted).Round(time.Second), p.line)
+		}
+		time.Sleep(toolsetMovePause)
+		if _, err := p.api.suspendSession(opCtx, session.GetId()); err != nil {
+			return err
+		}
+	}
+	note("Session %s: prepared revision %s, then %s after %s", session.GetId(), session.GetPreparedRevision(), resumed.GetPreparedRevision(), time.Since(moveStarted).Round(time.Second))
+	if err := p.actorMounts(ctx, ate, session.GetId(), started); err != nil {
+		return fmt.Errorf("on the new revision: %w", err)
 	}
 	return p.toolchainCheck(ctx, resumed, names)
 }
