@@ -18,6 +18,15 @@ import (
 // once. A second decision is withdrawn by its filer, never by its
 // addressee.
 
+// The beekeeper verbs, flag and option the notes steps use.
+const (
+	beekeeperVerbAgents = "agents"
+	beekeeperVerbAdd    = "add"
+	beekeeperVerbAnswer = "answer"
+	flagOption          = "--option"
+	centralWaitOption   = "Wait: nothing rolls before Monday"
+)
+
 // CentralPartNotes runs the central notes step alone (--part).
 const CentralPartNotes = "notes"
 
@@ -101,11 +110,11 @@ func (p *centralProof) sentinel(purpose string) error {
 // fileFor files a decision on the filer's machine for the other person
 // through the CLI and returns its central number.
 func (p *centralProof) fileFor(question, run string) (int, error) {
-	args := []string{verbNote, "add", "--for", p.pia, "--due", "3h",
+	args := []string{verbNote, beekeeperVerbAdd, "--for", p.pia, "--due", "3h",
 		"--status-quo", "The shared lane rolls one release a night; run " + run + " of the agentlab central proof asks.",
 		"--why", "Only the person it is for decides what rolls on the shared installation.",
-		"--option", centralRollOption,
-		"--option", "Wait: nothing rolls before Monday",
+		flagOption, centralRollOption,
+		flagOption, centralWaitOption,
 		"--default", "keep the lane closed until Monday",
 		"--ref", centralRepo + "#1", question}
 	out, code := p.beekeeper(p.anaCfg, centralAnaAgent, args...)
@@ -161,11 +170,11 @@ func (p *centralProof) centralNotes() error {
 	if err := p.expect(p.piaCfg, centralPiaAgent, 0, []string{"guide", "queue"}, ref); err != nil {
 		return err
 	}
-	if out, code := p.beekeeper(p.anaCfg, centralAnaAgent, verbNote, "answer", ref, "--choice", "1", "roll it"); code == 0 {
+	if out, code := p.beekeeper(p.anaCfg, centralAnaAgent, verbNote, beekeeperVerbAnswer, ref, "--choice", "1", "roll it"); code == 0 {
 		return fmt.Errorf("%s answered %s, a decision for %s: %s", p.ana, ref, p.pia, excerpt(out, 300))
 	}
 	note("%s's answer to %s is refused: it is %s's", p.ana, ref, p.pia)
-	if err := p.expect(p.piaCfg, centralPiaAgent, 0, []string{verbNote, "answer", ref, "--choice", "2", answer}, "note "+ref+" answered as "+p.pia); err != nil {
+	if err := p.expect(p.piaCfg, centralPiaAgent, 0, []string{verbNote, beekeeperVerbAnswer, ref, "--choice", "2", answer}, "note "+ref+" answered as "+p.pia); err != nil {
 		return err
 	}
 	if out, _ := p.beekeeper(p.piaCfg, centralPiaAgent, verbNote, beekeeperVerbList); strings.Contains(out, question) {
@@ -241,4 +250,83 @@ func (p *centralProof) centralNotes() error {
 	}
 	note("%s withdrew %s; %s no longer lists it", p.ana, ref2, p.pia)
 	return nil
+}
+
+// centralPark is step 8: the admin's registered agent, given a task, files
+// a decision for the other person, folds a second one into it by its
+// <context>#<n> and parks on it; the park stands while the decision is
+// open, and once its addressee answers, the filer's watch says AGENT
+// RESUMABLE once with the answer word for word.
+func (p *centralProof) centralPark() error {
+	run := randomSuffix()
+	if err := p.expect(p.anaCfg, centralSession, 0, []string{beekeeperVerbAgents, "register"}); err != nil {
+		return err
+	}
+	if err := p.expect(p.anaCfg, centralAnaAgent, 0, []string{beekeeperVerbAgents, "assign", centralSession, "central park proof " + run}, "assigned to "+centralSession); err != nil {
+		return err
+	}
+	question := "Central park proof " + run + ": may the shared lane roll tonight?"
+	id, err := p.fileFor(question, run)
+	if err != nil {
+		return err
+	}
+	ref := fmt.Sprintf("%s#%d", centralContext, id)
+	folded := "Central park proof " + run + ": may agentlab roll with it?"
+	if err := p.expect(p.anaCfg, centralSession, 0, []string{verbNote, beekeeperVerbAdd, "--for", p.pia, "--due", "3h",
+		"--status-quo", "agentlab rolls with the shared lane; run " + run + " of the agentlab central proof asks.",
+		"--why", "Only the person it is for decides what rolls on the shared installation.",
+		flagOption, centralRollOption, flagOption, centralWaitOption,
+		"--default", "keep the lane closed until Monday", "--ref", centralRepo + "#1",
+		"--fold-into", ref, folded}, "note "+ref+" (folded"); err != nil {
+		return err
+	}
+	if err := p.expect(p.piaCfg, centralPiaAgent, 0, []string{verbNote, beekeeperVerbList, "--full"}, ref, question, folded); err != nil {
+		return err
+	}
+	note("%s folded into %s; %s lists one note with both questions", folded, ref, p.pia)
+	if err := p.expect(p.anaCfg, centralSession, 0, []string{beekeeperVerbAgents, "park", "--on", ref, p.pia + "'s answer"}, "parked on "+ref); err != nil {
+		return err
+	}
+	if err := p.expect(p.anaCfg, centralSession, exitRefused, []string{beekeeperVerbAgents, "park", "--on", centralContext + "#999999", "nothing"}, "is not open"); err != nil {
+		return err
+	}
+	watchOnce := func() (string, error) {
+		out, code := p.beekeeper(p.anaCfg, centralSession, "watch", "--once")
+		if code != 0 && code != exitRefused {
+			return "", fmt.Errorf("watch --once: exit %d: %s", code, excerpt(out, 400))
+		}
+		return out, nil
+	}
+	out, err := watchOnce()
+	if err != nil {
+		return err
+	}
+	if strings.Contains(out, "AGENT RESUMABLE") {
+		return fmt.Errorf("the park on the open %s settled: %s", ref, excerpt(out, 400))
+	}
+	note("%s's agent parked on %s; the watch leaves it parked while it is open", p.ana, ref)
+	answer := "wait for Monday, park run " + run
+	if err := p.expect(p.piaCfg, centralPiaAgent, 0, []string{verbNote, beekeeperVerbAnswer, ref, "--choice", "2", answer}, "note "+ref+" answered as "+p.pia); err != nil {
+		return err
+	}
+	if out, err = watchOnce(); err != nil {
+		return err
+	}
+	var resumable []string
+	for _, l := range strings.Split(out, "\n") {
+		if strings.Contains(l, "AGENT RESUMABLE") {
+			resumable = append(resumable, l)
+		}
+	}
+	if len(resumable) != 1 || !strings.Contains(resumable[0], ref+" answered by "+p.pia) || !strings.Contains(resumable[0], answer) {
+		return fmt.Errorf("the watch's AGENT RESUMABLE after %s's answer: %q in %s", p.pia, resumable, excerpt(out, 800))
+	}
+	note("watch: %s", strings.TrimSpace(resumable[0]))
+	if out, err = watchOnce(); err != nil {
+		return err
+	}
+	if strings.Contains(out, "AGENT RESUMABLE") {
+		return fmt.Errorf("the watch said the settled park again: %s", excerpt(out, 400))
+	}
+	return p.expect(p.anaCfg, centralSession, 0, []string{beekeeperVerbAgents, "idle"})
 }

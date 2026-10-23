@@ -32,8 +32,9 @@ import (
 
 // BeekeeperCentralVersionDefault is the first beekeeper release whose local
 // binary lists, answers and withdraws the central instance's notes, its
-// answers naming the answerer's verified email.
-const BeekeeperCentralVersionDefault = "v0.165.0-rc.3"
+// answers naming the answerer's verified email, and parks on and folds into
+// one.
+const BeekeeperCentralVersionDefault = "v0.169.0-rc.4"
 
 // The proof's names: the installation the two machines share, its lane and
 // the repository merging into it, and the resource each machine keeps.
@@ -213,6 +214,11 @@ func (p *centralProof) notesStep() error {
 		return err
 	}
 	note("central notes proven through both machines' CLIs and the filer's watch")
+	step("8. %s's agent folds a second decision into a central one and parks on it; once %s answers, %s's watch says AGENT RESUMABLE with the answer", p.ana, p.pia, p.ana)
+	if err := p.centralPark(); err != nil {
+		return err
+	}
+	note("a park on a central note and a fold into one proven through both machines' CLIs and the filer's watch")
 	return nil
 }
 
@@ -526,7 +532,7 @@ func (p *centralProof) lanes() error {
 }
 
 func (p *centralProof) roster() error {
-	if err := p.expect(p.anaCfg, centralSession, 0, []string{"agents", "register"}); err != nil {
+	if err := p.expect(p.anaCfg, centralSession, 0, []string{beekeeperVerbAgents, "register"}); err != nil {
 		return err
 	}
 	if out, code := p.beekeeper(p.anaCfg, centralSession, "watch", "--once"); code != 0 && code != exitRefused {
@@ -568,7 +574,7 @@ func (p *centralProof) notes() error {
 		slackKeyText: centralQuestion, "for": "team:" + beekeeperTeam, beekeeperKeyAgent: centralAnaAgent, beekeeperKeyHost: centralContext,
 		"status_quo":    "The shared lane rolls one release a night.",
 		"why":           "Only the team picks what rolls on the shared installation.",
-		slackKeyOptions: []any{centralRollOption, "Wait: nothing rolls before Monday"},
+		slackKeyOptions: []any{centralRollOption, centralWaitOption},
 		beekeeperKeyDue: "3h", beekeeperKeyDefault: "nothing rolls tonight",
 		"refs": []any{centralRepo + "#1"},
 	})
