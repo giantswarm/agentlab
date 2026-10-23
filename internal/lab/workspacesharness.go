@@ -145,7 +145,7 @@ type workspacesHarnessProbe struct {
 }
 
 var (
-	probeLine     = regexp.MustCompile(probeMarker + ` ([a-z-]+)=([^\n]*)`)
+	probeLine     = regexp.MustCompile(probeMarker + ` ([a-z0-9-]+)=([^\n]*)`)
 	ownCloneLine  = regexp.MustCompile(`^rc(\d+) head=(\S*) ?(.*)$`)
 	shortRevision = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
 )

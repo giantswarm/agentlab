@@ -89,7 +89,7 @@ const (
 
 // toolchainTools are the tools the check asks for by toolchain, where the
 // tool is not named like the toolchain.
-var toolchainTools = map[string]string{toolchainGitHub: "gh", "gitlab": "glab", "python": "python3"}
+var toolchainTools = map[string]string{toolchainGitHub: "gh", "gitlab": "glab", "lint1": "golangci-lint", "python": "python3"}
 
 // toolchainTool is the tool the check runs of a toolchain.
 func toolchainTool(name string) string {
