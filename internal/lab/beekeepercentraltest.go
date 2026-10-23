@@ -31,8 +31,9 @@ import (
 // (beekeepercentralnotes.go).
 
 // BeekeeperCentralVersionDefault is the first beekeeper release whose local
-// binary reaches the central instance.
-const BeekeeperCentralVersionDefault = "v0.80.0-rc.5"
+// binary lists, answers and withdraws the central instance's notes, its
+// answers naming the answerer's verified email.
+const BeekeeperCentralVersionDefault = "v0.165.0-rc.3"
 
 // The proof's names: the installation the two machines share, its lane and
 // the repository merging into it, and the resource each machine keeps.
