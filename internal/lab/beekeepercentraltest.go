@@ -532,7 +532,7 @@ func (p *centralProof) lanes() error {
 }
 
 func (p *centralProof) roster() error {
-	if err := p.expect(p.anaCfg, centralSession, 0, []string{"agents", "register"}); err != nil {
+	if err := p.expect(p.anaCfg, centralSession, 0, []string{beekeeperVerbAgents, "register"}); err != nil {
 		return err
 	}
 	if out, code := p.beekeeper(p.anaCfg, centralSession, "watch", "--once"); code != 0 && code != exitRefused {
@@ -574,7 +574,7 @@ func (p *centralProof) notes() error {
 		slackKeyText: centralQuestion, "for": "team:" + beekeeperTeam, beekeeperKeyAgent: centralAnaAgent, beekeeperKeyHost: centralContext,
 		"status_quo":    "The shared lane rolls one release a night.",
 		"why":           "Only the team picks what rolls on the shared installation.",
-		slackKeyOptions: []any{centralRollOption, "Wait: nothing rolls before Monday"},
+		slackKeyOptions: []any{centralRollOption, centralWaitOption},
 		beekeeperKeyDue: "3h", beekeeperKeyDefault: "nothing rolls tonight",
 		"refs": []any{centralRepo + "#1"},
 	})
