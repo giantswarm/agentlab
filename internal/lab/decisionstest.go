@@ -127,7 +127,7 @@ func DecisionsTest(cfg *config.Config, email string, opts DecisionsTestOptions) 
 	run := strings.ToUpper(randomSuffix())
 	person := slackUserPrefix + run + "P"
 	channel := "CAGENTLAB" + run
-	fake, err := startFakeSlack(net.JoinHostPort("127.0.0.1", strconv.Itoa(opts.Port+2)), map[string]string{person: user.Email})
+	fake, err := startFakeSlack(net.JoinHostPort("127.0.0.1", strconv.Itoa(opts.Port+2)), map[string]string{person: user.Email}, nil)
 	if err != nil {
 		return err
 	}

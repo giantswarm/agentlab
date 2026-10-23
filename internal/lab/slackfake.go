@@ -98,6 +98,7 @@ const (
 	slackAuthTest      = "auth.test"
 	slackUsersInfo     = "users.info"
 	slackUsersByEmail  = "users.lookupByEmail"
+	slackUserGroups    = "usergroups.list"
 	slackViewsOpen     = "views.open"
 	slackViewsUpdate   = "views.update"
 	slackReplies       = "conversations.replies"
@@ -261,6 +262,8 @@ type fakeSlack struct {
 	server   *http.Server
 	// emails is what users.info answers per Slack user id.
 	emails map[string]string
+	// groups are the user groups usergroups.list answers: handle -> user ids.
+	groups map[string][]string
 
 	mu       sync.Mutex
 	seq      int
@@ -275,13 +278,14 @@ type fakeSlack struct {
 }
 
 // startFakeSlack serves the fake Web API on addr (host:port; port 0 picks
-// one). emails maps the proof's Slack user ids to what users.info answers.
-func startFakeSlack(addr string, emails map[string]string) (*fakeSlack, error) {
+// one). emails maps the proof's Slack user ids to what users.info answers,
+// groups the user groups' handles to their members' ids.
+func startFakeSlack(addr string, emails map[string]string, groups map[string][]string) (*fakeSlack, error) {
 	l, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("the fake Slack Web API cannot listen on %s: %w", addr, err)
 	}
-	f := &fakeSlack{listener: l, emails: emails, byTS: map[string]*slackMessage{}, calls: map[string]int{}}
+	f := &fakeSlack{listener: l, emails: emails, groups: groups, byTS: map[string]*slackMessage{}, calls: map[string]int{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST "+slackAPIPath+"/{method}", f.serveAPI)
 	mux.HandleFunc("POST "+slackResponsePath, f.serveResponse)
@@ -356,8 +360,9 @@ func waitThread(ws slackWorkspace, channel, threadTS string, timeout time.Durati
 // ServeFakeSlack serves the fake Slack Web API on addr until ctx ends:
 // `agentlab slack-fake`, what the proof runs in a container on the kind
 // network. emails are the people's `<slack user id>=<e-mail>` pairs
-// users.info answers.
-func ServeFakeSlack(ctx context.Context, addr string, emails []string) error {
+// users.info answers, groups the user groups' `<handle>=<id>,<id>…`
+// usergroups.list answers.
+func ServeFakeSlack(ctx context.Context, addr string, emails, groups []string) error {
 	people := make(map[string]string, len(emails))
 	for _, pair := range emails {
 		id, email, ok := strings.Cut(pair, "=")
@@ -366,7 +371,15 @@ func ServeFakeSlack(ctx context.Context, addr string, emails []string) error {
 		}
 		people[id] = email
 	}
-	f, err := startFakeSlack(addr, people)
+	members := make(map[string][]string, len(groups))
+	for _, pair := range groups {
+		handle, ids, ok := strings.Cut(pair, "=")
+		if !ok || handle == "" {
+			return fmt.Errorf("--group %q is not <handle>=<slack user id>,…", pair)
+		}
+		members[handle] = strings.Split(ids, ",")
+	}
+	f, err := startFakeSlack(addr, people, members)
 	if err != nil {
 		return err
 	}
@@ -436,10 +449,13 @@ func (c *slackFakeContainer) read(path string, v any) {
 }
 
 // startSlackFakeContainer runs `<binary> slack-fake` on the kind network.
-func startSlackFakeContainer(cfg *config.Config, binary string, emails map[string]string) (*slackFakeContainer, error) {
+func startSlackFakeContainer(cfg *config.Config, binary string, emails map[string]string, groups map[string][]string) (*slackFakeContainer, error) {
 	var args []string
 	for _, id := range slices.Sorted(maps.Keys(emails)) {
 		args = append(args, "--email", id+"="+emails[id])
+	}
+	for _, handle := range slices.Sorted(maps.Keys(groups)) {
+		args = append(args, "--group", handle+"="+strings.Join(groups[handle], ","))
 	}
 	c, err := startFakeContainer(cfg, binary, fakeContainerSpec{
 		what: "the fake Slack Web API", suffix: "slack-fake", command: slackFakeCommand,
@@ -488,6 +504,12 @@ func (f *fakeSlack) answer(method string, params map[string]any) map[string]any 
 			return map[string]any{"ok": true, slackKeyUser: map[string]any{"id": id, slackKeyTeamID: slackFakeTeam}}
 		}
 		return map[string]any{"ok": false, "error": "users_not_found"}
+	case slackUserGroups:
+		groups := []any{}
+		for _, handle := range slices.Sorted(maps.Keys(f.groups)) {
+			groups = append(groups, map[string]any{"handle": handle, "users": f.groups[handle]})
+		}
+		return map[string]any{"ok": true, "usergroups": groups}
 	case slackViewsOpen, slackViewsUpdate:
 		if view, ok := params[slackKeyView].(map[string]any); ok {
 			f.views = append(f.views, view)

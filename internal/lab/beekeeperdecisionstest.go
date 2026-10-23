@@ -48,6 +48,7 @@ const BeekeeperDecisionsVersionDefault = "v0.152.4"
 const (
 	beekeeperServer        = "beekeeper"
 	beekeeperTeam          = "agentlab"
+	beekeeperTeamGroup     = "team-" + beekeeperTeam
 	beekeeperNamespace     = "beekeeper-" + beekeeperTeam
 	beekeeperPostgresImage = "gsoci.azurecr.io/giantswarm/postgres:18.6-alpine"
 	beekeeperTokenFile     = "klaus-gateway-token"
@@ -104,6 +105,11 @@ type BeekeeperDecisionsTestOptions struct {
 	// GuideOnly runs the guide's conversation steps (6 to 9) without the
 	// decisions (1 to 5).
 	GuideOnly bool
+	// TeamGroup makes the team's Slack user group, beekeeperTeamGroup with
+	// the asker alone in it, who answers the team's decisions
+	// (serve.groups): step 2 then refuses the other person's answer and
+	// takes the asker's reply in the thread.
+	TeamGroup bool
 	// The gateway: Port is its endpoints' in the node's network, Port+1
 	// its admin endpoints, Port+3 beekeeper serve's, Port+4 its Postgres'.
 	// Default the lab's own block, gatewayTestPort. GatewayBinary is not
@@ -178,7 +184,11 @@ func BeekeeperDecisionsTest(cfg *config.Config, opts BeekeeperDecisionsTestOptio
 		return err
 	}
 	step("Starting the fake Slack Web API in a container on the kind network")
-	fake, err := startSlackFakeContainer(cfg, self, map[string]string{askerSlack: asker.Email, otherSlack: other.Email})
+	var groups map[string][]string
+	if opts.TeamGroup {
+		groups = map[string][]string{beekeeperTeamGroup: {askerSlack}}
+	}
+	fake, err := startSlackFakeContainer(cfg, self, map[string]string{askerSlack: asker.Email, otherSlack: other.Email}, groups)
 	if err != nil {
 		return err
 	}
@@ -251,8 +261,12 @@ func BeekeeperDecisionsTest(cfg *config.Config, opts BeekeeperDecisionsTestOptio
 	}
 	defer stopPG()
 
+	teamGroup := ""
+	if opts.TeamGroup {
+		teamGroup = beekeeperTeamGroup
+	}
 	serveCfg := beekeeperServeConfig(cfg, group, map[string]string{"asker": asker.Email, "other": other.Email}, channel,
-		"http://127.0.0.1:"+strconv.Itoa(opts.Port), beekeeperMount+"/"+beekeeperTokenFile)
+		"http://127.0.0.1:"+strconv.Itoa(opts.Port), beekeeperMount+"/"+beekeeperTokenFile, teamGroup)
 	image := beekeeperImage + ":" + strings.TrimPrefix(opts.Version, "v")
 	step("Starting beekeeper serve (%s) in node %s's network on :%d: issuer %s, team %s of group %s", cmp.Or(opts.Binary, image), node, servePort, cfg.Issuer(), beekeeperTeam, group)
 	stopServe, err := startBeekeeperServe(image, opts.Binary, run, inNode, runDir, serveCfg, nodeIP, servePort, pgPort)
@@ -288,9 +302,16 @@ func BeekeeperDecisionsTest(cfg *config.Config, opts BeekeeperDecisionsTestOptio
 		if err := p.personByClick(); err != nil {
 			return err
 		}
-		step("2. A decision for team:%s in %s, answered by %s's reply in its thread", beekeeperTeam, channel, other.Email)
-		if err := p.teamByThreadReply(); err != nil {
-			return err
+		if opts.TeamGroup {
+			step("2. A decision for team:%s in %s, whose Slack group @%s is %s alone: %s's answer is refused, %s's reply in its thread answers it", beekeeperTeam, channel, beekeeperTeamGroup, asker.Email, other.Email, asker.Email)
+			if err := p.teamGroupByThreadReply(); err != nil {
+				return err
+			}
+		} else {
+			step("2. A decision for team:%s in %s, answered by %s's reply in its thread", beekeeperTeam, channel, other.Email)
+			if err := p.teamByThreadReply(); err != nil {
+				return err
+			}
 		}
 		step("3. A decision nobody answers closes with its default at its due time (%s); a late click is refused", beekeeperDefaultDue)
 		if err := p.defaulted(); err != nil {
@@ -362,8 +383,8 @@ func beekeeperUsers(cfg *config.Config) (asker, other *config.User, group string
 
 // beekeeperServeConfig is serve's configuration: the lab Dex, the shared
 // group as the organization and the team, the people by name, the team's
-// channel and the gateway.
-func beekeeperServeConfig(cfg *config.Config, group string, people map[string]string, channel, gateway, tokenFile string) string {
+// channel and the gateway, and with teamGroup the team's Slack user group.
+func beekeeperServeConfig(cfg *config.Config, group string, people map[string]string, channel, gateway, tokenFile, teamGroup string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "serve:\n  issuer: %q\n  clientIDs: [%q, %q]\n  organization: %q\n  teams: {%q: %q}\n",
 		cfg.Issuer(), config.AgentPlatformClientID, config.KubernetesClientID, group, group, beekeeperTeam)
@@ -373,6 +394,9 @@ func beekeeperServeConfig(cfg *config.Config, group string, people map[string]st
 	}
 	fmt.Fprintf(&b, "  channels: {%q: %q}\n  gateway:\n    url: %q\n    tokenFile: %q\n    answerTool: %q\n    sendTool: %q\n",
 		beekeeperTeam, channel, gateway, tokenFile, beekeeperAnswerTool, beekeeperSendTool)
+	if teamGroup != "" {
+		fmt.Fprintf(&b, "  groups: {%q: %q}\n", beekeeperTeam, teamGroup)
+	}
 	return b.String()
 }
 
@@ -674,18 +698,41 @@ func (p *beekeeperProof) teamByThreadReply() error {
 	if err != nil {
 		return err
 	}
+	return p.threadReply(q, id, p.otherSlack)
+}
+
+// teamGroupByThreadReply files a team decision whose Slack group holds the
+// asker alone: the other person, in the team's Dex group, is refused through
+// muster, the asker's reply in the thread answers it.
+func (p *beekeeperProof) teamGroupByThreadReply() error {
+	const q = "Roll the release onto the lab on Tuesday instead?"
+	id, err := p.add("team:"+beekeeperTeam, q, "2h")
+	if err != nil {
+		return err
+	}
+	_, err = p.otherS.callServerTool(beekeeperAnswerTool, map[string]any{beekeeperKeyNote: id, slackKeyText: "not my team's to answer"})
+	if err == nil || !strings.Contains(err.Error(), "only its addressee") {
+		return fmt.Errorf("note #%d: the answer of a person outside @%s was not refused: %v", id, beekeeperTeamGroup, err)
+	}
+	note("note #%d: the answer of a person outside @%s refused: %v", id, beekeeperTeamGroup, err)
+	return p.threadReply(q, id, p.askerSlack)
+}
+
+// threadReply answers the team decision q, note id, with slackUser's reply in
+// its thread.
+func (p *beekeeperProof) threadReply(q string, id int, slackUser string) error {
 	m, err := p.message(p.channel, q, "the team's message", decisionsWait, func(slackMessage) bool { return true })
 	if err != nil {
 		return err
 	}
 	ts := p.fake.nextTS()
 	if err := p.driver.event(map[string]any{
-		fieldTypeKey: slackKeyMessage, slackKeyUser: p.otherSlack, slackKeyChannel: p.channel, slackKeyChanType: slackKeyChannel,
+		fieldTypeKey: slackKeyMessage, slackKeyUser: slackUser, slackKeyChannel: p.channel, slackKeyChanType: slackKeyChannel,
 		slackKeyText: decisionThreadReply, slackKeyTS: ts, slackKeyEventTS: ts, slackKeyThreadTS: m.TS, slackKeyParentUser: slackFakeBotUser,
 	}); err != nil {
 		return err
 	}
-	return p.answeredBy(p.channel, q, id, p.otherSlack, decisionThreadReply)
+	return p.answeredBy(p.channel, q, id, slackUser, decisionThreadReply)
 }
 
 func (p *beekeeperProof) defaulted() error {
