@@ -91,6 +91,16 @@ func TestJudgeToolchainCheck(t *testing.T) {
 	}
 }
 
+// A toolchain whose name holds a digit and whose tool is named otherwise
+// (lint1, golangci-lint) reads from a reply that joins the lines.
+func TestJudgeToolchainCheckDigitName(t *testing.T) {
+	reply := "AGENTLAB_PROBE mounted=lint1  AGENTLAB_PROBE onpath-lint1=yes AGENTLAB_PROBE path-lint1=/opt/kagent/tools/lint1/bin/golangci-lint AGENTLAB_PROBE version-lint1=golangci-lint has version 1.64.8 built with go1.24.1 from 8b37f141 on 2025-03-17T20:41:53Z AGENTLAB_PROBE built=no go toolchain"
+	verdict, err := judgeToolchainCheck(parseCodingProbe(reply), []string{"lint1"})
+	if err != nil || !strings.Contains(verdict, "/opt/kagent/tools/lint1/bin/golangci-lint: golangci-lint has version 1.64.8") {
+		t.Fatalf("lint1: verdict %q, err %v", verdict, err)
+	}
+}
+
 func TestJudgeGitGH(t *testing.T) {
 	if err := judgeGitGH("/usr/bin/gh", nil); err != nil {
 		t.Errorf("no toolchains: %v", err)
