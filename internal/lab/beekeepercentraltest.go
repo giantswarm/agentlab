@@ -213,6 +213,11 @@ func (p *centralProof) notesStep() error {
 		return err
 	}
 	note("central notes proven through both machines' CLIs and the filer's watch")
+	step("8. %s's agent folds a second decision into a central one and parks on it; once %s answers, %s's watch says AGENT RESUMABLE with the answer", p.ana, p.pia, p.ana)
+	if err := p.centralPark(); err != nil {
+		return err
+	}
+	note("a park on a central note and a fold into one proven through both machines' CLIs and the filer's watch")
 	return nil
 }
 
