@@ -2154,7 +2154,7 @@ func beekeeperCentralTestCmd() *cobra.Command {
 	var opts lab.BeekeeperCentralTestOptions
 	cmd := &cobra.Command{
 		Use:   "beekeeper-central-test",
-		Short: "Headless proof of beekeeper's central resources: beekeeper serve behind muster (on the host, or in the lab cluster from its chart with --chart), two local beekeepers as two lab users through it; a lease one claims refused to the other with its holder, a central lane hold stopping the other's merges, two merges into one lane taking turns, a machine's agent on the central roster, an unreachable central instance refused with exit 69, a team note answered by the other",
+		Short: "Headless proof of beekeeper's central resources: beekeeper serve behind muster (on the host, or in the lab cluster from its chart with --chart), two local beekeepers as two lab users through it; a lease one claims refused to the other with its holder, a central lane hold stopping the other's merges, two merges into one lane taking turns, a machine's agent on the central roster, an unreachable central instance refused with exit 69, a team note answered by the other, a decision one person's CLI files for the other answered on the other's machine and printed once by the filer's watch across a restart",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
@@ -2169,6 +2169,7 @@ func beekeeperCentralTestCmd() *cobra.Command {
 	cmd.Flags().IntVar(&opts.Port, "port", 18093, "beekeeper serve's port in the node's network; the next one takes its Postgres")
 	cmd.Flags().StringVar(&opts.Chart, "chart", "", "a beekeeper chart directory or oci:// reference (at --beekeeper-version): serve runs in the lab cluster from the chart, as an installation runs it, its Environment and lane from the chart's values and its mailboxes in a CloudNativePG database, instead of on the host")
 	cmd.Flags().StringVar(&opts.RunDir, "run-dir", "", "directory for serve's configuration, the two machines and the logs, kept afterwards (default: a temporary directory, removed)")
+	cmd.Flags().StringVar(&opts.Part, "part", "", "run one step instead of the proof: "+lab.CentralPartNotes+" (a decision the admin's CLI files with note add --for the other user is listed and queued as <context>#<n> on the other's machine, refused to its filer's answer and answered there with note answer; the filer's standby watch, down while it was answered, prints its answer.recorded line from the central feed exactly once across two restarts; a second decision is refused to its addressee's note done and withdrawn by its filer)")
 	return cmd
 }
 

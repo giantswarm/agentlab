@@ -578,7 +578,7 @@ func (p *beekeeperProof) add(forWho, question, due string) (int, error) {
 		slackKeyText: question, "for": forWho, beekeeperKeyKind: "decision", "agent": "beekeeper-decisions-test", "host": "agentlab",
 		"status_quo": "The lab's merge lane takes one release a night.",
 		"why":        "Only the lab's owners pick what rolls.",
-		"options":    []any{"Roll tonight: the lane clears at 22:00", "Wait for Monday: nothing rolls before Monday"},
+		"options":    []any{centralRollOption, "Wait for Monday: nothing rolls before Monday"},
 		"recommend":  2, beekeeperKeyDue: due, beekeeperKeyDefault: beekeeperDefault,
 		beekeeperKeyRefs: []any{beekeeperDecisionRef},
 	})
