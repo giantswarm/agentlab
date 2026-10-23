@@ -11,7 +11,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -214,7 +213,7 @@ func startStandbyWatch(bin, cfgFile, ca string, env []string, args ...string) (*
 	cmd.Env = append(slices.Clone(env), "SSL_CERT_FILE="+ca, "CLAUDE_CODE_SESSION_ID=")
 	cmd.Stdout, cmd.Stderr = out, out
 	// Its own process group: stopWatch ends the commands it runs too.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	ownProcessGroup(cmd)
 	if err := cmd.Start(); err != nil {
 		return nil, nil, err
 	}
@@ -222,14 +221,13 @@ func startStandbyWatch(bin, cfgFile, ca string, env []string, args ...string) (*
 }
 
 // stopWatch ends a watch started by startStandbyWatch and the commands it
-// runs: SIGTERM, then a kill after 30 seconds, and its process group's
+// runs: a stop, then a kill after 30 seconds, and its process group's
 // leftovers killed.
 func stopWatch(cmd *exec.Cmd) {
 	if cmd == nil || cmd.Process == nil {
 		return
 	}
-	pgid := -cmd.Process.Pid
-	_ = syscall.Kill(pgid, syscall.SIGTERM)
+	signalGroup(cmd, false)
 	done := make(chan struct{})
 	go func() { _ = cmd.Wait(); close(done) }()
 	select {
@@ -238,7 +236,7 @@ func stopWatch(cmd *exec.Cmd) {
 		_ = cmd.Process.Kill()
 		<-done
 	}
-	_ = syscall.Kill(pgid, syscall.SIGKILL)
+	signalGroup(cmd, true)
 }
 
 // output is what the watch printed so far.
