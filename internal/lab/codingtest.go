@@ -35,8 +35,9 @@ import (
 //     proof expects that refusal on it. Agent Plugins (codingplugins.go):
 //     validate_agent accepts the example package with its skill selected on
 //     every Harness of the namespace; a public Claude-format package is
-//     refused by validate_agent and create_agent on codex, nothing written;
-//     the refusal on kagent skips until agent-manager checks plugins there.
+//     refused by validate_agent and create_agent on codex and on kagent,
+//     nothing written; on kagent the row skips where validate_agent accepts
+//     it: a line without agent-manager's plugin check there.
 //  3. create_agent on the Harness with the read-only preset plus that write
 //     tool (the read-only preset alone below the floor) and the example
 //     package, on claude with the Claude-format package beside it:
@@ -374,6 +375,10 @@ type codingProof struct {
 	// write with; mockModelPlaced says the run placed the mockllm's for them.
 	codexModel      string
 	mockModelPlaced bool
+	// kagentRefusalSkip is why the claude-format refused on kagent row
+	// skipped (claudeFormatGate), so the harness change to kagent skips
+	// too; empty when the refusal was proven there.
+	kagentRefusalSkip string
 }
 
 func (p *codingProof) run() error {
@@ -441,11 +446,17 @@ func (p *codingProof) run() error {
 	p.stages.begin("claude-format refused on codex", "%s %s (Claude-format) on Harness codex: validate_agent and create_agent refuse it, naming the root plugin.json, and write nothing", claudePluginURL, claudePluginPath)
 	if !codex {
 		p.stages.skip("the lab renders no Harness codex: add it to platform.coding.harnesses in %s (`agentlab configure --coding-harnesses %s`), then `agentlab platform`", config.File, strings.Join(append(slices.Clone(p.cfg.CodingHarnesses()), config.CodingRuntimeCodex), ","))
-	} else if err := p.proveClaudeFormatRefused(spec); err != nil {
+	} else if skip, err := p.proveClaudeFormatRefused(spec, config.CodingRuntimeCodex, p.codexModel); err != nil {
 		return err
+	} else if skip != "" {
+		p.stages.skip("%s", skip)
 	}
 	p.stages.begin("claude-format refused on kagent", "The Claude-format package on Harness %s: validate_agent and create_agent refuse it, naming the root plugin.json", kagentHarness)
-	p.stages.skip("agent-manager runs its plugin check on the kagent Harness from %s, not released on this line (%s): until then a Claude-format git plugin passes the write on kagent and fails at its golden boot", kagentPluginCheck, p.line)
+	if p.kagentRefusalSkip, err = p.proveClaudeFormatRefused(spec, kagentHarness, spec.ModelConfig); err != nil {
+		return err
+	} else if p.kagentRefusalSkip != "" {
+		p.stages.skip("%s (%s)", p.kagentRefusalSkip, p.line)
+	}
 
 	spec.Toolset, spec.Plugins = p.toolset(), p.codingPlugins([]string{pluginExampleSkill})
 	p.stages.begin("create", "%screate_agent %s on Harness %s, toolset %v, plugins %s: Ready, its RemoteMCPServer Accepted with the toolset, the Agent's egress the Harness's origins", agentManagerToolPrefix, codingTestAgent, harness, spec.Toolset, p.pluginsWords())
@@ -524,11 +535,15 @@ func (p *codingProof) run() error {
 		p.stages.begin("harness change refused", "%supdate_agent moving %s, which binds the Claude-format package, to Harness codex refused as Claude-format: the HelmRelease not written, the Agent still on %s", agentManagerToolPrefix, codingTestAgent, harness)
 		if !codex {
 			p.stages.skip("the lab renders no Harness codex: add it to platform.coding.harnesses in %s, then `agentlab platform`", config.File)
-		} else if err := p.proveHarnessChangeRefused(); err != nil {
+		} else if err := p.proveHarnessChangeRefused(config.CodingRuntimeCodex, p.codexModel); err != nil {
 			return err
 		}
 		p.stages.begin("harness change to kagent refused", "%supdate_agent moving %s, which binds the Claude-format package, to Harness %s refused as Claude-format", agentManagerToolPrefix, codingTestAgent, kagentHarness)
-		p.stages.skip("agent-manager runs its plugin check on the kagent Harness from %s, not released on this line (%s): the move is not attempted, since it would write a revision that never boots", kagentPluginCheck, p.line)
+		if p.kagentRefusalSkip != "" {
+			p.stages.skip("%s (%s): the move is not attempted, since it would write a revision that never boots", p.kagentRefusalSkip, p.line)
+		} else if err := p.proveHarnessChangeRefused(kagentHarness, spec.ModelConfig); err != nil {
+			return err
+		}
 	}
 
 	p.stages.begin("mcp call", "The agent calls %s through its MCP binding and finds itself listed", codingTestReadTool)
