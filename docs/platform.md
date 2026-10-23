@@ -1546,6 +1546,7 @@ The part needs agent-manager's `toolchains.repository` (its `get_info` then repo
 | actor | the Session's actor in Substrate (`session-<id>`) runs on a template whose `tool-<name>` image volumes are exactly the digests `start_session` named, each mounted at `/opt/kagent/tools/<name>` |
 | other version | with `--other-version name@version`: a second Session of the agent starts with that toolchain at that version; its digest differs from the first Session's (every other toolchain's is the same), the two Sessions run different prepared revisions, its actor template mounts that digest while the first Session's keeps its own, and its turn's check passes |
 | resume | with `--other-version`: the first Session suspended and resumed runs the same prepared revision, its actor template mounts its own digests, and a turn's check passes |
+| new revision | with `--other-version`: the first Session suspended again, `update_agent` changes the agent's system message and the agent turns Ready on a new revision; the Session resumed runs a new prepared revision (the toolset revision of the agent's new revision, prepared for its own tool images), its actor template mounts the same digests, and a turn's check passes |
 | model | on the mockllm: every model call answered by its script |
 
 The agent and its Sessions are removed on every path.

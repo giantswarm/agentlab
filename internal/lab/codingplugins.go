@@ -420,6 +420,12 @@ func (p *codingProof) waitNewRevision(old string) error {
 	if !rendered {
 		return fmt.Errorf("AgentTemplate %s does not carry the empty selection of %s a minute after update_agent (%s)", codingTestAgent, pluginExampleURL, p.line)
 	}
+	return p.waitReadyOnNewRevision(old)
+}
+
+// waitReadyOnNewRevision waits for the proof's agent Ready on a revision
+// other than old.
+func (p *codingProof) waitReadyOnNewRevision(old string) error {
 	started := time.Now()
 	var r agentReadiness
 	var lastErr error
