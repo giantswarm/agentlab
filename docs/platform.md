@@ -1532,7 +1532,7 @@ The pull request is closed and its branch deleted, and the Session, the agent, t
 
 ### The toolchains part
 
-`agentlab coding-test --part toolchains [--harness claude|codex] [--toolchains go,github@0.1.0] [email]` proves that toolchains mounted into a coding agent's Session work there: agent-manager resolves each one (`name[@version]`, `latest` without a version; default `go`) to its digest and hands it to kagent with the Session's creation, and kagent mounts each image read-only at `/opt/kagent/tools/<name>`, its `bin/` on the runtime's `PATH`. On codex the model is the in-cluster mockllm unless `--model-config` names one.
+`agentlab coding-test --part toolchains [--harness claude|codex] [--toolchains go,github@0.1.0] [--other-version go@0.1.0] [email]` proves that toolchains mounted into a coding agent's Session work there: agent-manager resolves each one (`name[@version]`, `latest` without a version; default `go`) to its digest and hands it to kagent with the Session's creation, and kagent mounts each image read-only at `/opt/kagent/tools/<name>`, its `bin/` on the runtime's `PATH`. On codex the model is the in-cluster mockllm unless `--model-config` names one.
 
 The part needs agent-manager's `toolchains.repository` (its `get_info` then reports the capability `toolchains`) and a kagent controller that mounts session tool images and admits that repository in `KAGENT_SESSION_TOOL_IMAGE_REPOSITORIES` and every origin the toolchains declare (`io.giantswarm.toolchain.egress`, `go`'s `https://proxy.golang.org,https://sum.golang.org`) in `KAGENT_SESSION_TOOL_IMAGE_EGRESS_ORIGINS`, both through a `platform.valuesFiles` overlay (`agent-manager.toolchains.repository`, `kagent.controller.env`). A kagent line without session tool images refuses the start as unsupported; its controller and coding Harness images then come from a build that has them (`platform.devImages`: the controller, `claude-harness`, `codex-harness`).
 
@@ -1543,9 +1543,12 @@ The part needs agent-manager's `toolchains.repository` (its `get_info` then repo
 | agent | a coding agent created through agent-manager as the person, Ready on the Harness |
 | start | `start_session` as the person with the toolchains: the answer mounts exactly those, each image pinned by digest |
 | tools | one turn: `ls /opt/kagent/tools` lists exactly the toolchains; each one's `bin/` is on the `PATH` and its tool (`gh` for `github`, `glab` for `gitlab`, `python3` for `python`, else its name) at `/opt/kagent/tools/<name>/bin/<tool>` answers its version. Where the `PATH` finds the tool is reported, not judged: a Harness image's own copy, such as claude-harness's `gh`, comes first by the mount's contract. With `go`, a fixture module written into the Session's directory builds with the toolchain's `go` offline (`GOPROXY=off`, `GOTOOLCHAIN=local`) and prints its line |
+| actor | the Session's actor in Substrate (`session-<id>`) runs on a template whose `tool-<name>` image volumes are exactly the digests `start_session` named, each mounted at `/opt/kagent/tools/<name>` |
+| other version | with `--other-version name@version`: a second Session of the agent starts with that toolchain at that version; its digest differs from the first Session's (every other toolchain's is the same), the two Sessions run different prepared revisions, its actor template mounts that digest while the first Session's keeps its own, and its turn's check passes |
+| resume | with `--other-version`: the first Session suspended and resumed runs the same prepared revision, its actor template mounts its own digests, and a turn's check passes |
 | model | on the mockllm: every model call answered by its script |
 
-The agent and its Session are removed on every path.
+The agent and its Sessions are removed on every path.
 
 ### The Swarmgeist proof (klaus-gateway on kagent API v2)
 

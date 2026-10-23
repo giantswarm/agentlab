@@ -4,8 +4,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+
+	ateapi "github.com/giantswarm/agentlab/internal/kagent/gen"
 )
 
 func TestToolchainNames(t *testing.T) {
@@ -127,5 +130,68 @@ func TestToolchainsCheckCommandBuildsTheFixture(t *testing.T) {
 	if strings.TrimSpace(probe[toolchainsProbeTools]) != toolchainGo || probe[toolchainsProbeOnPath+"-go"] != toolchainsOnPath ||
 		!strings.HasPrefix(probe[toolchainsProbeVersion+"-go"], "go version go") || probe[toolchainsProbeBuilt] != toolchainsFixtureOutput {
 		t.Fatalf("readings %v from %s", probe, out)
+	}
+}
+
+func TestOtherVersionToolchains(t *testing.T) {
+	const otherGo = "go@0.0.9"
+	got, err := otherVersionToolchains([]string{"go", toolchainGitHub}, otherGo)
+	if err != nil || !slices.Equal(got, []string{otherGo, toolchainGitHub}) {
+		t.Fatalf("got %v, err %v", got, err)
+	}
+	if got, err := otherVersionToolchains([]string{"go"}, ""); err != nil || got != nil {
+		t.Fatalf("none: got %v, err %v", got, err)
+	}
+	for _, bad := range []struct {
+		entries []string
+		other   string
+	}{{[]string{"go"}, "go"}, {[]string{"go"}, "go@"}, {[]string{"go"}, "node@1"}, {[]string{otherGo}, otherGo}, {[]string{"go"}, "Go@1"}} {
+		if _, err := otherVersionToolchains(bad.entries, bad.other); err == nil {
+			t.Errorf("%v with %q accepted", bad.entries, bad.other)
+		}
+	}
+}
+
+func TestJudgeOtherVersion(t *testing.T) {
+	goNew := startedToolchain{Name: "go", Image: "r/go@sha256:02"}
+	goOld := startedToolchain{Name: "go", Image: "r/go@sha256:01"}
+	gh := startedToolchain{Name: toolchainGitHub, Image: "r/github@sha256:aa"}
+	ghOther := startedToolchain{Name: toolchainGitHub, Image: "r/github@sha256:bb"}
+	if err := judgeOtherVersion([]startedToolchain{goNew, gh}, []startedToolchain{goOld, gh}, "go"); err != nil {
+		t.Fatalf("another go, the same github: %v", err)
+	}
+	if err := judgeOtherVersion([]startedToolchain{goNew}, []startedToolchain{goNew}, "go"); err == nil {
+		t.Error("the same go digest accepted")
+	}
+	if err := judgeOtherVersion([]startedToolchain{goNew, gh}, []startedToolchain{goOld, ghOther}, "go"); err == nil {
+		t.Error("a changed github digest accepted")
+	}
+}
+
+func TestJudgeActorMounts(t *testing.T) {
+	goTC := startedToolchain{Name: "go", Image: "r/go@sha256:02"}
+	template := func(ref, path string) *ateapi.ActorTemplate {
+		return &ateapi.ActorTemplate{
+			Volumes: []*ateapi.Volume{
+				{Name: "workspace"},
+				{Name: "tool-go", Image: &ateapi.ImageVolumeSource{Reference: ref}},
+			},
+			Containers: []*ateapi.Container{{VolumeMounts: []*ateapi.VolumeMount{{Name: "tool-go", MountPath: path}}}},
+		}
+	}
+	if _, err := judgeActorMounts(template(goTC.Image, "/opt/kagent/tools/go"), []startedToolchain{goTC}); err != nil {
+		t.Fatalf("the good template: %v", err)
+	}
+	for name, tmpl := range map[string]*ateapi.ActorTemplate{
+		"another digest": template("r/go@sha256:01", "/opt/kagent/tools/go"),
+		"another path":   template(goTC.Image, "/opt/go"),
+		"no toolchains":  {},
+	} {
+		if _, err := judgeActorMounts(tmpl, []startedToolchain{goTC}); err == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+	if _, err := judgeActorMounts(template(goTC.Image, "/opt/kagent/tools/go"), nil); err == nil {
+		t.Error("a toolchain volume no Session named accepted")
 	}
 }
