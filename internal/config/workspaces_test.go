@@ -233,3 +233,38 @@ func TestValidateProofRepositories(t *testing.T) {
 		}
 	}
 }
+
+// The workspace storage: empty, nfs and hostpath accepted; hostpath refused
+// beside substrate workers and beside the CSI companion; any other value
+// refused.
+func TestWorkspacesStorage(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		storage        string
+		substrateNodes int
+		companion      bool
+		wantErr        string
+	}{
+		{"empty", "", 0, false, ""},
+		{"nfs", WorkspaceStorageNFS, 2, true, ""},
+		{"hostpath", WorkspaceStorageHostPath, 0, false, ""},
+		{"hostpath with workers", WorkspaceStorageHostPath, 1, false, "substrateNodes 1"},
+		{"hostpath with the companion", WorkspaceStorageHostPath, 0, true, "csiCompanion"},
+		{"another storage", "ceph", 0, false, `platform.workspaces.storage "ceph"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Default()
+			cfg.Platform.Workspaces.Enabled = true
+			cfg.Platform.Workspaces.Storage = tc.storage
+			cfg.Platform.Workspaces.CSICompanion = tc.companion
+			cfg.SubstrateNodes = tc.substrateNodes
+			err := cfg.Validate()
+			switch {
+			case tc.wantErr == "" && err != nil:
+				t.Errorf("Validate: %v, want accepted", err)
+			case tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)):
+				t.Errorf("Validate: %v, want an error naming %q", err, tc.wantErr)
+			}
+		})
+	}
+}

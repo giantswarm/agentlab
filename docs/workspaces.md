@@ -52,6 +52,50 @@ namespace, or with the cluster on `down`) and the export's bytes with it. A
 server that stopped first would leave a node's NFS client waiting on it for
 good, a node that can then be neither stopped nor removed.
 
+### Rootless Podman: the hostpath storage
+
+Under rootless Podman on Linux the nodes run in your user's user namespace,
+where the kernel mounts neither the `nfsd` filesystem nor an NFS export: the
+`nfs-server` pod logs `Unable to access /proc/fs/nfsd` and never listens, and
+every NFS mount is refused. `platform.workspaces.storage` picks what backs the
+volumes:
+
+| Value | What |
+|---|---|
+| `nfs` | The NFS server and csi-driver-nfs above |
+| `hostpath` | kubernetes-csi/csi-driver-host-path v1.17.1, as Substrate's own `ate-setup csi hostpath` installs it: every volume a directory of the node's `/var/lib/agentlab-workspaces` (beside the driver's `state.json`), published with a bind mount, which a user namespace allows |
+| empty (the default) | `hostpath` under rootless Podman on Linux for the single-node lab without the companion, `nfs` everywhere else |
+
+`agentlab configure --workspaces-storage <nfs|hostpath>` sets it; `""`
+returns to the default. The hostpath storage:
+
+| Piece | What |
+|---|---|
+| The `csi-hostpath-node` DaemonSet (namespace `agentlab-workspaces`) | The driver `hostpath.csi.k8s.io` on the control plane, serving the controller and the node service on `/var/lib/kubelet/plugins/csi-hostpath/csi.sock`, with the provisioner, the resizer and the registrar beside it; Substrate's `/var/lib/ate` mounted `Bidirectional` |
+| The controller endpoint | The `csi-hostpath-controller` Deployment: the same Envoy mTLS proxy as the NFS controller's, alone, dialling the driver's socket on the node, behind the Service `csi-hostpath-controller` (port 50051, TLS server name `csi-hostpath-controller.agentlab-workspaces.svc`) |
+| The StorageClass `agentlab-workspaces` | Read-write-many on the one node, `Immediate` binding, delete-reclaiming, expandable; no mount options |
+| The `CSIDriverConfig` `hostpath.csi.k8s.io` | As the NFS driver's, from the same `workspaces:` values |
+
+A volume is a directory of one node, so the hostpath storage needs the
+single-node lab: `substrateNodes` above 0 is refused with it, and so is
+`csiCompanion`, whose preset mounts the lab's NFS volumes. Nothing is
+installed on the host and no kernel module is needed. The plugin image is
+`registry.k8s.io`'s, pinned by digest (gsoci carries no mirror of it).
+
+The hostpath driver keeps one staging path per volume on a node and refuses
+a second (`volume … is already staged at …`). Two orchestrators stage on the
+node, each at its own path: the kubelet for a pod's claim and atelet for an
+actor's existing volume. So a pod and an actor cannot hold one volume at the
+same time on this storage: a workspace sync beside a running Session, or
+`workspaces-test --storage-only`'s report pod reading the volume its actors
+hold. Actors sharing a volume among themselves (a Session's directory
+read-write and the mirrors read-only, two Sessions of one workspace) need a
+Substrate that stages a multi-node volume once per node; earlier releases
+stage it once per target and are refused at the second mount. The claims,
+the sessions' sub-paths and the controller endpoint's refusal pass on any
+release. csi-driver-nfs advertises no staging, which is why the NFS storage
+meets neither limit; the whole workspace flow needs it.
+
 ### Turning it on
 
 ```sh
