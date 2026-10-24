@@ -82,15 +82,19 @@ single-node lab: `substrateNodes` above 0 is refused with it, and so is
 installed on the host and no kernel module is needed. The plugin image is
 `registry.k8s.io`'s, pinned by digest (gsoci carries no mirror of it).
 
-The hostpath driver stages a volume at one path per node, as the CSI spec
-asks of the orchestrator; atelet stages a read-write-many volume once per
-target. An actor that mounts the same volume twice (a Session's directory
-read-write and the mirrors read-only) is refused at the second
-`NodeStageVolume` with `volume … is already staged at …`, so the actor-level
-part of `workspaces-test --storage-only` and a Session on a workspace fail on
-this storage; the claims, the sessions' sub-paths and the controller
-endpoint's refusal pass. csi-driver-nfs advertises no staging, which is why the
-NFS storage never meets it.
+The hostpath driver keeps one staging path per volume on a node and refuses
+a second (`volume … is already staged at …`). Two orchestrators stage on the
+node, each at its own path: the kubelet for a pod's claim and atelet for an
+actor's existing volume. So a pod and an actor cannot hold one volume at the
+same time on this storage: a workspace sync beside a running Session, or
+`workspaces-test --storage-only`'s report pod reading the volume its actors
+hold. Actors sharing a volume among themselves (a Session's directory
+read-write and the mirrors read-only, two Sessions of one workspace) need a
+Substrate that stages a multi-node volume once per node; earlier releases
+stage it once per target and are refused at the second mount. The claims,
+the sessions' sub-paths and the controller endpoint's refusal pass on any
+release. csi-driver-nfs advertises no staging, which is why the NFS storage
+meets neither limit; the whole workspace flow needs it.
 
 ### Turning it on
 
