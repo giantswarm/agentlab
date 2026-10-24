@@ -3,6 +3,7 @@ package lab
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	clienttesting "k8s.io/client-go/testing"
 
@@ -237,6 +239,68 @@ func TestOrList(t *testing.T) {
 		if got := orList(tc.states); got != tc.want {
 			t.Errorf("orList(%q) = %q, want %q", tc.states, got, tc.want)
 		}
+	}
+}
+
+// TestWaitMCPServerReachableNudgesFailed: a server whose backend came up
+// after muster gave up on it reads Failed for as long as muster's reconnect
+// backoff (up to 2m, plus its 30 s retry tick) — longer than the wait. The
+// wait asks muster once for a restart (spec.restartRequestedAt), which dials
+// at once; a reachable server is never restarted, and one still Failed after
+// the nudge fails the wait with its state.
+func TestWaitMCPServerReachableNudgesFailed(t *testing.T) {
+	prevAttempts, prevInterval := mcpServerWaitAttempts, mcpServerWaitInterval
+	mcpServerWaitAttempts, mcpServerWaitInterval = 2, time.Millisecond
+	t.Cleanup(func() { mcpServerWaitAttempts, mcpServerWaitInterval = prevAttempts, prevInterval })
+	restarts := func(f *fakeLab, name string) []string {
+		var stamps []string
+		for _, a := range f.dyn.Actions() {
+			p, ok := a.(clienttesting.PatchActionImpl)
+			if !ok || p.GetResource() != musterMCPServerGVR || p.GetName() != name {
+				continue
+			}
+			var body struct {
+				Spec struct {
+					RestartRequestedAt string `json:"restartRequestedAt"`
+				} `json:"spec"`
+			}
+			if err := json.Unmarshal(p.GetPatch(), &body); err != nil {
+				t.Fatal(err)
+			}
+			stamps = append(stamps, body.Spec.RestartRequestedAt)
+		}
+		return stamps
+	}
+
+	f := newFakeLab(t, mcpServerObject("backedoff", "Failed"), mcpServerObject("up", mcpServerStateAwaitingSession), mcpServerObject("down", "Failed"))
+	// muster acting on the request for the server whose backend now answers.
+	f.dyn.PrependReactor("patch", "mcpservers", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		if action.(clienttesting.PatchActionImpl).GetName() == "backedoff" {
+			if err := f.dyn.Tracker().Update(musterMCPServerGVR, mcpServerObject("backedoff", mcpServerStateAwaitingSession), platformNamespace); err != nil {
+				return true, nil, err
+			}
+		}
+		return false, nil, nil
+	})
+
+	if err := waitMCPServerReachable("backedoff"); err != nil {
+		t.Fatalf("a Failed server whose backend answers: %v", err)
+	}
+	if got := restarts(f, "backedoff"); len(got) != 1 || got[0] == "" {
+		t.Errorf("restart requests for the backed-off server = %q, want one stamp", got)
+	}
+	if err := waitMCPServerReachable("up"); err != nil {
+		t.Fatal(err)
+	}
+	if got := restarts(f, "up"); len(got) != 0 {
+		t.Errorf("a reachable server was restarted: %q", got)
+	}
+	err := waitMCPServerReachable("down")
+	if err == nil || !strings.Contains(err.Error(), `never reached`) || !strings.Contains(err.Error(), `"Failed"`) {
+		t.Errorf("a server still Failed after the nudge: %v", err)
+	}
+	if got := restarts(f, "down"); len(got) != 1 {
+		t.Errorf("restart requests for the dead server = %q, want exactly one", got)
 	}
 }
 
