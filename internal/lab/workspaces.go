@@ -151,24 +151,131 @@ const (
 	nfsPluginRepository = "giantswarm/nfsplugin"
 )
 
-// workspacesCSIDrivers are the names the lab's NFS driver serves volumes
-// under: its own, and the companion preset's.
-var workspacesCSIDrivers = []string{workspacesCSIDriver, companionCSIDriver}
+// The hostpath storage (platform.workspaces.storage hostpath), the shape of
+// agent-substrate/substrate's own `ate-setup csi hostpath`: csi-driver-host-path
+// keeps every volume as a directory of the one node and publishes it with a
+// bind mount, which a rootless node's user namespace allows where the kernel
+// refuses it nfsd and NFS mounts. One DaemonSet runs the driver, which serves
+// the controller and the node service on one socket, with the provisioner,
+// the resizer and the registrar beside it; the controller Deployment is the
+// mTLS proxy alone, dialling that socket on the node.
+const (
+	hostPathCSIDriver         = "hostpath.csi.k8s.io"
+	hostPathController        = "csi-hostpath-controller"
+	hostPathControllerService = "csi-hostpath-controller"
+	hostPathNodePlugin        = "csi-hostpath-node"
+	hostPathNodeSocketDir     = "/var/lib/kubelet/plugins/csi-hostpath"
+	// hostPathPluginImage has no gsoci mirror; registry.k8s.io's, pinned by
+	// digest.
+	hostPathPluginImage = "registry.k8s.io/sig-storage/hostpathplugin:v1.17.1@sha256:ec6ded2430d4c5c6251e8d3a6ca55c675d6bd1b1ee8c012eab13aaa81be9c967"
+)
+
+// workspacesCSIDrivers are the names the lab's drivers serve volumes under:
+// the NFS driver's own, the companion preset's, and the hostpath driver's.
+var workspacesCSIDrivers = []string{workspacesCSIDriver, companionCSIDriver, hostPathCSIDriver}
 
 // isWorkspacesCSIDriver reports whether a CSI driver name is one the lab's
-// NFS driver serves volumes under.
+// drivers serve volumes under.
 func isWorkspacesCSIDriver(name string) bool {
 	return slices.Contains(workspacesCSIDrivers, name)
 }
 
-// workspacesCSIDriverFor is the name the lab's NFS driver serves the
-// volumes under: the companion preset's driver while the companion is
-// Substrate's driver, csi-driver-nfs's own otherwise.
-func workspacesCSIDriverFor(cfg *config.Config) string {
-	if cfg.WorkspacesCSICompanion() {
-		return companionCSIDriver
+// workspacesStorageFor is the storage the lab's workspace volumes are made
+// of: platform.workspaces.storage, or while it is empty hostpath under
+// rootless Podman on Linux for the single-node lab without the companion,
+// nfs otherwise.
+func workspacesStorageFor(cfg *config.Config) string {
+	if storage := cfg.Platform.Workspaces.Storage; storage != "" {
+		return storage
 	}
-	return workspacesCSIDriver
+	if rootlessPodmanOnLinux() && cfg.SubstrateNodes == 0 && !cfg.WorkspacesCSICompanion() {
+		return config.WorkspaceStorageHostPath
+	}
+	return config.WorkspaceStorageNFS
+}
+
+// workspacesBackend names the objects of one storage: the driver the class
+// provisions with, the controller Deployment behind its Service, the node
+// plugin DaemonSet and its socket directory, and whether an NFS server runs.
+type workspacesBackend struct {
+	storage, driver                           string
+	controller, controllerService, nodePlugin string
+	nodeSocketDir                             string
+	nfsServer                                 bool
+}
+
+func workspacesBackendFor(cfg *config.Config) workspacesBackend {
+	if workspacesStorageFor(cfg) == config.WorkspaceStorageHostPath {
+		return hostPathBackend
+	}
+	b := nfsBackend
+	if cfg.WorkspacesCSICompanion() {
+		b.driver = companionCSIDriver
+	}
+	return b
+}
+
+// workspacesBackendOfDriver is the backend whose class provisions with a
+// driver, read off the cluster: the hostpath driver's, or the NFS one's.
+func workspacesBackendOfDriver(driver string) workspacesBackend {
+	if driver == hostPathCSIDriver {
+		return hostPathBackend
+	}
+	b := nfsBackend
+	if driver != "" {
+		b.driver = driver
+	}
+	return b
+}
+
+var (
+	nfsBackend = workspacesBackend{
+		storage: config.WorkspaceStorageNFS, driver: workspacesCSIDriver,
+		controller: workspacesController, controllerService: workspacesControllerService, nodePlugin: workspacesNodePlugin,
+		nodeSocketDir: workspacesNodeSocketDir, nfsServer: true,
+	}
+	hostPathBackend = workspacesBackend{
+		storage: config.WorkspaceStorageHostPath, driver: hostPathCSIDriver,
+		controller: hostPathController, controllerService: hostPathControllerService, nodePlugin: hostPathNodePlugin,
+		nodeSocketDir: hostPathNodeSocketDir,
+	}
+)
+
+// serverName is the DNS name the service-DNS signer certifies for the
+// controller's proxy, <service>.<namespace>.svc: the TLS server name
+// ate-api-server verifies. Spelled out — Substrate's examples name
+// <service>.<namespace>.svc.cluster.local, which the certificate does not
+// carry, and an unset name would skip the verification.
+func (b workspacesBackend) serverName() string {
+	return b.controllerService + "." + workspacesNamespace + ".svc"
+}
+
+// controllerEndpoint is the CSIDriverConfig's controllerEndpoint: the
+// controller Service's DNS name and port.
+func (b workspacesBackend) controllerEndpoint() string {
+	return fmt.Sprintf("tcp://%s.%s.svc.cluster.local:%d", b.controllerService, workspacesNamespace, workspacesControllerPort)
+}
+
+// provisionerAccount is the ServiceAccount the provisioner runs as: the NFS
+// controller's, or the hostpath node plugin's, whose pod runs it.
+func (b workspacesBackend) provisionerAccount() string {
+	if b.nfsServer {
+		return b.controller
+	}
+	return b.nodePlugin
+}
+
+// nodeSocket is the CSIDriverConfig's nodeSocketOverride.
+func (b workspacesBackend) nodeSocket() string {
+	return "unix://" + b.nodeSocketDir + "/csi.sock"
+}
+
+// workspacesCSIDriverFor is the name the lab's driver serves the volumes
+// under: the hostpath driver's with that storage, the companion preset's
+// driver while the companion is Substrate's driver, csi-driver-nfs's own
+// otherwise.
+func workspacesCSIDriverFor(cfg *config.Config) string {
+	return workspacesBackendFor(cfg).driver
 }
 
 // companionValues are the connectivity chart's
@@ -205,16 +312,24 @@ const (
 )
 
 type workspacesImages struct {
-	NFSServer, NFSPlugin, Registrar, LivenessProbe, Provisioner, Resizer, Proxy string
+	NFSServer, NFSPlugin, HostPathPlugin, Registrar, LivenessProbe, Provisioner, Resizer, Proxy string
 }
 
 // workspacesValues are the names workspaces.yaml.tmpl and the values
 // template's `workspaces:` block render.
 type workspacesValues struct {
+	// HostPath renders the hostpath storage in place of the NFS server and
+	// csi-driver-nfs (workspacesStorageFor).
+	HostPath                                       bool
 	Namespace, Driver, DriverVersion, StorageClass string
 	NFSServer, NFSServerHost, ExportDir            string
 	ControllerService, Controller, NodePlugin      string
-	ControllerPort, ProxyPort                      int
+	// RBACName names the provisioner's and the resizer's cluster roles
+	// (<RBACName>-provisioner, -resizer), ProvisionerAccount the
+	// ServiceAccount the provisioner runs as, ProxyConfig the proxy's
+	// ConfigMap.
+	RBACName, ProvisionerAccount, ProxyConfig string
+	ControllerPort, ProxyPort                 int
 	// ControllerEndpoint, ServerName and NodeSocket are the CSIDriverConfig's
 	// controllerEndpoint, tls.serverName and nodeSocketOverride.
 	ControllerEndpoint, ServerName, NodeSocket  string
@@ -234,23 +349,28 @@ type workspacesValues struct {
 }
 
 func workspacesValuesFor(cfg *config.Config) workspacesValues {
+	b := workspacesBackendFor(cfg)
 	return workspacesValues{
+		HostPath:           b.storage == config.WorkspaceStorageHostPath,
 		Namespace:          workspacesNamespace,
-		Driver:             workspacesCSIDriverFor(cfg),
+		Driver:             b.driver,
 		DriverVersion:      workspacesDriverVersion,
 		StorageClass:       workspacesStorageClass,
 		NFSServer:          workspacesNFSServer,
 		NFSServerHost:      workspacesNFSServer + "." + workspacesNamespace + ".svc.cluster.local",
 		ExportDir:          workspacesExportDir,
-		ControllerService:  workspacesControllerService,
-		Controller:         workspacesController,
-		NodePlugin:         workspacesNodePlugin,
+		ControllerService:  b.controllerService,
+		Controller:         b.controller,
+		NodePlugin:         b.nodePlugin,
+		RBACName:           "agentlab-workspaces-csi-" + b.storage,
+		ProvisionerAccount: b.provisionerAccount(),
+		ProxyConfig:        "csi-" + b.storage + "-proxy",
 		ControllerPort:     workspacesControllerPort,
 		ProxyPort:          workspacesProxyPort,
-		ControllerEndpoint: fmt.Sprintf("tcp://%s.%s.svc.cluster.local:%d", workspacesControllerService, workspacesNamespace, workspacesControllerPort),
-		ServerName:         workspacesControllerServerName(),
-		NodeSocket:         "unix://" + workspacesNodeSocketDir + "/csi.sock",
-		NodeSocketDir:      workspacesNodeSocketDir,
+		ControllerEndpoint: b.controllerEndpoint(),
+		ServerName:         b.serverName(),
+		NodeSocket:         b.nodeSocket(),
+		NodeSocketDir:      b.nodeSocketDir,
 		SubstrateDir:       substrateVolumesDir,
 		ClientSPIFFEID:     ateAPIServerSPIFFEID,
 		Node:               WorkspacesNode(cfg),
@@ -258,13 +378,14 @@ func workspacesValuesFor(cfg *config.Config) workspacesValues {
 		OrganizationGroups: config.WorkspaceOrganizationGroups,
 		Companion:          companionFor(cfg),
 		Images: workspacesImages{
-			NFSServer:     nfsServerImage,
-			NFSPlugin:     nfsPluginImage,
-			Registrar:     csiRegistrarImage,
-			LivenessProbe: csiLivenessProbeImage,
-			Provisioner:   csiProvisionerImage,
-			Resizer:       csiResizerImage,
-			Proxy:         csiProxyImage,
+			NFSServer:      nfsServerImage,
+			NFSPlugin:      nfsPluginImage,
+			HostPathPlugin: hostPathPluginImage,
+			Registrar:      csiRegistrarImage,
+			LivenessProbe:  csiLivenessProbeImage,
+			Provisioner:    csiProvisionerImage,
+			Resizer:        csiResizerImage,
+			Proxy:          csiProxyImage,
 		},
 	}
 }
@@ -300,22 +421,14 @@ func substrateDriverEndpointFor(cfg *config.Config) substrateDriverEndpoint {
 			proxyPort:  companionProxyPort,
 		}
 	}
+	b := workspacesBackendFor(cfg)
 	return substrateDriverEndpoint{
 		namespace:  workspacesNamespace,
-		selector:   "app.kubernetes.io/name=" + workspacesController,
-		controller: workspacesController,
-		serverName: workspacesControllerServerName(),
+		selector:   "app.kubernetes.io/name=" + b.controller,
+		controller: b.controller,
+		serverName: b.serverName(),
 		proxyPort:  workspacesProxyPort,
 	}
-}
-
-// workspacesControllerServerName is the DNS name the service-DNS signer
-// certifies for the proxy, <service>.<namespace>.svc: the TLS server name
-// ate-api-server verifies. Spelled out — Substrate's examples name
-// <service>.<namespace>.svc.cluster.local, which the certificate does not
-// carry, and an unset name would skip the verification.
-func workspacesControllerServerName() string {
-	return workspacesControllerService + "." + workspacesNamespace + ".svc"
 }
 
 // WorkspacesNode is the node the NFS server and the driver's controller run
@@ -487,10 +600,15 @@ func valuesCarry(values map[string]any, path []string) bool {
 func workspacesUp(cfg *config.Config) error {
 	ctx := context.Background()
 	node := WorkspacesNode(cfg)
-	driver := workspacesCSIDriverFor(cfg)
-	step("Installing the workspace storage (an NFS server on %s, the NFS CSI driver %s as %s behind its mTLS proxy, the read-write-many StorageClass %s)", node, workspacesDriverVersion, driver, workspacesStorageClass)
-	if err := workspacesHostPreflight(); err != nil {
-		return err
+	b := workspacesBackendFor(cfg)
+	driver := b.driver
+	if b.nfsServer {
+		step("Installing the workspace storage (an NFS server on %s, the NFS CSI driver %s as %s behind its mTLS proxy, the read-write-many StorageClass %s)", node, workspacesDriverVersion, driver, workspacesStorageClass)
+		if err := workspacesHostPreflight(); err != nil {
+			return err
+		}
+	} else {
+		step("Installing the workspace storage (the hostpath CSI driver on %s, %s of the node per volume, behind its mTLS proxy, the read-write-many StorageClass %s)", node, workspacesExportDir, workspacesStorageClass)
 	}
 	// A class of the other driver name (platform.workspaces.csiCompanion
 	// switched) cannot be changed in place: a StorageClass's provisioner is
@@ -514,10 +632,22 @@ func workspacesUp(cfg *config.Config) error {
 	if _, err := applyManifests(ctx, manifest); err != nil {
 		return fmt.Errorf("the workspace storage: %w", err)
 	}
-	if err := waitDeploymentRolledOut(ctx, workspacesNamespace, workspacesNFSServer, workspacesRolloutTimeout); err != nil {
-		return fmt.Errorf("the NFS server: %w (the kind node loads the host kernel's nfsd for it; `kubectl -n %s logs deploy/%s`)", err, workspacesNamespace, workspacesNFSServer)
+	if !b.nfsServer {
+		if err := waitDaemonSetReady(ctx, workspacesNamespace, b.nodePlugin, workspacesRolloutTimeout); err != nil {
+			return fmt.Errorf("the hostpath CSI driver: %w (`kubectl -n %s logs ds/%s --all-containers`)", err, workspacesNamespace, b.nodePlugin)
+		}
+		note("hostpath CSI driver %s Ready on %s, its volumes under %s (Substrate's %s mounted Bidirectional); StorageClass %s (read-write-many on the one node)",
+			driver, node, workspacesExportDir, substrateVolumesDir, workspacesStorageClass)
+		return nil
 	}
-	if err := waitDaemonSetReady(ctx, workspacesNamespace, workspacesNodePlugin, workspacesRolloutTimeout); err != nil {
+	if err := waitDeploymentRolledOut(ctx, workspacesNamespace, workspacesNFSServer, workspacesRolloutTimeout); err != nil {
+		hint := "the kind node loads the host kernel's nfsd for it"
+		if rootlessPodmanOnLinux() {
+			hint = "rootless Podman's node cannot start the kernel's nfsd: `agentlab configure --workspaces-storage hostpath`"
+		}
+		return fmt.Errorf("the NFS server: %w (%s; `kubectl -n %s logs deploy/%s`)", err, hint, workspacesNamespace, workspacesNFSServer)
+	}
+	if err := waitDaemonSetReady(ctx, workspacesNamespace, b.nodePlugin, workspacesRolloutTimeout); err != nil {
 		return fmt.Errorf("the NFS CSI node plugin: %w", err)
 	}
 	note("NFS server exporting %s of %s; node plugin %s Ready on every node (Substrate's %s mounted Bidirectional); StorageClass %s (read-write-many, NFSv4.1)",
@@ -554,12 +684,13 @@ func workspacesHostPreflight() error {
 // do.
 func waitWorkspacesProxy(ctx context.Context, cfg *config.Config) error {
 	step("Waiting for the workspace storage's controller and its mTLS proxy (their certificate from Substrate's service-DNS signer)")
-	if err := waitDeploymentRolledOut(ctx, workspacesNamespace, workspacesController, workspacesRolloutTimeout); err != nil {
-		return fmt.Errorf("the NFS CSI controller: %w (the signer issues a certificate only to a pod the Service %s selects; `agentlab pods -n %s`, `kubectl -n %s describe deploy/%s`)",
-			err, workspacesControllerService, workspacesNamespace, workspacesNamespace, workspacesController)
+	b := workspacesBackendFor(cfg)
+	if err := waitDeploymentRolledOut(ctx, workspacesNamespace, b.controller, workspacesRolloutTimeout); err != nil {
+		return fmt.Errorf("the CSI controller: %w (the signer issues a certificate only to a pod the Service %s selects; `agentlab pods -n %s`, `kubectl -n %s describe deploy/%s`)",
+			err, b.controllerService, workspacesNamespace, workspacesNamespace, b.controller)
 	}
 	note("controller Ready: its proxy serves %s:%d with the certificate of %s, admitting %s alone",
-		workspacesControllerService, workspacesControllerPort, workspacesControllerServerName(), ateAPIServerSPIFFEID)
+		b.controllerService, workspacesControllerPort, b.serverName(), ateAPIServerSPIFFEID)
 	if cfg.WorkspacesCSICompanion() {
 		return waitWorkspacesCompanion(ctx)
 	}
@@ -586,21 +717,20 @@ func waitWorkspacesCompanion(ctx context.Context) error {
 // workspacesCSIDriverConfig is the CSIDriverConfig that registers the lab's
 // driver with Substrate, as the chart's workspaces.substrate.csiDriver
 // values render it: the lab applies it while the chart cannot.
-func workspacesCSIDriverConfig() *unstructured.Unstructured {
-	v := workspacesValuesFor(config.Default())
+func workspacesCSIDriverConfig(b workspacesBackend) *unstructured.Unstructured {
 	u := &unstructured.Unstructured{Object: map[string]any{}}
 	u.SetAPIVersion("ate.dev/v1alpha1")
 	u.SetKind("CSIDriverConfig")
-	u.SetName(workspacesCSIDriver)
+	u.SetName(b.driver)
 	u.SetLabels(map[string]string{managedByLabel: managedByAgentlabValue})
 	u.Object[crSpec] = map[string]any{
-		"driverName":         workspacesCSIDriver,
-		"controllerEndpoint": v.ControllerEndpoint,
-		"nodeSocketOverride": v.NodeSocket,
+		"driverName":         b.driver,
+		"controllerEndpoint": b.controllerEndpoint(),
+		"nodeSocketOverride": b.nodeSocket(),
 		"tls": map[string]any{
 			"enabled":        true,
 			"usePodIdentity": true,
-			"serverName":     v.ServerName,
+			"serverName":     b.serverName(),
 		},
 	}
 	return u
@@ -662,23 +792,24 @@ func ensureWorkspacesCSIDriverConfig(ctx context.Context, cfg *config.Config, ch
 	if err != nil {
 		return fmt.Errorf("the CSIDriverConfig API of Substrate is not served (%v): the agents runtime brings it; is platform.agents on and the substrate-crds component installed?", err)
 	}
-	if obj, err := getObject(ctx, gvr, "", workspacesCSIDriver); err == nil && csiDriverConfigRegistrant(obj) == registrantChart {
-		if !waitChartCSIDriverConfigGone(ctx, gvr, csiDriverConfigHandoverTimeout) {
-			note("CSIDriverConfig %s is the chart's and stayed through %s although the chart renders none: the lab applies none", workspacesCSIDriver, csiDriverConfigHandoverTimeout)
+	b := workspacesBackendFor(cfg)
+	if obj, err := getObject(ctx, gvr, "", b.driver); err == nil && csiDriverConfigRegistrant(obj) == registrantChart {
+		if !waitChartCSIDriverConfigGone(ctx, gvr, b.driver, csiDriverConfigHandoverTimeout) {
+			note("CSIDriverConfig %s is the chart's and stayed through %s although the chart renders none: the lab applies none", b.driver, csiDriverConfigHandoverTimeout)
 			return nil
 		}
-		note("the earlier chart's CSIDriverConfig %s is gone with its upgrade", workspacesCSIDriver)
+		note("the earlier chart's CSIDriverConfig %s is gone with its upgrade", b.driver)
 	}
 	k, err := labKube()
 	if err != nil {
 		return err
 	}
-	res, err := k.apply(ctx, workspacesCSIDriverConfig())
+	res, err := k.apply(ctx, workspacesCSIDriverConfig(b))
 	if err != nil {
-		return fmt.Errorf("the CSIDriverConfig %s: %w", workspacesCSIDriver, err)
+		return fmt.Errorf("the CSIDriverConfig %s: %w", b.driver, err)
 	}
 	note("%s (the chart renders no CSIDriverConfig for %s, so the lab registers the driver with Substrate itself: controllerEndpoint %s, tls.serverName %s)",
-		res, workspacesCSIDriver, workspacesValuesFor(config.Default()).ControllerEndpoint, workspacesControllerServerName())
+		res, b.driver, b.controllerEndpoint(), b.serverName())
 	return nil
 }
 
@@ -689,9 +820,9 @@ var csiDriverConfigHandoverTimeout = fluxActionTimeout
 
 // waitChartCSIDriverConfigGone waits until no Helm-managed CSIDriverConfig
 // of the driver is live; false when one still is after timeout.
-func waitChartCSIDriverConfigGone(ctx context.Context, gvr schema.GroupVersionResource, timeout time.Duration) bool {
+func waitChartCSIDriverConfigGone(ctx context.Context, gvr schema.GroupVersionResource, driver string, timeout time.Duration) bool {
 	err := wait.PollUntilContextTimeout(ctx, 2*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
-		obj, err := getObject(ctx, gvr, "", workspacesCSIDriver)
+		obj, err := getObject(ctx, gvr, "", driver)
 		if apierrors.IsNotFound(err) {
 			return true, nil
 		}
@@ -769,19 +900,30 @@ func removeLabWorkspacesCSIDriverConfig(ctx context.Context) error {
 	if err != nil {
 		return nil
 	}
-	obj, err := getObject(ctx, gvr, "", workspacesCSIDriver)
-	if err != nil {
+	for _, driver := range []string{workspacesCSIDriver, hostPathCSIDriver} {
+		obj, err := getObject(ctx, gvr, "", driver)
 		if apierrors.IsNotFound(err) {
-			return nil
+			continue
 		}
-		return err
+		if err != nil {
+			return err
+		}
+		if obj.GetLabels()[managedByLabel] != managedByAgentlabValue {
+			continue
+		}
+		note("removing the CSIDriverConfig %s the lab applied", driver)
+		if err := deleteObject(ctx, gvr, "", driver, fixtureDeleteWait); err != nil {
+			return err
+		}
 	}
-	if obj.GetLabels()[managedByLabel] != managedByAgentlabValue {
-		return nil
-	}
-	note("removing the CSIDriverConfig %s the lab applied", workspacesCSIDriver)
-	return deleteObject(ctx, gvr, "", workspacesCSIDriver, fixtureDeleteWait)
+	return nil
 }
+
+// The resources of the drivers' cluster roles.
+const (
+	clusterRolesResource        = "clusterroles.rbac.authorization.k8s.io"
+	clusterRoleBindingsResource = "clusterrolebindings.rbac.authorization.k8s.io"
+)
 
 // The cluster-scoped objects of the workspace storage, as kubectl resource
 // arguments and names: what workspacesDown removes after the namespace.
@@ -789,10 +931,15 @@ var workspacesClusterObjects = []struct{ resource, name string }{
 	{"storageclasses.storage.k8s.io", workspacesStorageClass},
 	{csiDriversResource, workspacesCSIDriver},
 	{csiDriversResource, companionCSIDriver},
-	{"clusterrolebindings.rbac.authorization.k8s.io", "agentlab-workspaces-csi-nfs-provisioner"},
-	{"clusterroles.rbac.authorization.k8s.io", "agentlab-workspaces-csi-nfs-provisioner"},
-	{"clusterrolebindings.rbac.authorization.k8s.io", "agentlab-workspaces-csi-nfs-resizer"},
-	{"clusterroles.rbac.authorization.k8s.io", "agentlab-workspaces-csi-nfs-resizer"},
+	{csiDriversResource, hostPathCSIDriver},
+	{clusterRoleBindingsResource, "agentlab-workspaces-csi-nfs-provisioner"},
+	{clusterRolesResource, "agentlab-workspaces-csi-nfs-provisioner"},
+	{clusterRoleBindingsResource, "agentlab-workspaces-csi-nfs-resizer"},
+	{clusterRolesResource, "agentlab-workspaces-csi-nfs-resizer"},
+	{clusterRoleBindingsResource, "agentlab-workspaces-csi-hostpath-provisioner"},
+	{clusterRolesResource, "agentlab-workspaces-csi-hostpath-provisioner"},
+	{clusterRoleBindingsResource, "agentlab-workspaces-csi-hostpath-resizer"},
+	{clusterRolesResource, "agentlab-workspaces-csi-hostpath-resizer"},
 }
 
 // workspacesDown removes the workspace storage from a lab that has it: the
@@ -914,11 +1061,19 @@ func readWorkspacesStatus(ctx context.Context) (*WorkspacesStatus, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &WorkspacesStatus{}
-	for _, w := range []struct {
+	s := &WorkspacesStatus{Driver: liveWorkspacesCSIDriver(ctx)}
+	b := workspacesBackendOfDriver(s.Driver)
+	workloads := []struct {
 		name string
 		into *string
-	}{{workspacesNFSServer, &s.NFSServer}, {workspacesController, &s.Controller}} {
+	}{{b.controller, &s.Controller}}
+	if b.nfsServer {
+		workloads = append(workloads, struct {
+			name string
+			into *string
+		}{workspacesNFSServer, &s.NFSServer})
+	}
+	for _, w := range workloads {
 		d, err := k.clientset.AppsV1().Deployments(workspacesNamespace).Get(ctx, w.name, metav1.GetOptions{})
 		switch {
 		case err != nil:
@@ -930,12 +1085,12 @@ func readWorkspacesStatus(ctx context.Context) (*WorkspacesStatus, error) {
 				*w.into = fmt.Sprintf("%d of %d replicas available", d.Status.AvailableReplicas, d.Status.Replicas)
 			}
 			s.Node = d.Spec.Template.Spec.NodeSelector["kubernetes.io/hostname"]
-			if w.name == workspacesController {
+			if w.name == b.controller {
 				s.Proxy = slices.ContainsFunc(d.Spec.Template.Spec.Containers, func(c corev1.Container) bool { return c.Name == workspacesProxyContainer })
 			}
 		}
 	}
-	ds, err := k.clientset.AppsV1().DaemonSets(workspacesNamespace).Get(ctx, workspacesNodePlugin, metav1.GetOptions{})
+	ds, err := k.clientset.AppsV1().DaemonSets(workspacesNamespace).Get(ctx, b.nodePlugin, metav1.GetOptions{})
 	switch {
 	case err != nil:
 		s.NodePlugin = readState(err)
@@ -944,7 +1099,6 @@ func readWorkspacesStatus(ctx context.Context) (*WorkspacesStatus, error) {
 	default:
 		s.NodePlugin = daemonSetStatus(ds)
 	}
-	s.Driver = liveWorkspacesCSIDriver(ctx)
 	s.StorageClass = s.Driver != ""
 	s.Companion = readCompanionState(ctx, k)
 	s.CSIDriverConfig = readWorkspacesRegistrant(ctx, cmp.Or(s.Driver, workspacesCSIDriver))
@@ -1013,6 +1167,10 @@ func (s *WorkspacesStatus) String() string {
 	}
 	line := fmt.Sprintf("NFS server %s on %s; CSI controller %s %s %s; node plugin %s; %s; %s",
 		s.NFSServer, orNone(s.Node), driver, s.Controller, proxy, s.NodePlugin, class, registration)
+	if driver == hostPathCSIDriver {
+		line = fmt.Sprintf("hostpath CSI driver %s on %s, its volumes under %s; controller proxy %s %s; %s; %s",
+			s.NodePlugin, orNone(s.Node), workspacesExportDir, s.Controller, proxy, class, registration)
+	}
 	if s.Companion != "" {
 		line += fmt.Sprintf("; the chart's CSI companion (%s preset, the lab's NFS plugin) %s", companionPreset, s.Companion)
 	}
@@ -1030,7 +1188,11 @@ func workspacesHint(cfg *config.Config, chartCarries bool, registrant string) st
 	if !cfg.WorkspacesEnabled() {
 		return "  Workspace storage is off (platform.workspaces in agentlab.yaml; `agentlab configure --workspaces` turns it on)."
 	}
-	hint := fmt.Sprintf("  Workspace storage: an NFS server on %s and the NFS CSI driver behind its mTLS proxy, %s;\n"+
+	storage := "an NFS server on %s and the NFS CSI driver behind its mTLS proxy"
+	if workspacesStorageFor(cfg) == config.WorkspaceStorageHostPath {
+		storage = "the hostpath CSI driver on %s (" + workspacesExportDir + " of the node per volume) behind its mTLS proxy"
+	}
+	hint := fmt.Sprintf("  Workspace storage: "+storage+", %s;\n"+
 		"  the read-write-many StorageClass %s. Proof: `agentlab workspaces-test --storage-only`.", WorkspacesNode(cfg), workspacesRegistration(workspacesCSIDriverFor(cfg), registrant), workspacesStorageClass)
 	if cfg.WorkspacesCSICompanion() {
 		hint += fmt.Sprintf("\n  Substrate's driver is the chart's CSI companion (%s preset, the lab's NFS plugin serving %s). Proof: `agentlab workspaces-test --storage-only`, its actors mounting through the companion.", companionPreset, companionCSIDriver)

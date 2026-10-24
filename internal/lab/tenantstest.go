@@ -1090,7 +1090,7 @@ func credentialProviderGrants(ctx context.Context) (map[string][]string, error) 
 // ClusterRole: a RoleBinding to a missing ClusterRole is accepted and grants
 // nothing, so the calls would fail as a bare 403.
 func checkTenantRole(role string) error {
-	gvr, err := gvrFor("clusterroles.rbac.authorization.k8s.io")
+	gvr, err := gvrFor(clusterRolesResource)
 	if err != nil {
 		return err
 	}
