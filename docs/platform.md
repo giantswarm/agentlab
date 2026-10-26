@@ -478,7 +478,8 @@ so a side-load is invisible to it. The lab therefore runs a **registry**
 for this target: a `registry` container named `<clusterName>-registry` on
 the kind docker network, published on the host's loopback
 (`platform.devRegistryPort`, default 5001, kind's documented local-registry
-port; created on demand, removed by `agentlab down`). `agentlab platform`
+port, which `agentlab configure` moves off another lab's registry like the
+other host ports; created on demand, removed by `agentlab down`). `agentlab platform`
 tags the build into it (`localhost:<port>/<path of your ref>:<tag>`), pushes,
 reads the manifest digest the registry computed, and forwards
 `kagent.harness.image: localhost:<port>/<path>@sha256:<digest>` through the

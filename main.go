@@ -655,13 +655,13 @@ func applyPorts(cfg *config.Config, disc *lab.Discovery) {
 		if err != nil {
 			fmt.Printf("The other labs' ports are unknown (%v): only the ports in use count as taken.\n\n", err)
 		}
-		reportPortChanges(cfg.ChooseFreePorts(disc.ClusterPorts, recorded, lab.MinPublishablePort()))
+		reportPortChanges(cfg.ChooseFreePorts(disc.OwnPorts(), recorded, lab.MinPublishablePort()))
 		return
 	}
 	if !disc.ClusterPorts[cfg.APIServerPort] {
 		fmt.Printf("The existing cluster's API server is not on apiServerPort %d: it keeps its port until it is recreated (`agentlab down`, then `agentlab up`).\n\n", cfg.APIServerPort)
 	}
-	conflicts := cfg.PortConflicts(disc.ClusterPorts)
+	conflicts := cfg.PortConflicts(disc.OwnPorts())
 	if len(conflicts) == 0 {
 		return
 	}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -47,6 +48,9 @@ type Discovery struct {
 	WorkspacesGitHubApp bool
 	ClusterExists       bool
 	ClusterPorts        map[int]bool
+	// RegistryPort is the host port the lab registry container of this
+	// configuration publishes, 0 when there is no such container.
+	RegistryPort int
 	KindGateway         string
 	Servers             []HostServer
 	FLM                 *FLMServer
@@ -121,6 +125,7 @@ func Discover(cfg *config.Config) *Discovery {
 		d.SecretTool = secretToolVersion()
 	}
 	d.ClusterExists, d.ClusterPorts = kindNodePublishedPorts(cfg.ControlPlaneNode())
+	d.RegistryPort = devRegistryOwnPort(cfg)
 	if gw, err := kindGatewayIP(cfg.ControlPlaneNode()); err == nil {
 		d.KindGateway = gw
 	}
@@ -172,6 +177,20 @@ func Discover(cfg *config.Config) *Discovery {
 // VM provisioner needs as a pod of the node — what platform.vmManager.enabled
 // is refused without.
 func (d *Discovery) KVMReady() bool { return len(d.KVMMissing) == 0 }
+
+// OwnPorts are the host ports this configuration's own containers publish,
+// the kind node's and the lab registry's: never occupied for the lab itself.
+func (d *Discovery) OwnPorts() map[int]bool {
+	own := maps.Clone(d.ClusterPorts)
+	if d.RegistryPort == 0 {
+		return own
+	}
+	if own == nil {
+		own = map[int]bool{}
+	}
+	own[d.RegistryPort] = true
+	return own
+}
 
 // podReachableHost is the address pods reach this machine on for port: the
 // kind network gateway where that is this machine, else the container

@@ -100,6 +100,9 @@ func (c *Config) ports() []labPort {
 		{"backstage.port", "Backstage's direct debug access", &c.Backstage.Port, lo, func(scan func(int, int) (int, bool)) (int, bool) {
 			return scan(c.Backstage.Port+1, 65535)
 		}, nil},
+		{"platform.devRegistryPort", "the lab registry", &c.Platform.DevRegistryPort, lo, func(scan func(int, int) (int, bool)) (int, bool) {
+			return scan(c.Platform.DevRegistryPort+1, 65535)
+		}, nil},
 	}
 }
 
@@ -118,8 +121,8 @@ func (c *Config) HostPorts() []string {
 // 127.0.0.1 — the address all kind port mappings bind — and moves each
 // unusable one to a nearby free port, returning what changed so the caller
 // can tell the user. Ports in `ours` are the lab's own (published by an
-// existing kind node of this very configuration) and never count as
-// occupied. Ports in `recorded` belong to another lab on this machine (its
+// existing kind node or lab registry of this very configuration) and never
+// count as occupied. Ports in `recorded` belong to another lab on this machine (its
 // agentlab.yaml records them, the value names it): occupied whether that lab
 // runs or not, since both could never be up together. Ports below minPublishable are ones the container engine cannot
 // bind at all (rootless podman and the privileged range); pass 1 where every
@@ -133,7 +136,7 @@ func (c *Config) ChooseFreePorts(ours map[int]bool, recorded map[string]string, 
 
 // PortConflicts reports which host-side ports of the configuration another
 // process holds, ignoring the lab's own (`ours`, the ports the existing kind
-// node publishes). Nothing is changed.
+// node and lab registry publish). Nothing is changed.
 func (c *Config) PortConflicts(ours map[int]bool) []PortConflict {
 	return c.portConflicts(func(addr string, p int) bool { return !ours[p] && portTaken(addr, p) })
 }
@@ -165,13 +168,14 @@ func (c *Config) chooseFreePorts(taken func(addr string, port int) bool, recorde
 	// NodePort, and keeping host ports off them avoids same-number
 	// coincidences in debugging).
 	reserved := map[int]bool{
-		c.DexPort:              true,
-		c.Backstage.Port:       true,
-		c.Platform.MusterPort:  true,
-		c.Platform.AgentsPort:  true,
-		c.Platform.GatewayPort: true,
-		c.APIServerPort:        true,
-		BrowserCallbackPort:    true,
+		c.DexPort:                  true,
+		c.Backstage.Port:           true,
+		c.Platform.MusterPort:      true,
+		c.Platform.AgentsPort:      true,
+		c.Platform.GatewayPort:     true,
+		c.APIServerPort:            true,
+		c.Platform.DevRegistryPort: true,
+		BrowserCallbackPort:        true,
 	}
 	for _, p := range PinnedNodePorts {
 		reserved[p] = true
