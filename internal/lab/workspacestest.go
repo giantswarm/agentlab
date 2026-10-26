@@ -183,10 +183,15 @@ func WorkspacesTest(cfg *config.Config, opts WorkspacesTestOptions) error {
 	driver := workspacesCSIDriverFor(cfg)
 	endpoint := substrateDriverEndpointFor(cfg)
 	step("The workspace storage in place (namespace %s)", workspacesNamespace)
-	if err := proveWorkspacesInstalled(ctx, driver, timeout); err != nil {
+	backend := workspacesBackendFor(cfg)
+	if err := proveWorkspacesInstalled(ctx, backend, timeout); err != nil {
 		return err
 	}
-	note("NFS server, controller with its mTLS proxy and node plugin Ready; StorageClass %s (%s)", workspacesStorageClass, driver)
+	if backend.nfsServer {
+		note("NFS server, controller with its mTLS proxy and node plugin Ready; StorageClass %s (%s)", workspacesStorageClass, driver)
+	} else {
+		note("hostpath driver and the controller's mTLS proxy Ready; StorageClass %s (%s)", workspacesStorageClass, driver)
+	}
 	if cfg.WorkspacesCSICompanion() {
 		if err := waitWorkspacesCompanion(ctx); err != nil {
 			return err
@@ -214,7 +219,11 @@ func WorkspacesTest(cfg *config.Config, opts WorkspacesTestOptions) error {
 	if err := waitPVCBound(ctx, workspacesTestClaim, timeout); err != nil {
 		return err
 	}
-	note("Bound (a directory of the export on %s, mounted NFSv4.1)", node)
+	if backend.nfsServer {
+		note("Bound (a directory of the export on %s, mounted NFSv4.1)", node)
+	} else {
+		note("Bound (a directory under %s on %s, bind-mounted)", workspacesExportDir, node)
+	}
 
 	step("A bare mirror seeded on the volume, from a repository with an executable and a symbolic link")
 	out, err := runPod(ctx, workspacesTestNamespace, workspacesTestPod("seed", workspacesSeedScript, []corev1.VolumeMount{{Name: workspacesTestVolume, MountPath: workspacesTestMountPath}}, false), timeout)
@@ -264,7 +273,7 @@ func WorkspacesTest(cfg *config.Config, opts WorkspacesTestOptions) error {
 
 	step("Removing the proof's namespace: the claim's volume goes with it")
 	cleanupWorkspacesTest(ctx, node)
-	if err := proveWorkspacesVolumeGone(ctx, node, timeout); err != nil {
+	if err := proveWorkspacesVolumeGone(ctx, node, backend, timeout); err != nil {
 		return err
 	}
 	note("no PersistentVolume of the proof left; nothing of it under %s on %s", workspacesExportDir, node)
@@ -281,23 +290,27 @@ func WorkspacesTest(cfg *config.Config, opts WorkspacesTestOptions) error {
 }
 
 // proveWorkspacesInstalled is the precondition: the class, the CSIDriver,
-// the NFS server, the controller and the node plugin, each waited for
-// briefly.
-func proveWorkspacesInstalled(ctx context.Context, driver string, timeout time.Duration) error {
+// the NFS server where the storage has one, the controller and the node
+// plugin, each waited for briefly.
+func proveWorkspacesInstalled(ctx context.Context, backend workspacesBackend, timeout time.Duration) error {
 	for _, o := range []struct{ resource, name, what string }{
 		{"storageclasses.storage.k8s.io", workspacesStorageClass, "StorageClass"},
-		{csiDriversResource, driver, "CSIDriver"},
+		{csiDriversResource, backend.driver, "CSIDriver"},
 	} {
 		if !clusterObjectExists(ctx, o.resource, o.name) {
 			return fmt.Errorf("no %s %s: `agentlab platform` installs the workspace storage", o.what, o.name)
 		}
 	}
-	for _, name := range []string{workspacesNFSServer, workspacesController} {
+	deployments := []string{backend.controller}
+	if backend.nfsServer {
+		deployments = append([]string{workspacesNFSServer}, deployments...)
+	}
+	for _, name := range deployments {
 		if err := waitDeploymentRolledOut(ctx, workspacesNamespace, name, timeout); err != nil {
 			return fmt.Errorf("%s: %w", name, err)
 		}
 	}
-	return waitDaemonSetReady(ctx, workspacesNamespace, workspacesNodePlugin, timeout)
+	return waitDaemonSetReady(ctx, workspacesNamespace, backend.nodePlugin, timeout)
 }
 
 // cleanupWorkspacesTest removes the proof's namespace, with its pods and
@@ -452,12 +465,18 @@ func waitWorkspacesVolumesGone(ctx context.Context, timeout time.Duration) error
 // proveWorkspacesVolumeGone is the end: no PersistentVolume of the proof,
 // and no directory in the export on the node that no PersistentVolume backs.
 // A directory still backing a live volume (another Workspace's) is left in
-// place and named.
-func proveWorkspacesVolumeGone(ctx context.Context, node string, timeout time.Duration) error {
+// place and named. csi-driver-nfs names a volume's directory after its
+// PersistentVolume (pvc-…), the hostpath driver after its volume handle,
+// beside its own state.json.
+func proveWorkspacesVolumeGone(ctx context.Context, node string, backend workspacesBackend, timeout time.Duration) error {
 	if err := waitWorkspacesVolumesGone(ctx, timeout); err != nil {
 		return fmt.Errorf("a PersistentVolume of the proof is still there %s after its claim went: `kubectl get pv`, the provisioner's log in %s", timeout, workspacesNamespace)
 	}
-	out, err := outputQuiet(dockerBin, "exec", node, "sh", "-c", "ls -A "+workspacesExportDir+" 2>/dev/null | grep '^pvc-' || true")
+	list := "ls -A " + workspacesExportDir + " 2>/dev/null | grep '^pvc-' || true"
+	if !backend.nfsServer {
+		list = "ls -A " + workspacesExportDir + " 2>/dev/null | grep -v '^state.json$' || true"
+	}
+	out, err := outputQuiet(dockerBin, "exec", node, "sh", "-c", list)
 	if err != nil {
 		return fmt.Errorf("reading the export on %s: %w", node, err)
 	}
@@ -481,7 +500,8 @@ func proveWorkspacesVolumeGone(ctx context.Context, node string, timeout time.Du
 
 // splitWorkspacesExportDirs splits the export's volume directories into
 // those a PersistentVolume of the class still backs, named with its claim,
-// and those left behind.
+// and those left behind. A directory is a volume's by the PersistentVolume's
+// name or its CSI volume handle.
 func splitWorkspacesExportDirs(dirs []string, pvs []corev1.PersistentVolume) (live, left []string) {
 	claims := map[string]string{}
 	for _, pv := range pvs {
@@ -493,6 +513,9 @@ func splitWorkspacesExportDirs(dirs []string, pvs []corev1.PersistentVolume) (li
 			claim = ref.Namespace + "/" + ref.Name
 		}
 		claims[pv.Name] = claim
+		if pv.Spec.CSI != nil && pv.Spec.CSI.VolumeHandle != "" {
+			claims[pv.Spec.CSI.VolumeHandle] = claim
+		}
 	}
 	for _, d := range dirs {
 		if claim, ok := claims[d]; ok {

@@ -2,6 +2,7 @@ package lab
 
 import (
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -57,6 +58,14 @@ func MinPublishablePort() int {
 		return 1
 	}
 	return unprivilegedPortStart(os.ReadFile)
+}
+
+// rootlessPodmanOnLinux reports whether the lab's nodes are rootless Podman
+// containers on this machine's kernel: they run in the invoking user's user
+// namespace, where the kernel mounts neither the nfsd filesystem nor an NFS
+// export.
+var rootlessPodmanOnLinux = func() bool {
+	return runtime.GOOS == goosLinux && dockerIsPodman() && os.Geteuid() != 0
 }
 
 // unprivilegedPortStart reads net.ipv4.ip_unprivileged_port_start. An

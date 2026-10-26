@@ -702,8 +702,8 @@ type Tenants struct {
 
 // Workspaces configures the workspace storage in the lab.
 type Workspaces struct {
-	// On, `agentlab platform` installs the NFS server, the NFS CSI driver
-	// behind its mTLS proxy and the StorageClass before the chart, and
+	// On, `agentlab platform` installs the storage (Storage), its CSI
+	// driver behind its mTLS proxy and the StorageClass before the chart, and
 	// renders the chart's `workspaces:` block when the chart carries the
 	// key.
 	Enabled bool `yaml:"enabled"`
@@ -747,6 +747,15 @@ type Workspaces struct {
 	// the preset's driver name. The lab path for proving a companion chart
 	// change (docs/workspaces.md); needs a chart that carries the key.
 	CSICompanion bool `yaml:"csiCompanion,omitempty"`
+	// Storage is what backs the workspaces' volumes: WorkspaceStorageNFS, an
+	// NFS server in the cluster and csi-driver-nfs, or
+	// WorkspaceStorageHostPath, csi-driver-host-path, a directory of the one
+	// node per volume, bind-mounted where it is published. Empty picks
+	// hostpath under rootless Podman on Linux, where the kernel refuses
+	// nfsd and NFS mounts to the node's user namespace, and nfs elsewhere.
+	// hostpath needs the single-node lab (substrateNodes 0) and refuses
+	// csiCompanion, whose preset mounts the lab's NFS volumes.
+	Storage string `yaml:"storage,omitempty"`
 }
 
 // WorkspaceGitLab is the GitLab behind the workspace-manager's provider
@@ -891,6 +900,12 @@ const (
 	WorkspaceGitLabSecretName    = "workspace-gitlab" // #nosec G101 -- Secret NAME, not a credential
 	WorkspaceGitLabTokenKey      = "token"            // #nosec G101 -- Secret KEY name, not a credential
 	WorkspaceGitLabPasswordKey   = "person-password"  // #nosec G101 -- Secret KEY name, not a credential
+)
+
+// The workspace storages platform.workspaces.storage names.
+const (
+	WorkspaceStorageNFS      = "nfs"
+	WorkspaceStorageHostPath = "hostpath"
 )
 
 // WorkspaceGrantProviderApps is the grantProvider that pins no instance:
@@ -2391,6 +2406,18 @@ func (c *Config) Validate() error {
 	// before anything installs.
 	if c.Platform.Workspaces.Enabled && c.Platform.Enabled && !c.Platform.Agents {
 		return fmt.Errorf("platform.workspaces requires platform.agents (the workspaces live in kagent's namespace, where every Session runs and mounts its workspace) — `agentlab configure --agents`, or `--workspaces=false`")
+	}
+	switch storage := c.Platform.Workspaces.Storage; storage {
+	case "", WorkspaceStorageNFS:
+	case WorkspaceStorageHostPath:
+		if c.SubstrateNodes > 0 {
+			return fmt.Errorf("platform.workspaces.storage %q publishes a volume as a directory of one node, and substrateNodes %d adds workers whose actors could not mount it: `agentlab configure --workspaces-storage %s`, or substrateNodes 0", storage, c.SubstrateNodes, WorkspaceStorageNFS)
+		}
+		if c.Platform.Workspaces.CSICompanion {
+			return fmt.Errorf("platform.workspaces.storage %q and csiCompanion: the companion's preset mounts the lab's NFS volumes: `agentlab configure --workspaces-storage %s`, or `--workspaces-csi-companion=false`", storage, WorkspaceStorageNFS)
+		}
+	default:
+		return fmt.Errorf("platform.workspaces.storage %q: want %q, %q, or empty (hostpath under rootless Podman on Linux, nfs elsewhere)", storage, WorkspaceStorageNFS, WorkspaceStorageHostPath)
 	}
 	if names, err := parseWorkspaceProviders(c.Platform.Workspaces.Provider); err != nil {
 		return err

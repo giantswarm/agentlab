@@ -172,6 +172,30 @@ plumbing for model servers under
   A new node leaves them alone; if `up` still reports a change, the warning
   names the key and the command that restores it.
 
+## Rootless Podman's kernel limits
+
+Under rootless Podman on Linux every container of the lab, the kind node's
+own included, runs as your user, so two per-user kernel defaults bound the
+whole lab. Neither can be raised from inside the node.
+
+- **A pod fails to start with `unable to create session key: disk quota
+  exceeded`.** Every container gets a session keyring, counted against your
+  user's key quota (`kernel.keys.maxkeys` 200 and `maxbytes` 20000 by
+  default; `/proc/key-users` shows the use). A full lab comes close to it on
+  its own, and leftover containers of other tools (testcontainers whose
+  reaper never ran) count too. Raise it and keep it:
+  `printf 'kernel.keys.maxkeys = 20000\nkernel.keys.maxbytes = 400000\n' | sudo tee /etc/sysctl.d/90-rootless-keys.conf && sudo sysctl --system`.
+- **Services stop reaching their pods while the pods answer on their own
+  addresses.** kube-proxy logs `Failed to execute iptables-restore` with
+  `sendmsg() failed: Message too long` and keeps the rules it last wrote, so
+  every Service whose pods changed since points at addresses that are gone
+  (an edge's connect to the kagent controller times out, muster cannot reach
+  agent-manager). Inside a user namespace iptables cannot force a socket
+  buffer above `net.core.wmem_default` (212992 bytes by default), and the
+  lab's ruleset outgrows it. Raising it on the host takes effect in the
+  running node at kube-proxy's next sync:
+  `printf 'net.core.wmem_default = 4194304\nnet.core.rmem_default = 4194304\n' | sudo tee /etc/sysctl.d/91-rootless-netlink.conf && sudo sysctl --system`.
+
 ## vm-manager
 
 - **`vm-manager-test` fails at `get_vm_attestation` with `golden mismatch:
