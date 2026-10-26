@@ -51,6 +51,9 @@ const (
 	// passes the write there, and a Harness change to kagent would write a
 	// revision that never boots.
 	kagentPluginCheck = "agent-manager's plugin check on Harness kagent"
+	// ompPluginCheck is the same capability on omp, which agent-manager
+	// tells from another BYO Harness by its workload image (2.15.0).
+	ompPluginCheck = "agent-manager's plugin check on Harness omp"
 	// codingTestPluginAgent is the agent create_agent must refuse.
 	codingTestPluginAgent = "agentlab-coding-plugin"
 )
@@ -220,7 +223,7 @@ func (p *codingProof) provePluginsAccepted(spec agentSpec) error {
 // verdict on harness: go on to create_agent (run), or skip naming why; neither
 // is the row's failure. An unread manifest is GitHub's anonymous window
 // spent, the skip naming the credential that lifts it; an acceptance on
-// kagent is a line without kagentPluginCheck, the skip naming it.
+// kagent or omp is a line without that Harness's check, the skip naming it.
 func claudeFormatGate(verdict claudeFormatVerdict, errs, harness string) (run bool, skip string) {
 	switch {
 	case verdict == claudeFormatRefused:
@@ -229,6 +232,8 @@ func claudeFormatGate(verdict claudeFormatVerdict, errs, harness string) (run bo
 		return false, fmt.Sprintf("agent-manager could not read the plugin's manifests: %s; %s", excerpt(errs, 240), uncheckedFix)
 	case verdict == claudeFormatAccepted && harness == kagentHarness:
 		return false, fmt.Sprintf("the line lacks %s: validate_agent accepted the Claude-format plugin there, which would pass the write and fail at its golden boot", kagentPluginCheck)
+	case verdict == claudeFormatAccepted && harness == config.CodingRuntimeOmp:
+		return false, fmt.Sprintf("the line lacks %s: validate_agent accepted the Claude-format plugin there, which would pass the write and fail at the adapter's boot refusal", ompPluginCheck)
 	}
 	return false, ""
 }
@@ -422,19 +427,7 @@ func (p *codingProof) proveEmptySelection(ctx context.Context) error {
 // waitNewRevision waits for the template to carry the empty selection and
 // the Agent Ready on a revision other than old.
 func (p *codingProof) waitNewRevision(old string) error {
-	rendered := waitFor(int(time.Minute/pollInterval), pollInterval, func() bool {
-		t, err := readAgentTemplate(codingTestAgent)
-		if err != nil {
-			return false
-		}
-		for _, plugin := range t.Spec.Plugins {
-			if plugin.Source.Git != nil && plugin.Source.Git.URL == pluginExampleURL {
-				return len(plugin.Skills) == 0
-			}
-		}
-		return false
-	})
-	if !rendered {
+	if !waitPluginSelection(codingTestAgent, nil) {
 		return fmt.Errorf("AgentTemplate %s does not carry the empty selection of %s a minute after update_agent (%s)", codingTestAgent, pluginExampleURL, p.line)
 	}
 	return p.waitReadyOnNewRevision(old)
@@ -443,19 +436,46 @@ func (p *codingProof) waitNewRevision(old string) error {
 // waitReadyOnNewRevision waits for the proof's agent Ready on a revision
 // other than old.
 func (p *codingProof) waitReadyOnNewRevision(old string) error {
+	if _, err := waitReadyOnNewRevision(codingTestAgent, p.rt.name, old, p.timeout); err != nil {
+		return fmt.Errorf("%w (%s)", err, p.line)
+	}
+	return nil
+}
+
+// waitPluginSelection waits up to a minute for agent's AgentTemplate to
+// carry the example package with exactly skills selected.
+func waitPluginSelection(agent string, skills []string) bool {
+	return waitFor(int(time.Minute/pollInterval), pollInterval, func() bool {
+		t, err := readAgentTemplate(agent)
+		if err != nil {
+			return false
+		}
+		for _, plugin := range t.Spec.Plugins {
+			if plugin.Source.Git != nil && plugin.Source.Git.URL == pluginExampleURL {
+				return slices.Equal(plugin.Skills, skills)
+			}
+		}
+		return false
+	})
+}
+
+// waitReadyOnNewRevision waits up to timeout for agent Ready on harness on
+// a revision other than old, and returns that revision.
+func waitReadyOnNewRevision(agent, harness, old string, timeout time.Duration) (string, error) {
 	started := time.Now()
 	var r agentReadiness
 	var lastErr error
-	waitFor(int(p.timeout/pollInterval), pollInterval, func() bool {
-		r, lastErr = readAgentReadinessOn(codingTestAgent, p.rt.name)
+	waitFor(int(timeout/pollInterval), pollInterval, func() bool {
+		r, lastErr = readAgentReadinessOn(agent, harness)
 		return lastErr != nil || r.terminal || (r.ready && r.agent != nil && r.agent.Status.LatestSuccessfulRevision != old)
 	})
 	switch {
 	case lastErr != nil:
-		return fmt.Errorf("agent %s: %w", codingTestAgent, lastErr)
+		return "", fmt.Errorf("agent %s: %w", agent, lastErr)
 	case !r.ready || r.agent == nil || r.agent.Status.LatestSuccessfulRevision == old:
-		return fmt.Errorf("agent %s is not Ready on a new revision after %s (still %.12s): %s (%s)", codingTestAgent, time.Since(started).Round(time.Second), old, r.reason, p.line)
+		return "", fmt.Errorf("agent %s is not Ready on a new revision after %s (still %.12s): %s", agent, time.Since(started).Round(time.Second), old, r.reason)
 	}
-	note("Ready on revision %.12s after %s", r.agent.Status.LatestSuccessfulRevision, time.Since(started).Round(time.Second))
-	return nil
+	revision := r.agent.Status.LatestSuccessfulRevision
+	note("Ready on revision %.12s after %s", revision, time.Since(started).Round(time.Second))
+	return revision, nil
 }

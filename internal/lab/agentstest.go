@@ -57,7 +57,7 @@ const baselineServiceAccount = "system:serviceaccount:" + platformNamespace + ":
 // user and writes the Generic chart 1.x contract, through the platform path
 // only (Dex id_token -> muster -> call_tool x_agent-manager_*): get_info
 // reports identity caller on the 1.x chart and the platform Harness; the
-// admin's create -> ready -> turn -> update -> refreshSkills -> delete round
+// admin's create -> ready -> turn -> update -> refreshSkills -> plugins -> delete round
 // trip succeeds with requestedBy set — the HelmRelease written by
 // agent-manager (its field manager, values.toolset the anchor, the skill
 // pinned to a commit) next to the OCIRepository on the chart line agent-manager declares (its
@@ -354,6 +354,9 @@ func AgentsTest(cfg *config.Config, email string) error {
 
 	refreshVerdict, err := proveAgentsTestRefreshSkills(session, fixture, head)
 	if err != nil {
+		return err
+	}
+	if err := proveAgentsTestPlugins(cfg, session, token); err != nil {
 		return err
 	}
 
