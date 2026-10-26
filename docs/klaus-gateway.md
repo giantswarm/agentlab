@@ -173,7 +173,20 @@ and, on a lab with the component, continues on it:
     agent and its Session are removed, and an aborted run's
     `agentlab-refusal-*` agents first. On an older meta chart the step is
     skipped with a note. `agentlab klaus-gateway-test --refusal-only` runs
-    this step alone, without the host gateway and its fixture.
+    this step and 10b alone, without the host gateway and its fixture.
+11. **The notice for a deleted Session (step 10b).** The same with a second
+    agent, except that the Session is gone before the gateway reads it: the
+    Deployment `klaus-gateway` is scaled to 0 replicas and its pods are
+    awaited gone before the turn, the Session is deleted as the person after
+    it (the person's `GetSession` must answer `NotFound`), and only then is
+    the Deployment put back at its replicas. The gateway's first read of the
+    refusing actor is therefore of a deleted Session, which the controller
+    answers its session reader with the Session's tombstone, naming the
+    Agent; without the tombstone the actor is no Session the gateway knows
+    and nobody is told. A series the gateway sees for the first time counts
+    whole, so the refusal made while it was held is still noted. The
+    HelmRelease has no drift detection, so the scale holds until the proof
+    restores it, on every exit path.
 
 Then the proof's records are removed (the count is back where it was), and
 the host-mode cleanup takes the fixtures and the Sessions with it. On a

@@ -578,13 +578,18 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	// above, its Slack Web API the same fake, and the session its turn
 	// creates is removed by the cleanup.
 	var component *componentOutcome
-	var egressRefusal *refusalOutcome
+	var egressRefusal, deletedRefusal *refusalOutcome
 	if cfg.KlausGatewayEnabled() {
 		if component, err = klausGatewayComponentProof(cfg, token, identity, user, fake, people.component); err != nil {
 			return err
 		}
-		if egressRefusal, err = klausGatewayRefusalProof(cfg, token, user, fake, emails); err != nil {
+		if egressRefusal, err = klausGatewayRefusalProof(cfg, token, user, fake, emails, false); err != nil {
 			return err
+		}
+		if egressRefusal != nil {
+			if deletedRefusal, err = klausGatewayRefusalProof(cfg, token, user, fake, emails, true); err != nil {
+				return err
+			}
 		}
 	} else {
 		note("the meta chart's klaus-gateway component is off in this lab (platform.klausGateway; `agentlab configure --klaus-gateway` turns it on): the host-mode assertions alone")
@@ -625,6 +630,9 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	}
 	if egressRefusal != nil {
 		egressRefusal.printPass(user.Email)
+	}
+	if deletedRefusal != nil {
+		deletedRefusal.printPass(user.Email)
 	}
 	fmt.Printf("PASS: nothing left behind — the Agents, the AgentTemplates, the RemoteMCPServer, the Sessions, the gateway process and its stores are gone\n")
 	return nil
