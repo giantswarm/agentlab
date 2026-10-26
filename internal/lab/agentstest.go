@@ -486,6 +486,7 @@ func AgentsTest(cfg *config.Config, email string) error {
 		agentManagerFieldManager, agentsTestToolset, kagentHarness, fixture.name(), agentChartOCIRepository, chartLine, displayNameAnnotation, iconURLAnnotation, kagentHarness, agentsTestAgent, toolsetHeader, agentsTestToolset, discoveryLabel, discoveryDisabledValue)
 	fmt.Printf("PASS: get_agent_status agrees with the Agent's status — ready on revision %.12s, and failed with the reason for an Agent on Harness %q\n", harness.LatestSuccessfulRevision, agentsTestNoHarness)
 	fmt.Println(refreshVerdict)
+	fmt.Printf("PASS: on Harness %s, %s @ %.12s bound by update_agent with %s selected lists that skill on a new revision, and with the selection empty no longer\n", kagentHarness, pluginExampleURL, pluginExampleCommit, pluginExampleSkill)
 	if viewer != nil {
 		fmt.Printf("PASS: %s's create is Forbidden by the apiserver as User \"oidc:%s\" (user RBAC, not the ServiceAccount's)\n", viewer.Email, viewer.Email)
 	}
