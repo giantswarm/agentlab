@@ -51,9 +51,9 @@ type Discovery struct {
 	// RegistryPort is the host port the lab registry container of this
 	// configuration publishes, 0 when there is no such container.
 	RegistryPort int
-	KindGateway         string
-	Servers             []HostServer
-	FLM                 *FLMServer
+	KindGateway  string
+	Servers      []HostServer
+	FLM          *FLMServer
 	// KVMMissing names the KVM devices this machine lacks (vmmanager.go):
 	// empty when the platform's VM provisioner can run as a pod of the node.
 	KVMMissing []string
