@@ -578,13 +578,18 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	// above, its Slack Web API the same fake, and the session its turn
 	// creates is removed by the cleanup.
 	var component *componentOutcome
-	var egressRefusal *refusalOutcome
+	var egressRefusal, deletedRefusal *refusalOutcome
 	if cfg.KlausGatewayEnabled() {
 		if component, err = klausGatewayComponentProof(cfg, token, identity, user, fake, people.component); err != nil {
 			return err
 		}
-		if egressRefusal, err = klausGatewayRefusalProof(cfg, token, user, fake, emails); err != nil {
+		if egressRefusal, err = klausGatewayRefusalProof(cfg, token, user, fake, emails, false); err != nil {
 			return err
+		}
+		if egressRefusal != nil {
+			if deletedRefusal, err = klausGatewayRefusalProof(cfg, token, user, fake, emails, true); err != nil {
+				return err
+			}
 		}
 	} else {
 		note("the meta chart's klaus-gateway component is off in this lab (platform.klausGateway; `agentlab configure --klaus-gateway` turns it on): the host-mode assertions alone")
@@ -625,6 +630,9 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	}
 	if egressRefusal != nil {
 		egressRefusal.printPass(user.Email)
+	}
+	if deletedRefusal != nil {
+		deletedRefusal.printPass(user.Email)
 	}
 	fmt.Printf("PASS: nothing left behind — the Agents, the AgentTemplates, the RemoteMCPServer, the Sessions, the gateway process and its stores are gone\n")
 	return nil
@@ -1211,13 +1219,21 @@ func gatewayArgs(f gatewayFlags) []string {
 // (the loopback ports, the fake and the edge's public hostname as the host
 // sees them), the caller's uid so the stores are writable in the run
 // directory, the run directory and the CA mounted read-write and read-only.
+// Rootless Podman maps a container uid other than root to a subordinate uid
+// of the host, which cannot write the caller's run directory; keep-id maps
+// the caller's uid to itself.
 func dockerRunArgs(image, name, network, runDir, caFile string, uid, gid int, args []string) []string {
-	return append(dockerRun(name, cmp.Or(network, "host"), "--rm",
+	flags := []string{"--rm"}
+	if rootlessPodmanOnLinux() {
+		flags = append(flags, "--userns=keep-id")
+	}
+	flags = append(flags,
 		"--user", fmt.Sprintf("%d:%d", uid, gid),
 		"-v", runDir+":"+gatewayDataPath,
 		"-v", caFile+":"+gatewayCAPath+":ro",
 		image,
-	), args...)
+	)
+	return append(dockerRun(name, cmp.Or(network, "host"), flags...), args...)
 }
 
 // start launches the gateway and waits for its readiness.

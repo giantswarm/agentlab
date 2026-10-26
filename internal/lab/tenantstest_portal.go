@@ -46,6 +46,11 @@ const (
 	// controller refuses a session (PermissionDenied): the answer the portal
 	// words as a refusal naming the agent's tenant.
 	refusalKagentForbidden = refusalForbidden + " kagent:"
+	// refusalAgentReadForbidden is the Kubernetes API's answer when
+	// agent-manager reads the Agent with the person's token before it calls
+	// kagent (agent-manager 2.15 and later): the same refusal, made before
+	// the controller is asked.
+	refusalAgentReadForbidden = `cannot get resource "agents" in API group "api.kagent.dev" in the namespace "%s"`
 	// verbDelete is the Kubernetes verb.
 	verbDelete = "delete"
 )
@@ -388,7 +393,7 @@ func (p *tenantsPortal) run() ([]string, error) {
 	}
 	out = append(out, fmt.Sprintf("PASS: through the portal's Kubernetes proxy, the access review for update and delete on the agent's HelmRelease answers no for %s (a user) in %s, yes for %s (its editor) there and no in %s: the page hides Edit, Update skills and Delete where they would be refused", alice.Email, a, p.editor.Email, b))
 
-	step("P5. %s starts a session on %s through the portal: agent-manager answers the controller's refusal (%s …), no Session of it, no credential read", alice.Email, agentB, refusalKagentForbidden)
+	step("P5. %s starts a session on %s through the portal: agent-manager answers a refusal (the controller's %s …, or the Kubernetes API's refusal of the Agent read as the person), no Session of it, no credential read", alice.Email, agentB, refusalKagentForbidden)
 	adminToken, err := passwordGrant(p.cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret, p.admin.Email, p.admin.Password, musterLoginScopes)
 	if err != nil {
 		return nil, err
@@ -407,8 +412,10 @@ func (p *tenantsPortal) run() ([]string, error) {
 	}
 	since := time.Now()
 	_, _, refused := sessions[0].startSession(portalAgentRef{Namespace: b, Name: tenantsTestAgent}, "agentlab tenants-test refused", uuid.NewString(), tenantsTestPrompt)
-	if refused == nil || !strings.Contains(refused.Error(), refusalKagentForbidden) {
-		return nil, fmt.Errorf("P5: %s's start_session on %s through the portal: %v, want agent-manager's %s … (the controller's PermissionDenied), the answer the portal words as a refusal naming the tenant", alice.Email, agentB, refused, refusalKagentForbidden)
+	refuser, ok := sessionStartRefuser(refused, b)
+	if !ok {
+		return nil, fmt.Errorf("P5: %s's start_session on %s through the portal: %v, want agent-manager's %s … (the controller's PermissionDenied) or its %s %s (the Agent read as the person), the answer the portal words as a refusal naming the tenant",
+			alice.Email, agentB, refused, refusalKagentForbidden, refusalForbidden, fmt.Sprintf(refusalAgentReadForbidden, b))
 	}
 	after, err := adminAPI.allCreatorsSessions(ctx, ref)
 	if err != nil {
@@ -425,7 +432,7 @@ func (p *tenantsPortal) run() ([]string, error) {
 		return nil, fmt.Errorf("P5: the credential provider read %v for atespace %s during the refused start: a turn reached the model", read, b)
 	}
 	note("refused: %s", excerpt(refused.Error(), 200))
-	out = append(out, fmt.Sprintf("PASS: %s's session start on %s through the portal is the controller's refusal (%s …), no Session of it (%d before and after), no credential read for its atespace", alice.Email, agentB, refusalKagentForbidden, len(before)))
+	out = append(out, fmt.Sprintf("PASS: %s's session start on %s through the portal is refused by %s, no Session of it (%d before and after), no credential read for its atespace", alice.Email, agentB, refuser, len(before)))
 
 	step("P6. The creator: %s's Agent carries %s=%s as %s reads it through the portal, and of their roster only that agent is theirs", agentA, createdByAnnotation, p.editor.Email, p.editor.Email)
 	// The person as kagent knows them (GET /kagent/me, the claims the
@@ -527,4 +534,22 @@ func waitAgentGone(ns, name string) error {
 		return fmt.Errorf("the Agent %s/%s is still there after %s (%v): its HelmRelease's uninstall did not remove it", ns, name, tenantsTestCopiesTimeout, readErr)
 	}
 	return nil
+}
+
+// sessionStartRefuser names who refused a session start on an Agent of the
+// namespace: the controller (agent-manager's forbidden: kagent: …) or the
+// Kubernetes API, which refuses agent-manager's read of the Agent with the
+// person's token. Any other answer, or none, is no refusal.
+func sessionStartRefuser(refused error, namespace string) (string, bool) {
+	if refused == nil {
+		return "", false
+	}
+	msg := refused.Error()
+	switch {
+	case strings.Contains(msg, refusalKagentForbidden):
+		return "the controller (" + refusalKagentForbidden + " …)", true
+	case strings.Contains(msg, refusalForbidden) && strings.Contains(msg, fmt.Sprintf(refusalAgentReadForbidden, namespace)):
+		return "the Kubernetes API (the Agent read as the person)", true
+	}
+	return "", false
 }
