@@ -13,8 +13,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/util/retry"
-	"sigs.k8s.io/structured-merge-diff/v6/fieldpath"
-	"sigs.k8s.io/structured-merge-diff/v6/value"
+	"sigs.k8s.io/structured-merge-diff/v7/fieldpath"
+	"sigs.k8s.io/structured-merge-diff/v7/value"
 )
 
 // A hand's edits on the platform's workloads, put back to the release's
