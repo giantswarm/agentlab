@@ -379,6 +379,9 @@ type codingProof struct {
 	// skipped (claudeFormatGate), so the harness change to kagent skips
 	// too; empty when the refusal was proven there.
 	kagentRefusalSkip string
+	// ompRefusalSkip is the same for omp; the omp rows write with the
+	// run's ModelConfig, an Anthropic one, so a codex run skips them.
+	ompRefusalSkip string
 }
 
 func (p *codingProof) run() error {
@@ -456,6 +459,20 @@ func (p *codingProof) run() error {
 		return err
 	} else if p.kagentRefusalSkip != "" {
 		p.stages.skip("%s (%s)", p.kagentRefusalSkip, p.line)
+	}
+	p.stages.begin("claude-format refused on omp", "The Claude-format package on Harness %s: validate_agent and create_agent refuse it, naming the root plugin.json", config.CodingRuntimeOmp)
+	switch {
+	case !slices.Contains(p.harnesses, config.CodingRuntimeOmp):
+		p.ompRefusalSkip = fmt.Sprintf("the lab renders no Harness omp: add it to platform.coding.harnesses in %s, then `agentlab platform`", config.File)
+	case harness == config.CodingRuntimeCodex:
+		p.ompRefusalSkip = "omp runs Anthropic models and this run's ModelConfig is codex's: run `agentlab coding-test --harness claude` or `--harness omp`"
+	default:
+		if p.ompRefusalSkip, err = p.proveClaudeFormatRefused(spec, config.CodingRuntimeOmp, spec.ModelConfig); err != nil {
+			return err
+		}
+	}
+	if p.ompRefusalSkip != "" {
+		p.stages.skip("%s (%s)", p.ompRefusalSkip, p.line)
 	}
 
 	spec.Toolset, spec.Plugins = p.toolset(), p.codingPlugins([]string{pluginExampleSkill})
@@ -542,6 +559,12 @@ func (p *codingProof) run() error {
 		if p.kagentRefusalSkip != "" {
 			p.stages.skip("%s (%s): the move is not attempted, since it would write a revision that never boots", p.kagentRefusalSkip, p.line)
 		} else if err := p.proveHarnessChangeRefused(kagentHarness, spec.ModelConfig); err != nil {
+			return err
+		}
+		p.stages.begin("harness change to omp refused", "%supdate_agent moving %s, which binds the Claude-format package, to Harness %s refused as Claude-format", agentManagerToolPrefix, codingTestAgent, config.CodingRuntimeOmp)
+		if p.ompRefusalSkip != "" {
+			p.stages.skip("%s (%s): the move is not attempted, since it would write a revision that never boots", p.ompRefusalSkip, p.line)
+		} else if err := p.proveHarnessChangeRefused(config.CodingRuntimeOmp, spec.ModelConfig); err != nil {
 			return err
 		}
 	}

@@ -47,6 +47,8 @@ func TestClaudeFormatGate(t *testing.T) {
 		"refused on codex":    {claudeFormatRefused, config.CodingRuntimeCodex, true, ""},
 		"accepted on kagent":  {claudeFormatAccepted, kagentHarness, false, kagentPluginCheck},
 		"accepted on codex":   {claudeFormatAccepted, config.CodingRuntimeCodex, false, ""},
+		"refused on omp":      {claudeFormatRefused, config.CodingRuntimeOmp, true, ""},
+		"accepted on omp":     {claudeFormatAccepted, config.CodingRuntimeOmp, false, ompPluginCheck},
 		"unchecked on kagent": {claudeFormatUnchecked, kagentHarness, false, "githubToken.source"},
 		"other on kagent":     {claudeFormatOther, kagentHarness, false, ""},
 	} {
