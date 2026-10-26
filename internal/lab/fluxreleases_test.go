@@ -2,6 +2,7 @@ package lab
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -566,5 +567,37 @@ func TestRenderFailureText(t *testing.T) {
 	other := "kagent: " + strings.Repeat("y", 400)
 	if got := renderFailureText(errors.New(other)); len(got) >= len(other) || !strings.Contains(got, " ... ") {
 		t.Errorf("a long non-refusal is not excerpted: %d of %d chars", len(got), len(other))
+	}
+}
+
+// The component renders are told the MutatingAdmissionPolicy is served while
+// the tenants are on, which the connectivity chart requires for them, and
+// not otherwise; the Prometheus Operator's API with the observability stack.
+func TestComponentAPIVersions(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		tenants, observ      bool
+		wantMAP, wantMonitor bool
+	}{
+		{"no switch on", false, false, false, false},
+		{"the tenants alone", true, false, true, false},
+		{"observability on", false, true, false, true},
+		{"tenants and observability on", true, true, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.Default()
+			cfg.Platform.Tenants.Enabled = tc.tenants
+			cfg.Platform.Observability = tc.observ
+			got := componentAPIVersions(cfg)
+			if has := slices.Contains(got, mutatingAdmissionPolicyAPIVersion); has != tc.wantMAP {
+				t.Errorf("componentAPIVersions = %v: MutatingAdmissionPolicy %v, want %v", got, has, tc.wantMAP)
+			}
+			if has := slices.Contains(got, "monitoring.coreos.com/v1"); has != tc.wantMonitor {
+				t.Errorf("componentAPIVersions = %v: monitoring.coreos.com/v1 %v, want %v", got, has, tc.wantMonitor)
+			}
+			if !slices.Equal(offlineAPIVersions, []string{"helm.toolkit.fluxcd.io/v2", "source.toolkit.fluxcd.io/v1", "gateway.networking.k8s.io/v1"}) {
+				t.Errorf("offlineAPIVersions changed under the call: %v", offlineAPIVersions)
+			}
+		})
 	}
 }

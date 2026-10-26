@@ -200,7 +200,11 @@ func polexValues(cfg *config.Config) (map[string]any, error) {
 // for, which the lab's apiserver serves — Kyverno's and the
 // MutatingAdmissionPolicy the tenants' ModelConfig policy needs.
 func polexAPIVersions(cfg *config.Config) []string {
-	return append(slices.Clone(componentAPIVersions(cfg)), "kyverno.io/v1", "admissionregistration.k8s.io/v1/MutatingAdmissionPolicy")
+	versions := append(componentAPIVersions(cfg), "kyverno.io/v1")
+	if !slices.Contains(versions, mutatingAdmissionPolicyAPIVersion) {
+		versions = append(versions, mutatingAdmissionPolicyAPIVersion)
+	}
+	return versions
 }
 
 // polexTenants reports whether the proof renders the tenants: wherever the
