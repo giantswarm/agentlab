@@ -534,6 +534,16 @@ func devRegistryPublishedPort(name string) (int, error) {
 	return port, nil
 }
 
+// devRegistryOwnPort is the host port the lab registry container publishes,
+// 0 when there is no such container or it publishes none.
+func devRegistryOwnPort(cfg *config.Config) int {
+	port, err := devRegistryPublishedPort(devRegistryName(cfg))
+	if err != nil {
+		return 0
+	}
+	return port
+}
+
 // removeDevRegistry removes the lab registry container with its storage;
 // nothing to do when there is none. Best-effort, for `agentlab down`.
 func removeDevRegistry(cfg *config.Config) {

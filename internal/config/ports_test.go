@@ -2,6 +2,7 @@ package config
 
 import (
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -30,8 +31,8 @@ func TestChooseFreePortsNothingTaken(t *testing.T) {
 	if changes := cfg.chooseFreePorts(takenSet(), nil, everyPortPublishable); len(changes) != 0 {
 		t.Fatalf("expected no changes, got %v", changes)
 	}
-	got := []int{cfg.DexPort, cfg.Platform.MusterPort, cfg.Platform.AgentsPort, cfg.Platform.GatewayPort, cfg.Backstage.Port}
-	exp := []int{want.DexPort, want.Platform.MusterPort, want.Platform.AgentsPort, want.Platform.GatewayPort, want.Backstage.Port}
+	got := []int{cfg.DexPort, cfg.Platform.MusterPort, cfg.Platform.AgentsPort, cfg.Platform.GatewayPort, cfg.Backstage.Port, cfg.Platform.DevRegistryPort}
+	exp := []int{want.DexPort, want.Platform.MusterPort, want.Platform.AgentsPort, want.Platform.GatewayPort, want.Backstage.Port, want.Platform.DevRegistryPort}
 	for i := range got {
 		if got[i] != exp[i] {
 			t.Fatalf("port mutated without conflicts: got %v, want %v", got, exp)
@@ -44,9 +45,10 @@ func TestChooseFreePortsMovesEveryTakenPort(t *testing.T) {
 	changes := cfg.chooseFreePorts(takenSet(
 		cfg.DexPort, cfg.Platform.MusterPort, cfg.Platform.AgentsPort,
 		cfg.Platform.GatewayPort, cfg.Backstage.Port, cfg.APIServerPort,
+		cfg.Platform.DevRegistryPort,
 	), nil, everyPortPublishable)
-	if len(changes) != 6 {
-		t.Fatalf("expected 6 changes, got %d: %v", len(changes), changes)
+	if len(changes) != 7 {
+		t.Fatalf("expected 7 changes, got %d: %v", len(changes), changes)
 	}
 	if cfg.APIServerPort != 6444 {
 		t.Errorf("apiServerPort = %d, want 6444", cfg.APIServerPort)
@@ -65,6 +67,9 @@ func TestChooseFreePortsMovesEveryTakenPort(t *testing.T) {
 	}
 	if cfg.Backstage.Port != 7008 {
 		t.Errorf("backstage.port = %d, want 7008", cfg.Backstage.Port)
+	}
+	if cfg.Platform.DevRegistryPort != 5002 {
+		t.Errorf("platform.devRegistryPort = %d, want 5002", cfg.Platform.DevRegistryPort)
 	}
 	for _, ch := range changes {
 		if ch.Field == "" || ch.What == "" || ch.From == ch.To {
@@ -230,6 +235,40 @@ func TestChooseFreePortsAvoidsRecordedPorts(t *testing.T) {
 	}
 	if len(changes) != 2 || !strings.Contains(changes[0].String(), "is the lab agentlab's") {
 		t.Fatalf("changes = %v, want dexPort and apiServerPort naming the lab agentlab", changes)
+	}
+}
+
+// A second lab moves its registry off the port the first lab's registry
+// publishes, whether that registry runs (the probe) or only the first lab's
+// agentlab.yaml records it.
+func TestChooseFreePortsMovesRegistryOffAnotherLabs(t *testing.T) {
+	for name, tc := range map[string]struct {
+		taken    func(string, int) bool
+		recorded map[string]string
+		why      string
+	}{
+		"held by a running registry": {taken: takenSet(DefaultDevRegistryPort), why: "is in use"},
+		"recorded by a stopped lab":  {taken: takenSet(), recorded: map[string]string{loopback(DefaultDevRegistryPort): DefaultClusterName}, why: "is the lab " + DefaultClusterName + "'s"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := Default()
+			changes := cfg.chooseFreePorts(tc.taken, tc.recorded, everyPortPublishable)
+			if cfg.Platform.DevRegistryPort != DefaultDevRegistryPort+1 {
+				t.Fatalf("platform.devRegistryPort = %d, want %d", cfg.Platform.DevRegistryPort, DefaultDevRegistryPort+1)
+			}
+			if len(changes) != 1 || changes[0].Field != "platform.devRegistryPort" || !strings.Contains(changes[0].String(), tc.why) {
+				t.Fatalf("changes = %v, want one platform.devRegistryPort change saying %q", changes, tc.why)
+			}
+		})
+	}
+}
+
+// Another lab's registry port is recorded with its other host ports, so the
+// next configure elsewhere counts it as taken.
+func TestHostPortsIncludeTheRegistry(t *testing.T) {
+	cfg := Default()
+	if !slices.Contains(cfg.HostPorts(), loopback(DefaultDevRegistryPort)) {
+		t.Fatalf("HostPorts() = %v, lacks the registry's %s", cfg.HostPorts(), loopback(DefaultDevRegistryPort))
 	}
 }
 
