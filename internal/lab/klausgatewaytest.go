@@ -1211,13 +1211,21 @@ func gatewayArgs(f gatewayFlags) []string {
 // (the loopback ports, the fake and the edge's public hostname as the host
 // sees them), the caller's uid so the stores are writable in the run
 // directory, the run directory and the CA mounted read-write and read-only.
+// Rootless Podman maps a container uid other than root to a subordinate uid
+// of the host, which cannot write the caller's run directory; keep-id maps
+// the caller's uid to itself.
 func dockerRunArgs(image, name, network, runDir, caFile string, uid, gid int, args []string) []string {
-	return append(dockerRun(name, cmp.Or(network, "host"), "--rm",
+	flags := []string{"--rm"}
+	if rootlessPodmanOnLinux() {
+		flags = append(flags, "--userns=keep-id")
+	}
+	flags = append(flags,
 		"--user", fmt.Sprintf("%d:%d", uid, gid),
 		"-v", runDir+":"+gatewayDataPath,
 		"-v", caFile+":"+gatewayCAPath+":ro",
 		image,
-	), args...)
+	)
+	return append(dockerRun(name, cmp.Or(network, "host"), flags...), args...)
 }
 
 // start launches the gateway and waits for its readiness.

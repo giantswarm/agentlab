@@ -195,11 +195,20 @@ func TestGatewayArgs(t *testing.T) {
 	if !reflect.DeepEqual(args, want) {
 		t.Errorf("gatewayArgs =\n%q\nwant\n%q", args, want)
 	}
-	docker := dockerRunArgs("img:1", "ctr", "", "/run/x", "/lab/certs/ca.crt", 1000, 100, []string{"--flag"})
+	const extraFlag = "--flag"
+	docker := dockerRunArgs("img:1", "ctr", "", "/run/x", "/lab/certs/ca.crt", 1000, 100, []string{extraFlag})
 	wantDocker := []string{"run", "--name", "ctr", "--network", "host", "--security-opt", "label=disable", "--rm", "--user", "1000:100",
-		"-v", "/run/x:" + gatewayDataPath, "-v", "/lab/certs/ca.crt:" + gatewayCAPath + ":ro", "img:1", "--flag"}
+		"-v", "/run/x:" + gatewayDataPath, "-v", "/lab/certs/ca.crt:" + gatewayCAPath + ":ro", "img:1", extraFlag}
 	if !reflect.DeepEqual(docker, wantDocker) {
 		t.Errorf("dockerRunArgs =\n%q\nwant\n%q", docker, wantDocker)
+	}
+	rootless := rootlessPodmanOnLinux
+	rootlessPodmanOnLinux = func() bool { return true }
+	docker = dockerRunArgs("img:1", "ctr", "", "/run/x", "/lab/certs/ca.crt", 1000, 100, []string{extraFlag})
+	rootlessPodmanOnLinux = rootless
+	wantDocker = slices.Insert(slices.Clone(wantDocker), 8, "--userns=keep-id")
+	if !reflect.DeepEqual(docker, wantDocker) {
+		t.Errorf("dockerRunArgs under rootless Podman =\n%q\nwant\n%q", docker, wantDocker)
 	}
 	edge, err := edgeHostPort("https://agentgateway.127.0.0.1.nip.io:8445")
 	if err != nil || edge != "agentgateway.127.0.0.1.nip.io:8445" {
