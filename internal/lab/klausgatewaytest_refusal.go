@@ -8,8 +8,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -34,6 +38,16 @@ import (
 //     port as plain text: the section's mrkdwn is sent verbatim, so Slack
 //     shows host:port as written and links nothing;
 //   - the agent and the Session removed, a leftover of an aborted run first.
+//
+// The deleted-Session pass (step 10b) runs the same with a second agent and
+// the Session deleted before the gateway reads it: the Deployment is held at
+// zero replicas from before the turn until the Session is deleted, so the
+// gateway's first read of the refusing actor is of a deleted Session. The
+// controller answers its session reader with the Session's tombstone, which
+// names the Agent, and the person with NotFound; the notice proves the
+// tombstone read (without it the actor is no Session the gateway knows and
+// nobody is told). A series the gateway sees for the first time counts
+// whole, so the refusal made while it was held is still noted.
 
 const (
 	// refusalAgentPrefix starts the name of the run's agent; a leftover of
@@ -42,6 +56,9 @@ const (
 	// refusalNoticeWait bounds the notice: the gateway's interval, the
 	// egress series' first read, the Session and the Agent read, the post.
 	refusalNoticeWait = 3 * time.Minute
+	// refusalHoldTimeout bounds the scale to zero and back of the
+	// deleted-Session pass.
+	refusalHoldTimeout = 2 * time.Minute
 	// The component's env the chart renders for the notices.
 	refusalsEnabledEnv  = "KLAUS_GATEWAY_REFUSALS_ENABLED"
 	refusalsIntervalEnv = "KLAUS_GATEWAY_REFUSALS_INTERVAL"
@@ -63,13 +80,18 @@ type refusalOutcome struct {
 	interval       string
 	elapsed        time.Duration
 	notice         string
+	// deleted is the deleted-Session pass: the Session was gone before the
+	// gateway's first read.
+	deleted bool
 }
 
 // klausGatewayRefusalProof runs the refusal half (see the file header) as
 // the person, on the component's Deployment: emails are the fake's people,
 // so the notice's direct message is found where users.lookupByEmail sent
-// it. A chart before the notices' floor is a note and nil.
-func klausGatewayRefusalProof(cfg *config.Config, token string, user *config.User, fake slackWorkspace, emails map[string]string) (*refusalOutcome, error) {
+// it. A chart before the notices' floor is a note and nil. With deleted, the
+// Session is deleted while the Deployment is held at zero replicas, before
+// the gateway's first read (step 10b).
+func klausGatewayRefusalProof(cfg *config.Config, token string, user *config.User, fake slackWorkspace, emails map[string]string, deleted bool) (*refusalOutcome, error) {
 	ctx := context.Background()
 	k, err := labKube()
 	if err != nil {
@@ -99,12 +121,18 @@ func klausGatewayRefusalProof(cfg *config.Config, token string, user *config.Use
 		agent:       refusalAgentPrefix + randomSuffix(),
 		destination: host + ":443",
 		interval:    env[refusalsIntervalEnv],
+		deleted:     deleted,
 	}
 	removeRefusalAgents()
 	defer removeRefusalAgents()
 
-	step("10. Egress refusal notice: agent %s created by %s with egress [%s]; one turn fetches %s; the gateway (interval %s, window %s) DMs %s (Slack user %s) once, naming %s as plain text",
-		out.agent, user.Email, DefaultEgressOrigin, egressTestUndeclaredURL, out.interval, env[refusalsWindowEnv], user.Email, slackUser, out.destination)
+	if deleted {
+		step("10b. Egress refusal notice for a deleted Session: agent %s created by %s with egress [%s]; Deployment %s held at 0 replicas; one turn fetches %s; the Session deleted, the person's GetSession NotFound; the gateway back, its first read the Session's tombstone, DMs %s once",
+			out.agent, user.Email, DefaultEgressOrigin, klausGatewayComponent, egressTestUndeclaredURL, user.Email)
+	} else {
+		step("10. Egress refusal notice: agent %s created by %s with egress [%s]; one turn fetches %s; the gateway (interval %s, window %s) DMs %s (Slack user %s) once, naming %s as plain text",
+			out.agent, user.Email, DefaultEgressOrigin, egressTestUndeclaredURL, out.interval, env[refusalsWindowEnv], user.Email, slackUser, out.destination)
+	}
 	muster, err := openMusterSession(cfg, token, "klaus-gateway-test-refusal")
 	if err != nil {
 		return nil, err
@@ -142,18 +170,51 @@ func klausGatewayRefusalProof(cfg *config.Config, token string, user *config.Use
 		return nil, err
 	}
 	defer api.close()
-	sessions, reply, err := refusalTurn(api, out.agent)
-	defer func() {
-		for _, id := range sessions {
-			api.removeSession(id)
+	var replicas int32
+	if deleted {
+		if replicas, err = holdGateway(ctx, k, deploy); err != nil {
+			return nil, err
 		}
-	}()
-	if err != nil {
-		return nil, err
+		held := true
+		defer func() {
+			if held {
+				if err := releaseGateway(ctx, replicas); err != nil {
+					note("cleanup: %v", err)
+				}
+			}
+		}()
+		sessions, reply, err := refusalTurn(api, out.agent)
+		defer func() {
+			for _, id := range sessions {
+				api.removeSession(id)
+			}
+		}()
+		if err != nil {
+			return nil, err
+		}
+		out.session = sessions[len(sessions)-1]
+		note("Session %s ran the fetch while the gateway was held; the reply, not evidence: %s", out.session, excerpt(strings.TrimSpace(reply), 120))
+		if err := deleteRefusalSessions(ctx, api, sessions); err != nil {
+			return nil, err
+		}
+		held = false
+		if err := releaseGateway(ctx, replicas); err != nil {
+			return nil, err
+		}
+	} else {
+		sessions, reply, err := refusalTurn(api, out.agent)
+		defer func() {
+			for _, id := range sessions {
+				api.removeSession(id)
+			}
+		}()
+		if err != nil {
+			return nil, err
+		}
+		out.session = sessions[len(sessions)-1]
+		note("Session %s ran the fetch, kept until the notice is in; the reply, not evidence: %s", out.session, excerpt(strings.TrimSpace(reply), 120))
 	}
-	out.session = sessions[len(sessions)-1]
 	turnDone := time.Now()
-	note("Session %s ran the fetch, kept until the notice is in; the reply, not evidence: %s", out.session, excerpt(strings.TrimSpace(reply), 120))
 
 	dm := directChannel(slackUser)
 	var notices []slackMessage
@@ -174,12 +235,92 @@ func klausGatewayRefusalProof(cfg *config.Config, token string, user *config.Use
 		return nil, err
 	}
 	out.notice = notices[0].shown()
-	note("one notice in %s %s after the turn: %q", dm, out.elapsed, excerpt(strings.ReplaceAll(out.notice, "\n", " "), 200))
+	note("one notice in %s %s after the %s: %q", dm, out.elapsed, out.waitedFrom(), excerpt(strings.ReplaceAll(out.notice, "\n", " "), 200))
 	return out, nil
+}
+
+// waitedFrom names the moment the notice's wait started.
+func (o *refusalOutcome) waitedFrom() string {
+	if o.deleted {
+		return "gateway was back"
+	}
+	return "turn"
+}
+
+// holdGateway scales the Deployment to zero and waits for its pods to be
+// gone, so nothing reads the egress until releaseGateway; it returns the
+// replicas to restore. The HelmRelease has no drift detection, so the scale
+// holds until the release puts it back.
+func holdGateway(ctx context.Context, k *kubeClients, d *appsv1.Deployment) (int32, error) {
+	replicas := int32(1)
+	if d.Spec.Replicas != nil && *d.Spec.Replicas > 0 {
+		replicas = *d.Spec.Replicas
+	}
+	sel, err := metav1.LabelSelectorAsSelector(d.Spec.Selector)
+	if err != nil {
+		return 0, fmt.Errorf("%s has an unusable selector: %w", describe(gvrDeployments, d.Namespace, d.Name), err)
+	}
+	if err := scaleGateway(ctx, 0); err != nil {
+		return 0, err
+	}
+	left := -1
+	if !waitFor(int(refusalHoldTimeout/pollInterval), pollInterval, func() bool {
+		list, err := k.clientset.CoreV1().Pods(d.Namespace).List(ctx, metav1.ListOptions{LabelSelector: sel.String()})
+		if err != nil {
+			return false
+		}
+		left = len(list.Items)
+		return left == 0
+	}) {
+		failure := fmt.Errorf("%d pod(s) of %s left %s after the scale to 0", left, describe(gvrDeployments, platformNamespace, klausGatewayComponent), refusalHoldTimeout)
+		if err := releaseGateway(ctx, replicas); err != nil {
+			return 0, fmt.Errorf("%w; putting it back: %w", failure, err)
+		}
+		return 0, failure
+	}
+	note("%s held at 0 replicas (was %d)", describe(gvrDeployments, platformNamespace, klausGatewayComponent), replicas)
+	return replicas, nil
+}
+
+// releaseGateway puts the Deployment back at its replicas and waits for the
+// rollout.
+func releaseGateway(ctx context.Context, replicas int32) error {
+	if err := scaleGateway(ctx, replicas); err != nil {
+		return err
+	}
+	return waitDeploymentRolledOut(ctx, platformNamespace, klausGatewayComponent, refusalHoldTimeout)
+}
+
+func scaleGateway(ctx context.Context, replicas int32) error {
+	return patchObject(ctx, gvrDeployments, platformNamespace, klausGatewayComponent, types.MergePatchType,
+		fmt.Appendf(nil, `{"spec":{"replicas":%d}}`, replicas))
+}
+
+// deleteRefusalSessions deletes the pass's Sessions as the person and checks
+// the person reads the last one as NotFound: the tombstone is the session
+// reader's alone.
+func deleteRefusalSessions(ctx context.Context, api *kagentAPI, sessions []string) error {
+	for _, id := range sessions {
+		if err := api.deleteSession(ctx, id); err != nil {
+			return err
+		}
+	}
+	last := sessions[len(sessions)-1]
+	_, err := api.getSession(ctx, last)
+	if status.Code(err) != codes.NotFound {
+		return fmt.Errorf("the person's GetSession of the deleted Session %s answered %v, want NotFound: only the session reader reads a tombstone", last, err)
+	}
+	note("Session %s deleted before the gateway's first read; the person's GetSession answers NotFound", last)
+	return nil
 }
 
 // printPass is the refusal half's line of the summary.
 func (o *refusalOutcome) printPass(creator string) {
+	if o.deleted {
+		fmt.Printf("PASS: the egress refused %s for agent %s (Session %s) while the component was held at 0 replicas; the Session was deleted (the person's GetSession NotFound) before the component's first read, which read its tombstone: one direct message to %s %s after the component was back, naming %s; the agent removed\n",
+			egressTestUndeclaredURL, o.agent, o.session, creator, o.elapsed, o.destination)
+		return
+	}
 	fmt.Printf("PASS: the egress refused %s for agent %s (Session %s); the component (interval %s) sent %s one direct message %s after the turn, naming %s as plain text (mrkdwn verbatim); the agent and its Session removed\n",
 		egressTestUndeclaredURL, o.agent, o.session, o.interval, creator, o.elapsed, o.destination)
 }
@@ -189,18 +330,23 @@ func (o *refusalOutcome) printPass(creator string) {
 // removed and checked gone. A chart without the notices fails it: there is
 // nothing else to prove.
 func klausGatewayRefusalOnly(cfg *config.Config, token string, user *config.User, fake slackWorkspace, emails map[string]string) error {
-	out, err := klausGatewayRefusalProof(cfg, token, user, fake, emails)
+	out, err := klausGatewayRefusalProof(cfg, token, user, fake, emails, false)
 	if err != nil {
 		return err
 	}
 	if out == nil {
 		return fmt.Errorf("--refusal-only needs agent-platform %s or newer, which runs the egress refusal notices", "4.154.0")
 	}
+	gone, err := klausGatewayRefusalProof(cfg, token, user, fake, emails, true)
+	if err != nil {
+		return err
+	}
 	if left := refusalAgents(); len(left) > 0 {
 		return fmt.Errorf("left behind: agent %s", strings.Join(left, ", agent "))
 	}
 	fmt.Println()
 	out.printPass(user.Email)
+	gone.printPass(user.Email)
 	return nil
 }
 
