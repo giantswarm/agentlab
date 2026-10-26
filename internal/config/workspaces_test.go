@@ -250,6 +250,9 @@ func TestWorkspacesStorage(t *testing.T) {
 		{"hostpath", WorkspaceStorageHostPath, 0, false, ""},
 		{"hostpath with workers", WorkspaceStorageHostPath, 1, false, "substrateNodes 1"},
 		{"hostpath with the companion", WorkspaceStorageHostPath, 0, true, "csiCompanion"},
+		{"moosefs", WorkspaceStorageMooseFS, 0, false, ""},
+		{"moosefs with workers", WorkspaceStorageMooseFS, 2, false, ""},
+		{"moosefs with the companion", WorkspaceStorageMooseFS, 0, true, "csiCompanion"},
 		{"another storage", "ceph", 0, false, `platform.workspaces.storage "ceph"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

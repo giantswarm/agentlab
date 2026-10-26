@@ -339,12 +339,13 @@ func waitGone(ctx context.Context, timeout time.Duration, kind string, names []s
 }
 
 // unmountWorkspacesNodeScript unmounts, deepest first, every NFS mount of a
-// node and the driver's publishes under Substrate's directory: forced, and
-// lazily inside the node's own mount namespace when a forced unmount is
-// refused, so the node's client lets go of the server before it stops.
+// node, the MooseFS controller's FUSE mount under the export and the
+// driver's publishes under Substrate's directory: forced, and lazily inside
+// the node's own mount namespace when a forced unmount is refused, so the
+// node's client lets go of the server before it stops.
 func unmountWorkspacesNodeScript() string {
-	return fmt.Sprintf(`for m in $(awk '$3 ~ /^nfs/ || $2 ~ "^%s/" {print $2}' /proc/mounts | sort -r); do umount -f "$m" 2>/dev/null || umount -l "$m" 2>/dev/null; done; true`,
-		substrateVolumesDir)
+	return fmt.Sprintf(`for m in $(awk '$3 ~ /^nfs/ || $2 ~ "^%s/" || $2 ~ "^%s/" {print $2}' /proc/mounts | sort -r); do umount -f "$m" 2>/dev/null || umount -l "$m" 2>/dev/null; done; true`,
+		substrateVolumesDir, workspacesExportDir)
 }
 
 // unmountWorkspacesNode is step 4 on one node, best effort through `docker

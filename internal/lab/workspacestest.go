@@ -187,9 +187,12 @@ func WorkspacesTest(cfg *config.Config, opts WorkspacesTestOptions) error {
 	if err := proveWorkspacesInstalled(ctx, backend, timeout); err != nil {
 		return err
 	}
-	if backend.nfsServer {
+	switch {
+	case backend.nfsServer:
 		note("NFS server, controller with its mTLS proxy and node plugin Ready; StorageClass %s (%s)", workspacesStorageClass, driver)
-	} else {
+	case backend.storage == config.WorkspaceStorageMooseFS:
+		note("MooseFS master and chunkserver, controller with its mTLS proxy and node plugin Ready; StorageClass %s (%s)", workspacesStorageClass, driver)
+	default:
 		note("hostpath driver and the controller's mTLS proxy Ready; StorageClass %s (%s)", workspacesStorageClass, driver)
 	}
 	if cfg.WorkspacesCSICompanion() {
@@ -219,9 +222,12 @@ func WorkspacesTest(cfg *config.Config, opts WorkspacesTestOptions) error {
 	if err := waitPVCBound(ctx, workspacesTestClaim, timeout); err != nil {
 		return err
 	}
-	if backend.nfsServer {
+	switch {
+	case backend.nfsServer:
 		note("Bound (a directory of the export on %s, mounted NFSv4.1)", node)
-	} else {
+	case backend.storage == config.WorkspaceStorageMooseFS:
+		note("Bound (a directory of the MooseFS filesystem, mounted through FUSE)")
+	default:
 		note("Bound (a directory under %s on %s, bind-mounted)", workspacesExportDir, node)
 	}
 
@@ -302,8 +308,11 @@ func proveWorkspacesInstalled(ctx context.Context, backend workspacesBackend, ti
 		}
 	}
 	deployments := []string{backend.controller}
-	if backend.nfsServer {
+	switch {
+	case backend.nfsServer:
 		deployments = append([]string{workspacesNFSServer}, deployments...)
+	case backend.storage == config.WorkspaceStorageMooseFS:
+		deployments = append([]string{mooseFSMaster, mooseFSChunkserver}, deployments...)
 	}
 	for _, name := range deployments {
 		if err := waitDeploymentRolledOut(ctx, workspacesNamespace, name, timeout); err != nil {
@@ -465,20 +474,14 @@ func waitWorkspacesVolumesGone(ctx context.Context, timeout time.Duration) error
 // proveWorkspacesVolumeGone is the end: no PersistentVolume of the proof,
 // and no directory in the export on the node that no PersistentVolume backs.
 // A directory still backing a live volume (another Workspace's) is left in
-// place and named. csi-driver-nfs names a volume's directory after its
-// PersistentVolume (pvc-…), the hostpath driver after its volume handle,
-// beside its own state.json.
+// place and named (workspaceVolumeDirs).
 func proveWorkspacesVolumeGone(ctx context.Context, node string, backend workspacesBackend, timeout time.Duration) error {
 	if err := waitWorkspacesVolumesGone(ctx, timeout); err != nil {
 		return fmt.Errorf("a PersistentVolume of the proof is still there %s after its claim went: `kubectl get pv`, the provisioner's log in %s", timeout, workspacesNamespace)
 	}
-	list := "ls -A " + workspacesExportDir + " 2>/dev/null | grep '^pvc-' || true"
-	if !backend.nfsServer {
-		list = "ls -A " + workspacesExportDir + " 2>/dev/null | grep -v '^state.json$' || true"
-	}
-	out, err := outputQuiet(dockerBin, "exec", node, "sh", "-c", list)
+	dirs, err := workspaceVolumeDirs(node, backend)
 	if err != nil {
-		return fmt.Errorf("reading the export on %s: %w", node, err)
+		return err
 	}
 	k, err := labKube()
 	if err != nil {
@@ -488,7 +491,7 @@ func proveWorkspacesVolumeGone(ctx context.Context, node string, backend workspa
 	if err != nil {
 		return fmt.Errorf("listing the PersistentVolumes: %w", err)
 	}
-	live, left := splitWorkspacesExportDirs(strings.Fields(out), pvs.Items)
+	live, left := splitWorkspacesExportDirs(dirs, pvs.Items)
 	if len(live) > 0 {
 		note("left in place on the export, still backing a live volume: %s", strings.Join(live, ", "))
 	}

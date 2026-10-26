@@ -748,13 +748,15 @@ type Workspaces struct {
 	// change (docs/workspaces.md); needs a chart that carries the key.
 	CSICompanion bool `yaml:"csiCompanion,omitempty"`
 	// Storage is what backs the workspaces' volumes: WorkspaceStorageNFS, an
-	// NFS server in the cluster and csi-driver-nfs, or
-	// WorkspaceStorageHostPath, csi-driver-host-path, a directory of the one
-	// node per volume, bind-mounted where it is published. Empty picks
-	// hostpath under rootless Podman on Linux, where the kernel refuses
-	// nfsd and NFS mounts to the node's user namespace, and nfs elsewhere.
-	// hostpath needs the single-node lab (substrateNodes 0) and refuses
-	// csiCompanion, whose preset mounts the lab's NFS volumes.
+	// NFS server in the cluster and csi-driver-nfs; WorkspaceStorageHostPath,
+	// csi-driver-host-path, a directory of the one node per volume,
+	// bind-mounted where it is published; or WorkspaceStorageMooseFS, a
+	// MooseFS master and chunkserver in the cluster and moosefs-csi, mounted
+	// through FUSE. Empty picks moosefs under rootless Podman on Linux,
+	// where the kernel refuses nfsd and NFS mounts to the node's user
+	// namespace, and nfs elsewhere. hostpath needs the single-node lab
+	// (substrateNodes 0); hostpath and moosefs refuse csiCompanion, whose
+	// preset mounts the lab's NFS volumes.
 	Storage string `yaml:"storage,omitempty"`
 }
 
@@ -906,6 +908,7 @@ const (
 const (
 	WorkspaceStorageNFS      = "nfs"
 	WorkspaceStorageHostPath = "hostpath"
+	WorkspaceStorageMooseFS  = "moosefs"
 )
 
 // WorkspaceGrantProviderApps is the grantProvider that pins no instance:
@@ -2416,8 +2419,12 @@ func (c *Config) Validate() error {
 		if c.Platform.Workspaces.CSICompanion {
 			return fmt.Errorf("platform.workspaces.storage %q and csiCompanion: the companion's preset mounts the lab's NFS volumes: `agentlab configure --workspaces-storage %s`, or `--workspaces-csi-companion=false`", storage, WorkspaceStorageNFS)
 		}
+	case WorkspaceStorageMooseFS:
+		if c.Platform.Workspaces.CSICompanion {
+			return fmt.Errorf("platform.workspaces.storage %q and csiCompanion: the companion's preset mounts the lab's NFS volumes: `agentlab configure --workspaces-storage %s`, or `--workspaces-csi-companion=false`", storage, WorkspaceStorageNFS)
+		}
 	default:
-		return fmt.Errorf("platform.workspaces.storage %q: want %q, %q, or empty (hostpath under rootless Podman on Linux, nfs elsewhere)", storage, WorkspaceStorageNFS, WorkspaceStorageHostPath)
+		return fmt.Errorf("platform.workspaces.storage %q: want %q, %q, %q, or empty (moosefs under rootless Podman on Linux, nfs elsewhere)", storage, WorkspaceStorageNFS, WorkspaceStorageHostPath, WorkspaceStorageMooseFS)
 	}
 	if names, err := parseWorkspaceProviders(c.Platform.Workspaces.Provider); err != nil {
 		return err
