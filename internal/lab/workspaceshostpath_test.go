@@ -20,8 +20,8 @@ func withRootless(t *testing.T, rootless bool) {
 	t.Cleanup(func() { rootlessPodmanOnLinux = prev })
 }
 
-// An empty platform.workspaces.storage is hostpath under rootless Podman for
-// the single-node lab without the companion, nfs otherwise; a set one wins.
+// An empty platform.workspaces.storage is moosefs under rootless Podman
+// without the companion, nfs otherwise; a set one wins.
 func TestWorkspacesStorageFor(t *testing.T) {
 	for _, tc := range []struct {
 		name           string
@@ -32,11 +32,12 @@ func TestWorkspacesStorageFor(t *testing.T) {
 		want           string
 	}{
 		{"rootful engine", false, "", 0, false, config.WorkspaceStorageNFS},
-		{"rootless Podman", true, "", 0, false, config.WorkspaceStorageHostPath},
-		{"rootless Podman with workers", true, "", 1, false, config.WorkspaceStorageNFS},
+		{"rootless Podman", true, "", 0, false, config.WorkspaceStorageMooseFS},
+		{"rootless Podman with workers", true, "", 1, false, config.WorkspaceStorageMooseFS},
 		{"rootless Podman with the companion", true, "", 0, true, config.WorkspaceStorageNFS},
 		{"nfs set under rootless Podman", true, config.WorkspaceStorageNFS, 0, false, config.WorkspaceStorageNFS},
 		{"hostpath set on a rootful engine", false, config.WorkspaceStorageHostPath, 0, false, config.WorkspaceStorageHostPath},
+		{"hostpath set under rootless Podman", true, config.WorkspaceStorageHostPath, 0, false, config.WorkspaceStorageHostPath},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			withRootless(t, tc.rootless)

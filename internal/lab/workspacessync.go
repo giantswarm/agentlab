@@ -416,11 +416,11 @@ func (sp *syncProof) delete(name string) error {
 		return nil
 	}
 	node := WorkspacesNode(sp.cfg)
-	out, err := outputQuiet(dockerBin, "exec", node, "sh", "-c", "ls -A "+workspacesExportDir+" 2>/dev/null || true")
+	dirs, err := workspaceVolumeDirs(node, workspacesBackendFor(sp.cfg))
 	if err != nil {
-		return fmt.Errorf("reading the export on %s: %w", node, err)
+		return err
 	}
-	if slices.Contains(strings.Fields(out), v.pv) {
+	if slices.Contains(dirs, v.pv) {
 		return fmt.Errorf("the export on %s still holds %s, the volume of workspace %s", node, v.pv, name)
 	}
 	note("deleted %s (%d Sessions with a directory at the delete): the workspace, its claim %s/%s and its volume %s gone, nothing of it under %s", name, len(res.Sessions), v.namespace, v.claim, v.pv, workspacesExportDir)

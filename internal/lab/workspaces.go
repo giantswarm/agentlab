@@ -170,9 +170,44 @@ const (
 	hostPathPluginImage = "registry.k8s.io/sig-storage/hostpathplugin:v1.17.1@sha256:ec6ded2430d4c5c6251e8d3a6ca55c675d6bd1b1ee8c012eab13aaa81be9c967"
 )
 
+// The MooseFS storage (platform.workspaces.storage moosefs): a MooseFS
+// master and one chunkserver on the control plane, their state kept under
+// mooseFSDir of that node, and moosefs-csi, whose controller and node
+// plugin mount the filesystem through FUSE, which a rootless node's user
+// namespace allows. A volume is a directory of the filesystem, published
+// with a bind mount from the plugin's mount; the plugins stage nothing and
+// read the master's address from their flags, never from a request's
+// secrets, so atelet drives them as the kubelet does. The controller pod
+// runs the provisioner, the resizer and the mTLS proxy beside the driver,
+// as the NFS controller does.
+const (
+	mooseFSCSIDriver         = "csi.moosefs.com"
+	mooseFSController        = "csi-moosefs-controller"
+	mooseFSControllerService = "csi-moosefs-controller"
+	mooseFSNodePlugin        = "csi-moosefs-node"
+	mooseFSNodeSocketDir     = "/var/lib/kubelet/plugins/csi.moosefs.com"
+	// mooseFSMaster and mooseFSChunkserver are the servers' Deployments,
+	// the master's Service the address the plugins and the chunkserver dial.
+	mooseFSMaster      = "mfsmaster"
+	mooseFSChunkserver = "mfschunkserver"
+	mooseFSMasterPort  = 9421
+	// mooseFSDir holds the master's metadata, the chunkserver's chunks and
+	// the controller's mount of the filesystem, which the node sees through
+	// its Bidirectional mount: mooseFSVolumesGlob lists the volumes there.
+	mooseFSDir         = workspacesExportDir + "/moosefs"
+	mooseFSWorkingDir  = "pv_data"
+	mooseFSVolumesGlob = mooseFSDir + "/mnt/*/" + mooseFSWorkingDir + "/volumes"
+	// The images have no gsoci mirror: Docker Hub's community editions,
+	// pinned by digest.
+	mooseFSMasterImage      = "docker.io/moosefs/master:4.59.2@sha256:30a19928ef9fa18fb7a0853cf482dc8c12c85e58b0369aa8f0de77f3be285291"
+	mooseFSChunkserverImage = "docker.io/moosefs/chunkserver:4.59.2@sha256:c9c038c83a77e1dbc77138904fed424646d236b2e3aa707a3a2f60696a8f6945"
+	mooseFSPluginImage      = "docker.io/moosefs/moosefs-csi:1.0.0-4.59.2@sha256:7d9fc28c2985010f9b9e812ace4aea7c0961ea252e583c759385127616db9c7e"
+)
+
 // workspacesCSIDrivers are the names the lab's drivers serve volumes under:
-// the NFS driver's own, the companion preset's, and the hostpath driver's.
-var workspacesCSIDrivers = []string{workspacesCSIDriver, companionCSIDriver, hostPathCSIDriver}
+// the NFS driver's own, the companion preset's, the hostpath driver's and
+// moosefs-csi's.
+var workspacesCSIDrivers = []string{workspacesCSIDriver, companionCSIDriver, hostPathCSIDriver, mooseFSCSIDriver}
 
 // isWorkspacesCSIDriver reports whether a CSI driver name is one the lab's
 // drivers serve volumes under.
@@ -181,15 +216,14 @@ func isWorkspacesCSIDriver(name string) bool {
 }
 
 // workspacesStorageFor is the storage the lab's workspace volumes are made
-// of: platform.workspaces.storage, or while it is empty hostpath under
-// rootless Podman on Linux for the single-node lab without the companion,
-// nfs otherwise.
+// of: platform.workspaces.storage, or while it is empty moosefs under
+// rootless Podman on Linux without the companion, nfs otherwise.
 func workspacesStorageFor(cfg *config.Config) string {
 	if storage := cfg.Platform.Workspaces.Storage; storage != "" {
 		return storage
 	}
-	if rootlessPodmanOnLinux() && cfg.SubstrateNodes == 0 && !cfg.WorkspacesCSICompanion() {
-		return config.WorkspaceStorageHostPath
+	if rootlessPodmanOnLinux() && !cfg.WorkspacesCSICompanion() {
+		return config.WorkspaceStorageMooseFS
 	}
 	return config.WorkspaceStorageNFS
 }
@@ -205,8 +239,11 @@ type workspacesBackend struct {
 }
 
 func workspacesBackendFor(cfg *config.Config) workspacesBackend {
-	if workspacesStorageFor(cfg) == config.WorkspaceStorageHostPath {
+	switch workspacesStorageFor(cfg) {
+	case config.WorkspaceStorageHostPath:
 		return hostPathBackend
+	case config.WorkspaceStorageMooseFS:
+		return mooseFSBackend
 	}
 	b := nfsBackend
 	if cfg.WorkspacesCSICompanion() {
@@ -216,10 +253,14 @@ func workspacesBackendFor(cfg *config.Config) workspacesBackend {
 }
 
 // workspacesBackendOfDriver is the backend whose class provisions with a
-// driver, read off the cluster: the hostpath driver's, or the NFS one's.
+// driver, read off the cluster: the hostpath driver's, moosefs-csi's, or the
+// NFS one's.
 func workspacesBackendOfDriver(driver string) workspacesBackend {
-	if driver == hostPathCSIDriver {
+	switch driver {
+	case hostPathCSIDriver:
 		return hostPathBackend
+	case mooseFSCSIDriver:
+		return mooseFSBackend
 	}
 	b := nfsBackend
 	if driver != "" {
@@ -239,6 +280,11 @@ var (
 		controller: hostPathController, controllerService: hostPathControllerService, nodePlugin: hostPathNodePlugin,
 		nodeSocketDir: hostPathNodeSocketDir,
 	}
+	mooseFSBackend = workspacesBackend{
+		storage: config.WorkspaceStorageMooseFS, driver: mooseFSCSIDriver,
+		controller: mooseFSController, controllerService: mooseFSControllerService, nodePlugin: mooseFSNodePlugin,
+		nodeSocketDir: mooseFSNodeSocketDir,
+	}
 )
 
 // serverName is the DNS name the service-DNS signer certifies for the
@@ -256,13 +302,13 @@ func (b workspacesBackend) controllerEndpoint() string {
 	return fmt.Sprintf("tcp://%s.%s.svc.cluster.local:%d", b.controllerService, workspacesNamespace, workspacesControllerPort)
 }
 
-// provisionerAccount is the ServiceAccount the provisioner runs as: the NFS
-// controller's, or the hostpath node plugin's, whose pod runs it.
+// provisionerAccount is the ServiceAccount the provisioner runs as: the
+// hostpath node plugin's, whose pod runs it, or the controller's.
 func (b workspacesBackend) provisionerAccount() string {
-	if b.nfsServer {
-		return b.controller
+	if b.storage == config.WorkspaceStorageHostPath {
+		return b.nodePlugin
 	}
-	return b.nodePlugin
+	return b.controller
 }
 
 // nodeSocket is the CSIDriverConfig's nodeSocketOverride.
@@ -313,17 +359,26 @@ const (
 
 type workspacesImages struct {
 	NFSServer, NFSPlugin, HostPathPlugin, Registrar, LivenessProbe, Provisioner, Resizer, Proxy string
+	MooseFSMaster, MooseFSChunkserver, MooseFSPlugin                                            string
 }
 
 // workspacesValues are the names workspaces.yaml.tmpl and the values
 // template's `workspaces:` block render.
 type workspacesValues struct {
-	// HostPath renders the hostpath storage in place of the NFS server and
-	// csi-driver-nfs (workspacesStorageFor).
-	HostPath                                       bool
+	// HostPath renders the hostpath storage and MooseFS the MooseFS
+	// storage in place of the NFS server and csi-driver-nfs
+	// (workspacesStorageFor).
+	HostPath, MooseFS                              bool
 	Namespace, Driver, DriverVersion, StorageClass string
-	NFSServer, NFSServerHost, ExportDir            string
-	ControllerService, Controller, NodePlugin      string
+	// MooseFSMaster, MooseFSChunkserver and MooseFSMasterHost name the
+	// MooseFS servers and the master's address; MooseFSDir and
+	// MooseFSWorkingDir are mooseFSDir and the plugins' directory in the
+	// filesystem.
+	MooseFSMaster, MooseFSChunkserver, MooseFSMasterHost string
+	MooseFSMasterPort                                    int
+	MooseFSDir, MooseFSWorkingDir                        string
+	NFSServer, NFSServerHost, ExportDir                  string
+	ControllerService, Controller, NodePlugin            string
 	// RBACName names the provisioner's and the resizer's cluster roles
 	// (<RBACName>-provisioner, -resizer), ProvisionerAccount the
 	// ServiceAccount the provisioner runs as, ProxyConfig the proxy's
@@ -352,6 +407,13 @@ func workspacesValuesFor(cfg *config.Config) workspacesValues {
 	b := workspacesBackendFor(cfg)
 	return workspacesValues{
 		HostPath:           b.storage == config.WorkspaceStorageHostPath,
+		MooseFS:            b.storage == config.WorkspaceStorageMooseFS,
+		MooseFSMaster:      mooseFSMaster,
+		MooseFSChunkserver: mooseFSChunkserver,
+		MooseFSMasterHost:  mooseFSMaster + "." + workspacesNamespace + ".svc.cluster.local",
+		MooseFSMasterPort:  mooseFSMasterPort,
+		MooseFSDir:         mooseFSDir,
+		MooseFSWorkingDir:  mooseFSWorkingDir,
 		Namespace:          workspacesNamespace,
 		Driver:             b.driver,
 		DriverVersion:      workspacesDriverVersion,
@@ -378,14 +440,17 @@ func workspacesValuesFor(cfg *config.Config) workspacesValues {
 		OrganizationGroups: config.WorkspaceOrganizationGroups,
 		Companion:          companionFor(cfg),
 		Images: workspacesImages{
-			NFSServer:      nfsServerImage,
-			NFSPlugin:      nfsPluginImage,
-			HostPathPlugin: hostPathPluginImage,
-			Registrar:      csiRegistrarImage,
-			LivenessProbe:  csiLivenessProbeImage,
-			Provisioner:    csiProvisionerImage,
-			Resizer:        csiResizerImage,
-			Proxy:          csiProxyImage,
+			NFSServer:          nfsServerImage,
+			NFSPlugin:          nfsPluginImage,
+			HostPathPlugin:     hostPathPluginImage,
+			MooseFSMaster:      mooseFSMasterImage,
+			MooseFSChunkserver: mooseFSChunkserverImage,
+			MooseFSPlugin:      mooseFSPluginImage,
+			Registrar:          csiRegistrarImage,
+			LivenessProbe:      csiLivenessProbeImage,
+			Provisioner:        csiProvisionerImage,
+			Resizer:            csiResizerImage,
+			Proxy:              csiProxyImage,
 		},
 	}
 }
@@ -607,6 +672,8 @@ func workspacesUp(cfg *config.Config) error {
 		if err := workspacesHostPreflight(); err != nil {
 			return err
 		}
+	} else if b.storage == config.WorkspaceStorageMooseFS {
+		step("Installing the workspace storage (a MooseFS master and chunkserver on %s, their state under %s, moosefs-csi as %s behind its mTLS proxy, the read-write-many StorageClass %s)", node, mooseFSDir, driver, workspacesStorageClass)
 	} else {
 		step("Installing the workspace storage (the hostpath CSI driver on %s, %s of the node per volume, behind its mTLS proxy, the read-write-many StorageClass %s)", node, workspacesExportDir, workspacesStorageClass)
 	}
@@ -632,6 +699,19 @@ func workspacesUp(cfg *config.Config) error {
 	if _, err := applyManifests(ctx, manifest); err != nil {
 		return fmt.Errorf("the workspace storage: %w", err)
 	}
+	if b.storage == config.WorkspaceStorageMooseFS {
+		for _, server := range []string{mooseFSMaster, mooseFSChunkserver} {
+			if err := waitDeploymentRolledOut(ctx, workspacesNamespace, server, workspacesRolloutTimeout); err != nil {
+				return fmt.Errorf("the MooseFS server %s: %w (`kubectl -n %s logs deploy/%s`)", server, err, workspacesNamespace, server)
+			}
+		}
+		if err := waitDaemonSetReady(ctx, workspacesNamespace, b.nodePlugin, workspacesRolloutTimeout); err != nil {
+			return fmt.Errorf("the moosefs-csi node plugin: %w (FUSE needs /dev/fuse in the node; `kubectl -n %s logs ds/%s --all-containers`)", err, workspacesNamespace, b.nodePlugin)
+		}
+		note("MooseFS master and chunkserver on %s, their state under %s; node plugin %s Ready on every node (Substrate's %s mounted Bidirectional); StorageClass %s (read-write-many, FUSE)",
+			node, mooseFSDir, driver, substrateVolumesDir, workspacesStorageClass)
+		return nil
+	}
 	if !b.nfsServer {
 		if err := waitDaemonSetReady(ctx, workspacesNamespace, b.nodePlugin, workspacesRolloutTimeout); err != nil {
 			return fmt.Errorf("the hostpath CSI driver: %w (`kubectl -n %s logs ds/%s --all-containers`)", err, workspacesNamespace, b.nodePlugin)
@@ -643,7 +723,7 @@ func workspacesUp(cfg *config.Config) error {
 	if err := waitDeploymentRolledOut(ctx, workspacesNamespace, workspacesNFSServer, workspacesRolloutTimeout); err != nil {
 		hint := "the kind node loads the host kernel's nfsd for it"
 		if rootlessPodmanOnLinux() {
-			hint = "rootless Podman's node cannot start the kernel's nfsd: `agentlab configure --workspaces-storage hostpath`"
+			hint = "rootless Podman's node cannot start the kernel's nfsd: `agentlab configure --workspaces-storage moosefs` (or hostpath)"
 		}
 		return fmt.Errorf("the NFS server: %w (%s; `kubectl -n %s logs deploy/%s`)", err, hint, workspacesNamespace, workspacesNFSServer)
 	}
@@ -900,7 +980,7 @@ func removeLabWorkspacesCSIDriverConfig(ctx context.Context) error {
 	if err != nil {
 		return nil
 	}
-	for _, driver := range []string{workspacesCSIDriver, hostPathCSIDriver} {
+	for _, driver := range []string{workspacesCSIDriver, hostPathCSIDriver, mooseFSCSIDriver} {
 		obj, err := getObject(ctx, gvr, "", driver)
 		if apierrors.IsNotFound(err) {
 			continue
@@ -932,6 +1012,7 @@ var workspacesClusterObjects = []struct{ resource, name string }{
 	{csiDriversResource, workspacesCSIDriver},
 	{csiDriversResource, companionCSIDriver},
 	{csiDriversResource, hostPathCSIDriver},
+	{csiDriversResource, mooseFSCSIDriver},
 	{clusterRoleBindingsResource, "agentlab-workspaces-csi-nfs-provisioner"},
 	{clusterRolesResource, "agentlab-workspaces-csi-nfs-provisioner"},
 	{clusterRoleBindingsResource, "agentlab-workspaces-csi-nfs-resizer"},
@@ -940,6 +1021,10 @@ var workspacesClusterObjects = []struct{ resource, name string }{
 	{clusterRolesResource, "agentlab-workspaces-csi-hostpath-provisioner"},
 	{clusterRoleBindingsResource, "agentlab-workspaces-csi-hostpath-resizer"},
 	{clusterRolesResource, "agentlab-workspaces-csi-hostpath-resizer"},
+	{clusterRoleBindingsResource, "agentlab-workspaces-csi-moosefs-provisioner"},
+	{clusterRolesResource, "agentlab-workspaces-csi-moosefs-provisioner"},
+	{clusterRoleBindingsResource, "agentlab-workspaces-csi-moosefs-resizer"},
+	{clusterRolesResource, "agentlab-workspaces-csi-moosefs-resizer"},
 }
 
 // workspacesDown removes the workspace storage from a lab that has it: the
@@ -1022,7 +1107,10 @@ type WorkspacesStatus struct {
 	// NFSServer, Controller and NodePlugin are the workloads' rollout states
 	// in a word: Ready, or what is not. The controller carries the mTLS
 	// proxy.
-	NFSServer  string `json:"nfsServer"`
+	NFSServer string `json:"nfsServer"`
+	// MooseFS words the MooseFS master's and chunkserver's rollouts with
+	// that storage.
+	MooseFS    string `json:"mooseFS,omitempty"`
 	Controller string `json:"controller"`
 	NodePlugin string `json:"nodePlugin"`
 	// Node is the node the server and the controller run on.
@@ -1073,6 +1161,16 @@ func readWorkspacesStatus(ctx context.Context) (*WorkspacesStatus, error) {
 			into *string
 		}{workspacesNFSServer, &s.NFSServer})
 	}
+	var master, chunkserver string
+	if b.storage == config.WorkspaceStorageMooseFS {
+		workloads = append(workloads, struct {
+			name string
+			into *string
+		}{mooseFSMaster, &master}, struct {
+			name string
+			into *string
+		}{mooseFSChunkserver, &chunkserver})
+	}
 	for _, w := range workloads {
 		d, err := k.clientset.AppsV1().Deployments(workspacesNamespace).Get(ctx, w.name, metav1.GetOptions{})
 		switch {
@@ -1098,6 +1196,9 @@ func readWorkspacesStatus(ctx context.Context) (*WorkspacesStatus, error) {
 		s.NodePlugin = fmt.Sprintf("%s on %d node(s)", conditionReady, ds.Status.NumberReady)
 	default:
 		s.NodePlugin = daemonSetStatus(ds)
+	}
+	if b.storage == config.WorkspaceStorageMooseFS {
+		s.MooseFS = fmt.Sprintf("master %s, chunkserver %s", master, chunkserver)
 	}
 	s.StorageClass = s.Driver != ""
 	s.Companion = readCompanionState(ctx, k)
@@ -1167,9 +1268,13 @@ func (s *WorkspacesStatus) String() string {
 	}
 	line := fmt.Sprintf("NFS server %s on %s; CSI controller %s %s %s; node plugin %s; %s; %s",
 		s.NFSServer, orNone(s.Node), driver, s.Controller, proxy, s.NodePlugin, class, registration)
-	if driver == hostPathCSIDriver {
+	switch driver {
+	case hostPathCSIDriver:
 		line = fmt.Sprintf("hostpath CSI driver %s on %s, its volumes under %s; controller proxy %s %s; %s; %s",
 			s.NodePlugin, orNone(s.Node), workspacesExportDir, s.Controller, proxy, class, registration)
+	case mooseFSCSIDriver:
+		line = fmt.Sprintf("MooseFS %s on %s, its state under %s; CSI controller %s %s %s; node plugin %s; %s; %s",
+			s.MooseFS, orNone(s.Node), mooseFSDir, driver, s.Controller, proxy, s.NodePlugin, class, registration)
 	}
 	if s.Companion != "" {
 		line += fmt.Sprintf("; the chart's CSI companion (%s preset, the lab's NFS plugin) %s", companionPreset, s.Companion)
@@ -1189,8 +1294,11 @@ func workspacesHint(cfg *config.Config, chartCarries bool, registrant string) st
 		return "  Workspace storage is off (platform.workspaces in agentlab.yaml; `agentlab configure --workspaces` turns it on)."
 	}
 	storage := "an NFS server on %s and the NFS CSI driver behind its mTLS proxy"
-	if workspacesStorageFor(cfg) == config.WorkspaceStorageHostPath {
+	switch workspacesStorageFor(cfg) {
+	case config.WorkspaceStorageHostPath:
 		storage = "the hostpath CSI driver on %s (" + workspacesExportDir + " of the node per volume) behind its mTLS proxy"
+	case config.WorkspaceStorageMooseFS:
+		storage = "a MooseFS master and chunkserver on %s and moosefs-csi behind its mTLS proxy"
 	}
 	hint := fmt.Sprintf("  Workspace storage: "+storage+", %s;\n"+
 		"  the read-write-many StorageClass %s. Proof: `agentlab workspaces-test --storage-only`.", WorkspacesNode(cfg), workspacesRegistration(workspacesCSIDriverFor(cfg), registrant), workspacesStorageClass)
@@ -1205,4 +1313,25 @@ func workspacesHint(cfg *config.Config, chartCarries bool, registrant string) st
 			strings.Join(cfg.WorkspaceProviders(), ", "), cfg.WorkspaceManagerBaseURL())
 	}
 	return hint
+}
+
+// workspaceVolumeDirs lists the volumes' directories the storage keeps, as
+// the node sees them: csi-driver-nfs's under the export, named after their
+// PersistentVolume (pvc-…); the hostpath driver's under the export, named
+// after their volume handle, beside its own state.json; moosefs-csi's in
+// the filesystem's volumes directory, named after their PersistentVolume,
+// through the controller's mount.
+func workspaceVolumeDirs(node string, b workspacesBackend) ([]string, error) {
+	list := "ls -A " + workspacesExportDir + " 2>/dev/null | grep '^pvc-' || true"
+	switch b.storage {
+	case config.WorkspaceStorageHostPath:
+		list = "ls -A " + workspacesExportDir + " 2>/dev/null | grep -v '^state.json$' || true"
+	case config.WorkspaceStorageMooseFS:
+		list = "ls -A " + mooseFSVolumesGlob + " 2>/dev/null || true"
+	}
+	out, err := outputQuiet(dockerBin, "exec", node, "sh", "-c", list)
+	if err != nil {
+		return nil, fmt.Errorf("reading the volumes' directories on %s: %w", node, err)
+	}
+	return strings.Fields(out), nil
 }

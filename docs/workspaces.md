@@ -52,7 +52,7 @@ namespace, or with the cluster on `down`) and the export's bytes with it. A
 server that stopped first would leave a node's NFS client waiting on it for
 good, a node that can then be neither stopped nor removed.
 
-### Rootless Podman: the hostpath storage
+### Rootless Podman: the moosefs and hostpath storages
 
 Under rootless Podman on Linux the nodes run in your user's user namespace,
 where the kernel mounts neither the `nfsd` filesystem nor an NFS export: the
@@ -63,11 +63,39 @@ volumes:
 | Value | What |
 |---|---|
 | `nfs` | The NFS server and csi-driver-nfs above |
+| `moosefs` | A MooseFS 4.59.2 master and chunkserver in the cluster and moosefs-csi 1.0.0: every volume a directory of the MooseFS filesystem, which the plugins mount through FUSE (a user namespace allows it) and publish with a bind mount |
 | `hostpath` | kubernetes-csi/csi-driver-host-path v1.17.1, as Substrate's own `ate-setup csi hostpath` installs it: every volume a directory of the node's `/var/lib/agentlab-workspaces` (beside the driver's `state.json`), published with a bind mount, which a user namespace allows |
-| empty (the default) | `hostpath` under rootless Podman on Linux for the single-node lab without the companion, `nfs` everywhere else |
+| empty (the default) | `moosefs` under rootless Podman on Linux without the companion, `nfs` everywhere else |
 
-`agentlab configure --workspaces-storage <nfs|hostpath>` sets it; `""`
-returns to the default. The hostpath storage:
+`agentlab configure --workspaces-storage <nfs|moosefs|hostpath>` sets it;
+`""` returns to the default.
+
+The MooseFS storage serves the whole workspace flow, where the hostpath
+storage meets the staging limits below: moosefs-csi stages nothing, as
+csi-driver-nfs does not, so the kubelet and atelet publish one volume side
+by side; and its plugins read the master's address from their flags, never
+from a request's secrets, which Substrate's CSI calls carry none of (a
+driver that mounts with per-request secrets, JuiceFS's for one, cannot serve
+Substrate's actors). Its pieces:
+
+| Piece | What |
+|---|---|
+| The `mfsmaster` and `mfschunkserver` Deployments (namespace `agentlab-workspaces`) | On the control plane; the master's metadata under the node's `/var/lib/agentlab-workspaces/moosefs/master` (seeded empty on the first start), the chunkserver's chunks and identity beside it; the master's Service is the address the chunkserver and the plugins dial |
+| The `csi-moosefs-controller` Deployment | The driver `csi.moosefs.com` in controller mode with the provisioner and the resizer, and the same Envoy mTLS proxy as the NFS controller's, behind the Service `csi-moosefs-controller` (port 50051, TLS server name `csi-moosefs-controller.agentlab-workspaces.svc`); the driver's FUSE mount at the node's `/var/lib/agentlab-workspaces/moosefs/mnt`, so the node sees the volumes' directories |
+| The `csi-moosefs-node` DaemonSet | The driver in node mode on every node, registered at `/var/lib/kubelet/plugins/csi.moosefs.com/csi.sock`, the kubelet's pods directory and Substrate's `/var/lib/ate` mounted `Bidirectional` |
+| The StorageClass `agentlab-workspaces` | Read-write-many on every node, `Immediate` binding, delete-reclaiming, expandable (a volume's quota is the claim's size); no mount options |
+| The `CSIDriverConfig` `csi.moosefs.com` | As the NFS driver's, from the same `workspaces:` values |
+
+`csiCompanion` is refused with it: the companion's preset mounts the lab's
+NFS volumes. The images are Docker Hub's community editions, pinned by
+digest (gsoci carries no mirror of them). A volume's root is the driver's
+`0755`, owned by root: a pod's `fsGroup` opens it to the group (moosefs-csi
+applies it as the volume's group, `0775`), where csi-driver-nfs's class
+opens it to everyone (`mountPermissions: 0777`). The FUSE mounts live in the
+plugins' containers: a node plugin's restart takes its node's publishes
+with it until the pods using them are started again.
+
+The hostpath storage:
 
 | Piece | What |
 |---|---|
