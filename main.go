@@ -127,6 +127,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		inGroup(groupTesting, agentsGitOpsTestCmd()),
 		inGroup(groupTesting, tenantsTestCmd()),
 		inGroup(groupTesting, toolsetsTestCmd()),
+		inGroup(groupTesting, signInTestCmd()),
 		inGroup(groupTesting, modelsTestCmd()),
 		inGroup(groupTesting, servingTestCmd()),
 		inGroup(groupTesting, vmManagerTestCmd()),
@@ -1977,6 +1978,31 @@ func toolsetsTestCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the throwaway agents run on (default: default-model-config, the Anthropic one the lab renders from $ANTHROPIC_API_KEY)")
 	cmd.Flags().BoolVar(&opts.SkipChat, "skip-chat", false, "skip the turns that need the model to answer (the runtime path, the chat-only agent, the real agent's view of the fixture)")
 	cmd.Flags().BoolVar(&opts.SkipPortal, "skip-portal", false, "kagent API v2 only: skip the portal's apply path (the composed AgentTemplate through the scaffolder template) for a portal that does not speak kagent main yet; the Tools step's endpoints are proven regardless")
+	return cmd
+}
+
+func signInTestCmd() *cobra.Command {
+	var opts lab.SignInTestOptions
+	cmd := &cobra.Command{
+		Use:   "signin-test [email]",
+		Short: "Headless sign-in proof: an agent calling a tool of a server the person has not signed in to pauses at input-required on muster's sign-in link (an MCP URL elicitation); a decline ends the call, an accept after the sign-in runs it, the conversation goes on either way — on the platform Harness and the claude and codex coding Harnesses",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadProofLab()
+			if err != nil {
+				return err
+			}
+			email := cfg.AdminUser().Email
+			if len(args) == 1 {
+				email = args[0]
+			}
+			return lab.SignInTest(cfg, email, opts)
+		},
+	}
+	cmd.Flags().StringSliceVar(&opts.Harnesses, "harness", nil, "the Harnesses to prove, of kagent, claude and codex (default: kagent and every coding Harness of the two the lab renders)")
+	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the ModelConfig of the kagent and claude agents (default: default-model-config); codex runs on the lab's Responses model, else the mockllm")
+	cmd.Flags().StringVar(&opts.MockLLMBinary, "mockllm-binary", "", "the static linux agentlab binary the mockllm's container runs (default: this one)")
+	cmd.Flags().DurationVar(&opts.Timeout, "timeout", 5*time.Minute, "how long an agent may take to become Ready")
 	return cmd
 }
 

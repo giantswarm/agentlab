@@ -29,13 +29,16 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/giantswarm/go-selfupdate"
 	selfupdatecosign "github.com/giantswarm/selfupdate-cosign"
+	"github.com/google/go-github/v86/github"
 
 	"github.com/giantswarm/agentlab/internal/xdg"
 	"github.com/giantswarm/agentlab/pkg/project"
@@ -78,22 +81,35 @@ var remindTimeout = 2 * time.Second
 // `version check`.
 var ErrOutdated = errors.New("a newer agentlab release is available")
 
-// Seams the tests replace: the release source (GitHub), the signature check
-// (the shared cosign validator for releases of Repository: it pins the
-// CircleCI issuer, a CircleCI pipeline as the subject and this repository as
-// the source, against the Sigstore public-good trust root), the cache
-// location ("" disables the cache), the clock, the executable to replace,
-// the folder it settles in and the running version.
+// The environment variables a GitHub token is read from, in gh's order:
+// GH_TOKEN wins over GITHUB_TOKEN.
+const (
+	ghTokenEnv     = "GH_TOKEN"     // #nosec G101 -- variable NAME, not a credential
+	githubTokenEnv = "GITHUB_TOKEN" // #nosec G101 -- variable NAME, not a credential
+)
+
+// ghAuthTokenSource names a token gh keeps for its signed-in account.
+const ghAuthTokenSource = "`gh auth token`" // #nosec G101 -- a command, not a credential
+
+// Seams the tests replace: the release source (GitHub, read with the token
+// it is handed, anonymously without one) and the API it asks, the token gh
+// keeps, the signature check (the shared cosign validator for releases of
+// Repository: it pins the CircleCI issuer, a CircleCI pipeline as the subject
+// and this repository as the source, against the Sigstore public-good trust
+// root), the cache location ("" disables the cache), the clock, the
+// executable to replace, the folder it settles in and the running version.
 var (
-	newSource = func() selfupdate.Source {
-		// The error is for GitHub Enterprise URLs only; nil makes NewUpdater
-		// build the same public-GitHub source itself. A GITHUB_TOKEN in the
-		// environment lifts the anonymous rate limit, nothing else changes.
-		src, err := selfupdate.NewGitHubSource(selfupdate.GitHubConfig{})
-		if err != nil {
-			return nil
+	newSource    = githubReleases
+	githubAPIURL = ""
+	ghAuthToken  = func(ctx context.Context) string {
+		if _, err := exec.LookPath("gh"); err != nil {
+			return ""
 		}
-		return src
+		out, err := exec.CommandContext(ctx, "gh", "auth", "token", "--hostname", "github.com").Output()
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(out))
 	}
 	newValidator = func() selfupdate.Validator { return selfupdatecosign.New(Repository) }
 	cacheDir     = func() string {
@@ -165,9 +181,14 @@ func Run(ctx context.Context, w io.Writer, opts Options) error {
 	if opts.Pre {
 		which = "release or release candidate"
 	}
-	_, _ = fmt.Fprintf(w, "Looking up the latest %s of %s...\n", which, Repository)
 	lookup, cancel := context.WithTimeout(ctx, selfUpdateTimeout)
-	up, rel, found, err := detect(lookup, newValidator(), opts.Pre)
+	cred := credential(lookup)
+	as := "anonymously"
+	if cred.source != "" {
+		as = "with the token from " + cred.source
+	}
+	_, _ = fmt.Fprintf(w, "Looking up the latest %s of %s %s...\n", which, Repository, as)
+	up, rel, found, err := detect(lookup, cred, newValidator(), opts.Pre)
 	cancel()
 	if errors.Is(err, selfupdate.ErrValidationAssetNotFound) {
 		// go-selfupdate found the newest release with a binary for this
@@ -175,7 +196,7 @@ func Run(ctx context.Context, w io.Writer, opts Options) error {
 		return fmt.Errorf("the latest %s of %s has no signature bundle for this platform's binary, so it cannot be verified; refusing to install it: %w", which, Repository, err)
 	}
 	if err != nil {
-		return fmt.Errorf("looking up the latest release of %s: %w (is this machine online?)", Repository, err)
+		return lookupFailed(err, cred)
 	}
 	if !found {
 		return fmt.Errorf("no release of %s carries a binary for %s/%s", Repository, runtime.GOOS, runtime.GOARCH)
@@ -273,19 +294,70 @@ func onPath(dir string) bool {
 }
 
 // detect asks GitHub for the newest release with a binary for this platform
-// (found is false when none has one), prereleases included when pre. The updater comes back with the release
+// (found is false when none has one), read with cred's token, prereleases
+// included when pre. The updater comes back with the release
 // because the download has to go through the same source. With a validator,
 // the release must also carry the validator's bundle for that binary — else
 // the error wraps selfupdate.ErrValidationAssetNotFound — and Install checks
 // the download against it; nil asks for no bundle, for a caller that installs
 // nothing.
-func detect(ctx context.Context, validator selfupdate.Validator, pre bool) (up *selfupdate.Updater, rel *selfupdate.Release, found bool, err error) {
-	up, err = selfupdate.NewUpdater(selfupdate.Config{Source: newSource(), Validator: validator, Prerelease: pre})
+func detect(ctx context.Context, cred githubCredential, validator selfupdate.Validator, pre bool) (up *selfupdate.Updater, rel *selfupdate.Release, found bool, err error) {
+	up, err = selfupdate.NewUpdater(selfupdate.Config{Source: newSource(cred.token), Validator: validator, Prerelease: pre})
 	if err != nil {
 		return nil, nil, false, err
 	}
 	rel, found, err = up.DetectLatest(ctx, selfupdate.ParseSlug(Repository))
 	return up, rel, found, err
+}
+
+// githubReleases is the GitHub releases source, authenticated with token
+// when it is not empty: 5,000 calls an hour for the token's account instead
+// of the 60 an hour GitHub grants every anonymous caller behind one address.
+func githubReleases(token string) selfupdate.Source {
+	src, err := selfupdate.NewGitHubSource(selfupdate.GitHubConfig{APIToken: token, EnterpriseBaseURL: githubAPIURL})
+	if err != nil {
+		// Only an unparsable API URL fails; nil makes NewUpdater build the
+		// public-GitHub source itself.
+		return nil
+	}
+	return src
+}
+
+// githubCredential is the token the releases are read with and where it
+// came from: GH_TOKEN, GITHUB_TOKEN, else the token gh keeps for its
+// signed-in account. Both are empty for an anonymous call.
+type githubCredential struct {
+	token, source string
+}
+
+func credential(ctx context.Context) githubCredential {
+	for _, env := range []string{ghTokenEnv, githubTokenEnv} {
+		if token := os.Getenv(env); token != "" {
+			return githubCredential{token: token, source: env}
+		}
+	}
+	if token := ghAuthToken(ctx); token != "" {
+		return githubCredential{token: token, source: ghAuthTokenSource}
+	}
+	return githubCredential{}
+}
+
+// lookupFailed words a failed release lookup. A spent rate limit says
+// whether the call was anonymous, and how to make it authenticated, or
+// which token's limit is spent.
+func lookupFailed(err error, cred githubCredential) error {
+	var limit *github.RateLimitError
+	if !errors.As(err, &limit) {
+		return fmt.Errorf("looking up the latest release of %s: %w (is this machine online?)", Repository, err)
+	}
+	until := ""
+	if reset := limit.Rate.Reset.Time; !reset.IsZero() {
+		until = " until " + reset.Local().Format(time.RFC3339)
+	}
+	if cred.source == "" {
+		return fmt.Errorf("looking up the latest release of %s: the call was anonymous, and GitHub's anonymous rate limit (60 calls an hour, shared by every machine behind this address) is spent%s; set %s or %s, or sign in with `gh auth login`, to read the releases with your token: %w", Repository, until, ghTokenEnv, githubTokenEnv, err)
+	}
+	return fmt.Errorf("looking up the latest release of %s: the rate limit of the token from %s is spent%s: %w", Repository, cred.source, until, err)
 }
 
 // tag is the version in the form the tags and pkg/project use ("v0.19.3");
@@ -323,7 +395,7 @@ func rememberedLatest(ctx context.Context) string {
 	}
 	ctx, cancel := context.WithTimeout(ctx, remindTimeout)
 	defer cancel()
-	_, rel, found, err := detect(ctx, nil, false)
+	_, rel, found, err := detect(ctx, credential(ctx), nil, false)
 	switch {
 	case err != nil:
 		// Keep the previous answer, if any: it is still the best this

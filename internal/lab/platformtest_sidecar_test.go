@@ -205,3 +205,20 @@ func TestHelmReleaseLastDeployed(t *testing.T) {
 		t.Errorf("no history: err = %v", err)
 	}
 }
+
+// A manager's tools are those under its prefix alone; none names the
+// audience and the rendered key that carries it.
+func TestAudienceManagerTools(t *testing.T) {
+	names := []string{"list_tools", "x_agent-manager_create_agent", "x_agent-manager-extra_x", "x_workspace-manager_list_providers", "x_workspace-manager_list_workspaces"}
+	got, err := audienceManagerTools(names, workspaceManagerMCPServer)
+	if err != nil || !slices.Equal(got, []string{"x_workspace-manager_list_providers", "x_workspace-manager_list_workspaces"}) {
+		t.Errorf("workspace-manager tools = %v, %v", got, err)
+	}
+	if got, err := audienceManagerTools(names, agentManagerMCPServer); err != nil || !slices.Equal(got, []string{"x_agent-manager_create_agent"}) {
+		t.Errorf("agent-manager tools = %v, %v", got, err)
+	}
+	_, err = audienceManagerTools(names, modelManagerMCPServer)
+	if err == nil || !strings.Contains(err.Error(), modelManagerMCPServer+".muster.mcpServer.auth.requiredAudiences") {
+		t.Errorf("model-manager without tools: %v, want the requiredAudiences key named", err)
+	}
+}

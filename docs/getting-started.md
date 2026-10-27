@@ -299,7 +299,7 @@ Applied to the configuration:
   GitHub App, since the portal's skill discovery and agent-manager's skill
   resolution otherwise share this machine's unauthenticated GitHub window (60
   requests an hour); without either, the line names the Secret the lab lacks.
-  agentlab never reads `$GITHUB_TOKEN`. See [Agents](agents.md#the-github-token).
+  The lab never takes `$GITHUB_TOKEN` (only `self-update` reads it). See [Agents](agents.md#the-github-token).
 
 Pins override the discovery for that run: `--model-manager[=false]` decides
 the flag regardless of what answers (off keeps the chart's default-on
