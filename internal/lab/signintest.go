@@ -33,7 +33,8 @@ const (
 	signInTestSystemPrompt = "You are a throwaway agent of `agentlab signin-test`. Do exactly what the user asks with your tools, and never ask questions."
 	// signInTestFollowUp is the turn after a decided sign-in: it completes
 	// only on a conversation the decision left whole.
-	signInTestFollowUp = "Reply with the single word READY."
+	signInTestFollowUp      = "Reply with the single word READY."
+	signInTestFollowUpReply = "READY"
 	// signInTestToolProof is what the fixture's list_core_tools answers
 	// with: muster's own core tools, the fixture being muster.
 	signInTestToolProof = "core_"
@@ -95,7 +96,7 @@ func SignInTest(cfg *config.Config, email string, opts SignInTestOptions) error 
 	if p.api, err = dialKagentAPI(cfg, p.token); err != nil {
 		return err
 	}
-	p.sessions = &sessionSet{api: p.api}
+	p.sessions = &sessionSet{api: p.api, manager: p.muster}
 	harnesses, err := p.harnesses()
 	if err != nil {
 		return err
@@ -174,20 +175,6 @@ func (p *signInProof) prove(harness string) error {
 		return fmt.Errorf("agent %s is not Ready after %s: %s", name, boot.elapsed.Round(time.Second), boot.reason)
 	}
 	note("%s Ready in %s", name, boot.elapsed.Round(time.Second))
-	if harness == config.CodingRuntimeCodex {
-		skip, err := p.codexBindingSkip(name)
-		if err != nil {
-			return err
-		}
-		if skip != "" {
-			// codex reaches muster only on a credential of the binding's
-			// own: without one muster refuses its MCP connection, and no
-			// tool call is made to elicit on.
-			p.verdicts = append(p.verdicts, fmt.Sprintf("SKIP: %s — %s", harness, skip))
-			note("skipped: %s", skip)
-			return removeAgent(name)
-		}
-	}
 	if harness == config.CodingRuntimeCodex && model == MockLLMModelConfig {
 		if err := p.startMock(name); err != nil {
 			return err
@@ -242,19 +229,20 @@ func (p *signInProof) prove(harness string) error {
 	}
 	p.pass("%s — accepted: the sign-in completed through Dex and muster's callback, accept resumed the same task (%s) and the call answered the fixture's tools, the next turn completed", harness, accepted.taskID)
 
+	// Signed out, the fixture stays Connected; restarted, it is Auth
+	// Required again, so the next Harness's call meets the sign-in.
 	p.signOut()
+	restartOAuthFixture()
 	return removeAgent(name)
 }
 
-// pausedOnSignIn starts a conversation of agent and asks for the fixture's
-// tool: the turn must pause at input-required on muster's sign-in link.
+// pausedOnSignIn starts a conversation of agent the way Slack and the
+// portal do (startBoundSession) and asks for the fixture's tool: the turn
+// must pause at input-required on muster's sign-in link.
 func (p *signInProof) pausedOnSignIn(agent string) (*apiv1alpha1.Session, *turn, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), p.opts.Timeout)
 	defer cancel()
-	session, err := p.api.createSession(ctx, agent, fmt.Sprintf("signin-test-%d", time.Now().UnixNano()))
-	if session != nil && session.GetId() != "" {
-		p.sessions.add(session.GetId())
-	}
+	session, err := startBoundSession(ctx, p.muster, p.api, p.sessions, agent)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -326,26 +314,6 @@ func (p *signInProof) startMock(agent string) error {
 	}
 	note("codex runs on the mockllm (%s), scripted to call %s through call_tool", mockLLMURL(), fixtureSignedOutTool)
 	return nil
-}
-
-// codexBindingSkip is why the codex agent's muster binding cannot reach
-// muster on this line (judgeSecretBacked: no header from a Secret), "" when
-// it carries a credential.
-func (p *signInProof) codexBindingSkip(agent string) (string, error) {
-	t, err := readAgentTemplate(agent)
-	if err != nil {
-		return "", err
-	}
-	rms, err := readKagentObject(remoteMCPServerResource, t.mcpServer())
-	if err != nil {
-		return "", fmt.Errorf("the bound %s %s: %w", remoteMCPServerKind, t.mcpServer(), err)
-	}
-	line := "agent-platform " + firstNonEmpty(p.cfg.Platform.ChartVersion, p.cfg.Platform.ChartPath, "unread")
-	skip, err := judgeSecretBacked(rms, secretHasKey, line)
-	if err != nil || skip == "" {
-		return "", err
-	}
-	return "muster refuses the runtime's MCP connection, so codex makes no call to elicit on (" + skip + ")", nil
 }
 
 // signOut forgets the person's grant for the fixture, so the next agent

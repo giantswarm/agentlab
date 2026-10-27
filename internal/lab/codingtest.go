@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
-	"github.com/google/uuid"
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
@@ -43,11 +42,7 @@ import (
 //     package, on claude with the Claude-format package beside it:
 //     Ready, its
 //     RemoteMCPServer Accepted and sending the toolset, the Agent's egress
-//     the Harness's origin list. On codex and omp a binding with a header
-//     from a Secret carries its credential on upstream's Secret-backed path,
-//     which the controller hands the runtime as kagent's placeholder: every
-//     Secret key it names is there. A binding with none, a platform line that
-//     ships no Secret-backed credential, skips the stage.
+//     the Harness's origin list.
 //  4. One Session, one turn whose shell tool probes the sandbox; its lines
 //     are judged stage by stage. On claude: Claude Code runs as the
 //     unprivileged uid and cannot read the harness's environment or memory;
@@ -105,10 +100,6 @@ type codingRuntime struct {
 	// handed its Secret-backed MCP credentials in; "" where it has none of
 	// its own.
 	mcpCredentialPrefix string
-	// secretBacked is whether the agent's MCP binding carries its credential
-	// on upstream's Secret-backed path: a RemoteMCPServer header from a
-	// Secret.
-	secretBacked bool
 }
 
 // The environment variables the codex runtime and a BYO Harness (omp) read
@@ -131,12 +122,12 @@ var codingRuntimes = map[string]codingRuntime{
 	config.CodingRuntimeCodex: {
 		name: config.CodingRuntimeCodex, shellTool: "shell tool",
 		modelKeys:           []string{codexOpenAIKeyEnv, codexBedrockKeyEnv},
-		mcpCredentialPrefix: codexMCPCredentialEnvs, secretBacked: true,
+		mcpCredentialPrefix: codexMCPCredentialEnvs,
 	},
 	config.CodingRuntimeOmp: {
 		name: config.CodingRuntimeOmp, shellTool: "bash tool",
 		modelKeys:           []string{anthropicKeyEnv},
-		mcpCredentialPrefix: byoMCPCredentialEnvs, secretBacked: true,
+		mcpCredentialPrefix: byoMCPCredentialEnvs,
 	},
 }
 
@@ -360,9 +351,6 @@ type codingProof struct {
 	// it; mock is the running mockllm.
 	mockBinary string
 	mock       *mockLLM
-	// noMCPCredential is why the secret-backed credential stage skipped:
-	// the runtime's binding carries no credential on the line.
-	noMCPCredential string
 	// musterTools is the agent's tool selection on muster; empty is none.
 	musterTools []string
 	// toolchains are the toolchains part's, name[@version] each;
@@ -494,13 +482,6 @@ func (p *codingProof) run() error {
 		}
 	}
 
-	if p.rt.secretBacked {
-		p.stages.begin("secret-backed credential", "The agent's MCP binding carries its credential on upstream's Secret-backed path: a RemoteMCPServer header from a Secret")
-		if err := p.proveSecretBacked(); err != nil {
-			return err
-		}
-	}
-
 	if p.rt.claude {
 		// The write tool the sandbox calls must exist for the person: its
 		// refusal through the agent's endpoint is then the toolset's.
@@ -579,11 +560,6 @@ func (p *codingProof) run() error {
 	switch {
 	case strings.Contains(called, codingTestAgent):
 		note("%s listed: %s", codingTestReadTool, excerpt(called, 240))
-	case p.noMCPCredential != "":
-		// The binding carries no credential on this line: muster answers
-		// the runtime's MCP connection 401, and the runtime has none of the
-		// binding's tools to call.
-		p.stages.skip("%s through the agent's binding answered %q: the binding carries no credential on this line, so muster refuses the runtime's MCP connection (%s)", codingTestReadTool, excerpt(called, 200), p.noMCPCredential)
 	default:
 		return fmt.Errorf("%s through the agent's binding on Harness %s answered %q, wanted a list naming %s; the reply: %q (%s)", codingTestReadTool, harness, called, codingTestAgent, excerpt(reply, 400), p.line)
 	}
@@ -653,7 +629,7 @@ func (p *codingProof) connect(ctx context.Context) error {
 	if p.api, err = dialKagentAPI(p.cfg, token); err != nil {
 		return err
 	}
-	p.sessions = &sessionSet{api: p.api}
+	p.sessions = &sessionSet{api: p.api, manager: p.muster}
 	p.line = p.releases(ctx)
 	note("the line: %s", p.line)
 	return nil
@@ -730,53 +706,6 @@ func (p *codingProof) judgedStages() []judgedStage {
 		judgedStage{"dns canary", "A lookup of " + codingTestDNSCanary + ", outside the allowlist, recorded", codingProbe.dnsCanary},
 		judgedStage{"egress", "A host outside the Agent's origins denied at the egress gate, an origin of its list reached", codingProbe.egress},
 	)
-}
-
-// proveSecretBacked is the agent's binding on upstream's Secret-backed path:
-// its RemoteMCPServer takes at least one header from a Secret, and every
-// Secret key it names is there. A binding with no header from a Secret is a
-// platform line that ships no Secret-backed credential: the stage is
-// skipped, naming the headers it has. Names only; the values stay in the
-// Secret.
-func (p *codingProof) proveSecretBacked() error {
-	t, err := readAgentTemplate(codingTestAgent)
-	if err != nil {
-		return err
-	}
-	rms, err := readKagentObject(remoteMCPServerResource, t.mcpServer())
-	if err != nil {
-		return fmt.Errorf("the bound %s %s: %w", remoteMCPServerKind, t.mcpServer(), err)
-	}
-	skip, err := judgeSecretBacked(rms, secretHasKey, p.line)
-	if err != nil {
-		return err
-	}
-	if skip != "" {
-		p.stages.skip("%s", skip)
-		p.noMCPCredential = skip
-	}
-	return nil
-}
-
-// judgeSecretBacked is the secret-backed credential stage's verdict on the
-// bound RemoteMCPServer: why the stage is skipped when no header comes from
-// a Secret, an error when a Secret key a header names is missing, neither
-// when every one is there. hasKey reports whether a Secret carries a key,
-// never its value.
-func judgeSecretBacked(rms *unstructured.Unstructured, hasKey func(ns, name, key string) bool, line string) (string, error) {
-	sources := secretBackedHeaders(rms)
-	if len(sources) == 0 {
-		return fmt.Sprintf("%s %s takes headers %v, none from a Secret: the platform line (%s) ships no Secret-backed MCP credential", remoteMCPServerKind, rms.GetName(), headerNames(rms), line), nil
-	}
-	var headers []string
-	for _, s := range sources {
-		if !hasKey(rms.GetNamespace(), s.secret, s.key) {
-			return "", fmt.Errorf("%s %s takes header %s from Secret %s/%s key %s, which is missing: its MCP calls carry no credential (%s)", remoteMCPServerKind, rms.GetName(), s.header, rms.GetNamespace(), s.secret, s.key, line)
-		}
-		headers = append(headers, s.header)
-	}
-	note("binds %s/%s with %v from a Secret, every key there", remoteMCPServerKind, rms.GetName(), headers)
-	return "", nil
 }
 
 // releases words the line under test: the chart and the versions the
@@ -918,16 +847,12 @@ func (p *codingProof) proveBinding(toolset []string) error {
 	return nil
 }
 
-// createSession is a Session of the agent as the person, tracked for
-// removal.
+// createSession is a Session of the agent as the person, started the way
+// Slack and the portal do (startBoundSession) and tracked for removal.
 func (p *codingProof) createSession(ctx context.Context, agent string) (*apiv1alpha1.Session, error) {
 	ctx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
-	session, err := p.api.createSession(ctx, agent, uuid.NewString())
-	if session != nil && session.GetId() != "" {
-		p.sessions.add(session.GetId())
-	}
-	return session, err
+	return startBoundSession(ctx, p.muster, p.api, p.sessions, agent)
 }
 
 // codingTurn is what one completed turn of the proof answered: the reply's
