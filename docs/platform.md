@@ -1172,11 +1172,14 @@ A coding agent is an agent whose Agent names a coding Harness: a coding CLI
 run headless in a Substrate actor by the kagent line's image of its runtime
 — `claude` (Claude Code, `claude-harness`), `codex` (OpenAI's Codex CLI,
 `codex-harness`) or `omp` (oh-my-pi, a BYO Harness on the kagent line's
-`omp-harness` adapter, on the Anthropic ModelConfig claude uses). The proof's
-Sessions start through agent-manager's `start_session` as the person, as
-Slack's and the portal's do, which binds the Session's actor to them in
-muster: each runtime reaches muster as the person on the actor's JWT, which
-the egress gateway sets in place of kagent's placeholder. An installation turns coding
+`omp-harness` adapter, on the Anthropic ModelConfig claude uses). On codex
+and omp, which have no caller forwarder, the proof's Sessions start through
+agent-manager's `start_session` as the person, as Slack's and the portal's
+do: that binds the Session's actor to them in muster, and the runtime reaches
+muster as the person on the actor's JWT, which the egress gateway sets in
+place of kagent's placeholder. On claude they are created through the kagent
+API, unbound, so the turns reach muster through the caller forwarder the
+claude stages prove. An installation turns coding
 agents on through the meta chart's `kagent.harnesses` alone, and the lab
 does the same: with `platform.coding` (`agentlab configure --coding`,
 agent-platform 4.110.0 or newer) `agentlab platform` renders one coding
