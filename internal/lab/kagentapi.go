@@ -936,6 +936,9 @@ type turn struct {
 	// approval is the tool_approval_request the task paused on at
 	// input-required, nil otherwise.
 	approval *toolApprovalRequest
+	// signIn is the url_elicitation_request the task paused on at
+	// input-required: an MCP server's sign-in link, nil otherwise.
+	signIn *urlElicitationRequest
 	// message is set for a bare Message answer (no task).
 	message *a2a.Message
 	events  int
@@ -990,10 +993,11 @@ func (t *turn) observe(ev a2a.Event) {
 
 func (t *turn) setStatus(s a2a.TaskStatus) {
 	t.states = append(t.states, s.State)
-	t.approval = nil
+	t.approval, t.signIn = nil, nil
 	switch {
 	case s.State == a2a.TaskStateInputRequired:
 		t.approval = parseToolApprovalRequest(s.Message)
+		t.signIn = parseURLElicitationRequest(s.Message)
 		t.statusText = messageText(s.Message)
 	case s.State.Terminal():
 		t.statusText = messageText(s.Message)
@@ -1243,6 +1247,59 @@ func parseToolApprovalRequest(msg *a2a.Message) *toolApprovalRequest {
 		return nil
 	}
 	return &req
+}
+
+// urlElicitationRequest is the HITL payload of a task paused at
+// input-required on an MCP server's URL elicitation: the person opens URL,
+// such as muster's sign-in link, then the task resumes.
+type urlElicitationRequest struct {
+	ID      string `json:"id"`
+	Server  string `json:"server"`
+	Message string `json:"message"`
+	URL     string `json:"url"`
+}
+
+// The URL elicitation's payload types and the actions that answer it.
+const (
+	hitlTypeURLElicitationRequest  = "url_elicitation_request"
+	hitlTypeURLElicitationResponse = "url_elicitation_response"
+	signInAccept                   = "accept"
+	signInDecline                  = "decline"
+)
+
+// parseURLElicitationRequest reads the url_elicitation_request a status
+// message carries under the HITL extension; nil without one.
+func parseURLElicitationRequest(msg *a2a.Message) *urlElicitationRequest {
+	if msg == nil || !slices.Contains(msg.Extensions, hitlExtensionURI) {
+		return nil
+	}
+	raw, ok := msg.Metadata[hitlExtensionURI].(map[string]any)
+	if !ok || stringOf(raw[fieldTypeKey]) != hitlTypeURLElicitationRequest {
+		return nil
+	}
+	req := &urlElicitationRequest{ID: stringOf(raw["id"]), Server: stringOf(raw["server"]), Message: stringOf(raw["message"]), URL: stringOf(raw["url"])}
+	if req.ID == "" || req.URL == "" {
+		return nil
+	}
+	return req
+}
+
+// answerSignIn resumes a task paused on a url_elicitation_request with
+// action (signInAccept: the person signed in; signInDecline) and folds the
+// resumed stream. The text part is the transcript's line.
+func (a *kagentAPI) answerSignIn(ctx context.Context, session *apiv1alpha1.Session, paused *turn, action string) (*turn, error) {
+	if paused.signIn == nil {
+		return nil, fmt.Errorf("task %s carries no url_elicitation_request to answer (state %s)", paused.taskID, stateName(paused.state()))
+	}
+	text := "I've signed in."
+	if action != signInAccept {
+		text = "Not now."
+	}
+	msg := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart(text))
+	msg.TaskID = paused.taskID
+	msg.SetMeta(hitlExtensionURI, map[string]any{fieldTypeKey: hitlTypeURLElicitationResponse, "id": paused.signIn.ID, "action": action})
+	msg.Extensions = append(msg.Extensions, hitlExtensionURI)
+	return a.turn(ctx, session, msg)
 }
 
 // decisionMessage answers a paused task's tool_approval_request the way
