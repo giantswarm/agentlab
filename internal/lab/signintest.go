@@ -2,8 +2,10 @@ package lab
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -29,15 +31,12 @@ const (
 	// signInTestPrompt asks for the fixture's tool through muster's
 	// call_tool; the mockllm's sign-in turn answers it for codex.
 	signInTestPrompt = "Sign-in check: call muster's call_tool tool with name " + fixtureSignedOutTool +
-		" and arguments {}, then reply with the tool's answer as it came back, nothing else."
+		" and arguments {}, then reply with the line of the tool's answer that holds filtered_count, as it came back, nothing else."
 	signInTestSystemPrompt = "You are a throwaway agent of `agentlab signin-test`. Do exactly what the user asks with your tools, and never ask questions."
 	// signInTestFollowUp is the turn after a decided sign-in: it completes
 	// only on a conversation the decision left whole.
 	signInTestFollowUp      = "Reply with the single word READY."
 	signInTestFollowUpReply = "READY"
-	// signInTestToolProof is what the fixture's list_core_tools answers
-	// with: muster's own core tools, the fixture being muster.
-	signInTestToolProof = "core_"
 )
 
 // SignInTestOptions tune `agentlab signin-test`.
@@ -186,6 +185,7 @@ func (p *signInProof) prove(harness string) error {
 	if err != nil {
 		return err
 	}
+	decided := time.Now()
 	declined, err := p.answer(session, paused, signInDecline)
 	if err != nil {
 		return err
@@ -193,8 +193,10 @@ func (p *signInProof) prove(harness string) error {
 	if declined.state() != a2a.TaskStateCompleted {
 		return fmt.Errorf("after decline the task ended %s (%s): %s", stateName(declined.state()), declined.statesString(), excerpt(declined.text(), 300))
 	}
-	if strings.Contains(declined.text(), signInTestToolProof) {
-		return fmt.Errorf("after decline the reply quotes the fixture's tools, so the call ran: %s", excerpt(declined.text(), 300))
+	if ran, err := p.fixtureCallsSince(decided); err != nil {
+		return err
+	} else if len(ran) > 0 {
+		return fmt.Errorf("after decline muster ran %s: %s", fixtureSignedOutTool, strings.Join(ran, ", "))
 	}
 	if err := p.followUp(session); err != nil {
 		return fmt.Errorf("after decline: %w", err)
@@ -210,6 +212,7 @@ func (p *signInProof) prove(harness string) error {
 		return fmt.Errorf("completing the sign-in at %s: %w", linkPath(paused.signIn.URL), err)
 	}
 	note("Dex login completed; muster's proxy callback answered Authentication Successful")
+	decided = time.Now()
 	accepted, err := p.answer(session, paused, signInAccept)
 	if err != nil {
 		return err
@@ -221,8 +224,13 @@ func (p *signInProof) prove(harness string) error {
 	for _, tool := range accepted.tools {
 		answered += "\n" + tool.output
 	}
-	if !strings.Contains(answered, signInTestToolProof) {
-		return fmt.Errorf("after accept neither the reply nor a tool result carries the fixture's tools (%q): %s", signInTestToolProof, excerpt(answered, 300))
+	if !callAnswered(answered) {
+		return fmt.Errorf("after accept neither the reply nor a tool result carries the fixture's tools (%s): %s", signInTestToolProof, excerpt(answered, 300))
+	}
+	if ran, err := p.fixtureCallsSince(decided); err != nil {
+		return err
+	} else if len(ran) != 1 {
+		return fmt.Errorf("after accept muster ran %s %d times, want once: %s", fixtureSignedOutTool, len(ran), strings.Join(ran, ", "))
 	}
 	if err := p.followUp(session); err != nil {
 		return fmt.Errorf("after accept: %w", err)
@@ -351,4 +359,52 @@ func linkPath(link string) string {
 		return "an unparsable link"
 	}
 	return u.Scheme + "://" + u.Host + u.Path
+}
+
+// signInTestToolProof matches the count field of the fixture's
+// list_core_tools answer, the fixture being muster, also inside a JSON string
+// that escapes its quotes; a refusal of the call carries no count.
+var signInTestToolProof = regexp.MustCompile(`filtered_count(\\?")?\s*:\s*\d`)
+
+// fixtureCallsSince lists muster's successful dispatches of the fixture's
+// tool as the person since the instant.
+func (p *signInProof) fixtureCallsSince(since time.Time) ([]string, error) {
+	identity, err := tokenIdentity(p.token, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	logs, err := musterLogSince(since)
+	if err != nil {
+		return nil, err
+	}
+	return fixtureCallsIn(logs, since, identity.subject), nil
+}
+
+// fixtureCallsIn lists, from the instant on, the subject's dispatches of the
+// fixture's tool that muster ran: a refused or declined call logs none.
+func fixtureCallsIn(logs string, since time.Time, subject string) []string {
+	var ran []string
+	for _, line := range strings.Split(logs, "\n") {
+		var entry struct {
+			Time    time.Time `json:"time"`
+			Msg     string    `json:"msg"`
+			Tool    string    `json:"tool"`
+			Subject string    `json:"subject"`
+			Outcome string    `json:"outcome"`
+		}
+		start := strings.IndexByte(line, '{')
+		if start < 0 || json.Unmarshal([]byte(line[start:]), &entry) != nil || entry.Time.Before(since) {
+			continue
+		}
+		if entry.Msg == "tool dispatched" && entry.Tool == fixtureSignedOutTool && entry.Outcome == "ok" && subjectMatches(entry.Subject, subject) {
+			ran = append(ran, entry.Time.UTC().Format(time.RFC3339Nano))
+		}
+	}
+	return ran
+}
+
+// callAnswered reports whether text carries the fixture's list_core_tools
+// answer.
+func callAnswered(text string) bool {
+	return signInTestToolProof.MatchString(text)
 }
