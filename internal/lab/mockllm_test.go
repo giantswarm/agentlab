@@ -170,6 +170,15 @@ func TestMockLLMScriptAnswersTheCodexTurns(t *testing.T) {
 		t.Fatalf("after the MCP call's output the mock answered %+v", reply)
 	}
 
+	search = mockLLMCall(t, srv, userItem(signInTestPrompt))
+	call = mockLLMCall(t, srv, userItem(signInTestPrompt), search, outputOf(search))
+	if want := `{"name":"` + signInTestTool + `","arguments":` + signInTestToolArguments + `}`; call.Type != "function_call" || call.Name != musterCallTool || stringOf(call.Arguments) != want {
+		t.Fatalf("on the sign-in prompt the mock answered %+v, wanted %s with %s", call, musterCallTool, want)
+	}
+	if reply := mockLLMCall(t, srv, userItem(signInTestPrompt), call, outputOf(call)); reply.Type != mockLLMMessage {
+		t.Fatalf("after the sign-in call's output the mock answered %+v", reply)
+	}
+
 	resp, err := srv.Client().Post(srv.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"m","input":"not in the script"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -184,10 +193,10 @@ func TestMockLLMScriptAnswersTheCodexTurns(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&counts); err != nil {
 		t.Fatal(err)
 	}
-	if counts.Answered != 15 || counts.Unmatched != 1 || len(counts.Log) != 16 {
-		t.Fatalf("the mock counts %d answered, %d unmatched, %d log lines; wanted 15, 1 and 16", counts.Answered, counts.Unmatched, len(counts.Log))
+	if counts.Answered != 18 || counts.Unmatched != 1 || len(counts.Log) != 19 {
+		t.Fatalf("the mock counts %d answered, %d unmatched, %d log lines; wanted 18, 1 and 19", counts.Answered, counts.Unmatched, len(counts.Log))
 	}
-	if last := counts.Log[15]; !strings.HasPrefix(last, "404 ") || !strings.Contains(last, "not in the script") {
+	if last := counts.Log[18]; !strings.HasPrefix(last, "404 ") || !strings.Contains(last, "not in the script") {
 		t.Fatalf("the unmatched request logs as %q, wanted its 404 and its input", last)
 	}
 }

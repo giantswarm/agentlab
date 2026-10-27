@@ -1112,12 +1112,14 @@ created through agent-manager as the person whose toolset names the
 
 | Stage | What passes |
 |---|---|
-| declined | the turn pauses at `input-required` on a link to muster's `/oauth/proxy/start`; `decline` completes the task without the call (the reply quotes none of the fixture's tools); the next turn of the conversation completes |
-| accepted | the same pause in a new conversation; the proof completes the sign-in headlessly as the person (Dex login, muster's proxy callback); `accept` resumes the same task, and the reply or a tool result carries the fixture's tools (`core_`); the next turn completes |
+| declined | the turn pauses at `input-required` on a link to muster's `/oauth/proxy/start`; `decline` completes the task, and muster's log records no dispatch of the fixture's tool as the person; the next turn of the conversation completes |
+| accepted | the same pause in a new conversation; the proof completes the sign-in headlessly as the person (Dex login, muster's proxy callback); `accept` resumes the same task, muster's log records exactly one successful dispatch of the fixture's tool as the person, and the reply or a tool result carries its answer (`filtered_count` and a number); the next turn completes |
 
 Between Harnesses the person is signed out of the fixture again, so each
 meets the link. The codex agent runs on the lab's Responses model, else the
-mockllm, whose scripted turn calls the fixture's tool. Every conversation is
+mockllm, whose scripted turn calls the fixture's tool. The tool is the
+fixture's `filter_tools` for `core_auth_login` (the fixture is muster), an
+answer short enough for a model to quote whole. Every conversation is
 started the way Slack and the portal start one: agent-manager's
 `start_session` through muster as the person, which binds the Session's
 actor to them in muster, so a runtime without a caller forwarder (codex)

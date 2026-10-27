@@ -107,7 +107,7 @@ func mockLLMScript(devctlArguments string) []mockLLMTurn {
 		{name: "codeword", prompt: "Remember the code word", command: codingCodeWordCommand(), reply: "The file is written."},
 		{name: "resume", prompt: "the code word I asked you to remember", command: codingResumeCommand(), reply: probeMarker + " code-word=" + codingTestCodeWord},
 		{name: "toolchain", prompt: toolchainsPrompt, command: toolchainsCheckCommand(), reply: "The toolchain check ran; its readings are the command's output."},
-		{name: "sign-in", prompt: signInTestPrompt, tool: musterCallTool, arguments: musterCallToolArguments(fixtureSignedOutTool), echo: true},
+		{name: "sign-in", prompt: signInTestPromptLead, tool: musterCallTool, arguments: `{"name":"` + signInTestTool + `","arguments":` + signInTestToolArguments + `}`, echo: true},
 		{name: "sign-in-follow-up", prompt: signInTestFollowUp, reply: signInTestFollowUpReply},
 	}...)
 }

@@ -28,10 +28,17 @@ import (
 
 const (
 	signInTestAgentPrefix = "signin-test-"
+	// signInTestTool is the fixture's tool the proof calls, the fixture
+	// being muster: filter_tools for one tool, whose answer is short enough
+	// for a model to quote whole.
+	signInTestTool          = "x_" + oauthFixtureServer + "_filter_tools"
+	signInTestToolArguments = `{"pattern":"core_auth_login"}`
 	// signInTestPrompt asks for the fixture's tool through muster's
-	// call_tool; the mockllm's sign-in turn answers it for codex.
-	signInTestPrompt = "Sign-in check: call muster's call_tool tool with name " + fixtureSignedOutTool +
-		" and arguments {}, then reply with the line of the tool's answer that holds filtered_count, as it came back, nothing else."
+	// call_tool; the mockllm's sign-in turn answers it for codex, matching
+	// signInTestPromptLead, which has no quote for JSON to escape.
+	signInTestPromptLead = "Sign-in check: call muster's call_tool tool with name " + signInTestTool
+	signInTestPrompt     = signInTestPromptLead + " and arguments " + signInTestToolArguments +
+		", then reply with the tool's answer as it came back, nothing else."
 	signInTestSystemPrompt = "You are a throwaway agent of `agentlab signin-test`. Do exactly what the user asks with your tools, and never ask questions."
 	// signInTestFollowUp is the turn after a decided sign-in: it completes
 	// only on a conversation the decision left whole.
@@ -196,7 +203,7 @@ func (p *signInProof) prove(harness string) error {
 	if ran, err := p.fixtureCallsSince(decided); err != nil {
 		return err
 	} else if len(ran) > 0 {
-		return fmt.Errorf("after decline muster ran %s: %s", fixtureSignedOutTool, strings.Join(ran, ", "))
+		return fmt.Errorf("after decline muster ran %s: %s", signInTestTool, strings.Join(ran, ", "))
 	}
 	if err := p.followUp(session); err != nil {
 		return fmt.Errorf("after decline: %w", err)
@@ -230,7 +237,7 @@ func (p *signInProof) prove(harness string) error {
 	if ran, err := p.fixtureCallsSince(decided); err != nil {
 		return err
 	} else if len(ran) != 1 {
-		return fmt.Errorf("after accept muster ran %s %d times, want once: %s", fixtureSignedOutTool, len(ran), strings.Join(ran, ", "))
+		return fmt.Errorf("after accept muster ran %s %d times, want once: %s", signInTestTool, len(ran), strings.Join(ran, ", "))
 	}
 	if err := p.followUp(session); err != nil {
 		return fmt.Errorf("after accept: %w", err)
@@ -320,7 +327,7 @@ func (p *signInProof) startMock(agent string) error {
 	if p.mock, err = startMockLLM(p.cfg, binary, t.mcpServer(), "", nil); err != nil {
 		return err
 	}
-	note("codex runs on the mockllm (%s), scripted to call %s through call_tool", mockLLMURL(), fixtureSignedOutTool)
+	note("codex runs on the mockllm (%s), scripted to call %s through call_tool", mockLLMURL(), signInTestTool)
 	return nil
 }
 
@@ -362,9 +369,9 @@ func linkPath(link string) string {
 }
 
 // signInTestToolProof matches the count field of the fixture's
-// list_core_tools answer, the fixture being muster, also inside a JSON string
-// that escapes its quotes; a refusal of the call carries no count.
-var signInTestToolProof = regexp.MustCompile(`filtered_count(\\?")?\s*:\s*\d`)
+// filter_tools answer, the fixture being muster, also inside JSON strings
+// nested to any depth; a refusal of the call carries no count.
+var signInTestToolProof = regexp.MustCompile(`filtered_count[\\"]*\s*:\s*\d`)
 
 // fixtureCallsSince lists muster's successful dispatches of the fixture's
 // tool as the person since the instant.
@@ -396,14 +403,14 @@ func fixtureCallsIn(logs string, since time.Time, subject string) []string {
 		if start < 0 || json.Unmarshal([]byte(line[start:]), &entry) != nil || entry.Time.Before(since) {
 			continue
 		}
-		if entry.Msg == "tool dispatched" && entry.Tool == fixtureSignedOutTool && entry.Outcome == "ok" && subjectMatches(entry.Subject, subject) {
+		if entry.Msg == "tool dispatched" && entry.Tool == signInTestTool && entry.Outcome == "ok" && subjectMatches(entry.Subject, subject) {
 			ran = append(ran, entry.Time.UTC().Format(time.RFC3339Nano))
 		}
 	}
 	return ran
 }
 
-// callAnswered reports whether text carries the fixture's list_core_tools
+// callAnswered reports whether text carries the fixture's filter_tools
 // answer.
 func callAnswered(text string) bool {
 	return signInTestToolProof.MatchString(text)
