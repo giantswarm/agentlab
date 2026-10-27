@@ -1415,26 +1415,31 @@ func waitSidecarMCPServers(ctx context.Context, cfg *config.Config, sidecars map
 // Connected one a session already uses. Every proof waiting for a server to
 // be up takes this, not a single state.
 //
-// Every caller waits only once the server's backend is rolled out, but muster
-// dials the CR as soon as the chart creates it: a backend that came up later
-// (mcp-prometheus, a release of its own after the platform) has by then been
-// refused and is on muster's reconnect backoff — 30 s doubling to a 2 m cap,
-// retried on a 30 s tick (muster internal/services/mcpserver/service.go
-// InitialBackoff/MaxBackoff) — which outlasts this wait. A Failed read
-// therefore asks muster once for a restart (spec.restartRequestedAt), which
-// dials at once instead of at the next scheduled retry.
+// muster dials an MCPServer as soon as it exists; a backend that comes up
+// later sits on muster's reconnect backoff (30 s doubling to a 2 m cap, muster
+// internal/services/mcpserver/service.go InitialBackoff/MaxBackoff), which
+// outlasts this wait. A Failed read therefore asks muster for a restart
+// (spec.restartRequestedAt), which dials at once. A restart does not reset
+// muster's failure count, so one that loses a race with the backend's
+// endpoints lands back on the cap: the request repeats on a Failed read every
+// mcpServerRestartInterval.
 func waitMCPServerReachable(name string) error {
-	nudged := false
+	var lastRequest time.Time
 	return pollMCPServerState(name, func(state string) {
-		if state != mcpServerStateFailed || nudged {
+		if state != mcpServerStateFailed || time.Since(lastRequest) < mcpServerRestartInterval {
 			return
 		}
-		nudged = true
-		if err := requestMCPServerRestart(name, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		lastRequest = time.Now()
+		if err := requestMCPServerRestart(name, lastRequest.UTC().Format(time.RFC3339)); err != nil {
 			note("could not ask muster to retry %s now (%v); waiting for its scheduled retry", name, err)
 		}
 	}, mcpServerReachableStates...)
 }
+
+// mcpServerRestartInterval spaces waitMCPServerReachable's restart requests:
+// muster's initial backoff, and apart by more than the second-precision stamp
+// muster compares.
+var mcpServerRestartInterval = 30 * time.Second
 
 // mcpServerReachableStates are the CR states of a server that answers: Failed
 // is the state that means trouble.

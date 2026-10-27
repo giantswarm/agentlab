@@ -247,7 +247,8 @@ func TestOrList(t *testing.T) {
 // backoff (up to 2m, plus its 30 s retry tick) — longer than the wait. The
 // wait asks muster once for a restart (spec.restartRequestedAt), which dials
 // at once; a reachable server is never restarted, and one still Failed after
-// the nudge fails the wait with its state.
+// the nudge fails the wait with its state. Requests repeat once
+// mcpServerRestartInterval has passed.
 func TestWaitMCPServerReachableNudgesFailed(t *testing.T) {
 	prevAttempts, prevInterval := mcpServerWaitAttempts, mcpServerWaitInterval
 	mcpServerWaitAttempts, mcpServerWaitInterval = 2, time.Millisecond
@@ -301,6 +302,17 @@ func TestWaitMCPServerReachableNudgesFailed(t *testing.T) {
 	}
 	if got := restarts(f, "down"); len(got) != 1 {
 		t.Errorf("restart requests for the dead server = %q, want exactly one", got)
+	}
+
+	prevRestart := mcpServerRestartInterval
+	mcpServerRestartInterval = 0
+	t.Cleanup(func() { mcpServerRestartInterval = prevRestart })
+	f = newFakeLab(t, mcpServerObject("down", "Failed"))
+	if err := waitMCPServerReachable("down"); err == nil {
+		t.Error("a server still Failed: wait succeeded")
+	}
+	if got := restarts(f, "down"); len(got) != mcpServerWaitAttempts {
+		t.Errorf("restart requests past the interval = %q, want one per Failed read (%d)", got, mcpServerWaitAttempts)
 	}
 }
 
