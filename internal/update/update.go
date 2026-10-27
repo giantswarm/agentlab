@@ -38,7 +38,7 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"github.com/giantswarm/go-selfupdate"
 	selfupdatecosign "github.com/giantswarm/selfupdate-cosign"
-	"github.com/google/go-github/v86/github"
+	"github.com/google/go-github/v93/github"
 
 	"github.com/giantswarm/agentlab/internal/xdg"
 	"github.com/giantswarm/agentlab/pkg/project"

@@ -18,7 +18,7 @@ require (
 	github.com/giantswarm/selfupdate-cosign v0.3.15
 	github.com/giantswarm/telemetrydeck-go v0.3.11
 	github.com/giantswarm/vm-manager v0.25.11
-	github.com/google/go-github/v86 v86.0.0
+	github.com/google/go-github/v93 v93.0.0
 	github.com/google/uuid v1.6.0
 	github.com/smallstep/truststore v0.13.0
 	github.com/spf13/cobra v1.10.2
@@ -128,6 +128,7 @@ require (
 	github.com/google/certificate-transparency-go v1.4.0 // indirect
 	github.com/google/gnostic-models v0.7.0 // indirect
 	github.com/google/go-containerregistry v0.22.1 // indirect
+	github.com/google/go-github/v86 v86.0.0 // indirect
 	github.com/google/go-querystring v1.2.0 // indirect
 	github.com/google/pprof v0.0.0-20260906184651-6331bc6350fe // indirect
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 // indirect
