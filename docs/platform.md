@@ -1104,9 +1104,9 @@ its sign-in link as an MCP URL elicitation, to a client that declares
 `elicitation.url`. A runtime that relays it pauses the turn at
 `input-required` with kagent's HITL `url_elicitation_request` (`id`, `server`,
 `message`, `url`), and the person's `url_elicitation_response` resumes the same
-task. `agentlab signin-test [email] [--harness kagent,claude,codex]
+task. `agentlab signin-test [email] [--harness kagent,claude,codex,omp]
 [--model-config <name>]` proves it on the platform Harness (the Go ADK) and on
-the claude and codex coding Harnesses the lab renders, each with an agent
+the claude, codex and omp coding Harnesses the lab renders, each with an agent
 created through agent-manager as the person whose toolset names the
 `lab-oauth-fixture` server:
 

@@ -42,8 +42,8 @@ const (
 
 // SignInTestOptions tune `agentlab signin-test`.
 type SignInTestOptions struct {
-	// Harnesses are the Harnesses proven, of claude, codex and kagent (the
-	// platform Harness); empty proves every one the lab renders.
+	// Harnesses are the Harnesses proven, of claude, codex, omp and kagent
+	// (the platform Harness); empty proves every one the lab renders.
 	Harnesses []string
 	// ModelConfig is the model of the claude and kagent agents (default
 	// default-model-config). codex runs on the lab's Responses model, else
@@ -115,13 +115,13 @@ func SignInTest(cfg *config.Config, email string, opts SignInTestOptions) error 
 }
 
 // harnesses are the Harnesses to prove: those asked for, else kagent and
-// the coding Harnesses of claude and codex the namespace has.
+// the coding Harnesses of claude, codex and omp the namespace has.
 func (p *signInProof) harnesses() ([]string, error) {
 	rendered, err := namespaceHarnesses(context.Background())
 	if err != nil {
 		return nil, err
 	}
-	known := []string{kagentHarness, config.CodingRuntimeClaude, config.CodingRuntimeCodex}
+	known := []string{kagentHarness, config.CodingRuntimeClaude, config.CodingRuntimeCodex, config.CodingRuntimeOmp}
 	if len(p.opts.Harnesses) == 0 {
 		out := []string{kagentHarness}
 		for _, h := range known[1:] {
