@@ -1414,9 +1414,32 @@ func waitSidecarMCPServers(ctx context.Context, cfg *config.Config, sidecars map
 // per-session server on a muster before 5.28.0, which spelled it that way;
 // Connected one a session already uses. Every proof waiting for a server to
 // be up takes this, not a single state.
+//
+// muster dials an MCPServer as soon as it exists; a backend that comes up
+// later sits on muster's reconnect backoff (30 s doubling to a 2 m cap, muster
+// internal/services/mcpserver/service.go InitialBackoff/MaxBackoff), which
+// outlasts this wait. A Failed read therefore asks muster for a restart
+// (spec.restartRequestedAt), which dials at once. A restart does not reset
+// muster's failure count, so one that loses a race with the backend's
+// endpoints lands back on the cap: the request repeats on a Failed read every
+// mcpServerRestartInterval.
 func waitMCPServerReachable(name string) error {
-	return waitMCPServerState(name, mcpServerReachableStates...)
+	var lastRequest time.Time
+	return pollMCPServerState(name, func(state string) {
+		if state != mcpServerStateFailed || time.Since(lastRequest) < mcpServerRestartInterval {
+			return
+		}
+		lastRequest = time.Now()
+		if err := requestMCPServerRestart(name, lastRequest.UTC().Format(time.RFC3339)); err != nil {
+			note("could not ask muster to retry %s now (%v); waiting for its scheduled retry", name, err)
+		}
+	}, mcpServerReachableStates...)
 }
+
+// mcpServerRestartInterval spaces waitMCPServerReachable's restart requests:
+// muster's initial backoff, and apart by more than the second-precision stamp
+// muster compares.
+var mcpServerRestartInterval = 30 * time.Second
 
 // mcpServerReachableStates are the CR states of a server that answers: Failed
 // is the state that means trouble.
@@ -1432,11 +1455,23 @@ var (
 // waitMCPServerState polls the MCPServer CR's status.state until it reads one
 // of want; the error names every state accepted and the last one read.
 func waitMCPServerState(name string, want ...string) error {
+	return pollMCPServerState(name, func(string) {}, want...)
+}
+
+// pollMCPServerState is waitMCPServerState with onMiss called on every read
+// that is not one of want.
+func pollMCPServerState(name string, onMiss func(state string), want ...string) error {
 	var state string
 	var readErr error
 	reached := waitFor(mcpServerWaitAttempts, mcpServerWaitInterval, func() bool {
 		state, readErr = mcpServerState(name)
-		return readErr == nil && slices.Contains(want, state)
+		if readErr == nil && slices.Contains(want, state) {
+			return true
+		}
+		if readErr == nil {
+			onMiss(state)
+		}
+		return false
 	})
 	if !reached {
 		return notReached("MCPServer "+name, orList(want), state, readErr,
