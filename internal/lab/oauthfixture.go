@@ -70,6 +70,9 @@ const (
 	// browser back (the chart's callbackPath default); registered on the
 	// platform client in dex.yaml.tmpl.
 	oauthProxyCallbackPath = "/oauth/proxy/callback"
+	// maxSignInForms bounds the Dex login forms one sign-in answers: the
+	// identity check's and the upstream's.
+	maxSignInForms = 2
 	// mcpServerStateAuthRequired is the CRD status.state of a reachable remote
 	// server that answered 401 — muster's api.StateAuthRequired, spelled the
 	// CRD way.
@@ -312,12 +315,24 @@ func completeSignInAt(challengeURL string, user *config.User, callbackPath strin
 		return fmt.Errorf("the sign-in did not reach Dex's login form (landed on %s with %d):\n%.300s",
 			landed, resp.StatusCode, strings.TrimSpace(string(body)))
 	}
-	resp, err = browser.PostForm(landed, url.Values{"login": {user.Email}, passwordParam: {user.Password}})
-	if err != nil {
-		return err
+	// muster's identity check signs the person in to Dex before the
+	// upstream's own authorization does, so the chain can show a second
+	// login form, one per authorization request. The same form again is a
+	// refused login.
+	answered := map[string]bool{}
+	for strings.Contains(resp.Request.URL.Path, "/auth/local") && len(answered) < maxSignInForms {
+		form := resp.Request.URL.String()
+		if answered[form] {
+			return fmt.Errorf("the sign-in's Dex login form refused %s's credentials (the form again at %s):\n%.300s", user.Email, form, excerpt(string(body), 300))
+		}
+		answered[form] = true
+		resp, err = browser.PostForm(form, url.Values{"login": {user.Email}, passwordParam: {user.Password}})
+		if err != nil {
+			return err
+		}
+		body, _ = io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
 	}
-	body, _ = io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
 	final := resp.Request.URL.String()
 	if resp.StatusCode != http.StatusOK || resp.Request.URL.Path != callbackPath || !signInCompleted(body) {
 		return fmt.Errorf("the sign-in did not end on the success page of muster's callback %s (ended on %s with %d):\n%.300s",
