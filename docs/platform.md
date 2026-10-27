@@ -1489,6 +1489,37 @@ by hand. Like the Substrate step proof it is
 not a CircleCI job of this repository: its turns are model turns. The unit
 tests of its pieces run in `make test`.
 
+### The harness matrix
+
+`agentlab harness-matrix-test` records what each Harness does with a Shared
+subagent binding, a same-namespace AgentTemplate bound as a tool and compiled
+into the parent's runtime, and, on `claude`, with a Claude-format package's
+`agents/` and `commands/`. It judges nothing: each cell is what the platform
+did, a refusal as much as an answer, so the table is the input to a decision
+rather than a gate.
+
+A Shared cell applies the child AgentTemplates, then a parent AgentTemplate
+and an Agent on the Harness. When the controller refuses the pair, the Agent's
+condition is the cell. Otherwise one turn asks the parent to delegate, and the
+cell reads the reply for `CODEWORD=`: the codeword is generated per run and
+written only into the child's system prompt, so the parent can return it only
+by running the child. The skill case adds the reply's `SKILLS=` line, the MCP
+case the tool the child ran (`TOOL=`).
+
+```sh
+agentlab harness-matrix-test                                    # every Harness, every case
+agentlab harness-matrix-test --harness kagent --case shared-prompt
+agentlab harness-matrix-test --harness codex --codex-model-config codex-host  # codex on a real model
+```
+
+Codex needs an OpenAI Responses API or Bedrock model. Without one, its
+`shared-prompt` turn runs on the mockllm: the script answers the parent's
+prompt with `spawn_agent` of the child's role, waits for it with
+`wait_agent`, and answers the child's request with the codeword found in that
+request's developer instructions, which carry the child's system prompt. The
+script never holds the codeword, so the reply proves kagent's wiring of the
+child (its role, prompt and model), not a model's choice to delegate.
+
 ### The Substrate tunnel-close proof (gRPC to an HTTP/1.1-only actor)
 
 `agentlab substrate-tunnel-test` proves that a gRPC call through

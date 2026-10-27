@@ -139,6 +139,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		inGroup(groupTesting, skillsTestCmd()),
 		inGroup(groupTesting, substrateStepTestCmd()),
 		inGroup(groupTesting, kagentStepTestCmd()),
+		inGroup(groupTesting, harnessMatrixTestCmd()),
 		inGroup(groupTesting, substrateTunnelTestCmd()),
 		inGroup(groupTesting, a2aTestCmd()),
 		inGroup(groupTesting, klausGatewayTestCmd()),
@@ -2063,6 +2064,28 @@ func substrateStepTestCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.Stay, "stay", false, "leave the lab on the --to release instead of returning it to the chart's Substrate")
 	cmd.Flags().BoolVar(&opts.NoDrain, "no-drain", false, "skip the drain case: by default every worker pod of the WorkerPool is deleted every 8s for a minute from the candidate's ate-api-server Ready, the suspended conversation is resumed during that drain once the release before's ate-api-server pods are gone (its ResumeActor must show in the candidate's RPC log while the drain runs), and every golden of the lab must be in the snapshot layout the candidate writes (taken again on a layout change, kept otherwise) with no terminal error")
 	_ = cmd.MarkFlagRequired("to")
+	return cmd
+}
+
+func harnessMatrixTestCmd() *cobra.Command {
+	var opts lab.HarnessMatrixOptions
+	cmd := &cobra.Command{
+		Use:   "harness-matrix-test",
+		Short: "What each Harness does with a Shared subagent binding (prompt only, with a skill, with an MCP tool, nested) and, on claude, with a Claude-format package's subagents and commands: per cell the controller's refusal or one turn whose child answers a codeword only its own prompt holds; a table of observations in state/harness-matrix.txt, no expectation judged",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadProofLab()
+			if err != nil {
+				return err
+			}
+			return lab.HarnessMatrixTest(cfg, opts)
+		},
+	}
+	cmd.Flags().StringSliceVar(&opts.Harnesses, "harness", nil, "the Harnesses probed (default kagent, claude, codex, omp)")
+	cmd.Flags().StringSliceVar(&opts.Cases, "case", nil, "the cases run (default all): shared-prompt, shared-skill, shared-mcp, shared-nested, plugin-parts")
+	cmd.Flags().StringVar(&opts.CodexModelConfig, "codex-model-config", "", "the ModelConfig of codex's cells, an OpenAI Responses API or Bedrock gpt-* one (default the mockllm's: shared-prompt takes its turn on the mockllm's script, which delegates to the child, and the other cells boot and take no turn)")
+	cmd.Flags().StringVar(&opts.MockLLMBinary, "mockllm-binary", "", "the static linux agentlab binary the mockllm's container runs (default this one)")
+	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", lab.DefaultCodingReadyTimeout, "how long each parent's boot may take")
 	return cmd
 }
 
