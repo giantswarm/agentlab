@@ -156,6 +156,15 @@ func proveWorkspaceManager(cfg *config.Config) (*workspaceManagerProof, error) {
 		}
 	}
 	session := adminPerson.session
+	names, err := session.listTools()
+	if err != nil {
+		return nil, err
+	}
+	tools, err := audienceManagerTools(names, workspaceManagerMCPServer)
+	if err != nil {
+		return nil, err
+	}
+	note("%s lists %d tools for %s", workspaceManagerMCPServer, len(tools), admin.Email)
 	step("Calling %slist_providers through muster as %s, expecting %s", workspaceManagerToolPrefix, admin.Email, strings.Join(want, ", "))
 	var listed struct {
 		Providers []workspaceProviderStatus `json:"providers"`

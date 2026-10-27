@@ -83,6 +83,41 @@ func workspaceManagerBlock(t *testing.T, values map[string]any) (map[string]any,
 	return wm, providers
 }
 
+// musterServerAuth is a rendered component block's muster.mcpServer.auth.
+func musterServerAuth(block map[string]any) map[string]any {
+	muster, _ := block["muster"].(map[string]any)
+	server, _ := muster["mcpServer"].(map[string]any)
+	auth, _ := server["auth"].(map[string]any)
+	return auth
+}
+
+// With workspaces on, every manager muster forwards the person's token to
+// requires the lab's `kubernetes` audience: agent-manager, model-manager and
+// the workspace-manager, pinned to a provider App or not.
+func TestManagersRequireKubernetesAudience(t *testing.T) {
+	stubWorkspacesProbe(t, true)
+	cfg := workspaceGitHubLab()
+	cfg.Platform.Workspaces.GitHub = config.WorkspaceGitHub{AppID: testGrantAppID, ClientID: testGrantClientID}
+	grant := workspaceGrantOf(workspaceProviderValues{Name: config.WorkspaceProviderGitHub, Kind: providerKindGitHub, AppID: testGrantAppID, ClientID: testGrantClientID, Secret: config.WorkspaceGitHubSecretName})
+	for name, pin := range map[string]*workspaceGrantValues{"pinned": grant, "unpinned": nil} {
+		t.Run(name, func(t *testing.T) {
+			values, raw, _, _ := renderWorkspaceTemplates(t, cfg, func(d *tmplData) {
+				d.WorkspaceGrant = pin
+				d.ModelManagerEnabled = true
+				d.ModelManagerBackends = []string{config.ModelManagerBackendOllama}
+				d.ModelManagerEndpoints = map[string]string{config.ModelManagerBackendOllama: "http://host.agentlab.internal:11434"}
+			})
+			for _, manager := range []string{agentManagerMCPServer, modelManagerMCPServer, workspaceManagerMCPServer} {
+				block, _ := values[manager].(map[string]any)
+				got, _ := musterServerAuth(block)["requiredAudiences"].([]any)
+				if len(got) != 1 || got[0] != config.KubernetesClientID {
+					t.Errorf("%s.muster.mcpServer.auth.requiredAudiences = %v, want [%s]\n%s", manager, got, config.KubernetesClientID, raw)
+				}
+			}
+		})
+	}
+}
+
 // wantSecretRef checks a credential renders as the Secret reference {name,
 // key} and nothing else.
 func wantSecretRef(t *testing.T, field string, got any, secret, key string) {
