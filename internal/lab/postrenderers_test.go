@@ -625,8 +625,8 @@ spec:
 func TestAgentgatewayIPv4Targets(t *testing.T) {
 	got := agentgatewayIPv4Targets(map[string]string{
 		config.ConnectivityChartName: connectivityGatewayRender,
-		substrateComponent:    substrateGatewayRender,
-		componentMuster:       "apiVersion: apps/v1\nkind: Deployment\nmetadata: {name: muster}\nspec:\n  template:\n    spec:\n      containers:\n        - {name: muster, image: gsoci.azurecr.io/giantswarm/muster:5.0.0}\n",
+		substrateComponent:           substrateGatewayRender,
+		componentMuster:              "apiVersion: apps/v1\nkind: Deployment\nmetadata: {name: muster}\nspec:\n  template:\n    spec:\n      containers:\n        - {name: muster, image: gsoci.azurecr.io/giantswarm/muster:5.0.0}\n",
 	})
 	want := map[string][]agentgatewayTarget{
 		config.ConnectivityChartName: {
@@ -652,7 +652,7 @@ func TestAgentgatewayIPv4Targets(t *testing.T) {
 func TestAgentgatewayIPv4Patches(t *testing.T) {
 	gateways := agentgatewayIPv4Targets(map[string]string{
 		config.ConnectivityChartName: connectivityGatewayRender,
-		substrateComponent:    substrateGatewayRender,
+		substrateComponent:           substrateGatewayRender,
 	})
 	rendered, err := componentPostRenderers(config.Default(), nil, nil, gateways)
 	if err != nil {
