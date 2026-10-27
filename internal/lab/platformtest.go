@@ -340,22 +340,31 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 	} else {
 		verdict += fmt.Sprintf("\nPASS: all %d servers told the issuer %s reach it through cluster DNS (the %s Service) — no sidecar, MCPServer Connected: %s", len(servers), cfg.Issuer(), dexIssuerService, strings.Join(serverNames, ", "))
 	}
-	// cluster-manager, when it is on (platform.devImages.cluster-manager, or
-	// an overlay): Connected is not enough — its downstream OAuth needs the
-	// `kubernetes` audience the lab renders for it, and without it the
-	// session sees no tool of its while the CR reads Connected.
-	if slices.ContainsFunc(servers, func(s dexLocalhostServer) bool { return s.mcpServer == clusterManager }) {
+	// The managers whose downstream OAuth presents the forwarded token as the
+	// caller (agent-manager, model-manager, and cluster-manager when an image
+	// or an overlay turns it on): Connected is not enough — without the
+	// `kubernetes` audience the lab renders for each, the session sees no
+	// tool of theirs while the CR reads Connected. The workspace-manager's
+	// tools are judged in its own stage, once the person's grant is settled.
+	var audienceManagers []string
+	for _, s := range servers {
+		if slices.Contains([]string{agentManagerMCPServer, modelManagerMCPServer, clusterManager}, s.mcpServer) {
+			audienceManagers = append(audienceManagers, s.mcpServer)
+		}
+	}
+	if len(audienceManagers) > 0 {
 		names, err := listTools()
 		if err != nil {
 			return "", err
 		}
-		prefix := "x_" + clusterManager + "_"
-		tools := slices.DeleteFunc(names, func(name string) bool { return !strings.HasPrefix(name, prefix) })
-		if len(tools) == 0 {
-			return "", fmt.Errorf("muster lists no %s* tool for this session although MCPServer %s reads Connected: the forwarded token lacks the audience cluster-manager's downstream OAuth presents to the apiserver (%s.muster.mcpServer.auth.requiredAudiences in the rendered values; `agentlab logs %s`)", prefix, clusterManager, clusterManager, clusterManager)
+		for _, manager := range audienceManagers {
+			tools, err := audienceManagerTools(names, manager)
+			if err != nil {
+				return "", err
+			}
+			note("%s lists %d tools for this session: %s", manager, len(tools), strings.Join(tools, ", "))
+			verdict += fmt.Sprintf("\nPASS: %s's %d tools reach the session through muster (the lab's %s audience): %s", manager, len(tools), config.KubernetesClientID, strings.Join(tools, ", "))
 		}
-		note("%s lists %d tools for this session: %s", clusterManager, len(tools), strings.Join(tools, ", "))
-		verdict += fmt.Sprintf("\nPASS: %s's %d tools reach the session through muster (the lab's %s audience): %s", clusterManager, len(tools), config.KubernetesClientID, strings.Join(tools, ", "))
 	}
 
 	// The user's identity, not a ServiceAccount: the same tool as two users
