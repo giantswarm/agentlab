@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/google/uuid"
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
@@ -847,12 +848,23 @@ func (p *codingProof) proveBinding(toolset []string) error {
 	return nil
 }
 
-// createSession is a Session of the agent as the person, started the way
-// Slack and the portal do (startBoundSession) and tracked for removal.
+// createSession is a Session of the agent as the person, tracked for
+// removal. On a runtime without a caller forwarder (codex, omp) it is started
+// the way Slack and the portal do (startBoundSession), the only way such a
+// runtime reaches muster as the person. On claude it is created through the
+// kagent API, unbound, so its turns reach muster through the caller
+// forwarder the claude stages prove.
 func (p *codingProof) createSession(ctx context.Context, agent string) (*apiv1alpha1.Session, error) {
 	ctx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
-	return startBoundSession(ctx, p.muster, p.api, p.sessions, agent)
+	if !p.rt.claude {
+		return startBoundSession(ctx, p.muster, p.api, p.sessions, agent)
+	}
+	session, err := p.api.createSession(ctx, agent, uuid.NewString())
+	if session != nil && session.GetId() != "" {
+		p.sessions.add(session.GetId())
+	}
+	return session, err
 }
 
 // codingTurn is what one completed turn of the proof answered: the reply's

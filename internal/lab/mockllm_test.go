@@ -150,7 +150,7 @@ func TestMockLLMScriptAnswersTheCodexTurns(t *testing.T) {
 		if err := json.Unmarshal([]byte(stringOf(call.Arguments)), &args); err != nil {
 			t.Fatalf("the call's arguments %v: %v", call.Arguments, err)
 		}
-		if call.Type != "function_call" || call.Name != "shell_command" || args.Command != turn.command || args.TimeoutMS < 60_000 {
+		if call.Type != mockLLMFunctionCall || call.Name != "shell_command" || args.Command != turn.command || args.TimeoutMS < 60_000 {
 			t.Fatalf("on %q the mock called %s %s with %q (timeout %dms), wanted shell_command with the prompt's command and minutes to run it", excerpt(turn.prompt, 60), call.Type, call.Name, args.Command, args.TimeoutMS)
 		}
 		if reply := mockLLMCall(t, srv, userItem(turn.prompt), call, outputOf(call)); reply.Type != mockLLMMessage {
@@ -163,11 +163,20 @@ func TestMockLLMScriptAnswersTheCodexTurns(t *testing.T) {
 		t.Fatalf("on the MCP prompt the mock answered %+v, wanted the tool search", search)
 	}
 	call := mockLLMCall(t, srv, userItem(codingMCPCallPrompt()), search, outputOf(search))
-	if call.Type != "function_call" || call.Name != musterCallTool || call.Namespace != "mcp__agentlab_coding_muster" || stringOf(call.Arguments) != musterCallToolArguments(codingTestReadTool) {
+	if call.Type != mockLLMFunctionCall || call.Name != musterCallTool || call.Namespace != "mcp__agentlab_coding_muster" || stringOf(call.Arguments) != musterCallToolArguments(codingTestReadTool) {
 		t.Fatalf("after the search the mock answered %+v, wanted %s running %s in the binding's namespace", call, musterCallTool, codingTestReadTool)
 	}
 	if reply := mockLLMCall(t, srv, userItem(codingMCPCallPrompt()), call, outputOf(call)); reply.Type != mockLLMMessage {
 		t.Fatalf("after the MCP call's output the mock answered %+v", reply)
+	}
+
+	search = mockLLMCall(t, srv, userItem(signInTestPrompt))
+	call = mockLLMCall(t, srv, userItem(signInTestPrompt), search, outputOf(search))
+	if want := `{"name":"` + signInTestTool + `","arguments":` + signInTestToolArguments + `}`; call.Type != mockLLMFunctionCall || call.Name != musterCallTool || stringOf(call.Arguments) != want {
+		t.Fatalf("on the sign-in prompt the mock answered %+v, wanted %s with %s", call, musterCallTool, want)
+	}
+	if reply := mockLLMCall(t, srv, userItem(signInTestPrompt), call, outputOf(call)); reply.Type != mockLLMMessage {
+		t.Fatalf("after the sign-in call's output the mock answered %+v", reply)
 	}
 
 	resp, err := srv.Client().Post(srv.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"m","input":"not in the script"}`))
@@ -184,10 +193,10 @@ func TestMockLLMScriptAnswersTheCodexTurns(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&counts); err != nil {
 		t.Fatal(err)
 	}
-	if counts.Answered != 15 || counts.Unmatched != 1 || len(counts.Log) != 16 {
-		t.Fatalf("the mock counts %d answered, %d unmatched, %d log lines; wanted 15, 1 and 16", counts.Answered, counts.Unmatched, len(counts.Log))
+	if counts.Answered != 18 || counts.Unmatched != 1 || len(counts.Log) != 19 {
+		t.Fatalf("the mock counts %d answered, %d unmatched, %d log lines; wanted 18, 1 and 19", counts.Answered, counts.Unmatched, len(counts.Log))
 	}
-	if last := counts.Log[15]; !strings.HasPrefix(last, "404 ") || !strings.Contains(last, "not in the script") {
+	if last := counts.Log[18]; !strings.HasPrefix(last, "404 ") || !strings.Contains(last, "not in the script") {
 		t.Fatalf("the unmatched request logs as %q, wanted its 404 and its input", last)
 	}
 }

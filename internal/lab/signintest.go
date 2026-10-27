@@ -2,8 +2,10 @@ package lab
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -26,24 +28,28 @@ import (
 
 const (
 	signInTestAgentPrefix = "signin-test-"
+	// signInTestTool is the fixture's tool the proof calls, the fixture
+	// being muster: filter_tools for one tool, whose answer is short enough
+	// for a model to quote whole.
+	signInTestTool          = "x_" + oauthFixtureServer + "_filter_tools"
+	signInTestToolArguments = `{"pattern":"core_auth_login"}`
 	// signInTestPrompt asks for the fixture's tool through muster's
-	// call_tool; the mockllm's sign-in turn answers it for codex.
-	signInTestPrompt = "Sign-in check: call muster's call_tool tool with name " + fixtureSignedOutTool +
-		" and arguments {}, then reply with the tool's answer as it came back, nothing else."
+	// call_tool; the mockllm's sign-in turn answers it for codex, matching
+	// signInTestPromptLead, which has no quote for JSON to escape.
+	signInTestPromptLead = "Sign-in check: call muster's call_tool tool with name " + signInTestTool
+	signInTestPrompt     = signInTestPromptLead + " and arguments " + signInTestToolArguments +
+		", then reply with the tool's answer as it came back, nothing else."
 	signInTestSystemPrompt = "You are a throwaway agent of `agentlab signin-test`. Do exactly what the user asks with your tools, and never ask questions."
 	// signInTestFollowUp is the turn after a decided sign-in: it completes
 	// only on a conversation the decision left whole.
 	signInTestFollowUp      = "Reply with the single word READY."
 	signInTestFollowUpReply = "READY"
-	// signInTestToolProof is what the fixture's list_core_tools answers
-	// with: muster's own core tools, the fixture being muster.
-	signInTestToolProof = "core_"
 )
 
 // SignInTestOptions tune `agentlab signin-test`.
 type SignInTestOptions struct {
-	// Harnesses are the Harnesses proven, of claude, codex and kagent (the
-	// platform Harness); empty proves every one the lab renders.
+	// Harnesses are the Harnesses proven, of claude, codex, omp and kagent
+	// (the platform Harness); empty proves every one the lab renders.
 	Harnesses []string
 	// ModelConfig is the model of the claude and kagent agents (default
 	// default-model-config). codex runs on the lab's Responses model, else
@@ -115,13 +121,13 @@ func SignInTest(cfg *config.Config, email string, opts SignInTestOptions) error 
 }
 
 // harnesses are the Harnesses to prove: those asked for, else kagent and
-// the coding Harnesses of claude and codex the namespace has.
+// the coding Harnesses of claude, codex and omp the namespace has.
 func (p *signInProof) harnesses() ([]string, error) {
 	rendered, err := namespaceHarnesses(context.Background())
 	if err != nil {
 		return nil, err
 	}
-	known := []string{kagentHarness, config.CodingRuntimeClaude, config.CodingRuntimeCodex}
+	known := []string{kagentHarness, config.CodingRuntimeClaude, config.CodingRuntimeCodex, config.CodingRuntimeOmp}
 	if len(p.opts.Harnesses) == 0 {
 		out := []string{kagentHarness}
 		for _, h := range known[1:] {
@@ -186,6 +192,7 @@ func (p *signInProof) prove(harness string) error {
 	if err != nil {
 		return err
 	}
+	decided := time.Now()
 	declined, err := p.answer(session, paused, signInDecline)
 	if err != nil {
 		return err
@@ -193,8 +200,10 @@ func (p *signInProof) prove(harness string) error {
 	if declined.state() != a2a.TaskStateCompleted {
 		return fmt.Errorf("after decline the task ended %s (%s): %s", stateName(declined.state()), declined.statesString(), excerpt(declined.text(), 300))
 	}
-	if strings.Contains(declined.text(), signInTestToolProof) {
-		return fmt.Errorf("after decline the reply quotes the fixture's tools, so the call ran: %s", excerpt(declined.text(), 300))
+	if ran, err := p.fixtureCallsSince(decided); err != nil {
+		return err
+	} else if len(ran) > 0 {
+		return fmt.Errorf("after decline muster ran %s: %s", signInTestTool, strings.Join(ran, ", "))
 	}
 	if err := p.followUp(session); err != nil {
 		return fmt.Errorf("after decline: %w", err)
@@ -210,6 +219,7 @@ func (p *signInProof) prove(harness string) error {
 		return fmt.Errorf("completing the sign-in at %s: %w", linkPath(paused.signIn.URL), err)
 	}
 	note("Dex login completed; muster's proxy callback answered Authentication Successful")
+	decided = time.Now()
 	accepted, err := p.answer(session, paused, signInAccept)
 	if err != nil {
 		return err
@@ -221,8 +231,13 @@ func (p *signInProof) prove(harness string) error {
 	for _, tool := range accepted.tools {
 		answered += "\n" + tool.output
 	}
-	if !strings.Contains(answered, signInTestToolProof) {
-		return fmt.Errorf("after accept neither the reply nor a tool result carries the fixture's tools (%q): %s", signInTestToolProof, excerpt(answered, 300))
+	if !callAnswered(answered) {
+		return fmt.Errorf("after accept neither the reply nor a tool result carries the fixture's tools (%s): %s", signInTestToolProof, excerpt(answered, 300))
+	}
+	if ran, err := p.fixtureCallsSince(decided); err != nil {
+		return err
+	} else if len(ran) != 1 {
+		return fmt.Errorf("after accept muster ran %s %d times, want once: %s", signInTestTool, len(ran), strings.Join(ran, ", "))
 	}
 	if err := p.followUp(session); err != nil {
 		return fmt.Errorf("after accept: %w", err)
@@ -312,7 +327,7 @@ func (p *signInProof) startMock(agent string) error {
 	if p.mock, err = startMockLLM(p.cfg, binary, t.mcpServer(), "", nil); err != nil {
 		return err
 	}
-	note("codex runs on the mockllm (%s), scripted to call %s through call_tool", mockLLMURL(), fixtureSignedOutTool)
+	note("codex runs on the mockllm (%s), scripted to call %s through call_tool", mockLLMURL(), signInTestTool)
 	return nil
 }
 
@@ -351,4 +366,52 @@ func linkPath(link string) string {
 		return "an unparsable link"
 	}
 	return u.Scheme + "://" + u.Host + u.Path
+}
+
+// signInTestToolProof matches the count field of the fixture's
+// filter_tools answer, the fixture being muster, also inside JSON strings
+// nested to any depth; a refusal of the call carries no count.
+var signInTestToolProof = regexp.MustCompile(`filtered_count[\\"]*\s*:\s*\d`)
+
+// fixtureCallsSince lists muster's successful dispatches of the fixture's
+// tool as the person since the instant.
+func (p *signInProof) fixtureCallsSince(since time.Time) ([]string, error) {
+	identity, err := tokenIdentity(p.token, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	logs, err := musterLogSince(since)
+	if err != nil {
+		return nil, err
+	}
+	return fixtureCallsIn(logs, since, identity.subject), nil
+}
+
+// fixtureCallsIn lists, from the instant on, the subject's dispatches of the
+// fixture's tool that muster ran: a refused or declined call logs none.
+func fixtureCallsIn(logs string, since time.Time, subject string) []string {
+	var ran []string
+	for _, line := range strings.Split(logs, "\n") {
+		var entry struct {
+			Time    time.Time `json:"time"`
+			Msg     string    `json:"msg"`
+			Tool    string    `json:"tool"`
+			Subject string    `json:"subject"`
+			Outcome string    `json:"outcome"`
+		}
+		start := strings.IndexByte(line, '{')
+		if start < 0 || json.Unmarshal([]byte(line[start:]), &entry) != nil || entry.Time.Before(since) {
+			continue
+		}
+		if entry.Msg == "tool dispatched" && entry.Tool == signInTestTool && entry.Outcome == "ok" && subjectMatches(entry.Subject, subject) {
+			ran = append(ran, entry.Time.UTC().Format(time.RFC3339Nano))
+		}
+	}
+	return ran
+}
+
+// callAnswered reports whether text carries the fixture's filter_tools
+// answer.
+func callAnswered(text string) bool {
+	return signInTestToolProof.MatchString(text)
 }

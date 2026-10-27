@@ -1986,7 +1986,7 @@ func signInTestCmd() *cobra.Command {
 	var opts lab.SignInTestOptions
 	cmd := &cobra.Command{
 		Use:   "signin-test [email]",
-		Short: "Headless sign-in proof: an agent calling a tool of a server the person has not signed in to pauses at input-required on muster's sign-in link (an MCP URL elicitation); a decline ends the call, an accept after the sign-in runs it, the conversation goes on either way — on the platform Harness and the claude and codex coding Harnesses",
+		Short: "Headless sign-in proof: an agent calling a tool of a server the person has not signed in to pauses at input-required on muster's sign-in link (an MCP URL elicitation); a decline ends the call, an accept after the sign-in runs it, the conversation goes on either way — on the platform Harness and the claude, codex and omp coding Harnesses",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadProofLab()

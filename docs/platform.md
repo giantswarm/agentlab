@@ -1104,20 +1104,22 @@ its sign-in link as an MCP URL elicitation, to a client that declares
 `elicitation.url`. A runtime that relays it pauses the turn at
 `input-required` with kagent's HITL `url_elicitation_request` (`id`, `server`,
 `message`, `url`), and the person's `url_elicitation_response` resumes the same
-task. `agentlab signin-test [email] [--harness kagent,claude,codex]
+task. `agentlab signin-test [email] [--harness kagent,claude,codex,omp]
 [--model-config <name>]` proves it on the platform Harness (the Go ADK) and on
-the claude and codex coding Harnesses the lab renders, each with an agent
+the claude, codex and omp coding Harnesses the lab renders, each with an agent
 created through agent-manager as the person whose toolset names the
 `lab-oauth-fixture` server:
 
 | Stage | What passes |
 |---|---|
-| declined | the turn pauses at `input-required` on a link to muster's `/oauth/proxy/start`; `decline` completes the task without the call (the reply quotes none of the fixture's tools); the next turn of the conversation completes |
-| accepted | the same pause in a new conversation; the proof completes the sign-in headlessly as the person (Dex login, muster's proxy callback); `accept` resumes the same task, and the reply or a tool result carries the fixture's tools (`core_`); the next turn completes |
+| declined | the turn pauses at `input-required` on a link to muster's `/oauth/proxy/start`; `decline` completes the task, and muster's log records no dispatch of the fixture's tool as the person; the next turn of the conversation completes |
+| accepted | the same pause in a new conversation; the proof completes the sign-in headlessly as the person (Dex login, muster's proxy callback); `accept` resumes the same task, muster's log records exactly one successful dispatch of the fixture's tool as the person, and the reply or a tool result carries its answer (`filtered_count` and a number); the next turn completes |
 
 Between Harnesses the person is signed out of the fixture again, so each
 meets the link. The codex agent runs on the lab's Responses model, else the
-mockllm, whose scripted turn calls the fixture's tool. Every conversation is
+mockllm, whose scripted turn calls the fixture's tool. The tool is the
+fixture's `filter_tools` for `core_auth_login` (the fixture is muster), an
+answer short enough for a model to quote whole. Every conversation is
 started the way Slack and the portal start one: agent-manager's
 `start_session` through muster as the person, which binds the Session's
 actor to them in muster, so a runtime without a caller forwarder (codex)
@@ -1172,11 +1174,14 @@ A coding agent is an agent whose Agent names a coding Harness: a coding CLI
 run headless in a Substrate actor by the kagent line's image of its runtime
 — `claude` (Claude Code, `claude-harness`), `codex` (OpenAI's Codex CLI,
 `codex-harness`) or `omp` (oh-my-pi, a BYO Harness on the kagent line's
-`omp-harness` adapter, on the Anthropic ModelConfig claude uses). The proof's
-Sessions start through agent-manager's `start_session` as the person, as
-Slack's and the portal's do, which binds the Session's actor to them in
-muster: each runtime reaches muster as the person on the actor's JWT, which
-the egress gateway sets in place of kagent's placeholder. An installation turns coding
+`omp-harness` adapter, on the Anthropic ModelConfig claude uses). On codex
+and omp, which have no caller forwarder, the proof's Sessions start through
+agent-manager's `start_session` as the person, as Slack's and the portal's
+do: that binds the Session's actor to them in muster, and the runtime reaches
+muster as the person on the actor's JWT, which the egress gateway sets in
+place of kagent's placeholder. On claude they are created through the kagent
+API, unbound, so the turns reach muster through the caller forwarder the
+claude stages prove. An installation turns coding
 agents on through the meta chart's `kagent.harnesses` alone, and the lab
 does the same: with `platform.coding` (`agentlab configure --coding`,
 agent-platform 4.110.0 or newer) `agentlab platform` renders one coding
