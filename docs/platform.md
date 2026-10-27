@@ -1094,6 +1094,33 @@ reach the gateway refused, or denies one it made, changes no outcome.
 entry and the same origin probed; its `declared` stage fails, so the reach is
 the declaration's. The agent and its Session are removed on every exit path.
 
+### The sign-in proof (an MCP URL elicitation)
+
+muster answers a tool call of a server the person has not signed in to with
+its sign-in link as an MCP URL elicitation, to a client that declares
+`elicitation.url`. A runtime that relays it pauses the turn at
+`input-required` with kagent's HITL `url_elicitation_request` (`id`, `server`,
+`message`, `url`), and the person's `url_elicitation_response` resumes the same
+task. `agentlab signin-test [email] [--harness kagent,claude,codex]
+[--model-config <name>]` proves it on the platform Harness (the Go ADK) and on
+the claude and codex coding Harnesses the lab renders, each with an agent
+created through agent-manager as the person whose toolset names the
+`lab-oauth-fixture` server:
+
+| Stage | What passes |
+|---|---|
+| declined | the turn pauses at `input-required` on a link to muster's `/oauth/proxy/start`; `decline` completes the task without the call (the reply quotes none of the fixture's tools); the next turn of the conversation completes |
+| accepted | the same pause in a new conversation; the proof completes the sign-in headlessly as the person (Dex login, muster's proxy callback); `accept` resumes the same task, and the reply or a tool result carries the fixture's tools (`core_`); the next turn completes |
+
+Between Harnesses the person is signed out of the fixture again, so each
+meets the link. The codex agent runs on the lab's Responses model, else the
+mockllm, whose scripted turn calls the fixture's tool. codex reaches muster
+only on a credential of its binding's own (a RemoteMCPServer header from a
+Secret, as in [The coding agents proof](#the-coding-agents-proof)); on a line
+whose binding carries none, muster refuses codex's MCP connection, and the
+codex half is skipped with that reason. The agents and their
+Sessions are removed on every exit path.
+
 ### The ChatGPT subscription proof
 
 `platform.chatgptSubscription` (`agentlab configure --chatgpt-subscription`;

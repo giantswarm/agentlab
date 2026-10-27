@@ -17,14 +17,14 @@ require (
 	github.com/giantswarm/pagekit v0.3.1
 	github.com/giantswarm/selfupdate-cosign v0.3.15
 	github.com/giantswarm/telemetrydeck-go v0.3.11
-	github.com/giantswarm/vm-manager v0.25.9
+	github.com/giantswarm/vm-manager v0.25.11
 	github.com/google/uuid v1.6.0
 	github.com/smallstep/truststore v0.13.0
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/crypto v0.58.0
 	golang.org/x/sys v0.49.0
 	golang.org/x/term v0.47.0
-	google.golang.org/grpc v1.84.0
+	google.golang.org/grpc v1.85.0
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
 	helm.sh/helm/v4 v4.2.4
