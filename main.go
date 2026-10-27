@@ -393,6 +393,19 @@ var labFlag string
 // on stderr, so the output never leaves the person guessing which lab it came
 // from.
 func enterLab(mode labs.Mode) error {
+	if err := enterLabDir(mode); err != nil {
+		return err
+	}
+	// The command's usage signal names the lab's deployment. A lab without
+	// one keeps the signal for `up`, which starts the deployment, or Flush.
+	if d, ok := lab.TelemetryDeployment(); ok {
+		telemetry.EnterLab(d.ID)
+	}
+	return nil
+}
+
+// enterLabDir is enterLab up to the lab's directory.
+func enterLabDir(mode labs.Mode) error {
 	var pick labs.Picker
 	if term.IsTerminal(int(os.Stdin.Fd())) {
 		pick = pickLab
@@ -778,6 +791,9 @@ func upCmd() *cobra.Command {
 			// convenience: it never fails the boot.
 			if err := labs.Register(cfg.ClusterName, "."); err != nil {
 				fmt.Fprintf(os.Stderr, "WARNING: not registering this lab: %v\n", err)
+			}
+			if d, ok := lab.StartTelemetryDeployment(); ok {
+				telemetry.EnterLab(d.ID)
 			}
 			return lab.Up(cfg, offersFromFlags(cmd, &trust, &open))
 		},

@@ -3,9 +3,11 @@
 // which agentlab version, operating system and architecture, under a hashed
 // machine identifier that lets Giant Swarm count users without knowing who
 // they are. And one per platform install (Platform): the meta chart line the
-// lab installs and its feature switches, as versions and booleans. Nothing
-// else about the lab — its users, clusters, paths, arguments or flags —
-// leaves the machine. See docs/telemetry.md.
+// lab installs and its feature switches, as versions and booleans. Once a
+// command has entered a lab (EnterLab), every signal names the lab's
+// deployment, a random ID the lab's Backstage sends with its own signals.
+// Nothing else about the lab — its users, clusters, paths, arguments or flags
+// — leaves the machine. See docs/telemetry.md.
 //
 // Setting AGENTLAB_TELEMETRY_OPTOUT (any value) or the console convention
 // DO_NOT_TRACK=1 disables both. Reporting never fails a command and never
@@ -110,6 +112,14 @@ var (
 	route  *reach
 )
 
+// pending is the command signal Command recorded and EnterLab or Flush
+// sends; deploymentID is the deployment EnterLab named, on every signal
+// after it.
+var (
+	pending      func()
+	deploymentID string
+)
+
 // reach records whether any signal's request got a connection to the ingest
 // endpoint: since is when the first signal set out, connected is closed by
 // the first connection.
@@ -156,16 +166,17 @@ func Enabled() bool {
 }
 
 // Command records one execution of a user-facing command ("agentlab up").
-// The HTTP request runs on its own goroutine while the command does its work
-// (Flush, at the end, gives a fast command a bounded moment to see it out),
-// and a failure to deliver is swallowed — telemetry must never get in the
-// user's way. Same shape as kubectl-gs: signal type
-// GiantSwarm.command with the command path and the app version in the
-// payload, plus the OS, architecture and SDK version the library adds. The
-// version and commit also go out as TelemetryDeck.AppInfo.version and
-// .buildNumber (the library's WithAppVersion/WithBuildNumber): those are the
-// parameters the TelemetryDeck dashboard's standard "App Versions" insight
-// reads — the payload's appVersion is what the shared usage report queries.
+// The signal leaves once the command has entered its lab (EnterLab), so that
+// it names the lab's deployment, or at Flush for a command that runs against
+// no lab; its HTTP request runs on its own goroutine, and a failure to
+// deliver is swallowed — telemetry must never get in the user's way. Same
+// shape as kubectl-gs: signal type GiantSwarm.command with the command path
+// and the app version in the payload, plus the OS, architecture and SDK
+// version the library adds. The version and commit also go out as
+// TelemetryDeck.AppInfo.version and .buildNumber (the library's
+// WithAppVersion/WithBuildNumber): those are the parameters the TelemetryDeck
+// dashboard's standard "App Versions" insight reads — the payload's
+// appVersion is what the shared usage report queries.
 //
 // Not every invocation is a person using the lab: hidden commands are
 // plumbing (__complete runs on every TAB press), `completion` runs on every
@@ -175,15 +186,38 @@ func Command(cmd *cobra.Command) {
 	if !Enabled() || !UserFacing(cmd) {
 		return
 	}
-	send(cmd.Context(), signalType, map[string]interface{}{
-		"appVersion": project.Version(),
-		"command":    cmd.CommandPath(),
-	})
+	ctx := cmd.Context()
+	pending = func() {
+		send(ctx, signalType, map[string]interface{}{
+			"appVersion": project.Version(),
+			"command":    cmd.CommandPath(),
+		})
+	}
+}
+
+// EnterLab names the deployment of the lab the command runs against: every
+// signal from here on carries it as deploymentID, and the command's own
+// signal (Command) leaves now. An empty ID, a lab without a recorded
+// deployment, sends the command signal without one.
+func EnterLab(id string) {
+	deploymentID = id
+	sendPending()
+}
+
+// sendPending sends the command signal Command recorded, once.
+func sendPending() {
+	if p := pending; p != nil {
+		pending = nil
+		p()
+	}
 }
 
 // send hands one signal to the process's client, traced for Flush. A failure
 // is only logged (logf): telemetry never gets in the user's way.
 func send(ctx context.Context, signalType string, payload map[string]interface{}) {
+	if deploymentID != "" {
+		payload["deploymentID"] = deploymentID
+	}
 	c, err := client()
 	if err != nil {
 		logf("creating the TelemetryDeck client: %s", err)
@@ -194,8 +228,9 @@ func send(ctx context.Context, signalType string, payload map[string]interface{}
 	}
 }
 
-// Flush lets the signals sent so far (Command, Platform) finish their trip
-// before the process exits, waiting at most flushTimeout (and no longer than
+// Flush sends the command signal if no lab was entered (EnterLab) and lets
+// the signals sent so far (Command, Platform) finish their trip before the
+// process exits, waiting at most flushTimeout (and no longer than
 // ctx allows): a sub-second command such as `agentlab version` would
 // otherwise exit before its request has left the machine. An endpoint none of
 // them has connected to within connectTimeout of the first one setting out is
@@ -203,6 +238,7 @@ func send(ctx context.Context, signalType string, payload map[string]interface{}
 // that ran longer than that. Never an error for the caller — a signal that
 // did not make it is dropped, and said so only under DebugEnv.
 func Flush(ctx context.Context) {
+	sendPending()
 	if sender == nil {
 		return
 	}
@@ -275,6 +311,17 @@ func userName() string {
 		}
 	}
 	return ""
+}
+
+// AppID is the TelemetryDeck app agentlab files its signals under; the lab's
+// Backstage reports into the same app.
+func AppID() string {
+	return appID
+}
+
+// TestMode says whether AGENTLAB_TELEMETRY_TESTMODE is set.
+func TestMode() bool {
+	return testMode()
 }
 
 // testMode says whether AGENTLAB_TELEMETRY_TESTMODE is set.

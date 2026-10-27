@@ -306,7 +306,13 @@ The lab's own e2e checks are the `*-test` subcommands, not `go test`.
   (stable/dev/path), `chartPinned`, `legacyShape` and the feature switches as
   booleans — never a path (a chart directory reports its Chart.yaml version),
   host name, user or token. Both signals share one client, so the one
-  `Flush` covers both. Opt-outs:
+  `Flush` covers both. The command signal waits for `enterLab`, which hands
+  it the lab's deployment (`telemetry.EnterLab`; `Flush` sends it for a
+  command without a lab): a random ID and salt the first `up` after a `down`
+  records in `state/telemetry-deployment.json` (`lab.StartTelemetryDeployment`)
+  and `down` removes. Every signal after it carries `deploymentID`, and the
+  Backstage overlay's `app.telemetrydeck` reports the portal into the same app
+  under that ID and salt — `null` with usage data off. Opt-outs:
   `AGENTLAB_TELEMETRY_OPTOUT`, `DO_NOT_TRACK=1`. When iterating on the lab,
   `AGENTLAB_TELEMETRY_TESTMODE=1` keeps the runs out of the production
   numbers; `AGENTLAB_TELEMETRY_DEBUG=1` alone logs delivery problems — a

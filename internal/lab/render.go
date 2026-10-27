@@ -233,6 +233,9 @@ type tmplData struct {
 	// into the pod template, so a changed overlay rolls Backstage through
 	// helm-controller. Empty while Backstage is off.
 	BackstageAppConfigChecksum string
+	// BackstageTelemetry is the overlay's app.telemetrydeck
+	// (backstageTelemetryFor); nil turns the portal's usage data off.
+	BackstageTelemetry *backstageTelemetry
 }
 
 // labCAFile is the CA certificate newTmplData renders as LabCA; the tests
@@ -312,6 +315,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		GitHubToken:                  gitHubTokenWired(cfg),
 		GitHubApp:                    gitHubAppWired(cfg),
 		PortalGitHubApp:              portalGitHubAppWired(cfg),
+		BackstageTelemetry:           backstageTelemetryFor(),
 		ModelManagerEnabled:          cfg.ModelManagerEnabled(),
 		LegacyChart:                  cfg.LegacyChart(),
 		FamilylessChart:              cfg.FamilylessChart(),
