@@ -100,7 +100,7 @@ scrub_key() {
 # ----------------------------------------------------------------- github ---
 
 # github_window <what>: print GitHub's core API window before a step that
-# resolves skills through GitHub (the migrate Job, agent-manager), the way
+# resolves skills through GitHub (the migrate run, agent-manager), the way
 # `agentlab backstage-test` and `agents-test` do: unauthenticated, this
 # machine's shared window, since the rehearsal holds no GitHub credential and
 # never reads one (the lab's consumers call GitHub as the skills GitHub App or
@@ -142,4 +142,33 @@ pick_yq() { # prints the first mikefarah yq v4 found (YQ, yq, ~/.go/bin/yq, go-y
 
 hr_chart_version() { # <ns> <name>: the chart version of the last deployed revision
   kubectl -n "$1" get helmrelease "$2" -o jsonpath='{.status.history[0].chartVersion}' 2>/dev/null
+}
+
+# The connectivity chart's agent-manager migrate run. Charts that ship the
+# suspended CronJob start each run as a Job created from it by the
+# post-install/post-upgrade hook agent-platform-connectivity-agent-manager-migrate-start;
+# earlier 4.x charts render the run as a Job of the release. Both carry the
+# component label, and so does the start hook's own Job.
+MIGRATE_NS=kagent
+MIGRATE_CRONJOB=agent-platform-connectivity-agent-manager-migrate
+MIGRATE_SELECTOR=app.kubernetes.io/component=agent-manager-migrate
+
+migrate_runs() { # the migrate runs as job/<name>, oldest first; the start hook's Job is not one
+  kubectl -n "$MIGRATE_NS" get job -l "$MIGRATE_SELECTOR" -o json \
+    | jq -r '.items | map(select(.metadata.annotations["helm.sh/hook"] == null)) | sort_by(.metadata.creationTimestamp) | .[] | "job/" + .metadata.name'
+}
+
+migrate_rerun() { # <name>: a new migrate run, from the CronJob when the chart ships one, else the newest run cloned
+  if kubectl -n "$MIGRATE_NS" get cronjob "$MIGRATE_CRONJOB" >/dev/null 2>&1; then
+    kubectl -n "$MIGRATE_NS" create job "$1" --from="cronjob/$MIGRATE_CRONJOB"
+    return
+  fi
+  local src
+  src=$(migrate_runs | tail -n1)
+  [ -n "$src" ] || die "no CronJob $MIGRATE_NS/$MIGRATE_CRONJOB and no migrate run with label $MIGRATE_SELECTOR to clone"
+  kubectl -n "$MIGRATE_NS" get "$src" -o json | jq --arg n "$1" '
+    del(.status, .metadata.uid, .metadata.resourceVersion, .metadata.creationTimestamp, .metadata.managedFields, .spec.selector,
+        .spec.template.metadata.labels["batch.kubernetes.io/controller-uid"], .spec.template.metadata.labels["controller-uid"],
+        .spec.template.metadata.labels["batch.kubernetes.io/job-name"], .spec.template.metadata.labels["job-name"])
+    | .metadata.name = $n' | kubectl create -f -
 }

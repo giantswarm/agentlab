@@ -56,10 +56,14 @@ effect, and it would fail on a read-only home directory.
 
 Nothing from `state/`, `certs/`, the cluster, the users, the models or the
 model servers is ever sent, and from `agentlab.yaml` only what the platform
-signal below lists. Help output (`-h`, `--help`) and shell completion do not
-count. The signals go out in the background while the command runs; a command
-that finishes before they have left the machine (`agentlab version`, say)
-waits for them at most half a second, then exits regardless. When the
+signal below lists; the one exception is the random deployment ID below, which
+exists only to be sent. Help output (`-h`, `--help`) and shell completion do
+not count. A command that runs against a lab sends its signal as it enters the
+lab, so that the signal can name the lab's deployment, and the signals go out
+in the background while the command runs; a command that runs against no lab
+(or one that fails before entering its lab) sends its signal as it finishes. A command that finishes before its signals
+have left the machine (`agentlab version`, say) waits for them at most half a
+second, then exits regardless. When the
 endpoint is out of reach (no connection within 300ms of the signal setting
 out: offline, or egress blocked), the command does not wait for it at all
 past that point. A signal is dropped when the network is unavailable — it
@@ -122,10 +126,45 @@ and the Test Mode toggle apply):
 Swap `chartMajor` for `chartVersion` to see the exact versions, or add a
 `legacyShape` dimension to count the labs still rendering the 3.x shape.
 
+## The deployment and the lab's portal
+
+A lab's Backstage reports how it is used into agentlab's TelemetryDeck app
+too, so that what happens in the portal can be read next to the commands that
+built the lab. The `agentlab up` that creates the lab's cluster draws a
+**deployment**: a random ID and a random salt, recorded in
+`state/telemetry-deployment.json` and removed again by `agentlab down` — with
+the lab's other state, which `up` writes anyway, and never with usage data off.
+An `up` on a running cluster keeps the deployment; a cluster that went missing
+without a `down` gets a new one. Every signal of a command that runs against
+the lab, the platform signal included, carries the ID as `deploymentID`, and
+so does every signal of the lab's portal.
+
+What the portal sends is what every Giant Swarm portal sends — page views by
+route template and the listed actions, never a name, prompt or free text; the
+portal's [telemetry page](https://github.com/giantswarm/backstage/blob/main/docs/telemetry.md)
+lists them. Its user identifier is a hash of the signed-in Backstage user and
+the deployment's salt: every lab has the same Dex users, so without the salt
+`admin@lab.local` would be one person across all labs. The salt stays in the
+lab; sent next to the hashes, it would let a guessed GitHub login (with
+`platform.githubSignIn`) be checked against them. A new deployment means a new
+salt, so the same person counts as a new portal user on every new cluster.
+
+The lab writes the portal's `app.telemetrydeck` into its app-config overlay
+on every `up` and `platform`. With usage data off (below), or before
+the first `up`, it writes an empty app ID, and the portal sends nothing (its
+browser console and its backend log say usage data is disabled); the decision
+is taken when the overlay is rendered, so an opt-out set later takes effect
+for the portal on the next `up`. Test mode applies to the portal's signals as
+well, as it was when the deployment started: a later command run without (or
+with) `AGENTLAB_TELEMETRY_TESTMODE` does not change the portal's config and
+restart it. A Backstage release from before `deploymentID` and `testMode` existed
+(giantswarm/backstage#3294) sends its signals without the ID and outside test
+mode.
+
 Data is stored at [TelemetryDeck](https://telemetrydeck.com/) on servers in
 the EU; see their [privacy FAQ](https://telemetrydeck.com/docs/guides/privacy-faq/).
 
-**Opting out** (of both signals): set `AGENTLAB_TELEMETRY_OPTOUT` to any
+**Opting out** (of every signal, the lab portal's included): set `AGENTLAB_TELEMETRY_OPTOUT` to any
 value, or the cross-tool [`DO_NOT_TRACK=1`](https://consoledonottrack.com/):
 
 ```bash

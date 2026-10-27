@@ -53,6 +53,8 @@ func Down(cfg *config.Config) error {
 	// The lab registry (the `harness` dev image, devimages.go) served this
 	// cluster's Harness; its content is a push away on the next lab.
 	removeDevRegistry(cfg)
+	// The next `up` is a new deployment for usage data (docs/telemetry.md).
+	endTelemetryDeployment()
 	fmt.Println("Lab destroyed. certs/ kept (agentlab certs --force to regenerate).")
 	return nil
 }
