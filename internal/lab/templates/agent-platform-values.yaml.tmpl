@@ -920,19 +920,6 @@ agent-manager:
       auth:
         requiredAudiences:
           - kubernetes
-{{- if .GitHubToken }}
-
-# The connectivity chart's wiring for agent-manager: its migrate Job (the
-# cut-over the rehearsal drives) resolves skills through GitHub too, from the
-# kagent namespace — the same token, the lab's copy of the Secret there
-# (githubtoken.go). The Job's env is optional, so a first install, where the
-# copy lands after the chart created the namespace, still runs.
-agentManager:
-  migration:
-    githubToken:
-      secretName: agentlab-github-token
-      key: GITHUB_TOKEN
-{{- end }}
 {{- end }}
 
 {{- if .ModelManagerEnabled }}
