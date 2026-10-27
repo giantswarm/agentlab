@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -764,18 +766,62 @@ func waitAgentReady(name string, timeout time.Duration) (agentReadiness, error) 
 // waitAgentReadyOn is waitAgentReady for an Agent that must reference the
 // named Harness.
 func waitAgentReadyOn(name, harness string, timeout time.Duration) (agentReadiness, error) {
-	started := time.Now()
-	var r agentReadiness
-	var lastErr error
-	waitFor(int(timeout/pollInterval), pollInterval, func() bool {
-		r, lastErr = readAgentReadinessOn(name, harness)
-		return lastErr != nil || r.ready || r.terminal
-	})
-	r.elapsed = time.Since(started)
-	if lastErr != nil {
-		return r, fmt.Errorf("agent %s: %w", name, lastErr)
+	r, err := waitReadiness(func() (agentReadiness, error) { return readAgentReadinessOn(name, harness) }, timeout)
+	if err != nil {
+		return r, fmt.Errorf("agent %s: %w", name, err)
 	}
 	return r, nil
+}
+
+// waitReadiness polls read until the agent is Ready, fails for good, or the
+// read fails, within timeout. Every golden boot kagent reports crashed for
+// the first time grants the wait a fresh timeout: kagent starts a crashed
+// boot over until its retry budget is spent and only then fails the Agent,
+// so a boot that crashes every time (a BYO adapter refusing its
+// configuration) ends as that failure, not as a timeout.
+func waitReadiness(read func() (agentReadiness, error), timeout time.Duration) (agentReadiness, error) {
+	started := time.Now()
+	deadline := started.Add(timeout)
+	crashed := 0
+	for {
+		r, err := read()
+		r.elapsed = time.Since(started)
+		if err != nil || r.ready || r.terminal {
+			return r, err
+		}
+		if r.agent != nil {
+			if attempt := goldenBootAttempt(&r.agent.Status); attempt > crashed {
+				crashed = attempt
+				if renewed := time.Now().Add(timeout); renewed.After(deadline) {
+					deadline = renewed
+				}
+			}
+		}
+		if !time.Now().Before(deadline) {
+			return r, nil
+		}
+		time.Sleep(pollInterval)
+	}
+}
+
+// goldenBootFailed matches kagent's Ready message for a crashed golden boot
+// it starts over (ActorTemplateRetrying): "golden boot N of M failed (...)",
+// after "Agent <ns>/<name>: " on a parent whose Shared child crashed.
+var goldenBootFailed = regexp.MustCompile(`golden boot (\d+) of \d+ failed`)
+
+// goldenBootAttempt is the number of the last crashed golden boot an Agent's
+// Ready condition reports while kagent retries it, 0 when it reports none.
+func goldenBootAttempt(s *agentStatus) int {
+	for _, c := range s.Conditions {
+		if c.Type != conditionReady || c.Reason != readyReasonRetrying {
+			continue
+		}
+		if m := goldenBootFailed.FindStringSubmatch(c.Message); m != nil {
+			attempt, _ := strconv.Atoi(m[1])
+			return attempt
+		}
+	}
+	return 0
 }
 
 // readAgentReadinessOn is one reading of an agent's state (waitAgentReady's
@@ -890,7 +936,7 @@ func readyAgent(w agentWriter, spec agentSpec, timeout time.Duration) (agentRead
 // failure words a readiness that did not end Ready: what was seen last and
 // how to look further.
 func (r agentReadiness) failure(name string, timeout time.Duration) error {
-	verdict := fmt.Sprintf("never became Ready on Harness %s within %s", kagentHarness, timeout)
+	verdict := fmt.Sprintf("never became Ready on Harness %s within %s", kagentHarness, max(timeout, r.elapsed).Round(time.Second))
 	if r.terminal {
 		verdict = fmt.Sprintf("failed for good after %s", r.elapsed.Round(time.Second))
 	}
