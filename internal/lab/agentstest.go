@@ -57,7 +57,7 @@ const baselineServiceAccount = "system:serviceaccount:" + platformNamespace + ":
 // user and writes the Generic chart 1.x contract, through the platform path
 // only (Dex id_token -> muster -> call_tool x_agent-manager_*): get_info
 // reports identity caller on the 1.x chart and the platform Harness; the
-// admin's create -> ready -> turn -> update -> refreshSkills -> delete round
+// admin's create -> ready -> turn -> update -> refreshSkills -> plugins -> delete round
 // trip succeeds with requestedBy set — the HelmRelease written by
 // agent-manager (its field manager, values.toolset the anchor, the skill
 // pinned to a commit) next to the OCIRepository on the chart line agent-manager declares (its
@@ -356,6 +356,9 @@ func AgentsTest(cfg *config.Config, email string) error {
 	if err != nil {
 		return err
 	}
+	if err := proveAgentsTestPlugins(cfg, session, token); err != nil {
+		return err
+	}
 
 	// The user's identity, not a ServiceAccount: a viewer (the view
 	// ClusterRole, no HelmRelease writes anywhere) is refused by the kind
@@ -390,7 +393,7 @@ func AgentsTest(cfg *config.Config, email string) error {
 		}
 	}
 
-	step("The agent-manager ServiceAccount holds no RBAC of its own beyond what the lab's switches grant — skills.mintGitAuthSecret the skills-Secret Role, tenants.organizations.enabled the tenant reconciler's ClusterRole (auth can-i --list --as=%s, against a ServiceAccount no binding names)", agentManagerServiceAccount)
+	step("The agent-manager ServiceAccount holds no RBAC of its own beyond what the lab's switches grant — skills.mintGitAuthSecret the skills-Secret Role, tenants.organizations.enabled the tenant reconciler's ClusterRole, the chart-source Role on the agent chart's OCIRepository always (auth can-i --list --as=%s, against a ServiceAccount no binding names)", agentManagerServiceAccount)
 	rules, err := serviceAccountRules(agentManagerServiceAccount, kagentNamespace)
 	if err != nil {
 		return err
@@ -483,6 +486,7 @@ func AgentsTest(cfg *config.Config, email string) error {
 		agentManagerFieldManager, agentsTestToolset, kagentHarness, fixture.name(), agentChartOCIRepository, chartLine, displayNameAnnotation, iconURLAnnotation, kagentHarness, agentsTestAgent, toolsetHeader, agentsTestToolset, discoveryLabel, discoveryDisabledValue)
 	fmt.Printf("PASS: get_agent_status agrees with the Agent's status — ready on revision %.12s, and failed with the reason for an Agent on Harness %q\n", harness.LatestSuccessfulRevision, agentsTestNoHarness)
 	fmt.Println(refreshVerdict)
+	fmt.Printf("PASS: on Harness %s, %s @ %.12s bound by update_agent with %s selected lists that skill on a new revision, and with the selection empty no longer\n", kagentHarness, pluginExampleURL, pluginExampleCommit, pluginExampleSkill)
 	if viewer != nil {
 		fmt.Printf("PASS: %s's create is Forbidden by the apiserver as User \"oidc:%s\" (user RBAC, not the ServiceAccount's)\n", viewer.Email, viewer.Email)
 	}
@@ -862,6 +866,10 @@ const skillsMintValue = "mintGitAuthSecret"
 // mintGrantVerbs are the verbs of the skills-Secret Role minting grants.
 var mintGrantVerbs = []string{"get", "update"}
 
+// chartSourceGrant is the chart-source Role's row: the agent chart's shared
+// OCIRepository by name, get and update like the skills-Secret Role.
+var chartSourceGrant = saGrant{resource: fluxOCIRepositoryResource, names: []string{agentChartOCIRepository}, verbs: mintGrantVerbs, optional: true, by: "agent-manager's chart-source Role"}
+
 // tenantFluxClusterRole is the ClusterRole the tenant reconciler binds in
 // each tenant, the one name its `bind` grant carries (agent-manager's
 // tenantFluxClusterRole helper).
@@ -937,8 +945,13 @@ func (g saGrant) String() string {
 //     enabled, the workers' policy kind of networkPolicy.flavor (either kind
 //     for `auto`, which the cluster resolves; optional, as the chart renders
 //     it only with Agent Substrate on).
+//
+// Always allowed, never required: the chart-source Role (agent-manager's
+// templates/chart-source-rbac.yaml), get and update on the agent chart's
+// OCIRepository by name, which a chart with downstream OAuth renders for the
+// source's convergence on start.
 func agentManagerGrants(values map[string]any, multiTenant bool) []saGrant {
-	var grants []saGrant
+	grants := []saGrant{chartSourceGrant}
 	if minted := mintedSkillsSecretNames(values); minted != nil {
 		grants = append(grants, saGrant{resource: gvrSecrets.Resource, names: minted, verbs: mintGrantVerbs, by: "agent-manager." + skillsKey + "." + skillsMintValue})
 	}

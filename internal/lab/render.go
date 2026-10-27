@@ -100,6 +100,13 @@ type tmplData struct {
 	// `klausGateway:` block needs.
 	KlausGatewayEnabled bool
 	KlausGateway        klausGatewayValues
+	// DevctlEnabled adds the github instance's App to the workspace-manager
+	// registration's providerApps beside its pin, the grant devctl's MCP
+	// server takes (devctl.go).
+	DevctlEnabled bool
+	// RefusalNotices mirrors cfg.RefusalNoticesChart(): the chart takes the
+	// `klausGateway.refusals` block, whose interval the lab shortens.
+	RefusalNotices bool
 	// ClusterManagerEnabled mirrors cfg.ClusterManagerEnabled(): the chart's
 	// cluster-manager component on, because platform.devImages names its
 	// image — the roster block renders then, with its patches.
@@ -126,21 +133,19 @@ type tmplData struct {
 	// WorkspaceProviders are the workspace-manager's provider instances
 	// (workspaceprovider.go), none while none is rendered: agentlab.yaml's
 	// in a render without a cluster, what the cluster allows in the
-	// install's. WorkspaceFake says the lab's GitHub is among them
-	// (workspacefake.go): CoreDNS sends its name to its Service, and the
-	// workspace-manager trusts the lab CA its leaf is from.
-	// WorkspaceFakeBearer says it serves the instance fake-bearer too:
-	// CoreDNS sends that instance's git and API hosts to the same Service.
+	// install's.
 	WorkspaceProviders []workspaceProviderValues
 	// WorkspaceGrant is the provider App muster pins the workspace-manager's
 	// registration to (workspacemustergrant.go), nil for none.
 	WorkspaceGrant *workspaceGrantValues
+	// WorkspaceProviderApps names the instances muster keeps a provider App
+	// of each, side by side, with the registration pinned to none
+	// (workspaceProviderAppsFor), nil otherwise.
+	WorkspaceProviderApps []string
 	// WorkspaceReleasable is the instance muster's credential provider
 	// releases while no instance renders (workspaceReleasableFor), nil with
 	// workspaces off.
 	WorkspaceReleasable *workspaceGrantValues
-	WorkspaceFake       bool
-	WorkspaceFakeBearer bool
 	// WorkspaceAdmission is the rig a Session on a workspace volume is
 	// admitted with (workspacegrant.go): the manager's grant signing key,
 	// kagent's jwt admission of its key set and the claude Harness; nil
@@ -153,12 +158,12 @@ type tmplData struct {
 	// (tenantstest.go).
 	TenantsEnabled        bool
 	TenantsTestNamespaces []string
-	// TenantsMusterVersion is the muster the lab pins with the tenants on
-	// (tenantsMusterVersion, tenantstest_muster.go).
-	TenantsMusterVersion string
 	// CodingHarnesses are the lab's coding Harnesses (coding.go), rendered
 	// as kagent.harnesses; none with coding agents and the workspaces off.
 	CodingHarnesses []codingHarness
+	// ChatGPTSubscription is a person's own ChatGPT login as a codex model
+	// (chatgptsubscription.go), nil with platform.chatgptSubscription off.
+	ChatGPTSubscription *chatgptSubscriptionValues
 	// PostRenderers is the lab's per-component `postRenderers` list as
 	// indented YAML, keyed by agent-platform component name
 	// (postrenderers.go): the hostNetwork, sidecar and nodePort patches plus
@@ -208,8 +213,8 @@ type tmplData struct {
 	// recorded (githubtoken.go), so the values name the Secret the lab
 	// places it in — the portal's
 	// extraEnvVarsSecrets and the overlay's integrations.github,
-	// agent-manager's skills.github.tokenSecret, the migrate Job's
-	// githubToken. Only ever the Secret's name, never the token.
+	// agent-manager's skills.github.tokenSecret. Only ever the Secret's
+	// name, never the token.
 	GitHubToken bool
 	// GitHubApp mirrors gitHubAppWired(cfg): githubApp is recorded
 	// (githubapp.go), so agent-manager's skills.github.app names the Secret
@@ -290,14 +295,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		}
 		labCA = strings.TrimRight(string(raw), "\n")
 	}
-	workspaceProviders, err := workspaceProvidersFor(cfg)
-	if err != nil {
-		return nil, err
-	}
-	workspaceReleasable, err := workspaceReleasableFor(cfg)
-	if err != nil {
-		return nil, err
-	}
+	workspaceProviders := workspaceProvidersFor(cfg)
 	workspacesChart := workspacesChartFor(cfg)
 	return &tmplData{
 		Config:                       cfg,
@@ -328,6 +326,8 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		VMManagerEnabled:             cfg.VMManagerEnabled(),
 		VMManagerGuestImage:          vmManagerGuestImage,
 		KlausGatewayEnabled:          cfg.KlausGatewayEnabled(),
+		DevctlEnabled:                cfg.DevctlEnabled(),
+		RefusalNotices:               cfg.RefusalNoticesChart(),
 		KlausGateway:                 klausGatewayValuesFor(cfg),
 		ClusterManagerEnabled:        cfg.ClusterManagerEnabled(),
 		AgentgatewayDevImage:         agentgatewayDevImage(cfg),
@@ -339,14 +339,13 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		Workspaces:                   workspacesValuesFor(cfg),
 		WorkspaceProviders:           workspaceProviders,
 		WorkspaceGrant:               workspaceGrantFor(cfg, workspaceProviders),
-		WorkspaceReleasable:          workspaceReleasable,
-		WorkspaceFake:                cfg.WorkspaceFakeProvider(),
-		WorkspaceFakeBearer:          cfg.WorkspaceFakeBearerProvider(),
+		WorkspaceProviderApps:        workspaceProviderAppsFor(cfg, workspaceProviders),
+		WorkspaceReleasable:          workspaceReleasableFor(cfg),
 		WorkspaceAdmission:           workspaceAdmissionValuesFor(cfg, workspacesChart.Carries),
 		TenantsEnabled:               cfg.TenantsEnabled(),
 		TenantsTestNamespaces:        tenantsTestNamespaces[:],
-		TenantsMusterVersion:         tenantsMusterVersion,
 		CodingHarnesses:              codingHarnessesFor(cfg, workspaceAdmissionValuesFor(cfg, workspacesChart.Carries), nil),
+		ChatGPTSubscription:          chatgptSubscriptionValuesFor(cfg),
 		CertsDir:                     certsDir,
 		NodeFilesDir:                 nodeFiles,
 		MusterNodePort:               config.MusterNodePort,
@@ -368,6 +367,11 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 // dexIssuerService is the ClusterIP Service pods reach the issuer under the
 // platform domain through (platform.tls; dex.yaml.tmpl, coredns.yaml.tmpl).
 const dexIssuerService = "dex-issuer"
+
+const (
+	dexKeysService = "dex-keys"
+	dexKeysPort    = 5557
+)
 
 // DexIssuerService is dexIssuerService for the templates.
 func (t *tmplData) DexIssuerService() string { return dexIssuerService }
@@ -391,6 +395,17 @@ func (t *tmplData) DexJWKSPort() int {
 	return 5556
 }
 
+// DexKeysService, DexKeysHost and DexKeysPort are Dex's plain-http listener
+// in the cluster, where the kagent controller fetches the key set it verifies
+// people's tokens against (the controller trusts no private CA).
+func (t *tmplData) DexKeysService() string { return dexKeysService }
+
+// DexKeysHost: see DexKeysService.
+func (t *tmplData) DexKeysHost() string { return dexKeysService + ".dex.svc.cluster.local" }
+
+// DexKeysPort: see DexKeysService.
+func (t *tmplData) DexKeysPort() int { return dexKeysPort }
+
 // ExtraPostRenderers is the part of PostRenderers the values template's
 // roster does not render under these settings: the components it names no
 // block for — cluster-manager while only an overlay turns it on — and the
@@ -400,22 +415,23 @@ func (t *tmplData) DexJWKSPort() int {
 // these as `<component>: {postRenderers: …}` so every patch the rule found
 // reaches its release and no component key renders twice. Mirrors the
 // template's conditions: a block that is always there (muster,
-// agentgateway, mcp-kubernetes, kagent, model-manager, backstage — the last
+// agentgateway, the connectivity chart whenever it is patched, mcp-kubernetes, kagent, model-manager, backstage — the last
 // three carry their `enabled` from a toggle and render their patches only
 // while it is on) is never extra.
 func (t *tmplData) ExtraPostRenderers() map[string]string {
 	named := map[string]bool{
-		componentMuster:           true,
-		agentgatewayComponent:     true,
-		componentMCPKubernetes:    true,
-		componentKagent:           true,
-		componentBackstage:        true,
-		modelManagerMCPServer:     true,
-		agentManagerMCPServer:     t.Platform.Agents,
-		vmManagerMCPServer:        t.VMManagerEnabled,
-		klausGatewayComponent:     t.KlausGatewayEnabled,
-		clusterManager:            t.ClusterManagerEnabled,
-		llmisvcResourcesComponent: t.ServingEnabled,
+		componentMuster:              true,
+		agentgatewayComponent:        true,
+		config.ConnectivityChartName: true,
+		componentMCPKubernetes:       true,
+		componentKagent:              true,
+		componentBackstage:           true,
+		modelManagerMCPServer:        true,
+		agentManagerMCPServer:        t.Platform.Agents,
+		vmManagerMCPServer:           t.VMManagerEnabled,
+		klausGatewayComponent:        t.KlausGatewayEnabled,
+		clusterManager:               t.ClusterManagerEnabled,
+		llmisvcResourcesComponent:    t.ServingEnabled,
 	}
 	extra := map[string]string{}
 	for component, postRenderers := range t.PostRenderers {

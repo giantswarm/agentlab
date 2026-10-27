@@ -18,6 +18,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/agentlab/internal/config"
 	"github.com/giantswarm/agentlab/pkg/project"
 )
 
@@ -114,6 +115,7 @@ func TestCommandPostsOneSignal(t *testing.T) {
 	withUserIdentity(t, "12a0d395-dbb9-3050-b357-f0f9f3185660", "tester")
 
 	Command(lab(t, "up"))
+	Flush(context.Background())
 
 	signals := received(t, got)
 	if len(signals) != 1 {
@@ -152,6 +154,9 @@ func TestCommandPostsOneSignal(t *testing.T) {
 	if payload["appVersion"] != project.Version() {
 		t.Errorf("payload.appVersion %v, want %s", payload["appVersion"], project.Version())
 	}
+	if _, ok := payload["deploymentID"]; ok {
+		t.Errorf("payload.deploymentID %v from a command that entered no lab", payload["deploymentID"])
+	}
 	// The dashboard's standard "App Versions" insight reads the reserved
 	// parameter, not the payload key the usage report queries.
 	if payload["TelemetryDeck.AppInfo.version"] != project.Version() {
@@ -186,6 +191,8 @@ func TestCommandSendsNothingWhenOptedOutOrUnconfigured(t *testing.T) {
 
 	withAppID(t, "")
 	Command(lab(t, "up"))
+	EnterLab("3f0c9a4e-5d1b-4b8e-9c2a-7e6f1d0b8a55")
+	Flush(context.Background())
 
 	select {
 	case p := <-hit:
@@ -204,10 +211,10 @@ func enable(t *testing.T, srv *httptest.Server) {
 	t.Setenv(doNotTrackEnv, "")
 	t.Setenv(TestModeEnv, "1")
 	endpoint = srv.URL
-	sender = nil
+	sender, pending, awaitStart, deploymentID = nil, nil, false, ""
 	t.Cleanup(func() {
 		endpoint = ""
-		sender = nil
+		sender, pending, awaitStart, deploymentID = nil, nil, false, ""
 	})
 }
 
@@ -369,6 +376,7 @@ func TestCommandFallsBackToTheLibraryIdentifier(t *testing.T) {
 	withUserIdentity(t, "", "tester")
 
 	Command(lab(t, "up"))
+	Flush(context.Background())
 
 	signals := received(t, got)
 	if len(signals) != 1 {
@@ -433,6 +441,7 @@ func TestAnUnreachableEndpointCostsNoWaitAndNoOutput(t *testing.T) {
 	var waited time.Duration
 	out := stderr(t, func() {
 		Command(lab(t, "up"))
+		EnterLab("")               // the signal leaves as the command enters its lab
 		time.Sleep(connectTimeout) // the command's own work
 		start := time.Now()
 		Flush(context.Background())
@@ -478,5 +487,99 @@ func TestDebugModeReportsTheFailure(t *testing.T) {
 	})
 	if !strings.Contains(out, "telemetry: ") {
 		t.Errorf("debug mode said nothing about the failed delivery; stderr:\n%s", out)
+	}
+}
+
+// TestEnterLabSendsTheCommandSignalWithTheDeployment: a command's signal
+// waits for its lab, then leaves at once, naming the lab's deployment — and so
+// does every signal after it. Flush sends nothing twice.
+func TestEnterLabSendsTheCommandSignalWithTheDeployment(t *testing.T) {
+	got := capture(t)
+	const id = "3f0c9a4e-5d1b-4b8e-9c2a-7e6f1d0b8a55"
+
+	Command(lab(t, "up"))
+	select {
+	case signals := <-got:
+		t.Fatalf("the command signal left before the command entered its lab: %v", signals)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	EnterLab(id)
+	signals := received(t, got)
+	if len(signals) != 1 || signals[0]["type"] != signalType {
+		t.Fatalf("got %v, want the one command signal", signals)
+	}
+	payload, _ := signals[0]["payload"].(map[string]any)
+	if payload["deploymentID"] != id {
+		t.Errorf("payload.deploymentID %v, want %s", payload["deploymentID"], id)
+	}
+
+	Platform(context.Background(), config.Default(), config.DefaultChartVersion)
+	Flush(context.Background())
+	signals = received(t, got)
+	if len(signals) != 1 || signals[0]["type"] != platformSignalType {
+		t.Fatalf("got %v after Flush, want the platform signal alone", signals)
+	}
+	payload, _ = signals[0]["payload"].(map[string]any)
+	if payload["deploymentID"] != id {
+		t.Errorf("platform payload.deploymentID %v, want %s", payload["deploymentID"], id)
+	}
+}
+
+func TestNewDeploymentDrawsDistinctIDsAndSalts(t *testing.T) {
+	a, err := NewDeployment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := NewDeployment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.ID == b.ID || a.Salt == b.Salt {
+		t.Errorf("two deployments share an ID or a salt: %+v %+v", a, b)
+	}
+	if a.ID == a.Salt || len(a.Salt) != 64 {
+		t.Errorf("salt %q is not 32 random bytes apart from the ID %q", a.Salt, a.ID)
+	}
+}
+
+// TestUpWaitsForTheDeploymentItStarts: the command that starts a deployment
+// (StartsDeployment) sends nothing on entering its lab, which may still name
+// the deployment of a cluster that is gone, and leaves with the one it starts.
+func TestUpWaitsForTheDeploymentItStarts(t *testing.T) {
+	got := capture(t)
+	const old, started = "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"
+	up := lab(t, "up")
+	up.Annotations = map[string]string{StartsDeployment: ""}
+
+	Command(up)
+	EnterLab(old)
+	select {
+	case signals := <-got:
+		t.Fatalf("up's signal left on entering its lab: %v", signals)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	StartDeployment(started)
+	signals := received(t, got)
+	payload, _ := signals[0]["payload"].(map[string]any)
+	if payload["deploymentID"] != started {
+		t.Errorf("up's payload.deploymentID %v, want the started %s", payload["deploymentID"], started)
+	}
+}
+
+// TestALabWithoutADeploymentSendsOnEntering: a command entering a lab that
+// records no deployment (one booted before deployments existed) sends at
+// once, without one, rather than at Flush — which an interrupted command
+// never reaches.
+func TestALabWithoutADeploymentSendsOnEntering(t *testing.T) {
+	got := capture(t)
+
+	Command(lab(t, "up"))
+	EnterLab("")
+	signals := received(t, got)
+	payload, _ := signals[0]["payload"].(map[string]any)
+	if _, ok := payload["deploymentID"]; ok {
+		t.Errorf("payload.deploymentID %v for a lab without one", payload["deploymentID"])
 	}
 }

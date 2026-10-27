@@ -127,7 +127,7 @@ func DecisionsTest(cfg *config.Config, email string, opts DecisionsTestOptions) 
 	run := strings.ToUpper(randomSuffix())
 	person := slackUserPrefix + run + "P"
 	channel := "CAGENTLAB" + run
-	fake, err := startFakeSlack(net.JoinHostPort("127.0.0.1", strconv.Itoa(opts.Port+2)), map[string]string{person: user.Email})
+	fake, err := startFakeSlack(net.JoinHostPort("127.0.0.1", strconv.Itoa(opts.Port+2)), map[string]string{person: user.Email}, nil)
 	if err != nil {
 		return err
 	}
@@ -440,9 +440,9 @@ func (a *decisionsAPI) post(body map[string]any) (decisionReceipt, error) {
 // answered with tool; addressee is {"team", "channel"} or {"person"}.
 func decisionBody(addressee map[string]any, question, tool string) map[string]any {
 	body := map[string]any{
-		"note":      decisionsNote,
-		"question":  question,
-		"statusQuo": "graveler and glean run the release since Tuesday without a restart.",
+		beekeeperKeyNote: decisionsNote,
+		"question":       question,
+		"statusQuo":      "graveler and glean run the release since Tuesday without a restart.",
 		"options": []any{
 			map[string]any{decisionsKeyLabel: "Roll tonight", "consequence": "The lane clears at 22:00."},
 			map[string]any{decisionsKeyLabel: "Wait for Monday", "consequence": "Nothing rolls before Monday."},

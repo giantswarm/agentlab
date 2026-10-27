@@ -19,8 +19,8 @@ import (
 // and the bundled helm-controller runs them as Kustomize post-renderers over
 // the component chart's render — the same mechanism the fleet has for chart
 // fixes, and the plain replacement for the post-renderer binary earlier
-// agentlab versions wrapped around `helm install`. Every patch is a strategic
-// merge on one named object, so a chart bump needs no hand-copying:
+// agentlab versions wrapped around `helm install`. Every patch but 8 is a
+// strategic merge on one named object, so a chart bump needs no hand-copying:
 //
 //  1. hostNetwork + dnsPolicy on the muster and backstage Deployments: both
 //     must resolve the issuer URL to the Dex NodePort from inside the pod so
@@ -96,8 +96,21 @@ import (
 //     signs, the way muster, the portal and workspace-manager trust it
 //     (klausgateway.go).
 //
+//  8. No HSTS from the portal: Backstage's helmet sends
+//     `Strict-Transport-Security: max-age=15552000; includeSubDomains` with no
+//     setting to turn it off, and a browser that trusted one lab CA then pins
+//     the hostname for 180 days — a lab recreated with a fresh CA, or another
+//     lab on the same name, is refused with no way past the warning. A lab
+//     edge on a machine-local CA has nothing HSTS protects, so the connectivity
+//     chart's `backstage` HTTPRoute drops the header (a ResponseHeaderModifier
+//     filter, JSON 6902: the route's rules are a list without merge keys).
+//     Lab only.
+//
 // The values-side shape is Flux's: `postRenderers: [{kustomize: {patches:
 // [{target, patch}], images: [{name, newName, newTag}]}}]`.
+
+// hstsHeader is the response header patch 8 removes at the edge.
+const hstsHeader = "Strict-Transport-Security"
 
 // dexLocalhostImage is the socat image of the sidecar (side-loaded like every
 // other lab image): the gsoci mirror of alpine/socat.
@@ -155,6 +168,7 @@ const (
 	kindDeployment = "Deployment"
 	kindService    = "Service"
 	kindConfigMap  = "ConfigMap"
+	kindHTTPRoute  = "HTTPRoute"
 )
 
 // kustomizePatch is one Flux postRenderers kustomize patch: a strategic merge
@@ -453,6 +467,23 @@ spec:
 	}
 }
 
+// noHSTSPatch is patch 8: the portal's route drops the HSTS header its
+// backend sends. The chart's backstage route carries one rule; a second one
+// would keep the header and fail backstage-test's check, not pass silently.
+func noHSTSPatch() kustomizePatch {
+	return kustomizePatch{
+		Target: map[string]string{kindKey: kindHTTPRoute, nameKey: componentBackstage},
+		Patch: literalYAML(fmt.Sprintf(`- op: add
+  path: /spec/rules/0/filters
+  value:
+    - type: ResponseHeaderModifier
+      responseHeaderModifier:
+        remove:
+          - %s
+`, hstsHeader)),
+	}
+}
+
 // mcpPrometheusPostRenderers is the postRenderers list of the release the lab
 // renders itself (mcp-prometheus.yaml.tmpl): the dex-localhost sidecar while
 // the issuer is spelled localhost, and the platform.devImages.mcp-prometheus
@@ -639,6 +670,9 @@ func componentPostRenderers(cfg *config.Config, imageNames map[string]string, si
 	}
 	if cfg.KlausGatewayEnabled() {
 		patches[klausGatewayComponent] = append(patches[klausGatewayComponent], slackAPIPatch(), labCAPatch())
+	}
+	if cfg.Backstage.Enabled {
+		patches[config.ConnectivityChartName] = []kustomizePatch{noHSTSPatch()}
 	}
 	for _, component := range slices.Sorted(maps.Keys(sidecars)) {
 		for _, target := range sidecars[component] {

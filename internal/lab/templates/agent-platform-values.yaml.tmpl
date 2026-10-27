@@ -156,17 +156,19 @@ components:
   # an Envoy filter kind has no implementation of.
   dicebear:
     enabled: false
+{{- $musterPatches := index .PostRenderers "muster" }}
+{{- if or $musterPatches ($.ChatGPTRange "muster") }}
   muster:
-{{- if .TenantsEnabled }}
-    # platform.tenants: the first muster that forgets a tenant namespace's
-    # sign-ins when its last server goes (giantswarm/muster#1603); the
-    # chart's range admits older ones. Drop the pin once the chart's range
-    # starts there (HACKS.md U38).
-    versionRange: "{{ .TenantsMusterVersion }}"
+{{- with $.ChatGPTRange "muster" }}
+    # The first muster with the ChatGPT provider App and up
+    # (platform.chatgptSubscription; chatgptsubscription.go): the chart's own
+    # range admits older releases, and the chart refuses the model entry then.
+    versionRange: "{{ . }}"
 {{- end }}
-{{- with index .PostRenderers "muster" }}
+{{- with $musterPatches }}
     postRenderers:
 {{ . | indent 6 }}
+{{- end }}
 {{- end }}
   # The edge and MCP data plane; its one patch is a dev image of the
   # controller (platform.devImages.agentgateway-controller). The proxy's dev
@@ -179,17 +181,26 @@ components:
 {{- end }}
   agent-platform-mcps:
     enabled: true
-{{- with .ConnectivityChart }}
-  # The wiring chart of the checkout (platform.chartPath; connectivity.go).
-  # The meta chart installs agent-platform-connectivity at its own version —
-  # for a checkout the placeholder of its Chart.yaml, which no registry
-  # publishes — so the lab pushes the checkout's copy into the lab registry
-  # at that version and points the release there: the two charts of one
-  # working tree, as CI publishes them for a commit.
+{{- $connectivityPatches := index .PostRenderers "agent-platform-connectivity" }}
+{{- if or .ConnectivityChart $connectivityPatches }}
+  # The wiring chart, which renders the public routes; its one patch drops the
+  # portal's HSTS header at the edge (postrenderers.go, patch 8).
   agent-platform-connectivity:
+{{- with .ConnectivityChart }}
+    # The wiring chart of the checkout (platform.chartPath; connectivity.go).
+    # The meta chart installs agent-platform-connectivity at its own version —
+    # for a checkout the placeholder of its Chart.yaml, which no registry
+    # publishes — so the lab pushes the checkout's copy into the lab registry
+    # at that version and points the release there: the two charts of one
+    # working tree, as CI publishes them for a commit.
     repository: {{ .Repository }}
     insecure: true
     versionRange: "{{ .Version }}"
+{{- end }}
+{{- with $connectivityPatches }}
+    postRenderers:
+{{ . | indent 6 }}
+{{- end }}
 {{- end }}
   # The Kubernetes MCP server (registered with muster by the connectivity
   # chart's MCPServer CR): an OAuth resource server against global.identity;
@@ -212,9 +223,18 @@ components:
   # agentlab.yaml).
   kagent:
     enabled: {{ .Platform.Agents }}
+{{- with $.ChatGPTRange "kagent" }}
+    # The first kagent that admits a ChatGPT model without a Secret and up
+    # (platform.chatgptSubscription), its CRDs beside it.
+    versionRange: "{{ . }}"
+{{- end }}
 {{- if .Platform.Agents }}
     postRenderers:
 {{ index .PostRenderers "kagent" | indent 6 }}
+{{- with $.ChatGPTRange "kagent-crds" }}
+  kagent-crds:
+    versionRange: "{{ . }}"
+{{- end }}
 {{- if not .LegacyChart }}
   # The platform Postgres: the CloudNativePG operator (the chart's optional
   # component; a management cluster runs it as its own app) and, under
@@ -467,6 +487,13 @@ muster:
           # The issuer is a loopback address; discovery refuses that by default.
           allowPrivateIPOIDC: true
         existingSecret: agent-platform-secrets
+{{- if .ChatGPTSubscription }}
+        # Tokens encrypted at rest with the Secret's oauth-encryption-key:
+        # the chart keeps a person's ChatGPT login (platform
+        # .chatgptSubscription) only encrypted and refuses the model entry
+        # without it.
+        encryptionKey: true
+{{- end }}
         # Lab only: lets Claude Code register itself over DCR without a
         # pre-shared registration token (its loopback port is random, so no
         # other registration gate can be opened for it).
@@ -488,8 +515,8 @@ muster:
     # No provider instance renders yet (the configured one lacks its ids or
     # Secret), so muster's registration of the workspace-manager is pinned to
     # none and the chart derives no releasable; it refuses an empty one with
-    # Substrate on. muster releases the lab's own App, {{ .Provider }}'s,
-    # until the configured instance renders (workspacemustergrant.go).
+    # Substrate on. muster releases {{ .Provider }}'s issuer until the
+    # configured instance renders (workspacemustergrant.go).
     credentialProvider:
       releasable:
         {{ .Provider }}: {{ .Issuer }}
@@ -729,6 +756,15 @@ kagent:
       # above) — the second of the two authentication layers. A caller that
       # bypasses the edge sends no verified bearer and is nobody.
       mode: trusted-proxy
+      # From kagent 1.24.1 the controller verifies a person's token against
+      # the issuer's keys before it reads a claim. The meta chart derives the
+      # key set from controllerRoute.jwtAuthentication.jwks, which the lab
+      # serves over TLS under the lab CA that the controller does not trust,
+      # and refuses that render; the controller reads Dex's plain-http
+      # Service instead, as an installation's does. An earlier kagent chart
+      # ignores both keys.
+      jwksURL: http://{{ .DexKeysHost }}:{{ .DexKeysPort }}/dex/keys
+      jwksAllowHTTP: true
     # The controller's Kubernetes RBAC authorizer (kubernetes mode, the
     # chart's default from agent-platform 4.151 on kagent 1.19, pinned here so
     # a chart default that moves cannot leave the lab on noop) reviews each
@@ -827,6 +863,20 @@ kagent:
 {{- end }}
 {{- end }}
 {{- end }}
+{{- with .ChatGPTSubscription }}
+  # A person's own ChatGPT subscription (platform.chatgptSubscription;
+  # chatgptsubscription.go): an entry with credentialType chatgptOAuth and
+  # no apiKeySecret is the model "ChatGPT (your subscription)", from which
+  # the chart derives muster's provider App chatgpt and kagent's
+  # installation provider chatgpt. A codex turn on it runs on the login the
+  # Session's person connected in muster (core_auth_login app=chatgpt).
+  modelConfigs:
+    - name: {{ .ModelConfig }}
+      provider: OpenAI
+      model: {{ .Model }}
+      credentialType: chatgptOAuth
+      apiFormat: responses
+{{- end }}
   # No OTLP gateway in kind; the exporters would only log dial errors.
   otel:
     tracing:
@@ -870,19 +920,6 @@ agent-manager:
       auth:
         requiredAudiences:
           - kubernetes
-{{- if .GitHubToken }}
-
-# The connectivity chart's wiring for agent-manager: its migrate Job (the
-# cut-over the rehearsal drives) resolves skills through GitHub too, from the
-# kagent namespace — the same token, the lab's copy of the Secret there
-# (githubtoken.go). The Job's env is optional, so a first install, where the
-# copy lands after the chart created the namespace, still runs.
-agentManager:
-  migration:
-    githubToken:
-      secretName: agentlab-github-token
-      key: GITHUB_TOKEN
-{{- end }}
 {{- end }}
 
 {{- if .ModelManagerEnabled }}
@@ -1128,6 +1165,13 @@ klausGateway:
     existingSecret: {{ .KlausGateway.KeysSecret }}
   serviceMonitor:
     enabled: {{ .Platform.Observability }}
+{{- if .RefusalNotices }}
+  # The egress refusal notices run where Slack, kagent and Substrate are (the
+  # chart derives the rest): the egress read every 10s instead of every
+  # minute, so klaus-gateway-test's refusal step waits seconds for its notice.
+  refusals:
+    interval: 10s
+{{- end }}
 {{- end }}
 
 {{- if .Backstage.Enabled }}
@@ -1340,31 +1384,27 @@ workspaces:
 {{- end }}
 
 # The workspace-manager's provider instances (platform.workspaces.provider;
-# workspaceprovider.go), each of the chart's github kind: fake, the lab's own
-# GitHub at its URL (a GitHub Enterprise-shaped instance, its API under
-# /api/v3), fake-bearer, the same GitHub shaped like github.com (its apiURL
-# on a host of its own), and github, github.com. The base URL carries the gateway port,
-# which the chart's derivation from global.domain drops: the chart routes its
-# host (its MCP endpoint and the grants' key set; the person's provider
-# sign-in is muster's). The github
-# instance renders once the App's ids are in agentlab.yaml and its Secret
-# carries both keys; the values name each instance's Secret, never a value.
+# workspaceprovider.go): github, a GitHub App on github.com, and gitlab, a
+# GitLab the lab reaches. The base URL carries the gateway port, which the
+# chart's derivation from global.domain drops: the chart routes its host (its
+# MCP endpoint and the grants' key set; the person's provider sign-in is
+# muster's). The github instance renders once the App's ids are in
+# agentlab.yaml and its Secret carries both keys; the values name each
+# instance's Secret, never a value.
 workspace-manager:
   oauth:
     baseURL: {{ .WorkspaceManagerBaseURL }}
 {{- with .Platform.Workspaces.SessionsCleanupAfter }}
   # How long a Session's directory outlives its last turn
-  # (platform.workspaces.sessionsCleanupAfter): a proof's short window, so
-  # workspaces-test --part sessions sees a directory cleaned up and its
-  # Session resume in a fresh one. Unset, the chart's 30 days.
+  # (platform.workspaces.sessionsCleanupAfter). Unset, the chart's 30
+  # days.
   sessions:
     cleanupAfter: {{ . }}
 {{- end }}
 {{- with .Platform.Workspaces.SyncRefreshAfter }}
   # The refresh threshold (platform.workspaces.syncRefreshAfter): a Session
-  # started on a workspace whose last sync is older requests a sync. A
-  # proof's short one, so workspaces-test --part refresh sees a workspace
-  # pass it. Unset, the manager's 1h.
+  # started on a workspace whose last sync is older requests a sync. Unset,
+  # the manager's 1h.
   sync:
     refreshAfter: {{ . }}
 {{- end }}
@@ -1384,7 +1424,7 @@ workspace-manager:
   # beside a provider instance: the manager refuses a key without one.
   grant:
     signingKey: {name: {{ .Secret }}, key: {{ .SecretKey }}}
-{{- if not $.WorkspaceGrant }}
+{{- if not (or $.WorkspaceGrant $.WorkspaceProviderApps) }}
   # A workspace-manager before 0.10.0 keeps the person's sign-in itself, and
   # its token exchange (POST /token) answers kagent's client: the lab
   # registers it with a secret of its own (certs/workspace-grant). From
@@ -1395,16 +1435,37 @@ workspace-manager:
 {{- end }}
 {{- end }}
 {{- end }}
-{{- with .WorkspaceGrant }}
-  # The registration pinned to the instance {{ .Provider }}'s App
-  # (platform.workspaces.grantProvider; workspacemustergrant.go): a person
-  # grants it once in muster (core_auth_login), and muster attaches their
-  # App token to every call, the Dex ID token beside it. The OAuth client is
-  # the instance's Secret, its client id placed beside the secret.
+{{- with .WorkspaceProviderApps }}
+  # No pin (platform.workspaces.grantProvider: apps;
+  # workspacemustergrant.go): the chart keeps one muster provider App per
+  # instance with person sign-in ({{ join . ", " }}), side by side, and the
+  # registration receives the grants of each. A person grants each App once
+  # in muster (core_auth_login app=<instance>).
+{{- end }}
+  # Same audience story as agent-manager and model-manager: the lab's person
+  # tokens carry the `kubernetes` audience, which the workspace-manager
+  # trusts only when it is listed here.
   muster:
     mcpServer:
       auth:
+        requiredAudiences:
+          - kubernetes
+{{- with .WorkspaceGrant }}
+        # The registration pinned to the instance {{ .Provider }}'s App
+        # (platform.workspaces.grantProvider; workspacemustergrant.go): a
+        # person grants it once in muster (core_auth_login), and muster
+        # attaches their App token to every call, the Dex ID token beside it.
+        # The OAuth client is the instance's Secret, its client id placed
+        # beside the secret.
         provider: {{ .Provider }}
+{{- if and $.DevctlEnabled (eq .Provider "github") }}
+        # devctl's MCP server (platform.devctl; devctl.go) takes the same
+        # grant: muster keeps the pinned App as the provider App github, with
+        # the pin's issuer and client Secret, so a grant made stands, and
+        # attaches it to every registration that names it — the shape
+        # gazelle's configuration declares.
+        providerApps: [github]
+{{- end }}
         authorizationServer:
           issuer: {{ .Issuer }}
           expectedIssuer: "{{ .ExpectedIssuer }}"
@@ -1416,16 +1477,6 @@ workspace-manager:
           scopes: "{{ .Scopes }}"
           clientCredentialsSecretRef: {name: {{ .Secret }}}
           grantScope: subject
-{{- end }}
-{{- if .WorkspaceFake }}
-  # The lab's GitHub serves TLS with a leaf of the lab CA, and the manager's
-  # HTTP client takes the system roots: the lab CA file the chart mounts for
-  # Dex (global.identity.ca) is named for them too. The image's own roots
-  # stay, read from its certificate directory regardless, so a github
-  # instance beside the fake still verifies github.com.
-  extraEnv:
-    - name: SSL_CERT_FILE
-      value: /etc/workspace-manager/idp-ca/ca.crt
 {{- end }}
 {{- with .WorkspaceProviders }}
   providers:

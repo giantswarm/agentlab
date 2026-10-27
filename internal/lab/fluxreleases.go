@@ -215,13 +215,24 @@ var offlineAPIVersions = []string{
 
 // componentAPIVersions are the API groups the component renders are given as
 // .Capabilities (offlineAPIVersions), plus the Prometheus Operator's when the
-// observability stack is on.
+// observability stack is on and, with the tenants, the
+// MutatingAdmissionPolicy the lab's apiserver serves, which the connectivity
+// chart requires for the Organizations' ModelConfig policy and refuses the
+// render without.
 func componentAPIVersions(cfg *config.Config) []string {
+	versions := slices.Clone(offlineAPIVersions)
 	if cfg.Platform.Observability {
-		return append(slices.Clone(offlineAPIVersions), "monitoring.coreos.com/v1")
+		versions = append(versions, "monitoring.coreos.com/v1")
 	}
-	return offlineAPIVersions
+	if cfg.TenantsEnabled() {
+		versions = append(versions, mutatingAdmissionPolicyAPIVersion)
+	}
+	return versions
 }
+
+// mutatingAdmissionPolicyAPIVersion is the capability Helm's
+// .Capabilities.APIVersions.Has answers for a MutatingAdmissionPolicy.
+const mutatingAdmissionPolicyAPIVersion = "admissionregistration.k8s.io/v1/MutatingAdmissionPolicy"
 
 // renderFailure is one component render that produced no manifest, kept with
 // the release it was for: whether a failure predicts the install depends on

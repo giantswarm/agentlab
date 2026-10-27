@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -317,6 +318,23 @@ func signWorkspaceGrant(key *ecdsa.PrivateKey, kid string, grant workspaceGrant)
 	return signWorkspaceClaims(key, kid, grant)
 }
 
+// signGrantWithout signs the grant with the claims named left out, as a
+// compact JWS: a grant the manager would never sign.
+func signGrantWithout(key *ecdsa.PrivateKey, kid string, grant workspaceGrant, claims ...string) (string, error) {
+	raw, err := json.Marshal(grant)
+	if err != nil {
+		return "", err
+	}
+	var generic map[string]any
+	if err := json.Unmarshal(raw, &generic); err != nil {
+		return "", err
+	}
+	for _, c := range claims {
+		delete(generic, c)
+	}
+	return signWorkspaceClaims(key, kid, generic)
+}
+
 // signWorkspaceClaims signs any claims with ES256 under kid, as a compact
 // JWS: a grant of the proof's, or a manager's grant with a claim changed.
 func signWorkspaceClaims(key *ecdsa.PrivateKey, kid string, claims any) (string, error) {
@@ -398,4 +416,11 @@ func readSessionAdmission(ctx context.Context) string {
 	}
 	return fmt.Sprintf("Session admission: kagent trusts %s (issuer %s), %s, %s",
 		cm.Data[admissionJWKSURLKey], cm.Data[admissionIssuerKey], key, harness)
+}
+
+// randomHex is n random bytes, hex-encoded.
+func randomHex(n int) string {
+	b := make([]byte, n)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }

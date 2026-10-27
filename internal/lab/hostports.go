@@ -18,7 +18,11 @@ import (
 // naming neither the lab's setting nor the holder; this names both, one line
 // per port, before minutes of image pulls and a half-created node.
 func checkHostPortsFree(cfg *config.Config) error {
-	conflicts := cfg.PortConflicts(nil)
+	var own map[int]bool
+	if port := devRegistryOwnPort(cfg); port != 0 {
+		own = map[int]bool{port: true}
+	}
+	conflicts := cfg.PortConflicts(own)
 	if len(conflicts) == 0 {
 		return nil
 	}

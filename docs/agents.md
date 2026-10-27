@@ -126,8 +126,7 @@ see [Agent proofs without an Anthropic key](models.md#agent-proofs-without-an-an
 Two consumers of the lab resolve skills through GitHub's REST API: the
 portal's skill discovery (`GET /api/gs/agent-skills?repoUrl=…`, the create
 wizard's skills step) and agent-manager (`list_skills`, the commit
-`create_agent` pins a branch to, `refreshSkills`, the migrate Job of the
-cut-over). Without a token GitHub allows 60 requests an hour **per egress
+`create_agent` pins a branch to, `refreshSkills`). Without a token GitHub allows 60 requests an hour **per egress
 address**, and the kind cluster shares this machine's — a handful of
 `backstage-test` runs within an hour exhaust it, after which discovery comes
 back truncated (the proof refuses that by name) until the window resets.
@@ -137,18 +136,20 @@ A token lifts that, from a recorded source (`githubToken.source` in
 op://<vault>/<item>/<field>`, or `<file>#<path>` of a SOPS file): every `up`
 and `platform` hand it to `beekeeper secret copy --to-secret`, which writes the
 token in its own process; agentlab never reads the value, and a placement that
-fails fails the run. agentlab never reads `$GITHUB_TOKEN` either: a token
-exported in its environment reaches no consumer. Without a source `discover`
-and `platform` name the Secret the lab lacks, `agentlab-github-token` (key
-`GITHUB_TOKEN`) in `agent-platform`.
+fails fails the run. The lab never takes `$GITHUB_TOKEN` either (only
+`self-update` reads it): a token exported in its environment reaches no
+consumer. Without a source `discover` names the Secret the lab lacks,
+`agentlab-github-token` (key `GITHUB_TOKEN`) in `agent-platform`, and `up` and
+`platform` warn on stderr, naming `githubToken.source`, unless the skills
+GitHub App is recorded; `agents-test` then reports its `refreshSkills` step as
+a SKIP with the same reason.
 
 `agentlab up`/`platform` place **or update** the Secret `agentlab-github-token` (key `GITHUB_TOKEN`) in
-`agent-platform` — the portal takes it through `extraEnvVarsSecrets` and the
+`agent-platform`: the portal takes it through `extraEnvVarsSecrets` and the
 lab's app-config overlay (`integrations.github[].token: ${GITHUB_TOKEN}`),
-agent-manager through the chart's `skills.github.tokenSecret` — and in
-`kagent` for the migrate Job (`agentManager.migration.githubToken`), which then
-call GitHub authenticated (5000 requests an hour; the rate-limit headers say
-so). A fine-grained token with public read access is enough; a token that
+agent-manager through the chart's `skills.github.tokenSecret`. Both
+then call GitHub authenticated (5000 requests an hour; the rate-limit headers
+say so). A copy in `kagent` that an earlier agentlab placed is removed. A fine-grained token with public read access is enough; a token that
 reads a private skill repository lets agent-manager resolve skills from it.
 The token travels vault -> Secret through beekeeper only and never enters
 `agentlab.yaml`, `state/` (the rendered values carry the Secret's *name*), a
@@ -174,6 +175,32 @@ for `backstage-test`.
 agent-manager's Deployment carries a GitHub credential; without one it skips
 them with a verdict naming the anonymous rate limit.
 
+**The migrate run reads no GitHub token.** The connectivity chart's
+`agent-manager migrate` run (the cut-over to the `api.kagent.dev` line)
+resolves public skill repositories without a credential and reports a private
+ref as pending; neither `githubToken.source` nor the skills GitHub App reaches
+it. The chart ships it as the suspended CronJob
+`agent-platform-connectivity-agent-manager-migrate` in `kagent`, never
+scheduled. The `post-install,post-upgrade` hook
+`agent-platform-connectivity-agent-manager-migrate-start` creates the run
+`agent-platform-connectivity-agent-manager-migrate-<hash>` from it, once per
+pod template: an upgrade that changes nothing in it starts no new run. The run
+is owned by the CronJob, not the release, so its failure never fails the
+`agentlab platform` upgrade; read it in its Job, its log and the ConfigMap
+`kagent/agent-manager-migrate-report`. To run it again:
+
+```bash
+kubectl -n kagent create job agent-platform-connectivity-agent-manager-migrate-rerun-1 \
+  --from=cronjob/agent-platform-connectivity-agent-manager-migrate
+```
+
+The chart documents the run in agent-platform's
+[UPGRADE.md](https://github.com/giantswarm/agent-platform/blob/main/UPGRADE.md)
+("the migrate run is started by a hook from a suspended CronJob") and in
+[`templates/kagent/migrate-cronjob.yaml`](https://github.com/giantswarm/agent-platform/blob/main/helm/agent-platform-connectivity/templates/kagent/migrate-cronjob.yaml);
+its values (`agentManager.migration.*`) are in the connectivity chart's
+[README](https://github.com/giantswarm/agent-platform/blob/main/helm/agent-platform-connectivity/README.md).
+
 ## Editing an agent applied from git
 
 An agent whose HelmRelease a Flux Kustomization applies carries the
@@ -188,24 +215,15 @@ offers the write only once the dry run is valid, so the dry run takes `mode`
 too and answers as the write would: `gitops_owned` in mode apply, valid with
 the composed manifests in mode commit.
 
-`./agentlab agents-gitops-test` is that edit, headless and as the person: the
+`agentlab agents-gitops-test` is that edit, headless and as the person: the
 platform's agent-manager composes a release, the proof applies it with the
 Flux labels and reads it back `managed: gitops`; the platform's own
 agent-manager (not pinned to a GitHub App) answers the change's dry run
 `gitops_owned` in mode apply and `unsupported` in mode commit, as its writes
-do; then, against a temporary copy of the agent-manager release pinned to the
-lab Dex as its GitHub App and to the fake GitHub API (the shape `models-test`
-uses, see [Models](models.md) "Dry runs, GitOps-owned objects and commit
-mode"), `validate_agent` in mode apply still answers `gitops_owned`, `force`
-or not, `validate_agent` in mode commit answers a valid update whose
-HelmRelease carries the change and opens nothing, and `update_agent` in mode
-commit opens exactly one pull request authored by the person whose file is
-the dry run's manifest byte for byte, while the live release's
-`resourceVersion` stays as it was and a mode apply write is still refused.
-The commit target is named (`repository`, `branch`, `path`): the lab's
-engine runs no kustomize-controller, so no Kustomization resolves it from
-the release's labels here. The agent, the copy, the fake and its Service go
-away at the end of the run.
+do; `update_agent` is refused and the live release stays as it was. The
+pull request itself takes an agent-manager pinned to a GitHub App and a
+person who granted that App in a browser, which the proof does not walk. The
+agent goes away at the end of the run.
 
 ## Organizations as tenants
 
@@ -232,7 +250,7 @@ of its own name, and by `ate-golden` — next to the chart's two entries. The
 list goes with #1041. A `platform.valuesFiles` overlay that sets that list
 replaces the lab's.
 
-`./agentlab tenants-test [email email]` is the proof
+`agentlab tenants-test [email email]` is the proof
 (giantswarm/agentlab#739). It creates `org-agentlab-tenants-a` and
 `org-agentlab-tenants-b`, labelled, and binds one person to
 `agent-platform:editor` in each (default: the first two users outside
@@ -473,7 +491,7 @@ nothing applied by hand:
 
 | File | What |
 |---|---|
-| `values.yaml` | The agent-platform values for its model: the `kagent.modelConfigs` entry `openai-chatgpt-codex` (`credentialType: chatgptOAuth`, `apiFormat: responses`, the login Secret `kagent-chatgpt-login`). On the lab a `platform.valuesFiles` overlay; on an installation the same entry in its values |
+| `values.yaml` | The agent-platform values for its model: the `kagent.modelConfigs` entry `openai-chatgpt-codex` (`credentialType: chatgptOAuth`, `apiFormat: responses`, the login Secret `kagent-chatgpt-login`). On an installation the same entry in its values; on the lab a `platform.valuesFiles` overlay on a chart that renders `credentialType`, or on any chart the `platform.extraModels` entry `chatgpt-login` with `credentialType: chatgptOAuth`, whose ModelConfig agentlab renders itself ([Extra model configs](models.md#extra-model-configs-self-hosted-openrouter-gemini-openai)) |
 | `agent.json` | agent-manager's `create_agent` input: `codex-coder` on the Harness `codex` and that ModelConfig, the toolset `preset:read-only`, a system message for branch-per-change work in `/workspace` |
 | `workspace.json` | workspace-manager's `create_workspace` input: the workspace `giantswarm`, one source on the provider instance `github`, owner `giantswarm`, the public repositories by name. `organization` and the provider instance are the lab's (`lab`, `github`); an installation sets its own, and adds the private repositories it is meant to see with `update_workspace` |
 

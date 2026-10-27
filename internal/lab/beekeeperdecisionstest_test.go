@@ -28,7 +28,13 @@ func TestBeekeeperUsersShareAGroup(t *testing.T) {
 
 func TestBeekeeperServeConfig(t *testing.T) {
 	cfg := &config.Config{DexPort: 32100}
-	got := beekeeperServeConfig(cfg, testDevelopers, map[string]string{"asker": testPortalUser}, "CAGENTLABX", "http://127.0.0.1:18090", "/run/token")
+	got := beekeeperServeConfig(cfg, testDevelopers, map[string]string{"asker": testPortalUser}, "CAGENTLABX", "http://127.0.0.1:18090", "/run/token", "")
+	if strings.Contains(got, "groups:") {
+		t.Errorf("serve's configuration names a Slack group without one:\n%s", got)
+	}
+	if got := beekeeperServeConfig(cfg, testDevelopers, nil, "CAGENTLABX", "http://127.0.0.1:18090", "/run/token", "team-agentlab"); !strings.Contains(got, `groups: {"agentlab": "team-agentlab"}`) {
+		t.Errorf("serve's configuration lacks the team's Slack group:\n%s", got)
+	}
 	for _, want := range []string{
 		`issuer: "https://localhost:32100/dex"`,
 		`organization: "` + testDevelopers + `"`,

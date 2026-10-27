@@ -52,8 +52,8 @@ func TestDrainablePods(t *testing.T) {
 // GoldenActorCrashed a drain left on every template of a Substrate without
 // the retry.
 func TestGoldensOff(t *testing.T) {
-	const a, b, aBefore, bBefore = "tmpl-a", "tmpl-b", "kagent/a-uid", "kagent/b-uid"
-	const perVolume, next = snapshotLayoutPerVolume, snapshotLayoutPerVolume + 1
+	const a, b, c, aBefore, bBefore = "tmpl-a", "tmpl-b", "tmpl-c", "kagent/a-uid", "kagent/b-uid"
+	const perVolume, next = snapshotLayoutPerVolume, snapshotLayoutGVisorNightly20260909
 	before := goldenSet{
 		golden:  map[string]string{a: aBefore, b: bBefore},
 		layout:  map[string]int32{a: perVolume, b: snapshotLayoutUnrecorded},
@@ -63,17 +63,19 @@ func TestGoldensOff(t *testing.T) {
 	// The candidate writes the layout a's golden is in: a's is kept, b's
 	// (recorded without a layout) is taken again into it.
 	kept := goldenSet{
-		golden:  map[string]string{a: aBefore, b: "kagent/b-uid-2", "tmpl-c": "kagent/c-uid"},
-		layout:  map[string]int32{a: perVolume, b: perVolume, "tmpl-c": perVolume},
-		failure: map[string]string{},
+		golden:    map[string]string{a: aBefore, b: "kagent/b-uid-2", c: "kagent/c-uid"},
+		layout:    map[string]int32{a: perVolume, b: perVolume, c: perVolume},
+		failure:   map[string]string{},
+		templates: map[string]bool{a: true, b: true, c: true},
 	}
 	if off := goldensOff(before, kept, perVolume); len(off) != 0 {
 		t.Errorf("a's golden kept, b's taken again into the candidate's layout: %v, want none", off)
 	}
 	// The candidate writes a newer layout: every golden is taken again into it.
 	retaken := goldenSet{
-		golden: map[string]string{a: "kagent/a-uid-3", b: "kagent/b-uid-3"},
-		layout: map[string]int32{a: next, b: next},
+		golden:    map[string]string{a: "kagent/a-uid-3", b: "kagent/b-uid-3"},
+		layout:    map[string]int32{a: next, b: next},
+		templates: map[string]bool{a: true, b: true},
 	}
 	if off := goldensOff(before, retaken, next); len(off) != 0 {
 		t.Errorf("every golden taken again into the new layout: %v, want none", off)
@@ -81,9 +83,10 @@ func TestGoldensOff(t *testing.T) {
 	// Not there: a's golden kept in the older layout, b's gone, a's re-take
 	// crashed.
 	stale := goldenSet{
-		golden:  map[string]string{a: aBefore},
-		layout:  map[string]int32{a: perVolume},
-		failure: map[string]string{a: "GoldenActorCrashed: resume failed: assigned worker is draining"},
+		golden:    map[string]string{a: aBefore},
+		layout:    map[string]int32{a: perVolume},
+		failure:   map[string]string{a: "GoldenActorCrashed: resume failed: assigned worker is draining"},
+		templates: map[string]bool{a: true, b: true},
 	}
 	off := goldensOff(before, stale, next)
 	want := []string{
@@ -93,6 +96,20 @@ func TestGoldensOff(t *testing.T) {
 	}
 	if strings.Join(off, "|") != strings.Join(want, "|") {
 		t.Errorf("goldensOff = %q, want %q", off, want)
+	}
+	// A superseded revision kagent deleted during the run is no longer
+	// listed: nothing is left to take again, the others are judged alone.
+	deleted := goldenSet{
+		golden:    map[string]string{a: "kagent/a-uid-3"},
+		layout:    map[string]int32{a: next},
+		templates: map[string]bool{a: true},
+	}
+	if off := goldensOff(before, deleted, next); len(off) != 0 {
+		t.Errorf("b deleted during the run, a taken again: %v, want none", off)
+	}
+	deleted.layout[a] = perVolume
+	if off := goldensOff(before, deleted, next); len(off) != 1 || !strings.HasPrefix(off[0], a+" ") {
+		t.Errorf("b deleted during the run, a in the old layout: %v, want only a's", off)
 	}
 	// A golden taken again into a layout the proof does not expect of the
 	// candidate is named as such: currentSnapshotLayout is behind Substrate.
@@ -106,9 +123,13 @@ func TestGoldensOff(t *testing.T) {
 func TestGoldensWorded(t *testing.T) {
 	const a, b, aBefore, bBefore = "tmpl-a", "tmpl-b", "kagent/a-uid", "kagent/b-uid"
 	before := goldenSet{golden: map[string]string{a: aBefore, b: bBefore}, layout: map[string]int32{b: 2}}
-	after := goldenSet{golden: map[string]string{a: "kagent/a-uid-2", b: bBefore}, layout: map[string]int32{a: 2, b: 2}}
+	after := goldenSet{golden: map[string]string{a: "kagent/a-uid-2", b: bBefore}, layout: map[string]int32{a: 2, b: 2}, templates: map[string]bool{a: true, b: true}}
 	if got, want := goldensWorded(before, after), "2 templates (tmpl-a kagent/a-uid -> kagent/a-uid-2 (layout 0 -> 2); tmpl-b keeps kagent/b-uid (layout 2))"; got != want {
 		t.Errorf("goldensWorded = %q, want %q", got, want)
+	}
+	delete(after.templates, b)
+	if got, want := goldensWorded(before, after), "2 templates (tmpl-a kagent/a-uid -> kagent/a-uid-2 (layout 0 -> 2); tmpl-b deleted during the run (was kagent/b-uid))"; got != want {
+		t.Errorf("goldensWorded with b deleted = %q, want %q", got, want)
 	}
 	if got := goldensWorded(goldenSet{}, after); !strings.Contains(got, "no template") {
 		t.Errorf("goldensWorded without goldens = %q", got)

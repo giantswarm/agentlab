@@ -803,21 +803,16 @@ the step. Unblocks when kagent's Update maps a conflict to `Aborted` or
 retries it on a fresh read (giantswarm/kagent-upstream,
 `go/core/internal/service/kubecrud`): the retry then goes.
 
-### U38. `agent-platform-values.yaml.tmpl`: with the tenants on, the lab pins muster 5.48.0 — BLOCKED UPSTREAM
-`tenants-test` needs muster 5.48.0 or later (giantswarm/muster#1603): a
-tenant server's sign-ins go with its MCPServer, so a namespace created again
-with the same name starts with none, and `core_auth_login` names a pin's
-Secret muster may not read. The chart's range for muster (`>=5.45.0 <6.0.0`)
-admits older musters; the pin holds the lab on the first muster with #1603
-whatever the range selects. **Fix:** with `platform.tenants` on, the values set
-`components.muster.versionRange` to `tenantsMusterVersion` (5.48.0,
-`tenantstest_muster.go`) next to `muster.muster.mcpServersInAllNamespaces:
-true`; with the tenants off, neither renders. Unblocks when the lab's chart
-carries giantswarm/agent-platform#1150, whose range for muster starts at
-5.48.0: the pin then goes.
-
 ## Accepted lab trade-offs (not hacks to fix)
 
+- **No HSTS from the portal** — Backstage's helmet sends
+  `Strict-Transport-Security: max-age=15552000; includeSubDomains` and has no
+  setting for it; a browser that trusted one lab CA then refuses the hostname
+  for 180 days with no way past the warning once the CA changes (a recreated
+  lab, another domain's re-mint). The lab's edge drops the header on the
+  connectivity chart's `backstage` route (postrenderers.go, patch 8);
+  `backstage-test` asserts it is gone. A machine-local CA has nothing HSTS
+  protects.
 - **Checksum stamping via the `REPLACED_AT_APPLY` placeholder** — the standard
   Helm `checksum/config` pattern, done with sed because there is no templating
   engine here. Deduplicated into one script (H3), otherwise kept.
@@ -923,9 +918,9 @@ the post-renderer against a synthetic Helm release.
 On an SELinux-enforcing host (Fedora) under a rootful engine (Podman through
 `sudo`), a container's process may not read or execute a bind-mounted file
 labelled `user_home_t`, and every lab container bind-mounts one: the fakes
-(the lab's GitHub, the skill host, the mockllm) run agentlab's own binary
+(the skill host, the fake Slack Web API, the mockllm) run agentlab's own binary
 from the user's home, beekeeper and klaus-gateway mount a run directory and
-the lab CA. The fake exits at once and `up` stops at the lab's GitHub with no
+the lab CA. The container exits at once and the step that started it stops with no
 log. **Fix:** `dockerRun` passes `--security-opt label=disable` to every
 `docker run`. Relabelling (`:z`) would change the user's own files and is
 undone by the next `self-update`; the lab's containers are throwaway

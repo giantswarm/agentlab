@@ -27,6 +27,7 @@ const (
 	stageMusterReplicas       = "muster replicas"
 	stageProvidedAPIs         = "provided APIs"
 	stageFleetAdmission       = "fleet admission"
+	stageChartExceptions      = "chart PolicyExceptions"
 	stageDexReach             = "Dex reach"
 	stageDownstreamIdentity   = "downstream identity"
 	stageControllerIdentity   = "controller identity"
@@ -302,6 +303,18 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 	}
 	verdict += fmt.Sprintf("\nPASS: the fleet's %s policy (Enforce, Kyverno %s) answers as an installation does for %d HelmRelease shapes in %s — %s", fleetPolicyName, kyvernoVersion, len(cases), orgNamespace, strings.Join(caseLines, "; "))
 
+	// The chart's PolicyExceptions (polextest.go): rendered with
+	// kyvernoPolicies.enabled: true, the shape an installation with Kyverno
+	// installs, and dry-run against the lab's Kyverno, which refuses what the
+	// fleet's refuses.
+	chart := platformChartFor(cfg)
+	p.begin(stageChartExceptions, "Verifying the lab's Kyverno admits the PolicyExceptions %s renders (%s)", chart, polexShape(cfg))
+	polex, err := proveChartPolicyExceptions(cfg, chart)
+	if err != nil {
+		return "", err
+	}
+	verdict += "\n" + polex
+
 	// The lab's Dex bridge: every OAuth resource server the rule selects on
 	// the live Deployments carries the dex-localhost sidecar, runs without a
 	// restart and reads Connected in muster (platformtest_sidecar.go) — the
@@ -327,22 +340,31 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 	} else {
 		verdict += fmt.Sprintf("\nPASS: all %d servers told the issuer %s reach it through cluster DNS (the %s Service) — no sidecar, MCPServer Connected: %s", len(servers), cfg.Issuer(), dexIssuerService, strings.Join(serverNames, ", "))
 	}
-	// cluster-manager, when it is on (platform.devImages.cluster-manager, or
-	// an overlay): Connected is not enough — its downstream OAuth needs the
-	// `kubernetes` audience the lab renders for it, and without it the
-	// session sees no tool of its while the CR reads Connected.
-	if slices.ContainsFunc(servers, func(s dexLocalhostServer) bool { return s.mcpServer == clusterManager }) {
+	// The managers whose downstream OAuth presents the forwarded token as the
+	// caller (agent-manager, model-manager, and cluster-manager when an image
+	// or an overlay turns it on): Connected is not enough — without the
+	// `kubernetes` audience the lab renders for each, the session sees no
+	// tool of theirs while the CR reads Connected. The workspace-manager's
+	// tools are judged in its own stage, once the person's grant is settled.
+	var audienceManagers []string
+	for _, s := range servers {
+		if slices.Contains([]string{agentManagerMCPServer, modelManagerMCPServer, clusterManager}, s.mcpServer) {
+			audienceManagers = append(audienceManagers, s.mcpServer)
+		}
+	}
+	if len(audienceManagers) > 0 {
 		names, err := listTools()
 		if err != nil {
 			return "", err
 		}
-		prefix := "x_" + clusterManager + "_"
-		tools := slices.DeleteFunc(names, func(name string) bool { return !strings.HasPrefix(name, prefix) })
-		if len(tools) == 0 {
-			return "", fmt.Errorf("muster lists no %s* tool for this session although MCPServer %s reads Connected: the forwarded token lacks the audience cluster-manager's downstream OAuth presents to the apiserver (%s.muster.mcpServer.auth.requiredAudiences in the rendered values; `agentlab logs %s`)", prefix, clusterManager, clusterManager, clusterManager)
+		for _, manager := range audienceManagers {
+			tools, err := audienceManagerTools(names, manager)
+			if err != nil {
+				return "", err
+			}
+			note("%s lists %d tools for this session: %s", manager, len(tools), strings.Join(tools, ", "))
+			verdict += fmt.Sprintf("\nPASS: %s's %d tools reach the session through muster (the lab's %s audience): %s", manager, len(tools), config.KubernetesClientID, strings.Join(tools, ", "))
 		}
-		note("%s lists %d tools for this session: %s", clusterManager, len(tools), strings.Join(tools, ", "))
-		verdict += fmt.Sprintf("\nPASS: %s's %d tools reach the session through muster (the lab's %s audience): %s", clusterManager, len(tools), config.KubernetesClientID, strings.Join(tools, ", "))
 	}
 
 	// The user's identity, not a ServiceAccount: the same tool as two users
@@ -446,15 +468,11 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 		p.leaveOut(reason, stageWorkspaceManager)
 	} else {
 		p.begin(stageWorkspaceManager, "The workspace-manager: registered with muster, Ready, list_providers as the admin, the lab's Organization")
-		providers, err := proveWorkspaceManager(cfg)
+		proof, err := proveWorkspaceManager(cfg)
 		if err != nil {
 			return "", err
 		}
-		cleanup := ", cleans session directories up from kagent's Sessions,"
-		if !cfg.Platform.Agents {
-			cleanup = " (no kagent: the agents are off)"
-		}
-		verdict += fmt.Sprintf("\nPASS: the workspace-manager is registered with muster (MCPServer %s Connected)%s and lists its %d provider instances to the admin: %s; list_workspaces for Organization %s answers a member and refuses a viewer", workspaceManagerMCPServer, cleanup, len(providers), strings.Join(providers, ", "), config.WorkspaceOrganization)
+		verdict += workspaceManagerVerdict(proof, cfg.Platform.Agents)
 	}
 
 	// The per-server sign-in path: muster as OAuth client, challenged by the
@@ -661,7 +679,7 @@ func substrateShipped(ctx context.Context, cfg *config.Config) (bool, error) {
 	if cfg.LegacyChart() {
 		return false, nil
 	}
-	gvr, err := gvrFor(helmReleaseResource)
+	gvr, err := gvrFor(fluxHelmReleaseResource)
 	if err != nil {
 		return false, err
 	}

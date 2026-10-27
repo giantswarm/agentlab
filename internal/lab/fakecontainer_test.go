@@ -52,27 +52,27 @@ func elfFixture(t *testing.T, progs ...elf.ProgType) string {
 // that is no ELF is refused as not a Linux executable.
 func TestLinuxStaticBinary(t *testing.T) {
 	static := elfFixture(t, elf.PT_LOAD, elf.PT_NOTE)
-	if err := linuxStaticBinary(static, "the lab's GitHub", ""); err != nil {
+	if err := linuxStaticBinary(static, "the skill host", ""); err != nil {
 		t.Errorf("a static binary: %v", err)
 	}
 	dynamic := elfFixture(t, elf.PT_LOAD, elf.PT_INTERP, elf.PT_DYNAMIC)
-	err := linuxStaticBinary(dynamic, "the lab's GitHub", "")
+	err := linuxStaticBinary(dynamic, "the skill host", "")
 	if err == nil {
 		t.Fatal("a dynamically linked binary passed")
 	}
-	for _, want := range []string{"the lab's GitHub runs " + dynamic, "dynamically linked", "`CGO_ENABLED=0 go build`", "`make build`", "run it from a static agentlab"} {
+	for _, want := range []string{"the skill host runs " + dynamic, "dynamically linked", "`CGO_ENABLED=0 go build`", "`make build`", "run it from a static agentlab"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("a dynamically linked binary: %v\n  wants %q", err, want)
 		}
 	}
-	if err := linuxStaticBinary(dynamic, "the fake GitHub API", "--github-fake-binary"); err == nil || !strings.Contains(err.Error(), "pass --github-fake-binary with a static agentlab") {
+	if err := linuxStaticBinary(dynamic, "the mock LLM", "--mockllm-binary"); err == nil || !strings.Contains(err.Error(), "pass --mockllm-binary with a static agentlab") {
 		t.Errorf("a dynamically linked binary with a flag: %v", err)
 	}
 	script := filepath.Join(t.TempDir(), "agentlab")
 	if err := os.WriteFile(script, []byte("#!/bin/sh\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := linuxStaticBinary(script, "the lab's GitHub", ""); err == nil || !strings.Contains(err.Error(), "not a Linux executable") {
+	if err := linuxStaticBinary(script, "the skill host", ""); err == nil || !strings.Contains(err.Error(), "not a Linux executable") {
 		t.Errorf("a script: %v", err)
 	}
 }

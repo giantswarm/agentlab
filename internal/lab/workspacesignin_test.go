@@ -8,12 +8,14 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/giantswarm/agentlab/internal/config"
 )
 
 // signInLab stands in for the walk's parties on one test server: muster's
 // proxy start, which sends the browser to the provider's authorization
-// endpoint, the lab GitHub's consent for the user its login parameter
-// names, and muster's proxy callback, which completes the grant once.
+// endpoint, a GitLab's sign-in form, its consent form and its post, and
+// muster's proxy callback, which completes the grant once.
 type signInLab struct {
 	server    *httptest.Server
 	fails     bool
@@ -25,15 +27,24 @@ func newSignInLab(t *testing.T) *signInLab {
 	l := &signInLab{}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET "+oauthProxyStartPath, func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, githubAuthorizePath+"?"+url.Values{githubState: {r.URL.Query().Get(githubState)}}.Encode(), http.StatusFound)
+		http.Redirect(w, r, gitlabAuthorizePath+"?"+url.Values{oauthStateParam: {r.URL.Query().Get(oauthStateParam)}}.Encode(), http.StatusFound)
 	})
-	mux.HandleFunc("GET "+githubAuthorizePath, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get(githubLogin) == "" {
-			http.Error(w, "no lab user", http.StatusBadRequest)
+	mux.HandleFunc("GET "+gitlabAuthorizePath, func(w http.ResponseWriter, r *http.Request) {
+		if c, err := r.Cookie("gitlab_session"); err != nil || c.Value != testGitLabPerson {
+			http.Redirect(w, r, gitlabSignInAction, http.StatusFound)
 			return
 		}
-		// #nosec G710 -- the test's own callback path, the state echoed as an OAuth server does
-		http.Redirect(w, r, oauthProxyCallbackPath+"?code=c&state="+url.QueryEscape(r.URL.Query().Get(githubState)), http.StatusFound)
+		_, _ = w.Write([]byte(`<form action="` + gitlabAuthorizePath + `" method="post"><input name="state" value="s" /></form>`))
+	})
+	mux.HandleFunc("GET "+gitlabSignInAction, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`<form action="` + gitlabSignInAction + `" method="post"><input name="user[login]" /><input type="password" name="user[password]" /></form>`))
+	})
+	mux.HandleFunc("POST "+gitlabSignInAction, func(w http.ResponseWriter, r *http.Request) {
+		http.SetCookie(w, &http.Cookie{Name: "gitlab_session", Value: r.PostFormValue("user[login]"), Path: "/", Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+		http.Redirect(w, r, gitlabAuthorizePath, http.StatusFound)
+	})
+	mux.HandleFunc("POST "+gitlabAuthorizePath, func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, oauthProxyCallbackPath+"?"+url.Values{oauthCodeParam: {"c"}, oauthStateParam: {r.PostFormValue(oauthStateParam)}}.Encode(), http.StatusFound) // #nosec G710 -- the test server's own callback path
 	})
 	mux.HandleFunc("GET "+oauthProxyCallbackPath, func(w http.ResponseWriter, _ *http.Request) {
 		if l.fails {
@@ -58,12 +69,14 @@ func (l *signInLab) client(t *testing.T) *http.Client {
 }
 
 func (l *signInLab) link() string {
-	return l.server.URL + oauthProxyStartPath + "?" + url.Values{githubState: {"s"}}.Encode()
+	return l.server.URL + oauthProxyStartPath + "?" + url.Values{oauthStateParam: {"s"}}.Encode()
 }
+
+var testSignInLogin = &providerLogin{login: testGitLabPerson, password: "pw"}
 
 func TestWalkProviderSignIn(t *testing.T) {
 	l := newSignInLab(t)
-	hops, err := walkProviderSignIn(l.client(t), l.link(), testLogin, nil)
+	hops, err := walkProviderSignIn(l.client(t), l.link(), testSignInLogin)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +84,7 @@ func TestWalkProviderSignIn(t *testing.T) {
 		t.Fatalf("muster's callback never completed: %s", signInHops(hops))
 	}
 	worded := signInHops(hops)
-	for _, want := range []string{"GET " + l.server.URL + oauthProxyStartPath + " 302", "GET " + l.server.URL + githubAuthorizePath + " 302", "GET " + l.server.URL + oauthProxyCallbackPath + " 200"} {
+	for _, want := range []string{"GET " + l.server.URL + oauthProxyStartPath + " 302", "POST " + l.server.URL + gitlabSignInAction + " 302", "GET " + l.server.URL + gitlabAuthorizePath + " 200", "POST " + l.server.URL + gitlabAuthorizePath + " 302", "GET " + l.server.URL + oauthProxyCallbackPath + " 200"} {
 		if !strings.Contains(worded, want) {
 			t.Errorf("hops %s lack %q", worded, want)
 		}
@@ -83,21 +96,21 @@ func TestWalkProviderSignIn(t *testing.T) {
 
 func TestWalkProviderSignInStops(t *testing.T) {
 	l := newSignInLab(t)
-	_, err := walkProviderSignIn(l.client(t), l.link(), "", nil)
-	if !errors.Is(err, errSignInStopped) || !strings.Contains(err.Error(), githubAuthorizePath+" 400") {
-		t.Fatalf("a refused consent: got %v, want the walk stopped at the authorize hop with 400", err)
+	_, err := walkProviderSignIn(l.client(t), l.link(), nil)
+	if !errors.Is(err, errSignInStopped) || !strings.Contains(err.Error(), gitlabSignInAction+" 200") {
+		t.Fatalf("a sign-in form without the person's login: got %v, want the walk stopped at the sign-in page", err)
 	}
 
 	l = newSignInLab(t)
 	l.fails = true
-	_, err = walkProviderSignIn(l.client(t), l.link(), testLogin, nil)
+	_, err = walkProviderSignIn(l.client(t), l.link(), testSignInLogin)
 	if !errors.Is(err, errSignInStopped) || !strings.Contains(err.Error(), "did not complete the sign-in") || !strings.Contains(err.Error(), "Authentication Failed") {
 		t.Fatalf("a failed callback: got %v, want the walk stopped at muster's callback naming its heading", err)
 	}
 
 	l = newSignInLab(t)
 	l.server.Close()
-	_, err = walkProviderSignIn(l.client(t), l.link(), testLogin, nil)
+	_, err = walkProviderSignIn(l.client(t), l.link(), testSignInLogin)
 	if !errors.Is(err, errSignInStopped) || !strings.Contains(err.Error(), oauthProxyStartPath+" 0") {
 		t.Fatalf("an unreachable muster: got %v, want the walk stopped at the proxy start hop", err)
 	}
@@ -190,5 +203,18 @@ func TestSignInCompleted(t *testing.T) {
 		if got := signInCompleted([]byte(page)); got != want {
 			t.Errorf("signInCompleted(%q) = %t, want %t", page, got, want)
 		}
+	}
+}
+
+// A pinned lab grants and drops through the workspace-manager's server; a
+// lab with no pin through each instance's App by name.
+func TestWorkspacePersonGrantArgs(t *testing.T) {
+	pinned := &workspacePerson{}
+	if got := pinned.grantArgs(config.WorkspaceProviderGitLab); got[serverKey] != workspaceManagerMCPServer || len(got) != 1 {
+		t.Errorf("pinned: %v, want server=%s", got, workspaceManagerMCPServer)
+	}
+	perApp := &workspacePerson{perApp: true}
+	if got := perApp.grantArgs(config.WorkspaceProviderGitLab); got[musterAppArg] != config.WorkspaceProviderGitLab || len(got) != 1 {
+		t.Errorf("per App: %v, want app=%s", got, config.WorkspaceProviderGitLab)
 	}
 }

@@ -34,6 +34,7 @@ func labOnFreePorts(t *testing.T) *config.Config {
 	cfg.Platform.MusterPort = freeHostPort(t)
 	cfg.Platform.AgentsPort = freeHostPort(t)
 	cfg.Platform.GatewayPort = freeHostPort(t)
+	cfg.Platform.DevRegistryPort = freeHostPort(t)
 	return cfg
 }
 

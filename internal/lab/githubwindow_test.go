@@ -10,9 +10,9 @@ import (
 	"time"
 )
 
-// fakeGitHubRateLimit is /rate_limit on a test server: the window it answers
+// rateLimitServer is /rate_limit on a test server: the window it answers
 // with, the Authorization headers it saw, and the seams pointed at it.
-type fakeGitHubRateLimit struct {
+type rateLimitServer struct {
 	mu        sync.Mutex
 	remaining int
 	reset     time.Time
@@ -20,9 +20,9 @@ type fakeGitHubRateLimit struct {
 	slept     []time.Duration
 }
 
-func newFakeGitHubRateLimit(t *testing.T, reset time.Time) *fakeGitHubRateLimit {
+func newRateLimitServer(t *testing.T, reset time.Time) *rateLimitServer {
 	t.Helper()
-	f := &fakeGitHubRateLimit{reset: reset}
+	f := &rateLimitServer{reset: reset}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -48,13 +48,13 @@ func newFakeGitHubRateLimit(t *testing.T, reset time.Time) *fakeGitHubRateLimit 
 	return f
 }
 
-func (f *fakeGitHubRateLimit) set(remaining int) {
+func (f *rateLimitServer) set(remaining int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.remaining, f.auth, f.slept = remaining, nil, nil
 }
 
-func (f *fakeGitHubRateLimit) seen() (auth []string, slept []time.Duration) {
+func (f *rateLimitServer) seen() (auth []string, slept []time.Duration) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.auth...), append([]time.Duration(nil), f.slept...)
@@ -67,7 +67,7 @@ func (f *fakeGitHubRateLimit) seen() (auth []string, slept []time.Duration) {
 // after the wait.
 func TestAwaitGitHubWindow(t *testing.T) {
 	reset := time.Unix(time.Now().Add(30*time.Minute).Unix(), 0)
-	f := newFakeGitHubRateLimit(t, reset)
+	f := newRateLimitServer(t, reset)
 
 	t.Run("unauthenticated with budget, whatever the environment holds", func(t *testing.T) {
 		t.Setenv(GitHubTokenEnv, gitHubTestToken)

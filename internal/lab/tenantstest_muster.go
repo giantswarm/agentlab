@@ -26,9 +26,6 @@ import (
 // namespaces next to its own, lists them as the caller with the person's
 // token, and files a tenant server's sign-in under its namespace.
 const (
-	// tenantsMusterVersion is the muster chart the lab pins with the tenants
-	// on. HACKS.md U38.
-	tenantsMusterVersion = "5.48.0"
 	// tenantsMusterMinimum is the first muster with giantswarm/muster#1603: a
 	// tenant namespace's sign-ins go when its last server or the namespace
 	// goes, and a pin's Secret muster may not read is named in
@@ -107,7 +104,7 @@ func (t musterTenancy) problem() string {
 	}
 	minimum := semver.MustParse(tenantsMusterMinimum)
 	if v, err := semver.NewVersion(tag); err == nil && v.LessThan(minimum) {
-		return fmt.Sprintf("muster %s is older than tenants-test needs: it needs %s or later (giantswarm/muster#1601, #1603). `agentlab platform` with this agentlab pins %s with platform.tenants on", tag, tenantsMusterMinimum, tenantsMusterVersion)
+		return fmt.Sprintf("muster %s is older than tenants-test needs: it needs %s or later (giantswarm/muster#1601, #1603); the agent-platform chart's muster range starts there from 4.157.1 on", tag, tenantsMusterMinimum)
 	}
 	if !t.allNamespaces {
 		return "muster runs without mcpServersInAllNamespaces: it serves no organization namespace's MCPServer. `agentlab platform` with this agentlab sets muster.muster.mcpServersInAllNamespaces with platform.tenants on (a platform.valuesFiles overlay that sets it false wins)"
@@ -450,7 +447,7 @@ func tenantSignInRedirect(challengeURL string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("proxy start redirect %q: %w", location, err)
 	}
-	return target.Query().Get("redirect_uri"), nil
+	return target.Query().Get(oauthRedirectURI), nil
 }
 
 // signInToTenantServer signs the session's person in to a server of an

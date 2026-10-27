@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 
@@ -86,42 +87,62 @@ func workspaceGrantFor(cfg *config.Config, providers []workspaceProviderValues) 
 	return nil
 }
 
+// workspaceProviderAppsFor are the rendered instances muster keeps a
+// provider App of each for, side by side, with the registration pinned to
+// none (config.WorkspaceProviderApps): the lab renders no pin, and the meta
+// chart derives one App per instance with person sign-in
+// (agent-platform.workspaceManager.providerApps) once there are two. Nil
+// with a pin, for a manager that takes none, and while fewer than two
+// instances render.
+func workspaceProviderAppsFor(cfg *config.Config, providers []workspaceProviderValues) []string {
+	if !cfg.WorkspaceProviderApps() || len(providers) < 2 || !workspaceManagerTakesGrant(cfg) {
+		return nil
+	}
+	names := make([]string, len(providers))
+	for i, p := range providers {
+		names[i] = p.Name
+	}
+	return names
+}
+
 // workspaceReleasableFor is the instance muster's credential provider
 // releases while workspaces are on and no instance renders (a github or
-// gitlab instance whose ids or Secret are not in place yet): the fake's, the
-// lab's own App, whose issuer is known without a cluster. The meta chart
-// derives the releasable from the pin and refuses an empty one with
-// Substrate on; without an instance there is no pin, and this keeps the
-// render going until the configured instance renders. Nil with workspaces
+// gitlab instance whose ids or Secret are not in place yet): the pinned
+// instance with the issuer agentlab.yaml gives it, github.com's OAuth
+// issuer while the App's id is empty. The meta chart derives the
+// releasable from the pin and refuses an empty one with Substrate on;
+// without an instance there is no pin, and this keeps the render going
+// until the configured instance renders; with no pin
+// (config.WorkspaceProviderApps) the first instance's. Nil with workspaces
 // off.
-func workspaceReleasableFor(cfg *config.Config) (*workspaceGrantValues, error) {
+func workspaceReleasableFor(cfg *config.Config) *workspaceGrantValues {
 	if !cfg.WorkspacesEnabled() {
-		return nil, nil
+		return nil
 	}
-	fake, err := workspaceFakeValues(cfg)
-	if err != nil {
-		return nil, err
+	name := cmp.Or(cfg.WorkspaceGrantProvider(), cfg.WorkspaceProviders()[0])
+	if gl := cfg.Platform.Workspaces.GitLab; name == config.WorkspaceProviderGitLab && gl.URL != "" {
+		return workspaceGrantOf(workspaceProviderValues{Name: name, Kind: providerKindGitLab, URL: gl.URL})
 	}
-	return workspaceGrantOf(*fake), nil
+	issuer := githubOAuthIssuer
+	if id := cfg.Platform.Workspaces.GitHub.AppID; id != "" {
+		issuer = workspaceGrantOf(workspaceProviderValues{Name: name, Kind: providerKindGitHub, AppID: id}).Issuer
+	}
+	return &workspaceGrantValues{Provider: name, Issuer: issuer}
 }
 
 // workspaceGrantOf is the pin to one instance's App.
 func workspaceGrantOf(p workspaceProviderValues) *workspaceGrantValues {
 	g := &workspaceGrantValues{Provider: p.Name, Secret: p.Secret}
-	switch {
-	case p.Kind == providerKindGitLab:
+	switch p.Kind {
+	case providerKindGitLab:
 		base := strings.TrimSuffix(p.URL, "/")
 		g.Issuer, g.AuthorizationEndpoint, g.TokenEndpoint, g.Scopes = base, base+"/oauth/authorize", base+gitlabTokenPath, workspaceGitLabScopes
 		g.RevocationEndpoint = base + gitlabRevokePath
-	case p.URL == "":
+	default:
 		// github.com: the App is known by its App id (agentlab.yaml
 		// records no slug), and GitHub names its issuer in the response.
 		g.Issuer, g.ExpectedIssuer = "https://github.com/apps/"+p.AppID, githubOAuthIssuer
 		g.AuthorizationEndpoint, g.TokenEndpoint = "https://github.com"+githubAuthorizePath, "https://github.com"+githubAccessTokenPath
-	default:
-		// The lab's GitHub, which names no issuer in its response.
-		base := strings.TrimSuffix(p.URL, "/")
-		g.Issuer, g.AuthorizationEndpoint, g.TokenEndpoint = base+"/apps/"+p.AppID, base+githubAuthorizePath, base+githubAccessTokenPath
 	}
 	return g
 }
@@ -247,25 +268,25 @@ func (s workspaceManagerSource) over(values map[string]any) workspaceManagerSour
 	return s
 }
 
-// ensureWorkspaceGrantClientID places the pinned instance's OAuth client id
-// in its Secret under GitHubClientIDKey, where muster reads the client; the
-// fake's Secret carries it from its creation (githubFakeUp). The id is
-// public: agentlab writes it and reads no value of the Secret.
-func ensureWorkspaceGrantClientID(ctx context.Context, grant *workspaceGrantValues, providers []workspaceProviderValues) error {
-	if grant == nil || grant.Secret == config.WorkspaceFakeSecretName {
+// ensureWorkspaceGrantClientIDs places the OAuth client id of each instance
+// muster signs a person in to (the pinned one, or every App's with no pin)
+// in its Secret under GitHubClientIDKey, where muster reads the client. The
+// id is public: agentlab writes it and reads no value of the Secret.
+func ensureWorkspaceGrantClientIDs(ctx context.Context, instances []string, providers []workspaceProviderValues) error {
+	if len(instances) == 0 {
 		return nil
 	}
+	k, err := labKube()
+	if err != nil {
+		return err
+	}
 	for _, p := range providers {
-		if p.Name != grant.Provider {
+		if !slices.Contains(instances, p.Name) {
 			continue
 		}
-		k, err := labKube()
-		if err != nil {
-			return err
-		}
 		patch := fmt.Sprintf(`{"stringData":{%q:%q}}`, config.GitHubClientIDKey, p.ClientID)
-		if _, err := k.clientset.CoreV1().Secrets(platformNamespace).Patch(ctx, grant.Secret, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
-			return fmt.Errorf("placing the client id of %s in the Secret %s/%s for muster: %w", p.Name, platformNamespace, grant.Secret, err)
+		if _, err := k.clientset.CoreV1().Secrets(platformNamespace).Patch(ctx, p.Secret, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
+			return fmt.Errorf("placing the client id of %s in the Secret %s/%s for muster: %w", p.Name, platformNamespace, p.Secret, err)
 		}
 	}
 	return nil

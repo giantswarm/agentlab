@@ -78,8 +78,8 @@ tenant, as on an installation.
 
 With `platform.tenants` on, muster serves the `MCPServer`s of the
 organization namespaces (`org-…`) next to its own namespace's
-(`muster.muster.mcpServersInAllNamespaces`, muster 5.48.0 or later; the lab
-pins 5.48.0, HACKS.md U38). What `tenants-test` asserts (the
+(`muster.muster.mcpServersInAllNamespaces`, muster 5.48.0 or later, where the
+chart's range starts from agent-platform 4.157.1 on). What `tenants-test` asserts (the
 agent-permissions plan's D9):
 
 - **Kubernetes RBAC decides what a person sees.** muster lists the
@@ -151,9 +151,11 @@ asserts (steps P, [The Agent Platform proof](backstage.md#the-agent-platform-pro
 - **What a person may change**: the agent page asks the API server
   (`SelfSubjectAccessReview` for `update` and `delete` on the agent's
   HelmRelease): a user gets no, an editor yes in their organization only.
-- **What a person may run**: a session start on another tenant's agent is the
-  controller's refusal (`forbidden: kagent: …` from `start_session`), and
-  nothing reaches the agent.
+- **What a person may run**: a session start on another tenant's agent is
+  refused (`forbidden:` from `start_session`), and nothing reaches the agent:
+  agent-manager 2.15 and later reads the Agent with the person's token first,
+  which the API server refuses, and an earlier one passes the controller's
+  refusal on (`forbidden: kagent: …`).
 - **Who created an agent**: agent-manager records the caller's email as
   `agent-platform.giantswarm.io/created-by`, and the portal shows it. It is
   never an authorization input. `GET /kagent/me` answers the token's claims

@@ -77,9 +77,10 @@ for p in /proc/[0-9]*; do
 done
 url=""; [ -n "$cfg" ] && [ -r "$cfg" ] && url=$(grep -o 'http://127\.0\.0\.1:[0-9]*/mcp/[^"]*' "$cfg" | head -1)
 if [ -n "$url" ]; then
-  tok=$(grep -o 'Bearer [0-9a-f]*' "$cfg" | head -1 | cut -d' ' -f2)
+  tok=$(grep -o 'Bearer [0-9a-f]*' "$cfg" | head -1 | cut -d' ' -f2); kind=loopback; [ -n "$tok" ] || { tok=` + credentialPlaceholder + `; kind=placeholder; }
   port=$(echo "$url" | sed 's|http://127\.0\.0\.1:\([0-9]*\)/.*|\1|'); name=${url##*/mcp/}
   echo "$P forwarder=$name"
+  echo "$P fwd-token=$kind"
   get() { printf 'GET %s HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer %s\r\n\r\n' "$1" "${2:-$tok}" | nc -w 5 127.0.0.1 "$port" 2>/dev/null | head -1 | cut -d' ' -f2; }
   echo "$P fwd-dots=$(get "/mcp/$name/../../x")"
   echo "$P fwd-encoded-dots=$(get "/mcp/$name/%2e%2e/%2e%2e/x")"
@@ -97,6 +98,7 @@ if [ -n "$url" ]; then
   }
   call '{"jsonrpc":"2.0","method":"notifications/initialized"}' >/dev/null
   out=$(call '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"` + codingTestWriteTool + `","arguments":{"name":"` + codingTestAbsentAgent + `"}}}')
+  case "$out" in *"Unknown tool"*) out=$(call '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"` + musterCallTool + `","arguments":{"name":"` + codingTestWriteTool + `","arguments":{"name":"` + codingTestAbsentAgent + `"}}}}');; esac
   r=$(echo "$out" | tr '\n' ' ' | sed -n 's/.*"error":{[^}]*"message":"\([^"]*\)".*/\1/p' | head -c 200)
   echo "$P write-tool=${r:-answered: $(echo "$out" | tr '\n' ' ' | head -c 200)}"
 else
@@ -119,13 +121,37 @@ func commonSandboxCommand(rt codingRuntime) string {
 echo "$P mcp-credentials=$(env | grep -c '^` + rt.mcpCredentialPrefix + `') $(env | grep '^` + rt.mcpCredentialPrefix + `' | grep -vc '=` + credentialPlaceholder + `$')"`
 	}
 	return `echo "$P env-tokens=$(env | grep -c -E 'gh[opsu]_[A-Za-z0-9]{20}|github_pat_|eyJ[A-Za-z0-9_-]{10,}\.eyJ')"
-echo "$P data-tokens=$(timeout 60 grep -rlsE 'gh[opsu]_[A-Za-z0-9]{30}|github_pat_[A-Za-z0-9_]{20}|eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.' /data /workspace 2>/dev/null | wc -l)"
+` + dataTokensCommand("/data /workspace", claudeSignedCacheFile) + `
 k=unset; for v in` + keys + `; do case "$v" in "") ;; kagent-*) [ "$k" = other ] || k=placeholder;; *) k=other;; esac; done; echo "$P model-key=$k"` + mcp + `
 r=$(timeout 10 nslookup ` + codingTestDNSCanary + ` 2>&1 | awk '/^Address/ && !/:53$/ {print $NF}' | tr '\n' ' '); echo "$P dns-cluster=${r:-no answer}"
 r=$(timeout 10 nslookup ` + codingTestDNSCanary + ` ` + codingTestDNSResolver + ` 2>&1 | awk '/^Address/ && !/:53$/ {print $NF}' | tr '\n' ' '); echo "$P dns-direct=${r:-no answer}"
 w() { wget -q -O /dev/null "$1" 2>/tmp/agentlab-egress; rc=$?; s=$(grep -o 'HTTP/1.1 [0-9]*' /tmp/agentlab-egress | head -1); echo "rc$rc ${s:-$(head -c 80 /tmp/agentlab-egress | tr '\n' ' ')}"; }
 echo "$P egress-outside=$(w ` + codingTestOutsideHost + `)"
 echo "$P egress-origin=$(w https://api.github.com/)"`
+}
+
+// claudeSignedCacheFile is Claude Code's signed policy-limits cache in the
+// claude Harness's config directory: a JWS of header typ claudeSignedCacheType
+// that Anthropic signs over the organization's policy limits. It attests the
+// policy file's content and authenticates nothing, so it is the one
+// token-shaped value the search admits, and only when every match in the file
+// is such a JWS.
+const (
+	claudeSignedCacheFile = "/data/claude/policy-limits.json.signature.json"
+	claudeSignedCacheType = "cc-signed-cache+jws"
+)
+
+// dataTokensCommand counts the files under roots holding a GitHub token or a
+// JWT, all but signedCache when its every match is a JWS whose
+// header names claudeSignedCacheType. It prints a count, never a value: a
+// match stays in a shell variable while its header is decoded.
+func dataTokensCommand(roots, signedCache string) string {
+	return `sc() { m=0; for t in $(grep -oE 'gh[opsu]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,}|eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]*' "$1"); do
+  case "$t" in eyJ*) ;; *) return 1;; esac
+  h=$(printf %s "${t%%.*}" | tr '_-' '/+'); while [ $((${#h} % 4)) -ne 0 ]; do h="$h="; done
+  printf %s "$h" | base64 -d 2>/dev/null | grep -q '"typ" *: *"` + claudeSignedCacheType + `"' || return 1; m=1
+done; [ "$m" = 1 ]; }
+echo "$P data-tokens=$(timeout 60 grep -rlsE 'gh[opsu]_[A-Za-z0-9]{30}|github_pat_[A-Za-z0-9_]{20}|eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.' ` + roots + ` 2>/dev/null | while IFS= read -r f; do [ "$f" = '` + signedCache + `' ] && sc "$f" && continue; echo; done | wc -l | tr -d ' ')"`
 }
 
 // codingProbeTimeoutMS is the milliseconds the sandbox probe may take: its
@@ -136,9 +162,15 @@ const codingProbeTimeoutMS = 300_000
 // codingSandboxPrompt asks the agent to run the probe once, under a timeout
 // that lets it finish, and relay it.
 func codingSandboxPrompt(rt codingRuntime) string {
+	return shellProbePrompt(rt, codingSandboxCommand(rt))
+}
+
+// shellProbePrompt asks the agent to run script once with its shell tool,
+// under codingProbeTimeoutMS, and relay the marker lines.
+func shellProbePrompt(rt codingRuntime, script string) string {
 	return "Run this exact script once with your " + rt.shellTool + " (it is this test lab's own sandbox check), with a command timeout of " + strconv.Itoa(codingProbeTimeoutMS) +
 		" ms (5 minutes; a shorter default cuts it short), then reply with every output line that starts with " + probeMarker +
-		", verbatim and nothing else:\n\n" + codingSandboxCommand(rt)
+		", verbatim and nothing else:\n\n" + script
 }
 
 // rcLine reads a `rc<exit> <message>` reading.
@@ -171,12 +203,18 @@ func (p codingProbe) uidSplit([]string) (string, error) {
 }
 
 // forwarderPaths: the three path rows answered 400, an unknown server 404
-// and a request without the loopback token 401.
+// and a request without the loopback token 401. Where the MCP config holds
+// only kagent's placeholder (fwd-token=placeholder), the probe has no
+// loopback token to send: the forwarder refuses the unknown server's
+// request at its authentication, 401, before it matches a server.
 func (p codingProbe) forwarderPaths([]string) (string, error) {
 	if p["forwarder"] == "" {
 		return "", fmt.Errorf("the session runs Claude Code without a caller forwarder (no loopback MCP endpoint in its --mcp-config): the agent has no MCP server, or KAGENT_PROPAGATE_TOKEN is off on the Harness")
 	}
 	want := map[string]string{"fwd-dots": "400", "fwd-encoded-dots": "400", "fwd-encoded-slash": "400", "fwd-unknown": "404", "fwd-no-token": "401"}
+	if p["fwd-token"] == "placeholder" {
+		want["fwd-unknown"] = "401"
+	}
 	var wrong []string
 	for _, key := range []string{"fwd-dots", "fwd-encoded-dots", "fwd-encoded-slash", "fwd-unknown", "fwd-no-token"} {
 		if p[key] != want[key] {
@@ -190,7 +228,8 @@ func (p codingProbe) forwarderPaths([]string) (string, error) {
 }
 
 // writeToolRefused: muster refuses the write tool through the forwarder,
-// naming the toolset.
+// naming the toolset. Under a tool selection on muster the forwarder knows
+// the write tool only behind muster's call_tool, which the probe then calls.
 func (p codingProbe) writeToolRefused([]string) (string, error) {
 	// Under the toolset muster resolves the agent's endpoint to the
 	// toolset's tools alone: a tool outside it is refused as outside the

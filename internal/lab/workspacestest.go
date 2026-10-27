@@ -35,41 +35,73 @@ type WorkspacesTestOptions struct {
 	// a pod finished, a volume gone, a sync cycle.
 	ReadyTimeout time.Duration
 	// Part runs one part instead of the storage proof: WorkspacesPartSync
-	// (workspacessync.go), WorkspacesPartAccess (workspacesaccess.go),
-	// WorkspacesPartGitLab (workspacesgitlab.go), WorkspacesPartSessions
-	// (workspacessessions.go), WorkspacesPartCallerCredential
-	// (workspacescallercredential.go), WorkspacesPartWrite (workspaceswrite.go)
-	// or WorkspacesPartRefresh (workspacesrefresh.go). "" is the storage proof.
+	// (workspacessyncpart.go), WorkspacesPartSessions
+	// (workspacessessionspart.go), WorkspacesPartGit (workspacesgitpart.go)
+	// or WorkspacesPartGitLab (workspacesgitlab.go). "" is the storage proof.
 	Part string
+	// Provider is the provider instance the sync and sessions parts run on,
+	// github (the default) or gitlab.
+	Provider string
 	// Sessions is how many Sessions the sessions part starts, alternating
 	// the claude and the kagent Harness; zero is DefaultWorkspacesSessions.
 	Sessions int
-	// Email is the lab user a part signs in as, a member of the lab's
-	// Organization: the sync part's member (default the admin), the access
-	// and GitLab parts' second user beside the admin (default
-	// dev@lab.local).
+	// Email is the GitLab part's second user beside the admin, a member of
+	// the lab's Organization (default dev@lab.local).
 	Email string
+	// Harness is the Harness the harness stage's Session runs on: claude
+	// (the default) or another coding Harness the lab renders, such as codex.
+	Harness string
+	// ModelConfig is the kagent ModelConfig the stage's Agent runs on:
+	// default-model-config on claude; required on another Harness, whose
+	// runtime needs a model of its own (codex: a Responses API one).
+	ModelConfig string
+	// Toolchains are mounted into the git part's Sessions through
+	// start_session, name[@version] each; empty mounts none.
+	Toolchains []string
 }
+
+// WorkspacesParts are the parts `workspaces-test --part` takes.
+var WorkspacesParts = []string{WorkspacesPartSync, WorkspacesPartSessions, WorkspacesPartGit, WorkspacesPartGitLab}
 
 // validate refuses a part workspaces-test does not have, and the flags and
 // argument of one run given to the other.
 func (o WorkspacesTestOptions) validate() error {
+	sessionFlags := o.Harness != "" || o.ModelConfig != ""
 	switch o.Part {
 	case "":
 		if o.Email != "" {
 			return fmt.Errorf("the storage proof signs in as nobody: [email] names the user of a part (--part %s)", strings.Join(WorkspacesParts, ", "))
 		}
-	case WorkspacesPartSync, WorkspacesPartAccess, WorkspacesPartGitLab, WorkspacesPartSessions, WorkspacesPartCallerCredential, WorkspacesPartRefresh, WorkspacesPartWrite:
+		if o.StorageOnly && sessionFlags {
+			return errors.New("--harness and --model-config choose the Session's; --storage-only runs none")
+		}
+		if o.Harness != "" && o.Harness != claudeHarness && o.ModelConfig == "" {
+			return fmt.Errorf("--harness %s needs --model-config: the default ModelConfig is the claude Harness's", o.Harness)
+		}
+	case WorkspacesPartSync, WorkspacesPartSessions, WorkspacesPartGit, WorkspacesPartGitLab:
 		if o.StorageOnly {
 			return fmt.Errorf("--storage-only is the storage proof's; --part %s proves no storage", o.Part)
 		}
-		if (o.Part == WorkspacesPartSessions || o.Part == WorkspacesPartCallerCredential || o.Part == WorkspacesPartRefresh || o.Part == WorkspacesPartWrite) && o.Email != "" {
-			return fmt.Errorf("--part %s starts its Sessions as the admin: it takes no [email]", o.Part)
+		if sessionFlags {
+			sessions := "runs the claude Session"
+			if o.Part != WorkspacesPartGitLab {
+				sessions = "chooses its own Sessions"
+			}
+			return fmt.Errorf("--harness and --model-config are the storage proof's; --part %s %s", o.Part, sessions)
+		}
+		if o.Part != WorkspacesPartGitLab && o.Email != "" {
+			return fmt.Errorf("--part %s works as the admin: it takes no [email]", o.Part)
 		}
 	default:
 		return fmt.Errorf("no part %q of workspaces-test: --part takes %s", o.Part, strings.Join(WorkspacesParts, ", "))
 	}
 	switch {
+	case o.Provider != "" && o.Part != WorkspacesPartSync && o.Part != WorkspacesPartSessions:
+		return fmt.Errorf("--provider names the instance of the sync and sessions parts (--part %s or %s)", WorkspacesPartSync, WorkspacesPartSessions)
+	case o.Provider != "" && o.Provider != config.WorkspaceProviderGitHub && o.Provider != config.WorkspaceProviderGitLab:
+		return fmt.Errorf("--provider %q: %s or %s", o.Provider, config.WorkspaceProviderGitHub, config.WorkspaceProviderGitLab)
+	case len(o.Toolchains) > 0 && o.Part != WorkspacesPartGit:
+		return fmt.Errorf("--toolchains mounts toolchains into the git part's Sessions (--part %s)", WorkspacesPartGit)
 	case o.Sessions != 0 && o.Part != WorkspacesPartSessions:
 		return fmt.Errorf("--sessions is the sessions part's (--part %s)", WorkspacesPartSessions)
 	case o.Sessions != 0 && o.Sessions < workspacesMinSessions:
@@ -77,9 +109,6 @@ func (o WorkspacesTestOptions) validate() error {
 	}
 	return nil
 }
-
-// workspacesMinSessions is the fewest Sessions the sessions part starts.
-const workspacesMinSessions = 3
 
 // DefaultWorkspacesReadyTimeout is the proof's default wait.
 const DefaultWorkspacesReadyTimeout = 5 * time.Minute
@@ -124,6 +153,10 @@ func WorkspacesTest(cfg *config.Config, opts WorkspacesTestOptions) error {
 	if err := opts.validate(); err != nil {
 		return err
 	}
+	session := workspacesSessionHarnessFor(opts.Harness, opts.ModelConfig)
+	if session.name != claudeHarness && !cfg.CodingHarnessRendered(session.name) {
+		return fmt.Errorf("the lab renders no Harness %s: add it to platform.coding.harnesses in %s, then `agentlab platform`", session.name, config.File)
+	}
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
 	}
@@ -132,32 +165,16 @@ func WorkspacesTest(cfg *config.Config, opts WorkspacesTestOptions) error {
 	if err != nil {
 		return err
 	}
-	if opts.Part == WorkspacesPartSync {
-		email := opts.Email
-		if email == "" {
-			if admin := cfg.AdminUser(); admin != nil {
-				email = admin.Email
-			}
-		}
-		return workspacesSyncPart(cfg, email, opts.ReadyTimeout)
-	}
-	if opts.Part == WorkspacesPartAccess {
-		return workspacesAccessPart(cfg, opts.Email, opts.ReadyTimeout)
-	}
-	if opts.Part == WorkspacesPartGitLab {
+	provider := cmpOr(opts.Provider, config.WorkspaceProviderGitHub)
+	switch opts.Part {
+	case WorkspacesPartGitLab:
 		return workspacesGitLabPart(cfg, opts.Email, opts.ReadyTimeout)
-	}
-	if opts.Part == WorkspacesPartSessions {
-		return workspacesSessionsPart(cfg, opts.Sessions, opts.ReadyTimeout)
-	}
-	if opts.Part == WorkspacesPartCallerCredential {
-		return workspacesCallerCredentialPart(cfg, opts.ReadyTimeout)
-	}
-	if opts.Part == WorkspacesPartRefresh {
-		return workspacesRefreshPart(cfg, opts.ReadyTimeout)
-	}
-	if opts.Part == WorkspacesPartWrite {
-		return workspacesWritePart(cfg, opts.ReadyTimeout)
+	case WorkspacesPartSync:
+		return workspacesSyncPart(cfg, provider, opts.ReadyTimeout)
+	case WorkspacesPartSessions:
+		return workspacesSessionsPart(cfg, provider, opts.Sessions, opts.ReadyTimeout)
+	case WorkspacesPartGit:
+		return workspacesGitPart(cfg, opts.ReadyTimeout, opts.Toolchains)
 	}
 	ctx := context.Background()
 	timeout := opts.ReadyTimeout
@@ -166,10 +183,18 @@ func WorkspacesTest(cfg *config.Config, opts WorkspacesTestOptions) error {
 	driver := workspacesCSIDriverFor(cfg)
 	endpoint := substrateDriverEndpointFor(cfg)
 	step("The workspace storage in place (namespace %s)", workspacesNamespace)
-	if err := proveWorkspacesInstalled(ctx, driver, timeout); err != nil {
+	backend := workspacesBackendFor(cfg)
+	if err := proveWorkspacesInstalled(ctx, backend, timeout); err != nil {
 		return err
 	}
-	note("NFS server, controller with its mTLS proxy and node plugin Ready; StorageClass %s (%s)", workspacesStorageClass, driver)
+	switch {
+	case backend.nfsServer:
+		note("NFS server, controller with its mTLS proxy and node plugin Ready; StorageClass %s (%s)", workspacesStorageClass, driver)
+	case backend.storage == config.WorkspaceStorageMooseFS:
+		note("MooseFS master and chunkserver, controller with its mTLS proxy and node plugin Ready; StorageClass %s (%s)", workspacesStorageClass, driver)
+	default:
+		note("hostpath driver and the controller's mTLS proxy Ready; StorageClass %s (%s)", workspacesStorageClass, driver)
+	}
 	if cfg.WorkspacesCSICompanion() {
 		if err := waitWorkspacesCompanion(ctx); err != nil {
 			return err
@@ -197,7 +222,14 @@ func WorkspacesTest(cfg *config.Config, opts WorkspacesTestOptions) error {
 	if err := waitPVCBound(ctx, workspacesTestClaim, timeout); err != nil {
 		return err
 	}
-	note("Bound (a directory of the export on %s, mounted NFSv4.1)", node)
+	switch {
+	case backend.nfsServer:
+		note("Bound (a directory of the export on %s, mounted NFSv4.1)", node)
+	case backend.storage == config.WorkspaceStorageMooseFS:
+		note("Bound (a directory of the MooseFS filesystem, mounted through FUSE)")
+	default:
+		note("Bound (a directory under %s on %s, bind-mounted)", workspacesExportDir, node)
+	}
 
 	step("A bare mirror seeded on the volume, from a repository with an executable and a symbolic link")
 	out, err := runPod(ctx, workspacesTestNamespace, workspacesTestPod("seed", workspacesSeedScript, []corev1.VolumeMount{{Name: workspacesTestVolume, MountPath: workspacesTestMountPath}}, false), timeout)
@@ -240,14 +272,14 @@ func WorkspacesTest(cfg *config.Config, opts WorkspacesTestOptions) error {
 
 	harness := ""
 	if !opts.StorageOnly {
-		if harness, err = proveWorkspacesHarnessSession(cfg, timeout); err != nil {
+		if harness, err = proveWorkspacesHarnessSession(cfg, session, timeout); err != nil {
 			return err
 		}
 	}
 
 	step("Removing the proof's namespace: the claim's volume goes with it")
 	cleanupWorkspacesTest(ctx, node)
-	if err := proveWorkspacesVolumeGone(ctx, node, timeout); err != nil {
+	if err := proveWorkspacesVolumeGone(ctx, node, backend, timeout); err != nil {
 		return err
 	}
 	note("no PersistentVolume of the proof left; nothing of it under %s on %s", workspacesExportDir, node)
@@ -264,23 +296,30 @@ func WorkspacesTest(cfg *config.Config, opts WorkspacesTestOptions) error {
 }
 
 // proveWorkspacesInstalled is the precondition: the class, the CSIDriver,
-// the NFS server, the controller and the node plugin, each waited for
-// briefly.
-func proveWorkspacesInstalled(ctx context.Context, driver string, timeout time.Duration) error {
+// the NFS server where the storage has one, the controller and the node
+// plugin, each waited for briefly.
+func proveWorkspacesInstalled(ctx context.Context, backend workspacesBackend, timeout time.Duration) error {
 	for _, o := range []struct{ resource, name, what string }{
 		{"storageclasses.storage.k8s.io", workspacesStorageClass, "StorageClass"},
-		{csiDriversResource, driver, "CSIDriver"},
+		{csiDriversResource, backend.driver, "CSIDriver"},
 	} {
 		if !clusterObjectExists(ctx, o.resource, o.name) {
 			return fmt.Errorf("no %s %s: `agentlab platform` installs the workspace storage", o.what, o.name)
 		}
 	}
-	for _, name := range []string{workspacesNFSServer, workspacesController} {
+	deployments := []string{backend.controller}
+	switch {
+	case backend.nfsServer:
+		deployments = append([]string{workspacesNFSServer}, deployments...)
+	case backend.storage == config.WorkspaceStorageMooseFS:
+		deployments = append([]string{mooseFSMaster, mooseFSChunkserver}, deployments...)
+	}
+	for _, name := range deployments {
 		if err := waitDeploymentRolledOut(ctx, workspacesNamespace, name, timeout); err != nil {
 			return fmt.Errorf("%s: %w", name, err)
 		}
 	}
-	return waitDaemonSetReady(ctx, workspacesNamespace, workspacesNodePlugin, timeout)
+	return waitDaemonSetReady(ctx, workspacesNamespace, backend.nodePlugin, timeout)
 }
 
 // cleanupWorkspacesTest removes the proof's namespace, with its pods and
@@ -433,19 +472,62 @@ func waitWorkspacesVolumesGone(ctx context.Context, timeout time.Duration) error
 }
 
 // proveWorkspacesVolumeGone is the end: no PersistentVolume of the proof,
-// and no directory of it in the export on the node.
-func proveWorkspacesVolumeGone(ctx context.Context, node string, timeout time.Duration) error {
+// and no directory in the export on the node that no PersistentVolume backs.
+// A directory still backing a live volume (another Workspace's) is left in
+// place and named (workspaceVolumeDirs).
+func proveWorkspacesVolumeGone(ctx context.Context, node string, backend workspacesBackend, timeout time.Duration) error {
 	if err := waitWorkspacesVolumesGone(ctx, timeout); err != nil {
 		return fmt.Errorf("a PersistentVolume of the proof is still there %s after its claim went: `kubectl get pv`, the provisioner's log in %s", timeout, workspacesNamespace)
 	}
-	out, err := outputQuiet(dockerBin, "exec", node, "sh", "-c", "ls -A "+workspacesExportDir+" 2>/dev/null | grep '^pvc-' || true")
+	dirs, err := workspaceVolumeDirs(node, backend)
 	if err != nil {
-		return fmt.Errorf("reading the export on %s: %w", node, err)
+		return err
 	}
-	if left := strings.Fields(out); len(left) > 0 {
-		return fmt.Errorf("the export on %s still holds %d volume directories after the proof: %s", node, len(left), strings.Join(left, ", "))
+	k, err := labKube()
+	if err != nil {
+		return err
+	}
+	pvs, err := k.clientset.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("listing the PersistentVolumes: %w", err)
+	}
+	live, left := splitWorkspacesExportDirs(dirs, pvs.Items)
+	if len(live) > 0 {
+		note("left in place on the export, still backing a live volume: %s", strings.Join(live, ", "))
+	}
+	if len(left) > 0 {
+		return fmt.Errorf("the export on %s still holds %d volume directories no PersistentVolume backs after the proof: %s", node, len(left), strings.Join(left, ", "))
 	}
 	return nil
+}
+
+// splitWorkspacesExportDirs splits the export's volume directories into
+// those a PersistentVolume of the class still backs, named with its claim,
+// and those left behind. A directory is a volume's by the PersistentVolume's
+// name or its CSI volume handle.
+func splitWorkspacesExportDirs(dirs []string, pvs []corev1.PersistentVolume) (live, left []string) {
+	claims := map[string]string{}
+	for _, pv := range pvs {
+		if pv.Spec.StorageClassName != workspacesStorageClass {
+			continue
+		}
+		claim := "unclaimed"
+		if ref := pv.Spec.ClaimRef; ref != nil {
+			claim = ref.Namespace + "/" + ref.Name
+		}
+		claims[pv.Name] = claim
+		if pv.Spec.CSI != nil && pv.Spec.CSI.VolumeHandle != "" {
+			claims[pv.Spec.CSI.VolumeHandle] = claim
+		}
+	}
+	for _, d := range dirs {
+		if claim, ok := claims[d]; ok {
+			live = append(live, d+" ("+claim+")")
+			continue
+		}
+		left = append(left, d)
+	}
+	return live, left
 }
 
 // proveWorkspacesProxyRefuses opens the proxy's port as a client without

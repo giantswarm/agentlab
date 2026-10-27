@@ -2,6 +2,7 @@ package lab
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -194,11 +195,20 @@ func TestGatewayArgs(t *testing.T) {
 	if !reflect.DeepEqual(args, want) {
 		t.Errorf("gatewayArgs =\n%q\nwant\n%q", args, want)
 	}
-	docker := dockerRunArgs("img:1", "ctr", "", "/run/x", "/lab/certs/ca.crt", 1000, 100, []string{"--flag"})
+	const extraFlag = "--flag"
+	docker := dockerRunArgs("img:1", "ctr", "", "/run/x", "/lab/certs/ca.crt", 1000, 100, []string{extraFlag})
 	wantDocker := []string{"run", "--name", "ctr", "--network", "host", "--security-opt", "label=disable", "--rm", "--user", "1000:100",
-		"-v", "/run/x:" + gatewayDataPath, "-v", "/lab/certs/ca.crt:" + gatewayCAPath + ":ro", "img:1", "--flag"}
+		"-v", "/run/x:" + gatewayDataPath, "-v", "/lab/certs/ca.crt:" + gatewayCAPath + ":ro", "img:1", extraFlag}
 	if !reflect.DeepEqual(docker, wantDocker) {
 		t.Errorf("dockerRunArgs =\n%q\nwant\n%q", docker, wantDocker)
+	}
+	rootless := rootlessPodmanOnLinux
+	rootlessPodmanOnLinux = func() bool { return true }
+	docker = dockerRunArgs("img:1", "ctr", "", "/run/x", "/lab/certs/ca.crt", 1000, 100, []string{extraFlag})
+	rootlessPodmanOnLinux = rootless
+	wantDocker = slices.Insert(slices.Clone(wantDocker), 8, "--userns=keep-id")
+	if !reflect.DeepEqual(docker, wantDocker) {
+		t.Errorf("dockerRunArgs under rootless Podman =\n%q\nwant\n%q", docker, wantDocker)
 	}
 	edge, err := edgeHostPort("https://agentgateway.127.0.0.1.nip.io:8445")
 	if err != nil || edge != "agentgateway.127.0.0.1.nip.io:8445" {
@@ -462,6 +472,13 @@ func TestGatewayFiles(t *testing.T) {
 // clicks the way the adapter does — through the fake Slack Web API — writes
 // the adapter's records into its log, and moves the fake controller's tasks
 // the way the turns would.
+// The real gateway's words on its workspace prompt the fake gateway posts:
+// the prompt and its card once No workspace answered it.
+const (
+	slackWorkspaceAsk    = "Which workspace should this conversation work in?"
+	slackWorkspaceNoneIn = "Working without a workspace"
+)
+
 type scriptedGateway struct {
 	t        *testing.T
 	secret   string
@@ -474,6 +491,9 @@ type scriptedGateway struct {
 	bound     map[string]string
 	approvals int
 	running   map[string]chan struct{}
+	// declines is how many more times the model answers the count "No."
+	// instead of counting, as a terse model does.
+	declines int
 
 	// workspaces has a new thread's first message held behind the
 	// workspace prompt, as the adapter does for a person with workspaces;
@@ -542,9 +562,15 @@ func (g *scriptedGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case slackInteractionsPath:
 		form, _ := url.ParseQuery(string(body))
 		var p struct {
-			Type      string
-			User      struct{ ID string }
-			Channel   struct{ ID string }
+			Type        string
+			CallbackID  string `json:"callback_id"`
+			ResponseURL string `json:"response_url"`
+			User        struct{ ID string }
+			Channel     struct{ ID string }
+			Message     struct {
+				TS       string `json:"ts"`
+				ThreadTS string `json:"thread_ts"`
+			}
 			Container struct {
 				MessageTS string `json:"message_ts"`
 				ThreadTS  string `json:"thread_ts"`
@@ -559,15 +585,21 @@ func (g *scriptedGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				State           struct {
 					Values map[string]map[string]struct {
 						SelectedOption struct{ Value string } `json:"selected_option"`
+						Value          string
 					}
 				}
 			}
 		}
 		_ = json.Unmarshal([]byte(form.Get("payload")), &p)
 		switch {
+		case p.Type == "message_action" && p.CallbackID == slackShortcutAskAgent:
+			thread := cmp.Or(p.Message.ThreadTS, p.Message.TS)
+			g.answering.Go(func() { g.onShortcut(p.User.ID, p.Channel.ID, thread, p.ResponseURL) })
 		case p.Type == "view_submission":
+			values := p.View.State.Values
 			g.answering.Go(func() {
-				g.onPick(p.User.ID, p.View.PrivateMetadata, p.View.State.Values[slackPickerAgentBlock][slackPickerAgentAction].SelectedOption.Value)
+				g.onPick(p.User.ID, p.View.PrivateMetadata, values[slackPickerAgentBlock][slackPickerAgentAction].SelectedOption.Value,
+					values[slackPickerQuestionBlock][slackPickerQuestionAction].Value)
 			})
 		case p.Actions[0].ActionID == slackActionAgentSelect:
 			g.answering.Go(func() { g.openPicker(p.Channel.ID, p.Container.ThreadTS, p.Actions[0].Value) })
@@ -616,9 +648,14 @@ func (g *scriptedGateway) onMessage(ev map[string]string) {
 		thread = ev[slackKeyTS]
 	}
 	text := strings.TrimPrefix(ev[slackKeyText], "<@"+slackFakeBotUser+"> ")
+	g.mu.Lock()
+	_, known := g.bound[thread]
+	g.mu.Unlock()
 	switch {
-	case user == g.stranger:
-		g.post(channel, thread, "Waiting for <@"+user+"> to sign in")
+	case user == g.stranger && (text == slackLoginWord || known):
+		if known {
+			g.post(channel, thread, "Waiting for <@"+user+"> to sign in")
+		}
 		g.api(slackPostEphemeral, map[string]any{slackKeyChannel: channel, slackKeyThreadTS: thread, slackKeyUser: user, slackKeyText: "Sign in",
 			slackKeyBlocks: []any{map[string]any{fieldTypeKey: slackBlockActions, slackKeyElements: []any{map[string]any{fieldTypeKey: slackButton, slackKeyActionID: slackActionSignIn, slackKeyURL: "http://gw" + musterlink.LinkPath + "?u=x"}}}}})
 		return
@@ -639,44 +676,40 @@ func (g *scriptedGateway) onMessage(ev map[string]string) {
 		}
 		close(stop)
 		return
+	case !known:
+		// klaus-gateway 4.13.0 and later: a conversation opens only through
+		// the picker; a message outside one gets the help.
+		g.post(channel, thread, "No conversation is open here, so your message did not reach an agent. Here is how to start one.")
+		return
 	}
-	g.mu.Lock()
-	instance, known := g.bound[thread]
-	if !known && g.workspaces {
-		if _, prompted := g.held[thread]; !prompted {
-			g.held[thread] = ev
-			g.mu.Unlock()
-			g.post(channel, thread, slackWorkspaceAsk,
-				map[string]any{fieldTypeKey: slackBlockActions, slackKeyElements: []any{
-					map[string]any{fieldTypeKey: slackStaticSelect, slackKeyActionID: slackWorkspaceSelect},
-					map[string]any{fieldTypeKey: slackButton, slackKeyActionID: slackWorkspaceNone, slackKeyValue: thread},
-				}})
-			return
-		}
-	}
-	if !known {
-		instance = "inst-" + thread
-		g.bound[thread] = instance
-	}
-	g.mu.Unlock()
-	if !known {
-		g.ctrl.mu.Lock()
-		g.ctrl.sessions[instance] = fakeSession(instance, testToken, klausGatewayTestAgent)
-		g.ctrl.mu.Unlock()
-		g.record(map[string]any{recordKey: recordBound, "thread": thread, fieldSession: instance})
-	}
-	g.record(map[string]any{recordKey: recordDispatch, "thread_id": thread, "agent": kagentNamespace + "/" + klausGatewayTestAgent, "agent_source": "default",
+	g.turn(channel, thread, user, text)
+}
+
+// turn runs one turn of the thread's conversation.
+func (g *scriptedGateway) turn(channel, thread, user, text string) {
+	g.record(map[string]any{recordKey: recordDispatch, "thread_id": thread, "agent": testFixtureRef, "agent_source": "thread",
 		"slack_user": user, "subject": testUser, claimSubject: testSubject})
 	switch text {
 	case klausGatewayToolPrompt:
 		g.card(channel, thread, "task-"+thread)
-	case klausGatewayEssayPrompt:
+	case klausGatewayStopPrompt:
+		g.mu.Lock()
+		declined := g.declines > 0
+		if declined {
+			g.declines--
+		}
+		g.mu.Unlock()
+		if declined {
+			g.answer(channel, thread, "No.")
+			g.done(thread, outcomeCompleted, "declined-"+thread)
+			return
+		}
 		stop := make(chan struct{})
 		g.mu.Lock()
 		g.running[thread] = stop
 		g.mu.Unlock()
 		g.ctrl.setTaskState(a2a.TaskID("essay-"+thread), a2a.TaskStateWorking)
-		g.api(slackStartStream, map[string]any{slackKeyChannel: channel, slackKeyThreadTS: thread, slackKeyChunks: []any{map[string]any{fieldTypeKey: slackMarkdownChunk, slackKeyText: "Once upon a time"}}})
+		g.api(slackStartStream, map[string]any{slackKeyChannel: channel, slackKeyThreadTS: thread, slackKeyChunks: []any{map[string]any{fieldTypeKey: slackMarkdownChunk, slackKeyText: "One\nTwo\nThree\nFour\nFive\n"}}})
 		<-stop
 		g.ctrl.setTaskState(a2a.TaskID("essay-"+thread), a2a.TaskStateCanceled)
 		g.post(channel, thread, slackStopped)
@@ -703,17 +736,61 @@ func (g *scriptedGateway) openPicker(channel, thread, ref string) {
 	}})
 }
 
-// onPick answers a submitted picker whose agent no Harness admits: the
-// refusal, shown to the submitter alone in the thread.
-func (g *scriptedGateway) onPick(user, metadata, ref string) {
-	var pm struct{ C, T string }
-	_ = json.Unmarshal([]byte(metadata), &pm)
-	if ref == testFixtureRef {
-		g.t.Errorf("the picker was submitted with the admitted fixture")
+// onShortcut answers the Ask an agent here shortcut: the picker for the
+// message's thread, or for a person with no link the sign-in notice through
+// the response_url.
+func (g *scriptedGateway) onShortcut(user, channel, thread, responseURL string) {
+	if user == g.stranger {
+		raw, _ := json.Marshal(map[string]any{slackKeyText: "The agents are listed with your permissions, so " + slackSignInFirst + ": mention the bot with `login`, then run the command again.", "response_type": "ephemeral"})
+		req, err := http.NewRequest(http.MethodPost, responseURL, bytes.NewReader(raw))
+		if err != nil {
+			g.t.Errorf("response_url: %v", err)
+			return
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			g.t.Errorf("response_url: %v", err)
+			return
+		}
+		_ = resp.Body.Close()
 		return
 	}
-	g.api(slackPostEphemeral, map[string]any{slackKeyChannel: pm.C, slackKeyThreadTS: pm.T, slackKeyUser: user,
-		slackKeyText: "*" + klausGatewayTestUnadmittedDisplay + "* is installed but " + slackNotRunnable + ": Agent x " + unadmittedReason + ": blocked by ResolvedRefs. " + slackNotStarted + ".\n\n*Available agents*:\n• *" + klausGatewayTestDisplay + "*"})
+	g.openPicker(channel, thread, "")
+}
+
+// onPick answers a submitted picker: the fixture binds the thread to a new
+// instance, echoes the question and runs it (behind the workspace prompt when
+// the person has workspaces); an agent no Harness admits gets the refusal,
+// shown to the submitter alone in the thread.
+func (g *scriptedGateway) onPick(user, metadata, ref, question string) {
+	var pm struct{ C, T string }
+	_ = json.Unmarshal([]byte(metadata), &pm)
+	if ref != testFixtureRef {
+		g.api(slackPostEphemeral, map[string]any{slackKeyChannel: pm.C, slackKeyThreadTS: pm.T, slackKeyUser: user,
+			slackKeyText: "*" + klausGatewayTestUnadmittedDisplay + "* is installed but " + slackNotRunnable + ": Agent x " + unadmittedReason + ": blocked by ResolvedRefs. " + slackNotStarted + ".\n\n*Available agents*:\n• *" + klausGatewayTestDisplay + "*"})
+		return
+	}
+	instance := "inst-" + pm.T
+	g.mu.Lock()
+	g.bound[pm.T] = instance
+	g.mu.Unlock()
+	g.ctrl.mu.Lock()
+	g.ctrl.sessions[instance] = fakeSession(instance, testToken, klausGatewayTestAgent)
+	g.ctrl.mu.Unlock()
+	g.record(map[string]any{recordKey: recordBound, "thread": pm.T, fieldSession: instance})
+	g.post(pm.C, pm.T, question)
+	if g.workspaces {
+		g.mu.Lock()
+		g.held[pm.T] = map[string]string{slackKeyChannel: pm.C, slackKeyUser: user, slackKeyText: question}
+		g.mu.Unlock()
+		g.post(pm.C, pm.T, slackWorkspaceAsk,
+			map[string]any{fieldTypeKey: slackBlockActions, slackKeyElements: []any{
+				map[string]any{fieldTypeKey: slackStaticSelect, slackKeyActionID: slackWorkspaceSelect},
+				map[string]any{fieldTypeKey: slackButton, slackKeyActionID: slackWorkspaceNone, slackKeyValue: pm.T},
+			}})
+		return
+	}
+	g.turn(pm.C, pm.T, user, question)
 }
 
 func (g *scriptedGateway) onClick(user, channel, thread, cardTS, action, value string) {
@@ -727,7 +804,7 @@ func (g *scriptedGateway) onClick(user, channel, thread, cardTS, action, value s
 			return
 		}
 		g.api(slackUpdate, map[string]any{slackKeyChannel: channel, slackKeyTS: cardTS, slackKeyText: slackWorkspaceNoneIn})
-		g.onMessage(ev)
+		g.turn(ev[slackKeyChannel], thread, ev[slackKeyUser], ev[slackKeyText])
 		return
 	}
 	var v struct {
@@ -789,8 +866,8 @@ func TestSlackProof(t *testing.T) {
 	if err != nil || strings.Contains(refusal, "\n") || !strings.Contains(refusal, unadmittedReason) {
 		t.Fatalf("refusal = %q %v", refusal, err)
 	}
-	if link, err := p.signInPrompt("US", "hi"); err != nil || !strings.Contains(link, musterlink.LinkPath) {
-		t.Fatalf("signInPrompt = %q %v", link, err)
+	if notice, link, err := p.signInPrompt("US"); err != nil || !strings.Contains(link, musterlink.LinkPath) || !strings.Contains(notice, slackSignInFirst) {
+		t.Fatalf("signInPrompt = %q %q %v", notice, link, err)
 	}
 	if err := assertNoSessions(api, klausGatewayTestAgent); err != nil {
 		t.Fatal(err)
@@ -856,12 +933,15 @@ func TestSlackProof(t *testing.T) {
 		t.Error(err)
 	}
 
+	// The model declines the count once: the proof asks once more and
+	// stops the count that follows.
+	gw.declines = 1
 	before, _ := api.taskIDs(context.Background(), session)
-	stopped, err := p.stop(main, klausGatewayEssayPrompt)
+	stopped, err := p.stop(main, klausGatewayStopPrompt)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stopped.answer, "Once upon") {
+	if !strings.Contains(stopped.answer, "Five") {
 		t.Errorf("stopped answer = %q", stopped.answer)
 	}
 	if canceled, err := api.waitCanceledTask(session, before, 3*time.Second); err != nil || canceled != "essay-"+main.ts {
@@ -872,20 +952,39 @@ func TestSlackProof(t *testing.T) {
 		t.Errorf("the turn after stop: %+v %v", turn, err)
 	}
 
-	// A turn that does not pause cannot be decided; one that ends before
-	// `stop` is not a stop.
+	// A turn that does not pause cannot be decided; a model that declines
+	// the count twice fails as the model's doing, never as the gateway's.
 	if _, err := p.decideUntilSettled(api, session, main, turn, true); err == nil || !strings.Contains(err.Error(), "did not pause") {
 		t.Errorf("deciding a completed turn: %v", err)
 	}
-	if _, err := p.stop(main, klausGatewayWordPrompt); err == nil || !strings.Contains(err.Error(), "not canceled") {
-		t.Errorf("stopping a turn that completes: %v", err)
+	gw.declines = 2
+	if _, err := p.stop(main, klausGatewayStopPrompt); err == nil || !strings.Contains(err.Error(), "the model's doing") {
+		t.Errorf("stopping a count the model declines twice: %v", err)
 	}
 }
 
-// TestSayPastWorkspace: step 9's first message through a component that
-// lists the person's workspaces — held behind the workspace prompt, which
-// No workspace answers, then the turn — and through one that asks nothing.
-func TestSayPastWorkspace(t *testing.T) {
+func TestCountReached(t *testing.T) {
+	for answer, want := range map[string]bool{
+		"No.":                              false,
+		"":                                 false,
+		"one\ntwo\nthree\nfour\nfive":      true,
+		"One\nTwo\nThree\nFour\nFive\nSix": true,
+		"1. one\n2. two\n3. three\n4. four\n5. five": true,
+		"- one\n- two\n- three\n- four\n- **five**":  true,
+		"I won't write out five hundred numbers.":    false,
+		"one\ntwo\nthree\nfour":                      false,
+	} {
+		if got := countReached(answer); got != want {
+			t.Errorf("countReached(%q) = %v, want %v", answer, got, want)
+		}
+	}
+}
+
+// TestOpenPastWorkspace: a conversation opened through the shortcut on a
+// gateway that lists the person's workspaces in the thread — the question
+// held behind the workspace prompt, which No workspace answers, then the
+// turn — and on one that asks nothing.
+func TestOpenPastWorkspace(t *testing.T) {
 	for name, workspaces := range map[string]bool{"prompted": true, "not asked": false} {
 		t.Run(name, func(t *testing.T) {
 			ctrl := newFakeKagent()
@@ -900,7 +999,7 @@ func TestSayPastWorkspace(t *testing.T) {
 			})
 			p := &slackProof{driver: newSlackDriver(srv.URL, "sekrit", fake, "C1"), fake: fake, channel: "C1", logs: gw.logs}
 			thread := &slackThread{user: "UP"}
-			turn, err := p.firstTurnBy(p.sayPastWorkspace, thread, klausGatewayWordPrompt)
+			turn, err := p.firstTurn(thread, klausGatewayWordPrompt)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -947,5 +1046,165 @@ func TestGatewayKeepsHeld(t *testing.T) {
 		if got := gatewayKeepsHeld(described); got != want {
 			t.Errorf("gatewayKeepsHeld(%q) = %v, want %v", described, got, want)
 		}
+	}
+}
+
+// TestSlackDriverPickerActions: a pick on a message, a pick inside an open
+// modal (the view as Slack holds it, with an id and a hash) and the slash
+// command reach the gateway's endpoints as Slack sends them; the fake keeps
+// a views.update as the modal's latest state.
+func TestSlackDriverPickerActions(t *testing.T) {
+	var paths []string
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		paths, bodies = append(paths, r.URL.Path), append(bodies, string(body))
+	}))
+	defer srv.Close()
+	f := startTestFake(t, nil)
+	d := newSlackDriver(srv.URL, "sekrit", f, "C1")
+	msg := slackMessage{TS: "7.1", Channel: "C1", ThreadTS: "9.0"}
+	if err := d.pick("UP", msg, slackWorkspaceSelect, `{"t":"9.0","w":"ws"}`); err != nil {
+		t.Fatal(err)
+	}
+	view := map[string]any{slackKeyCallbackID: slackPickerCallback, slackKeyBlocks: []any{}}
+	if err := d.pickInView("UP", view, slackPickerAgentBlock, slackPickerAgentAction, "kagent/a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.slashCommand("UP", "ask"); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(paths, []string{slackInteractionsPath, slackInteractionsPath, slackCommandsPath}) {
+		t.Fatalf("paths = %v", paths)
+	}
+	var action struct {
+		Type    string `json:"type"`
+		Actions []struct {
+			Type           string `json:"type"`
+			ActionID       string `json:"action_id"`
+			SelectedOption struct {
+				Value string `json:"value"`
+			} `json:"selected_option"`
+		} `json:"actions"`
+		View map[string]any `json:"view"`
+	}
+	for i, want := range []string{`{"t":"9.0","w":"ws"}`, "kagent/a"} {
+		form, _ := url.ParseQuery(bodies[i])
+		if err := json.Unmarshal([]byte(form.Get("payload")), &action); err != nil {
+			t.Fatal(err)
+		}
+		if action.Type != "block_actions" || len(action.Actions) != 1 || action.Actions[0].Type != slackStaticSelect || action.Actions[0].SelectedOption.Value != want {
+			t.Errorf("pick %d = %+v", i, action)
+		}
+	}
+	if action.View[slackKeyCallbackID] != slackPickerCallback || action.View["id"] == "" || action.View["hash"] == "" {
+		t.Errorf("the view of the pick in the modal = %v", action.View)
+	}
+	if _, held := view["hash"]; held {
+		t.Error("pickInView changed the caller's view")
+	}
+	form, _ := url.ParseQuery(bodies[2])
+	if form.Get("command") != slackCommand || form.Get("user_id") != "UP" || form.Get("channel_id") != "C1" || form.Get("text") != "ask" || form.Get("trigger_id") == "" || form.Get("response_url") == "" {
+		t.Errorf("slash command = %v", form)
+	}
+
+	callFake(t, f, slackViewsOpen, nil, map[string]any{slackKeyView: map[string]any{slackKeyCallbackID: "first"}})
+	callFake(t, f, slackViewsUpdate, nil, map[string]any{"view_id": "V1", "hash": "h", slackKeyView: map[string]any{slackKeyCallbackID: "redrawn"}})
+	if views := f.openedViews(); len(views) != 2 || views[1][slackKeyCallbackID] != "redrawn" {
+		t.Errorf("openedViews = %v", views)
+	}
+}
+
+// TestSlackDriverShortcut: the Ask an agent here shortcut reaches the
+// interactions endpoint as Slack's message_action on a lone message (no
+// thread_ts) and on a reply; what the gateway posts to its response_url is
+// read back, as text, from the fake in process and over HTTP.
+func TestSlackDriverShortcut(t *testing.T) {
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(body))
+	}))
+	defer srv.Close()
+	f := startTestFake(t, nil)
+	d := newSlackDriver(srv.URL, "sekrit", f, "C1")
+	if err := d.shortcut("UP", slackShortcutAskAgent, "5.0", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.shortcut("UP", slackShortcutAskAgent, "5.2", "5.0"); err != nil {
+		t.Fatal(err)
+	}
+	for i, wantThread := range []string{"", "5.0"} {
+		form, _ := url.ParseQuery(bodies[i])
+		var p struct {
+			Type          string
+			CallbackID    string `json:"callback_id"`
+			TriggerID     string `json:"trigger_id"`
+			ResponseURL   string `json:"response_url"`
+			User, Channel struct{ ID string }
+			Message       map[string]string
+		}
+		if err := json.Unmarshal([]byte(form.Get("payload")), &p); err != nil {
+			t.Fatal(err)
+		}
+		if p.Type != "message_action" || p.CallbackID != slackShortcutAskAgent || p.User.ID != "UP" || p.Channel.ID != "C1" ||
+			p.Message[slackKeyThreadTS] != wantThread || p.Message[slackKeyTS] == "" || p.TriggerID == "" || p.ResponseURL != d.responseURL() {
+			t.Errorf("shortcut %d = %+v", i, p)
+		}
+	}
+
+	resp, err := http.Post(d.responseURL(), "application/json", strings.NewReader(`{"text":"sign in first"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if got := f.responses(); len(got) != 1 || responseText(got[0]) != "sign in first" {
+		t.Errorf("responses = %q", got)
+	}
+	resp, err = http.Get(strings.TrimSuffix(f.baseURL(), slackAPIPath) + slackResponsesPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var served []string
+	if err := json.NewDecoder(resp.Body).Decode(&served); err != nil || len(served) != 1 {
+		t.Errorf("served responses = %q %v", served, err)
+	}
+	if responseText("no JSON") != "no JSON" {
+		t.Error("a body that is no JSON is not kept as it came")
+	}
+}
+
+// TestPickerValues: a submission selects the agent and types the question;
+// a picker with the optional Workspace input submits it empty (No
+// workspace) under its revisioned block id.
+func TestPickerValues(t *testing.T) {
+	plain := pickerValues(map[string]any{slackKeyBlocks: []any{map[string]any{slackKeyBlockID: slackPickerAgentBlock}}}, "kagent/a", "hi")
+	if len(plain) != 2 {
+		t.Errorf("values without a Workspace input = %v", plain)
+	}
+	agent, _ := plain[slackPickerAgentBlock].(map[string]any)[slackPickerAgentAction].(map[string]any)
+	if agent[slackSelectedOption].(map[string]any)[slackKeyValue] != "kagent/a" {
+		t.Errorf("agent = %v", agent)
+	}
+	question, _ := plain[slackPickerQuestionBlock].(map[string]any)[slackPickerQuestionAction].(map[string]any)
+	if question[slackKeyValue] != "hi" {
+		t.Errorf("question = %v", question)
+	}
+	withWS := pickerValues(map[string]any{slackKeyBlocks: []any{map[string]any{slackKeyBlockID: slackPickerWorkspaceBlock + ".2"}}}, "kagent/a", "hi")
+	ws, ok := withWS[slackPickerWorkspaceBlock+".2"].(map[string]any)[slackPickerWorkspaceAction].(map[string]any)
+	if !ok || ws[slackSelectedOption] != nil {
+		t.Errorf("the Workspace input = %v, want it present and empty", withWS)
+	}
+	if ref, ok := pickerRef(map[string]any{slackKeyBlocks: []any{map[string]any{slackKeyBlockID: slackPickerAgentBlock, slackKeyElement: map[string]any{
+		slackKeyOptions: []any{map[string]any{slackKeyValue: "kagent/other-" + klausGatewayTestAgent}, map[string]any{slackKeyValue: "kagent/" + klausGatewayTestAgent}},
+	}}}}, klausGatewayTestAgent); !ok || ref != "kagent/"+klausGatewayTestAgent {
+		t.Errorf("pickerRef = %q %v", ref, ok)
+	}
+	// The gateway's own namespace offers its agents by their bare name.
+	if ref, ok := pickerRef(map[string]any{slackKeyBlocks: []any{map[string]any{slackKeyBlockID: slackPickerAgentBlock, slackKeyElement: map[string]any{
+		slackKeyOptions: []any{map[string]any{slackKeyValue: "codex-operator"}, map[string]any{slackKeyValue: klausGatewayTestAgent}},
+	}}}}, klausGatewayTestAgent); !ok || ref != klausGatewayTestAgent {
+		t.Errorf("pickerRef of a bare name = %q %v", ref, ok)
 	}
 }

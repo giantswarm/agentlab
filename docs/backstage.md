@@ -9,7 +9,7 @@ RHDH: the GS build is the one that carries the first-party `muster` plugin,
 which is the whole reason to run a portal in this lab at all.
 
 ```bash
-./agentlab up            # the whole stack, Backstage included
+agentlab up            # the whole stack, Backstage included
 open https://backstage.127.0.0.1.nip.io
 ```
 
@@ -352,10 +352,12 @@ tenant](identity.md#the-portal-per-tenant)):
   no for alice (a user) on her organization's agent, yes for the editor
   there, no for the editor in the other organization.
 - **P5 session refusal**: alice's `start_session` through the portal on the
-  other organization's agent answers `forbidden: kagent: …` (the controller's
-  `PermissionDenied`, which the portal words as a refusal naming the agent and
-  its tenant); no Session of that agent and no credential read for its
-  atespace.
+  other organization's agent answers a refusal the portal words as naming the
+  agent and its tenant: the API server's refusal of agent-manager's read of
+  that Agent as alice (`forbidden: … cannot get resource "agents" … in the
+  namespace "<the other organization>"`, agent-manager 2.15 and later) or
+  the controller's `PermissionDenied` (`forbidden: kagent: …`); no Session of
+  that agent and no credential read for its atespace.
 - **P6 owner**: of the editor's roster through the portal (their agent and
   the platform tenant's, the admin's), `agent-platform.giantswarm.io/created-by`
   names them on their agent alone, and `GET /kagent/me` names them by

@@ -404,3 +404,20 @@ func podSpecTold(spec *corev1.PodSpec) iter.Seq2[string, string] {
 		}
 	}
 }
+
+// audienceManagerTools is the tools of the MCPServer manager among names,
+// muster's list for the session; none is the missing `kubernetes` audience
+// the lab renders as the manager's requiredAudiences.
+func audienceManagerTools(names []string, manager string) ([]string, error) {
+	prefix := "x_" + manager + "_"
+	var tools []string
+	for _, name := range names {
+		if strings.HasPrefix(name, prefix) {
+			tools = append(tools, name)
+		}
+	}
+	if len(tools) == 0 {
+		return nil, fmt.Errorf("muster lists no %s* tool for this session although MCPServer %s reads Connected: the forwarded token lacks the audience %s's downstream OAuth requires (%s.muster.mcpServer.auth.requiredAudiences in the rendered values; `agentlab logs %s`)", prefix, manager, manager, manager, manager)
+	}
+	return tools, nil
+}

@@ -40,6 +40,7 @@ const (
 	componentMuster        = "muster"
 	componentBackstage     = "backstage"
 	componentKagent        = "kagent"
+	componentKagentCRDs    = "kagent-crds"
 	componentMCPKubernetes = "mcp-kubernetes"
 	clusterManager         = config.DevImageClusterManager
 	workspaceManager       = config.DevImageWorkspaceManager
@@ -132,12 +133,6 @@ const helmInstallTimeout = 15 * time.Minute
 // release is the Helm CLI's too — `helm upgrade` from a shell stays the lab's
 // day-2 tool.
 func PlatformUp(cfg *config.Config, offers Offers) error {
-	// A binary the lab's GitHub container cannot run is refused before the
-	// preload and the installs (workspacefake.go), not when the container
-	// starts after the storage install; `up` judges it before the cluster.
-	if err := checkLabGitHubBinary(cfg); err != nil {
-		return err
-	}
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
 	}
@@ -321,6 +316,18 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	// about to — the way the command signal counts failed runs.
 	telemetry.Platform(ctx, cfg, chart.installedVersion())
 	step("Installing %s in the lab shape (bundled Flux engine on, self-management off)", chart)
+	// An install decides what runs: a proof's hold on the version ranges
+	// (rangehold.go) is lifted for it, and the proof in this process holds
+	// again on what the install left running.
+	held, err := liftRangeHolds(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := resumeRangeHold(ctx, held); err != nil {
+			warn("%v", err)
+		}
+	}()
 
 	// The cluster-level APIs the lab provides itself (providedapis.go: the
 	// Gateway API, the Cilium policy CRDs) — before anything that renders
@@ -479,20 +486,6 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 			return err
 		}
 	}
-	// The lab's GitHub for the workspace-manager's provider instance fake
-	// (workspacefake.go): its container, Service and Secret before the
-	// install, which references the Secret; gone when the instance is not
-	// configured, with the Service, so nothing resolves to it.
-	if cfg.WorkspaceFakeProvider() {
-		if err := githubFakeUp(cfg); err != nil {
-			return err
-		}
-	} else {
-		githubFakeDown(cfg)
-		if err := githubFakeServiceDown(ctx); err != nil {
-			return err
-		}
-	}
 	// The workspace grant's signing key (workspacegrant.go): generated once
 	// and placed as the manager's Secret ahead of the install, which names
 	// it in workspace-manager.grant.signingKey.
@@ -583,7 +576,12 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 		return err
 	}
 	workspaceGrant := workspaceGrantFor(cfg, workspaceProviders)
-	if err := ensureWorkspaceGrantClientID(ctx, workspaceGrant, workspaceProviders); err != nil {
+	workspaceApps := workspaceProviderAppsFor(cfg, workspaceProviders)
+	signIns := workspaceApps
+	if workspaceGrant != nil {
+		signIns = []string{workspaceGrant.Provider}
+	}
+	if err := ensureWorkspaceGrantClientIDs(ctx, signIns, workspaceProviders); err != nil {
 		return err
 	}
 	// The dev images a Harness runs (`harness`, `<runtime>-harness`), in the
@@ -597,6 +595,7 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 		t.WorkerPoolArch = workerArch
 		t.WorkspaceProviders = workspaceProviders
 		t.WorkspaceGrant = workspaceGrant
+		t.WorkspaceProviderApps = workspaceApps
 		registryImages.pin(cfg, t)
 	}
 
@@ -969,6 +968,10 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	if err := ensureGitHubMCP(cfg); err != nil {
 		return err
 	}
+	// devctl's MCP server (devctl.go), off by default; same CRD reason.
+	if err := ensureDevctl(cfg); err != nil {
+		return err
+	}
 	// The agents' model key. The default ModelConfig (rendered by the kagent
 	// chart from providers.anthropic) references this secret; agent pods
 	// mount it at run time, so it can land after the install — which it must,
@@ -983,12 +986,6 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 			return err
 		}
 		if err := waitDefaultModelConfigResolved(); err != nil {
-			return err
-		}
-		// The migrate Job's copy of the GitHub token (githubtoken.go) — the
-		// chart created the kagent namespace by now; a no-op when the
-		// pre-install pass already found the namespace, or without the token.
-		if err := ensureGitHubTokenSecret(ctx, cfg, kagentNamespace); err != nil {
 			return err
 		}
 		// The extra ModelConfigs from platform.extraModels (self-hosted
@@ -1099,7 +1096,8 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 %s
 %s
 %s
-%s%s`, header, reach, usersBlock(cfg), backstageHint, claudeCodeHint(cfg), agentsHint, modelManagerHint(cfg, backendEndpoints), servingHint(cfg), workspacesHint(cfg, workspacesChart, workspacesRegistrant), vmManagerHint(cfg), klausGatewayHint(cfg), obsHint, devImagesHint(cfg, dev), tryItBlock(cfg))
+%s
+%s%s`, header, reach, usersBlock(cfg), backstageHint, claudeCodeHint(cfg), agentsHint, modelManagerHint(cfg, backendEndpoints), servingHint(cfg), workspacesHint(cfg, workspacesChart, workspacesRegistrant), vmManagerHint(cfg), klausGatewayHint(cfg), devctlHint(cfg), obsHint, devImagesHint(cfg, dev), tryItBlock(cfg))
 	// A field a hand wrote on a platform workload outlives this run, which
 	// installs only what the releases render: kubectl's edits are put back
 	// to the render (handfields.go), any other writer's named last, where the

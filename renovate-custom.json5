@@ -24,6 +24,16 @@
     },
   ],
   packageRules: [
+    // go-github's major follows the one giantswarm/go-selfupdate imports: the
+    // release lookup's *github.RateLimitError comes from go-selfupdate's client,
+    // and internal/update matches it with errors.As, which another major's type
+    // never matches (a spent rate limit then reads as a network failure). The
+    // major moves by hand with the go-selfupdate release that moves its own.
+    {
+      matchPackageNames: ['github.com/google/go-github{/,}**'],
+      matchUpdateTypes: ['major'],
+      enabled: false,
+    },
     {
       matchPackageNames: ['gsoci.azurecr.io/charts/giantswarm/agent-platform'],
       automerge: false,

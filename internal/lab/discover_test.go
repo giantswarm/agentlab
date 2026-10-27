@@ -3,6 +3,7 @@ package lab
 import (
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -496,5 +497,30 @@ func TestReportSaysWhenTheProbeCouldNotRun(t *testing.T) {
 	}
 	if strings.Contains(out, "OLLAMA_HOST=0.0.0.0") {
 		t.Errorf("report blames the server's bind address for a probe failure:\n%s", out)
+	}
+}
+
+// The lab registry's published port is the lab's own, with or without a kind
+// node, so configure never moves the lab off its own registry.
+func TestDiscoveryOwnPortsIncludeTheRegistry(t *testing.T) {
+	for name, tc := range map[string]struct {
+		disc Discovery
+		want map[int]bool
+	}{
+		"nothing exists":        {disc: Discovery{}, want: nil},
+		"node only":             {disc: Discovery{ClusterPorts: map[int]bool{6443: true}}, want: map[int]bool{6443: true}},
+		"registry only":         {disc: Discovery{RegistryPort: 5001}, want: map[int]bool{5001: true}},
+		"node and its registry": {disc: Discovery{ClusterPorts: map[int]bool{6443: true}, RegistryPort: 5001}, want: map[int]bool{6443: true, 5001: true}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			clusterBefore := maps.Clone(tc.disc.ClusterPorts)
+			got := tc.disc.OwnPorts()
+			if !maps.Equal(got, tc.want) {
+				t.Fatalf("OwnPorts() = %v, want %v", got, tc.want)
+			}
+			if !maps.Equal(tc.disc.ClusterPorts, clusterBefore) {
+				t.Fatalf("OwnPorts() changed ClusterPorts to %v", tc.disc.ClusterPorts)
+			}
+		})
 	}
 }

@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -62,26 +63,28 @@ func TestLoadKnownFieldsAndANamelessFile(t *testing.T) {
 	}
 }
 
-// The retired platform.fakeFleet key, which every file an earlier release
-// wrote carries, still loads and is not written back.
-func TestLoadDropsTheRetiredFakeFleet(t *testing.T) {
-	t.Chdir(t.TempDir())
-	if err := os.WriteFile(File, []byte("clusterName: lab\nplatform:\n  chartVersion: "+loadTestChart+"\n  fakeFleet: true\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := cfg.Save(); err != nil {
-		t.Fatal(err)
-	}
-	after, err := os.ReadFile(File)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(after), "fakeFleet") {
-		t.Errorf("the retired key was written back:\n%s", after)
+// The retired platform keys, which files an earlier release wrote carry,
+// still load and are not written back.
+func TestLoadDropsTheRetiredKeys(t *testing.T) {
+	for _, retired := range []string{"fakeFleet: true", "platformManager:\n    enabled: false\n    version: 0.69.0"} {
+		t.Chdir(t.TempDir())
+		if err := os.WriteFile(File, []byte("clusterName: lab\nplatform:\n  chartVersion: "+loadTestChart+"\n  "+retired+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("%s: %v", retired, err)
+		}
+		if err := cfg.Save(); err != nil {
+			t.Fatal(err)
+		}
+		after, err := os.ReadFile(File)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if key, _, _ := strings.Cut(retired, ":"); strings.Contains(string(after), key) {
+			t.Errorf("the retired key %s was written back:\n%s", key, after)
+		}
 	}
 }
 
@@ -233,5 +236,105 @@ func TestLoadForConfigureTakesARefusedShape(t *testing.T) {
 	cfg.Platform.Agents = true
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("the repaired configuration: %v", err)
+	}
+}
+
+// A command that never writes agentlab.yaml reads a file a newer agentlab
+// wrote: the unknown field is read past, the known ones load, the note names
+// the field's writer, and the file stays byte for byte. Peek reads it too.
+func TestLoadReadOnlyReadsAFileANewerReleaseWrote(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	raw := []byte(writtenByPrefix + "v9.0.0.\nclusterName: newer\nplatform:\n  chartVersion: " + loadTestChart + "\n  frobnicate: true\n  serving:\n    enabled: true\n")
+	if err := os.WriteFile(File, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, note, err := LoadReadOnly()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ClusterName != "newer" || !cfg.Platform.Serving.Enabled {
+		t.Errorf("known fields not loaded: %+v", cfg.Platform)
+	}
+	for _, want := range []string{"does not know", "v9.0.0", "self-update"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("note %q lacks %q", note, want)
+		}
+	}
+	if peeked, err := Peek(dir); err != nil || peeked.ClusterName != "newer" {
+		t.Errorf("Peek = %+v, %v", peeked, err)
+	}
+	if after, _ := os.ReadFile(File); string(after) != string(raw) {
+		t.Fatalf("a read-only load rewrote the file:\n%s", after)
+	}
+	if _, note, err := LoadReadOnly(); err != nil || note == "" {
+		t.Errorf("a second read = %q, %v", note, err)
+	}
+}
+
+// A file this release reads in full carries no note.
+func TestLoadReadOnlyKnownFields(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := os.WriteFile(File, []byte("clusterName: known\nplatform:\n  chartVersion: "+loadTestChart+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, note, err := LoadReadOnly(); err != nil || note != "" {
+		t.Fatalf("LoadReadOnly = %q, %v", note, err)
+	}
+}
+
+// Before a lab leaves its directory, its relative paths become absolute
+// against it; absolute ones and the rest of the file stay.
+func TestRebasePaths(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, File)
+	raw := "clusterName: rebased\nplatform:\n  chartVersion: " + loadTestChart + "\n  valuesFiles:\n    - overlay.yaml\n    - /abs/other.yaml\n  vmManager:\n    enabled: false\n    imageDir: images/build\n"
+	if err := os.WriteFile(file, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "images", "build"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := RebasePaths(file, dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Platform.ValuesFiles; len(got) != 2 || got[0] != filepath.Join(dir, "overlay.yaml") || got[1] != "/abs/other.yaml" {
+		t.Errorf("valuesFiles = %v", got)
+	}
+	if got := cfg.Platform.VMManager.ImageDir; got != filepath.Join(dir, "images/build") {
+		t.Errorf("imageDir = %s", got)
+	}
+	before, _ := os.ReadFile(filepath.Clean(file))
+	if err := RebasePaths(file, "/elsewhere"); err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := os.ReadFile(filepath.Clean(file)); string(after) != string(before) {
+		t.Errorf("a file without relative paths was rewritten")
+	}
+}
+
+// A file a newer release wrote is rebased only when it has no relative path:
+// a write would drop the field this release does not know.
+func TestRebasePathsLeavesANewerFile(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, File)
+	for raw, refused := range map[string]bool{
+		"clusterName: newer\nplatform:\n  frobnicate: true\n":                               false,
+		"clusterName: newer\nplatform:\n  frobnicate: true\n  valuesFiles:\n    - o.yaml\n": true,
+	} {
+		if err := os.WriteFile(file, []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := RebasePaths(file, dir); (err != nil) != refused {
+			t.Errorf("RebasePaths(%q) = %v, want refused %v", raw, err, refused)
+		}
+		if after, _ := os.ReadFile(filepath.Clean(file)); string(after) != raw {
+			t.Errorf("the newer file was rewritten:\n%s", after)
+		}
 	}
 }

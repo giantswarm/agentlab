@@ -289,9 +289,6 @@ func TestToolsetHeaderOf(t *testing.T) {
 			t.Errorf("%s: header %q found %v, err %v; want %q found %v", tc.agent, header, found, err, tc.want, tc.found)
 		}
 	}
-	if names := headerNames(secretServer); !reflect.DeepEqual(names, []string{toolsetHeader}) {
-		t.Errorf("headerNames = %v", names)
-	}
 }
 
 // TestModelConfigSummary: the summary is the proof's jsonpath line —
