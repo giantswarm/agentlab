@@ -80,6 +80,26 @@ data:
       # classic portal does not route; / is the classic home page.
       rootRedirect: /
 {{- end }}
+{{- with .BackstageTelemetry }}
+      # Usage data into agentlab's TelemetryDeck app (docs/telemetry.md): the
+      # deployment ID the CLI's signals carry too, and a salt of the lab's
+      # own, so this lab's users count apart from every other lab's.
+      telemetrydeck:
+        # Quoted: a hex salt such as 123e45… would otherwise read as a number.
+        appID: "{{ .AppID }}"
+        salt: "{{ .Salt }}"
+        deploymentID: "{{ .DeploymentID }}"
+{{- if .TestMode }}
+        testMode: true
+{{- end }}
+{{- else }}
+      # Usage data is off (AGENTLAB_TELEMETRY_OPTOUT, DO_NOT_TRACK) or the lab
+      # has not booted yet. An empty app ID, not null: a portal from before
+      # giantswarm/backstage#3294 sends test signals for a null one, and an
+      # empty app ID sends nothing on every version (with one warning).
+      telemetrydeck:
+        appID: ""
+{{- end }}
     backend:
       baseUrl: {{ .BackstageBaseURL }}
       cors:
