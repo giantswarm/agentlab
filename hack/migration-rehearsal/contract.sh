@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Stage 2b of the migration rehearsal (agentlab#143): the operator's diff PR
-# applied, the releases on the 1.x agent chart, the migrate Job's contract and
+# applied, the releases on the 1.x agent chart, the migrate run's contract and
 # no-op runs asserted, one turn per migrated agent through the edge.
 #
 # Usage: contract.sh <evidence-dir> [expand-run-report.yaml]
@@ -32,10 +32,9 @@ NS=kagent
 GITOPS_NS=flux-giantswarm
 HARNESS=kagent
 REPORT_CM=agent-manager-migrate-report
-JOB_LABEL=app.kubernetes.io/component=agent-manager-migrate
 LOG=$EVIDENCE/contract.log
 TIMINGS=$EVIDENCE/timings.md
-export EVIDENCE RUN1_REPORT NS GITOPS_NS HARNESS REPORT_CM JOB_LABEL LOG TIMINGS AGENTLAB LAB_DIR
+export EVIDENCE RUN1_REPORT NS GITOPS_NS HARNESS REPORT_CM LOG TIMINGS AGENTLAB LAB_DIR
 
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=lib.sh
@@ -187,16 +186,11 @@ assert_rmcp() { # <name>...: one RemoteMCPServer per agent
   log "  RemoteMCPServers present for $*"
 }
 
-clone_job() { # <name>: the chart's UPGRADE.md recipe — the migrate Job cloned under a new name
+start_migrate_run() { # <name>: the chart's UPGRADE.md re-run, a new migrate run under this name
   local src
-  src=$(kubectl -n "$NS" get job -l "$JOB_LABEL" -o name | head -1)
-  [[ -n $src ]] || fail "no migrate Job with label $JOB_LABEL to clone"
-  kubectl -n "$NS" get "$src" -o json | jq --arg n "$1" '
-    del(.status, .metadata.uid, .metadata.resourceVersion, .metadata.creationTimestamp, .metadata.managedFields, .spec.selector,
-        .spec.template.metadata.labels["batch.kubernetes.io/controller-uid"], .spec.template.metadata.labels["controller-uid"],
-        .spec.template.metadata.labels["batch.kubernetes.io/job-name"], .spec.template.metadata.labels["job-name"])
-    | .metadata.name = $n' | kubectl create -f - | sed 's/^/  /' | tee -a "$LOG"
-  log "  cloned from $src"
+  migrate_rerun "$1" | sed 's/^/  /' | tee -a "$LOG"
+  src=$(kubectl -n "$NS" get job "$1" -o jsonpath='{.metadata.ownerReferences[?(@.kind=="CronJob")].name}')
+  log "  started from ${src:+cronjob/}${src:-the newest run}"
 }
 wait_job() { # <name>: until the Job is Complete; a Failed Job stops the script with its log
   local s
@@ -210,17 +204,17 @@ wait_job() { # <name>: until the Job is Complete; a Failed Job stops the script 
     sleep 5
   done
 }
-run_migrate() { # <name>: clone, wait, save the Job, its log and the report; print the phase
+run_migrate() { # <name>: start, wait, save the Job, its log and the report; print the phase
   local name=$1 start st ct
   start=$(now)
-  clone_job "$name"
+  start_migrate_run "$name"
   bounded 600 wait_job "$name"
   kubectl -n "$NS" get job "$name" -o yaml >|"$EVIDENCE/$name.yaml"
   kubectl -n "$NS" logs "job/$name" --all-containers >|"$EVIDENCE/$name.log" 2>&1 || true
   save_report "$name-report"
   st=$(kubectl -n "$NS" get job "$name" -o jsonpath='{.status.startTime}')
   ct=$(kubectl -n "$NS" get job "$name" -o jsonpath='{.status.completionTime}')
-  timing "migrate Job $name" "$(($(date -d "$ct" +%s) - $(date -d "$st" +%s))) s (start $st, completion $ct; $(($(now) - start)) s wall)"
+  timing "migrate run $name" "$(($(date -d "$ct" +%s) - $(date -d "$st" +%s))) s (start $st, completion $ct; $(($(now) - start)) s wall)"
   jq -r '"  report: phase=\(.phase) changed=\(.changed) at=\(.run.at)\n  summary: \(.summary)"' "$EVIDENCE/$name-report.json" | tee -a "$LOG"
 }
 assert_contract() { # <report.json> <expected-agents.txt>: the contract phase deleted what was left and retired the five CRDs
@@ -328,7 +322,7 @@ main() {
     # the AgentTemplate in the Agent's place) is what the contract phase sweeps.
     kubectl -n "$NS" get agents.kagent.dev -o name 2>/dev/null | sed 's#.*/##' | sort >|"$EVIDENCE/before-run2-v1alpha2-agents.txt" || true
     log "  v1alpha2 Agents left for the contract phase: [$(paste -sd, "$EVIDENCE/before-run2-v1alpha2-agents.txt")]"
-    github_window "the contract phase's migrate Job (it resolves every skill through GitHub)"
+    github_window "the contract phase's migrate run (it resolves every skill through GitHub)"
     run_migrate agent-manager-migrate-2
     report=$EVIDENCE/agent-manager-migrate-2-report.json
     if [[ $(jq -r .phase "$report") == wait ]]; then

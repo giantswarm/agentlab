@@ -166,7 +166,7 @@ The lab installs it in its **lab shape**:
   member; the muster and mcp-kubernetes identity proofs cover the edge). `platform.serving` and
   `platform.vmManager` came with the 4.x line and are refused on it, with
   the switch that turns them off. The
-  rehearsal — the four fleet shapes, the in-place upgrade, the migrate Job's
+  rehearsal — the four fleet shapes, the in-place upgrade, the migrate run's
   three phases, the timings — is [The migration rehearsal](migration-rehearsal.md).
 
 The platform installs as part of `agentlab up` (it is enabled in the default
