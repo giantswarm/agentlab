@@ -1114,12 +1114,13 @@ created through agent-manager as the person whose toolset names the
 
 Between Harnesses the person is signed out of the fixture again, so each
 meets the link. The codex agent runs on the lab's Responses model, else the
-mockllm, whose scripted turn calls the fixture's tool. codex reaches muster
-only on a credential of its binding's own (a RemoteMCPServer header from a
-Secret, as in [The coding agents proof](#the-coding-agents-proof)); on a line
-whose binding carries none, muster refuses codex's MCP connection, and the
-codex half is skipped with that reason. The agents and their
-Sessions are removed on every exit path.
+mockllm, whose scripted turn calls the fixture's tool. Every conversation is
+started the way Slack and the portal start one: agent-manager's
+`start_session` through muster as the person, which binds the Session's
+actor to them in muster, so a runtime without a caller forwarder (codex)
+reaches muster as the person on the actor's JWT. A Session that lists no
+provider verifying that JWT fails the proof. The agents and their Sessions
+are removed on every exit path, the Sessions through `delete_session`.
 
 ### The ChatGPT subscription proof
 
@@ -1166,11 +1167,13 @@ disconnected, so the next one connects again.
 
 A coding agent is an agent whose Agent names a coding Harness: a coding CLI
 run headless in a Substrate actor by the kagent line's image of its runtime
-— `claude` (Claude Code, `claude-harness`, calling muster as the person who
-sent the turn), `codex` (OpenAI's Codex CLI, `codex-harness`, its MCP
-credentials on upstream's Secret-backed path) or `omp` (oh-my-pi, a BYO
-Harness on the kagent line's `omp-harness` adapter, the same Secret-backed
-path, on the Anthropic ModelConfig claude uses). An installation turns coding
+— `claude` (Claude Code, `claude-harness`), `codex` (OpenAI's Codex CLI,
+`codex-harness`) or `omp` (oh-my-pi, a BYO Harness on the kagent line's
+`omp-harness` adapter, on the Anthropic ModelConfig claude uses). The proof's
+Sessions start through agent-manager's `start_session` as the person, as
+Slack's and the portal's do, which binds the Session's actor to them in
+muster: each runtime reaches muster as the person on the actor's JWT, which
+the egress gateway sets in place of kagent's placeholder. An installation turns coding
 agents on through the meta chart's `kagent.harnesses` alone, and the lab
 does the same: with `platform.coding` (`agentlab configure --coding`,
 agent-platform 4.110.0 or newer) `agentlab platform` renders one coding
@@ -1270,7 +1273,6 @@ the one that runs on both of those:
 | claude-format refused on kagent | the same package on `kagent` (with the run's ModelConfig): `validate_agent` and `create_agent` refuse it as Claude-format, naming `plugin.json` at the plugin root, and no HelmRelease is written. Gated on the capability, not the version: where `validate_agent` accepts the package, the line lacks agent-manager's plugin check on `kagent` and the row SKIPs naming it (the write would pass and fail at its golden boot), so a dev build that has the check is judged; SKIP, naming the fix, where the manifests could not be read |
 | claude-format refused on omp | the same package on `omp` (with the run's ModelConfig, an Anthropic one): `validate_agent` and `create_agent` refuse it as Claude-format, naming `plugin.json` at the plugin root, and no HelmRelease is written. agent-manager tells omp from another BYO Harness by its workload image (2.15.0). Gated like the kagent row: where `validate_agent` accepts the package, the line lacks the check on `omp` and the row SKIPs naming it (the write would pass and fail at the adapter's boot refusal); SKIP where the lab renders no `omp` Harness or the run is on `codex`, whose ModelConfig omp does not speak |
 | create | `create_agent` on the Harness with that toolset (`preset:read-only` alone below agent-manager 1.14.0) and the example package, `migrate-agent-plugin` selected (on `claude` with `explanatory-output-style` beside it), as the person; Ready; its `RemoteMCPServer` Accepted and sending the toolset as `X-Muster-Toolset`; the Agent's `spec.egress` is the Harness's origin list agent-manager writes |
-| secret-backed credential (*codex, omp*) | every header the agent's `RemoteMCPServer` takes from a Secret names a Secret key that is there: upstream's Secret-backed path, the controller handing the runtime kagent's placeholder and the egress gateway setting the value; SKIP, naming the headers, on a platform line whose binding takes no header from a Secret (no released component writes one yet) |
 | uid split (*claude*) | the agent's commands run as uid 65532; the root harness's `/proc/<pid>/environ` and `mem` refuse it |
 | forwarder paths (*claude*) | the forwarder answers 400 to `../..`, `%2e%2e` and `..%2f`, 404 for a server it does not front (401 where the MCP config holds only kagent's placeholder: the probe has no loopback token to send, and the forwarder refuses before it matches a server), 401 without its token |
 | write tool refused (*claude*) | `x_agent-manager_delete_agent`, called through the forwarder with the turn's bearer, refused by muster as outside the toolset |
@@ -1282,7 +1284,7 @@ the one that runs on both of those:
 | harness change refused (*claude*) | `update_agent` moving the agent, which binds `explanatory-output-style`, to `codex` (with a Responses API ModelConfig) is refused as Claude-format; the HelmRelease's resourceVersion is unchanged and the Agent still Ready on `claude`; SKIP where no `codex` Harness is rendered |
 | harness change to kagent refused (*claude*) | `update_agent` moving the agent to `kagent` (its own ModelConfig) is refused as Claude-format; the HelmRelease's resourceVersion is unchanged and the Agent still Ready on `claude`; SKIP with the claude-format refused on kagent row's reason, the move not attempted, since without the check it would write a revision that never boots |
 | harness change to omp refused (*claude*) | `update_agent` moving the agent to `omp` (its own ModelConfig) is refused as Claude-format; the HelmRelease's resourceVersion is unchanged and the Agent still Ready on `claude`; SKIP with the claude-format refused on omp row's reason, the move not attempted |
-| mcp call | the agent calls `x_agent-manager_list_agents` through its MCP binding (muster's `call_tool`, which runs every catalogue tool; on `codex` the mockllm's script calls it so) and finds itself listed; SKIP where the secret-backed credential stage skipped and the call answered nothing else: the binding carries no credential on that line, so muster refuses the runtime's MCP connection (401) and the runtime has none of the binding's tools |
+| mcp call | the agent calls `x_agent-manager_list_agents` through its MCP binding (muster's `call_tool`, which runs every catalogue tool; on `codex` the mockllm's script calls it so) and finds itself listed |
 | turn gap | one turn starts a detached heartbeat in the sandbox: every 3 s it appends the time and muster's status for an MCP initialize with a placeholder `Authorization`; after 90 s without a turn the next turn reads it back. It ticked in its own turn, not once from 20 s after that turn's answer (Substrate suspends the actor once a turn settles) to the next turn's send, and again in the next turn. The egress gateway checks no turn: that nothing in the sandbox runs between turns is what keeps a call outside a turn from reaching muster |
 | instruction fixture (*claude*) | a record: what Claude Code loads from a repository's `CLAUDE.md`, `AGENTS.md`, `.claude/` settings, hook, skill, subagent and command and `.mcp.json` on the pinned release |
 | suspend and resume | the Session's file and conversation survive the snapshot |

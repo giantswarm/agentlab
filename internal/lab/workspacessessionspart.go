@@ -420,6 +420,31 @@ func startAgentSession(ms *musterSession, agent, grant string, toolchains ...str
 	return started.Session.ID, nil
 }
 
+// startBoundSession starts a Session of the Agent without a workspace the
+// way Slack and the portal do: through agent-manager's start_session as the
+// person ms signs in as, which binds the Session's actor to them in muster.
+// It returns the Session once it is ready, and refuses one that lists no
+// provider verifying the actor's JWT: its runtime would then reach muster as
+// nobody.
+func startBoundSession(ctx context.Context, ms *musterSession, api *kagentAPI, sessions *sessionSet, agent string) (*apiv1alpha1.Session, error) {
+	id, err := startAgentSession(ms, agent, "")
+	if err != nil {
+		return nil, err
+	}
+	sessions.add(id)
+	session, err := api.getSession(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if session, err = api.awaitSessionReady(ctx, session); err != nil {
+		return nil, err
+	}
+	if !slices.ContainsFunc(session.GetProviders(), func(p *apiv1alpha1.SessionProvider) bool { return p.GetAudience() != "" }) {
+		return nil, fmt.Errorf("start_session started Session %s of %s with no provider that verifies the actor's JWT (providers %v): agent-manager did not bind it", id, agent, session.GetProviders())
+	}
+	return session, nil
+}
+
 // createWorkspace defines the workspace as the admin and waits for its
 // first cycle; its volume is the one the grants name.
 func (sp *sessionsProof) createWorkspace() error {

@@ -74,7 +74,8 @@ func mockLLMURL() string {
 
 // mockLLMTurn is one turn of the script: the prompt it answers (a substring
 // of the turn's message), the tool call it answers with, and the reply once
-// the tool's output is back.
+// the tool's output is back; a turn with neither a command nor a tool
+// answers its prompt with the reply at once.
 type mockLLMTurn struct {
 	name, prompt string
 	// command is the shell command the runtime runs; tool the MCP tool it
@@ -107,6 +108,7 @@ func mockLLMScript(devctlArguments string) []mockLLMTurn {
 		{name: "resume", prompt: "the code word I asked you to remember", command: codingResumeCommand(), reply: probeMarker + " code-word=" + codingTestCodeWord},
 		{name: "toolchain", prompt: toolchainsPrompt, command: toolchainsCheckCommand(), reply: "The toolchain check ran; its readings are the command's output."},
 		{name: "sign-in", prompt: signInTestPrompt, tool: musterCallTool, arguments: musterCallToolArguments(fixtureSignedOutTool), echo: true},
+		{name: "sign-in-follow-up", prompt: signInTestFollowUp, reply: signInTestFollowUpReply},
 	}...)
 }
 
@@ -211,6 +213,13 @@ func mockLLMConfig(mcpServer, devctlArguments string) ([]mockLLMScriptEntry, err
 	var entries []mockLLMScriptEntry
 	for _, turn := range mockLLMScript(devctlArguments) {
 		callID := "call_agentlab_" + turn.name
+		if turn.command == "" && turn.tool == "" {
+			entries = append(entries, mockLLMEntry(turn.name, turn.prompt, mockLLMItem{
+				ID: "msg_agentlab_" + turn.name, Type: mockLLMMessage, Status: mockLLMItemDone, Role: "assistant",
+				Content: []mockLLMContent{{Type: mockLLMOutputText, Text: turn.reply, Annotations: []any{}}},
+			}))
+			continue
+		}
 		if turn.command != "" {
 			arguments, err := json.Marshal(mockLLMShellArguments{Command: turn.command, TimeoutMS: codingProbeTimeoutMS})
 			if err != nil {
