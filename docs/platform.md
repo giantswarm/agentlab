@@ -435,11 +435,11 @@ the component on (`components.cluster-manager.enabled: true` in the rendered
 values) with the lab's patches on it — the `dex-localhost` sidecar the rule
 finds on its render, the image override, the pull policy — and the lab's
 own values for it: `cluster-manager.muster.mcpServer.auth.requiredAudiences:
-[kubernetes]`, the same audience story as mcp-kubernetes, agent-manager and
-model-manager. cluster-manager's downstream OAuth presents the forwarded
-token to the kind apiserver as the caller, so without that audience a
-headless session sees no `x_cluster-manager_*` tool while the MCPServer reads
-Connected. The audience block renders whatever turns the component on — the
+[kubernetes]`, the same audience story as mcp-kubernetes, agent-manager,
+model-manager and workspace-manager. cluster-manager's downstream OAuth
+presents the forwarded token to the kind apiserver as the caller, so without
+that audience a headless session sees no `x_cluster-manager_*` tool while
+the MCPServer reads Connected. The audience block renders whatever turns the component on — the
 meta chart forwards it only while the component is enabled — so a
 `platform.valuesFiles` overlay that enables `components.cluster-manager`
 itself needs no audience of its own either. Removing the entry turns the

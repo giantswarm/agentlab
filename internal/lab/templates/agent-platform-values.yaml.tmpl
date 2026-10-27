@@ -1455,15 +1455,21 @@ workspace-manager:
   # registration receives the grants of each. A person grants each App once
   # in muster (core_auth_login app=<instance>).
 {{- end }}
-{{- with .WorkspaceGrant }}
-  # The registration pinned to the instance {{ .Provider }}'s App
-  # (platform.workspaces.grantProvider; workspacemustergrant.go): a person
-  # grants it once in muster (core_auth_login), and muster attaches their
-  # App token to every call, the Dex ID token beside it. The OAuth client is
-  # the instance's Secret, its client id placed beside the secret.
+  # Same audience story as agent-manager and model-manager: the lab's person
+  # tokens carry the `kubernetes` audience, which the workspace-manager
+  # trusts only when it is listed here.
   muster:
     mcpServer:
       auth:
+        requiredAudiences:
+          - kubernetes
+{{- with .WorkspaceGrant }}
+        # The registration pinned to the instance {{ .Provider }}'s App
+        # (platform.workspaces.grantProvider; workspacemustergrant.go): a
+        # person grants it once in muster (core_auth_login), and muster
+        # attaches their App token to every call, the Dex ID token beside it.
+        # The OAuth client is the instance's Secret, its client id placed
+        # beside the secret.
         provider: {{ .Provider }}
 {{- if and $.DevctlEnabled (eq .Provider "github") }}
         # devctl's MCP server (platform.devctl; devctl.go) takes the same

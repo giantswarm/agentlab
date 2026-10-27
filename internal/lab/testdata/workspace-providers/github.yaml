@@ -2,6 +2,11 @@ grant:
     signingKey:
         key: grant
         name: workspace-manager-grant
+muster:
+    mcpServer:
+        auth:
+            requiredAudiences:
+                - kubernetes
 oauth:
     baseURL: https://workspace-manager.127.0.0.1.nip.io:8443
 providers:
