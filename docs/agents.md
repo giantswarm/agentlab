@@ -137,12 +137,13 @@ A token lifts that, from a recorded source (`githubToken.source` in
 op://<vault>/<item>/<field>`, or `<file>#<path>` of a SOPS file): every `up`
 and `platform` hand it to `beekeeper secret copy --to-secret`, which writes the
 token in its own process; agentlab never reads the value, and a placement that
-fails fails the run. agentlab never reads `$GITHUB_TOKEN` either: a token
-exported in its environment reaches no consumer. Without a source `discover`
-names the Secret the lab lacks, `agentlab-github-token` (key `GITHUB_TOKEN`)
-in `agent-platform`, and `up` and `platform` warn on stderr, naming
-`githubToken.source`, unless the skills GitHub App is recorded; `agents-test`
-then reports its `refreshSkills` step as a SKIP with the same reason.
+fails fails the run. The lab never takes `$GITHUB_TOKEN` either (only
+`self-update` reads it): a token exported in its environment reaches no
+consumer. Without a source `discover` names the Secret the lab lacks,
+`agentlab-github-token` (key `GITHUB_TOKEN`) in `agent-platform`, and `up` and
+`platform` warn on stderr, naming `githubToken.source`, unless the skills
+GitHub App is recorded; `agents-test` then reports its `refreshSkills` step as
+a SKIP with the same reason.
 
 `agentlab up`/`platform` place **or update** the Secret `agentlab-github-token` (key `GITHUB_TOKEN`) in
 `agent-platform` — the portal takes it through `extraEnvVarsSecrets` and the

@@ -253,7 +253,7 @@ The flags pin a value regardless of the discovery, with or without
 | Variable | Read by | Effect |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | `up`, `platform` | Becomes the Secret `kagent/kagent-anthropic` at deploy time while `agentlab.yaml` records no `aiKey.source`; never written to `agentlab.yaml` or `state/`. With a source the Secret is placed from it through `beekeeper secret copy --to-secret` instead, and without either it holds a placeholder (the ModelConfig resolves, agent turns fail until the key is placed). See [Agents](agents.md#the-model). |
-| `GITHUB_TOKEN` | the update check | Lifts GitHub's anonymous rate limit of the update check. `up`, `platform`, `discover`, `backstage-test`, `agents-test` and the migration rehearsal never read it: the lab's consumers get a token only from `githubToken.source` (or call GitHub as the skills GitHub App). See [Agents](agents.md#the-github-token). |
+| `GH_TOKEN`, `GITHUB_TOKEN` | `self-update`, the update check | Read GitHub's releases with the token, GH_TOKEN first, instead of under GitHub's anonymous rate limit; without either, the token `gh auth token` prints. `up`, `platform`, `discover`, `backstage-test`, `agents-test` and the migration rehearsal never read it: the lab's consumers get a token only from `githubToken.source` (or call GitHub as the skills GitHub App). See [Agents](agents.md#the-github-token). |
 | `<name>` per `extraModels[].apiKeyEnv` | `up`, `platform` | The key for that model config, same handling. See [Models](models.md). |
 | `NODE_USE_SYSTEM_CA=1` | Node >= 22.15, Claude Code | Makes Node honor the system trust store after `agentlab trust`. Older Node: `NODE_EXTRA_CA_CERTS=~/.local/state/agentlab/labs/<lab>/certs/ca.crt`. See [TLS](tls.md). |
 | `KUBECONFIG` | your shell | Never read by the lab: its embedded Helm and Kubernetes client are built from `state/kubeconfig` alone. `KUBECONFIG=state/kubeconfig kubectl ...` is the lab's view from a shell. A file it names that is a copy of this lab's admin kubeconfig (every entry `kind-<clusterName>` — a lab lease holds one) is refreshed by `up` and every other cluster-facing command once the cluster behind it was recreated, so a copy taken before `down` and `up` reaches the new cluster without a manual step; your own kubeconfig, `~/.kube/config` and another lab's are never written, except that `up` removes a `kind-<clusterName>` context, cluster and user of the recreated lab whose CA is the previous cluster's (the lab's own kubeconfig, or its lease's copy, is the one to use). |
@@ -320,9 +320,14 @@ release is out — devctl's per-command check, with two deliberate differences:
   (`~/.cache/agentlab/latest-release.json` on Linux,
   `~/Library/Caches/agentlab/` on macOS). A failed attempt is remembered for
   ten minutes, so a machine without internet is not held up on every command,
-  and the last known answer keeps being shown meanwhile. A `GITHUB_TOKEN` in
-  the environment is used when present; it only lifts GitHub's anonymous
-  rate limit.
+  and the last known answer keeps being shown meanwhile.
+
+`self-update` and the hint read the releases with a token when one is at
+hand: `GH_TOKEN`, else `GITHUB_TOKEN`, else the token of gh's signed-in
+account (`gh auth token`). Without one the call is anonymous, under GitHub's
+limit of 60 calls an hour shared by every machine behind the same address;
+`self-update` says which it used, and when that limit is spent its error says
+the call was anonymous and which variable to set.
 
 `AGENTLAB_NO_UPDATE_CHECK=1` silences the hint (`self-update` itself always
 works); `dev` builds never check.

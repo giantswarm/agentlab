@@ -336,7 +336,9 @@ The lab's own e2e checks are the `*-test` subcommands, not `go test`.
   never a gate: the command runs whatever the version. GitHub is asked at
   most once an hour (`latest-release.json` under `os.UserCacheDir()/agentlab`)
   with a two-second cap, and a failed attempt is remembered for ten minutes,
-  so an offline machine is not held up. `AGENTLAB_NO_UPDATE_CHECK=1`
+  so an offline machine is not held up. Both read the releases with
+  `GH_TOKEN`, else `GITHUB_TOKEN`, else `gh auth token`, anonymously without
+  one; a spent rate limit's error says which. `AGENTLAB_NO_UPDATE_CHECK=1`
   silences it; `dev` builds never check and cannot self-update. Details in
   docs/cli.md "Keeping agentlab current". `agentlab.yaml`'s header records
   the agentlab that wrote it (`# Written by agentlab <version>.`, a comment

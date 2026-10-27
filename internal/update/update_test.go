@@ -147,13 +147,16 @@ func lab(t *testing.T, current string, src *fakeSource) *fixture {
 	t.Helper()
 	f := &fixture{src: src, dir: t.TempDir(), at: time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)}
 	t.Setenv(OptOutEnv, "")
-	prevSource, prevValidator, prevDir, prevNow, prevVersion, prevExe, prevTimeout := newSource, newValidator, cacheDir, now, currentVersion, executable, remindTimeout
-	newSource = func() selfupdate.Source { return src }
+	t.Setenv(ghTokenEnv, "")
+	t.Setenv(githubTokenEnv, "")
+	prevSource, prevValidator, prevDir, prevNow, prevVersion, prevExe, prevTimeout, prevGHToken := newSource, newValidator, cacheDir, now, currentVersion, executable, remindTimeout, ghAuthToken
+	newSource = func(string) selfupdate.Source { return src }
+	ghAuthToken = func(context.Context) string { return "" }
 	cacheDir = func() string { return f.dir }
 	now = func() time.Time { return f.at }
 	currentVersion = func() string { return current }
 	t.Cleanup(func() {
-		newSource, newValidator, cacheDir, now, currentVersion, executable, remindTimeout = prevSource, prevValidator, prevDir, prevNow, prevVersion, prevExe, prevTimeout
+		newSource, newValidator, cacheDir, now, currentVersion, executable, remindTimeout, ghAuthToken = prevSource, prevValidator, prevDir, prevNow, prevVersion, prevExe, prevTimeout, prevGHToken
 	})
 	return f
 }
