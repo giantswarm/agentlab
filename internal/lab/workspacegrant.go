@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -15,7 +16,6 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -182,15 +182,6 @@ func ensureWorkspaceTokenExchangeSecret() (string, error) {
 	return path, nil
 }
 
-// readWorkspaceTokenExchangeSecret reads the token exchange client's secret.
-func readWorkspaceTokenExchangeSecret() (string, error) {
-	raw, err := os.ReadFile(filepath.Join(workspaceGrantDir, workspaceTokenExchangeSecretFile)) // #nosec G304 -- the lab's own credentials directory
-	if err != nil {
-		return "", fmt.Errorf("reading the workspace token exchange client's secret: %w (`agentlab platform` generates it with the workspaces on)", err)
-	}
-	return strings.TrimSpace(string(raw)), nil
-}
-
 // readWorkspaceGrantKey reads the lab's grant signing key.
 func readWorkspaceGrantKey() (*ecdsa.PrivateKey, error) {
 	path := filepath.Join(workspaceGrantDir, workspaceGrantKeyFile)
@@ -276,18 +267,21 @@ func publishedWorkspaceGrantKey(jwks []byte, key *ecdsa.PublicKey) (string, erro
 // workspaceGrant is a grant's payload in the manager's claims, which are
 // kagent's jwt admission's.
 type workspaceGrant struct {
-	Issuer    string              `json:"iss"`
-	Subject   string              `json:"sub"`
-	Audience  []string            `json:"aud"`
-	IssuedAt  int64               `json:"iat"`
-	NotBefore int64               `json:"nbf"`
-	Expiry    int64               `json:"exp"`
-	ID        string              `json:"jti"`
-	Workspace map[string]string   `json:"workspace"`
-	Volume    workspaceVolume     `json:"volume"`
-	Mounts    []workspaceMount    `json:"mounts"`
-	Changed   []string            `json:"changed,omitempty"`
-	Providers []map[string]string `json:"providers,omitempty"`
+	Issuer    string   `json:"iss"`
+	Subject   string   `json:"sub"`
+	Audience  []string `json:"aud"`
+	IssuedAt  int64    `json:"iat"`
+	NotBefore int64    `json:"nbf"`
+	Expiry    int64    `json:"exp"`
+	ID        string   `json:"jti"`
+	// AgentNamespace is the namespace whose Agents may start a Session
+	// with the grant, the manager's --grant-agent-namespace.
+	AgentNamespace string              `json:"agent_namespace"`
+	Workspace      map[string]string   `json:"workspace"`
+	Volume         workspaceVolume     `json:"volume"`
+	Mounts         []workspaceMount    `json:"mounts"`
+	Changed        []string            `json:"changed,omitempty"`
+	Providers      []map[string]string `json:"providers,omitempty"`
 }
 
 type workspaceVolume struct {
@@ -308,9 +302,10 @@ func newWorkspaceGrant(issuer, subject, workspace string, volume workspaceVolume
 	return workspaceGrant{
 		Issuer: issuer, Subject: subject, Audience: []string{workspaceGrantAudience},
 		IssuedAt: issued.Unix(), NotBefore: issued.Unix(), Expiry: issued.Add(ttl).Unix(),
-		ID:        randomHex(16),
-		Workspace: map[string]string{"namespace": kagentNamespace, nameKey: workspace},
-		Volume:    volume,
+		ID:             randomHex(16),
+		AgentNamespace: kagentNamespace,
+		Workspace:      map[string]string{"namespace": kagentNamespace, nameKey: workspace},
+		Volume:         volume,
 		Mounts: []workspaceMount{
 			{SubPath: workspaceGrantSessionDirectory},
 			{SubPath: workspaceGrantMirrors, ReadOnly: true},
@@ -321,6 +316,23 @@ func newWorkspaceGrant(issuer, subject, workspace string, volume workspaceVolume
 // signWorkspaceGrant signs the grant with ES256 under kid, as a compact JWS.
 func signWorkspaceGrant(key *ecdsa.PrivateKey, kid string, grant workspaceGrant) (string, error) {
 	return signWorkspaceClaims(key, kid, grant)
+}
+
+// signGrantWithout signs the grant with the claims named left out, as a
+// compact JWS: a grant the manager would never sign.
+func signGrantWithout(key *ecdsa.PrivateKey, kid string, grant workspaceGrant, claims ...string) (string, error) {
+	raw, err := json.Marshal(grant)
+	if err != nil {
+		return "", err
+	}
+	var generic map[string]any
+	if err := json.Unmarshal(raw, &generic); err != nil {
+		return "", err
+	}
+	for _, c := range claims {
+		delete(generic, c)
+	}
+	return signWorkspaceClaims(key, kid, generic)
 }
 
 // signWorkspaceClaims signs any claims with ES256 under kid, as a compact
@@ -404,4 +416,11 @@ func readSessionAdmission(ctx context.Context) string {
 	}
 	return fmt.Sprintf("Session admission: kagent trusts %s (issuer %s), %s, %s",
 		cm.Data[admissionJWKSURLKey], cm.Data[admissionIssuerKey], key, harness)
+}
+
+// randomHex is n random bytes, hex-encoded.
+func randomHex(n int) string {
+	b := make([]byte, n)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }

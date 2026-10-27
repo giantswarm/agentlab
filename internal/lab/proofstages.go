@@ -12,11 +12,11 @@ import (
 // line and ends judged: PASS when the next stage begins or the proof closes
 // without an error, FAIL on the error that ends the proof, SKIP with the
 // reason when the lab's own configuration leaves it without a subject — a
-// component agentlab.yaml turns off, a chart line without the route. The
-// summary at the end names every stage with its outcome and duration: on a
-// warm lab the whole platform proof takes about a second, which the
-// whole-second stamps of the step lines cannot show, and a run that left a
-// stage out must not read as a pass. What the lab's live state cannot run —
+// component agentlab.yaml turns off, a chart line without the route or the
+// mechanism the stage proves. The summary at the end names every stage with
+// its outcome and duration: on a warm lab the whole platform proof takes
+// about a second, which the whole-second stamps of the step lines cannot
+// show, and a run that left a stage out must not read as a pass. What the lab's live state cannot run —
 // a fixture user that is not configured, a release that is not there, a read
 // that failed — is never skipped: it fails, naming what is missing. The
 // configuration is the one allowance, and the summary quotes it.

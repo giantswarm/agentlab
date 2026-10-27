@@ -68,15 +68,20 @@ const (
 	slackThreadPath = "/state/thread"
 	// slackViewsPath reads the opened and redrawn modals back, likewise.
 	slackViewsPath = "/state/views"
+	// slackResponsesPath reads the bodies posted to response_url back,
+	// likewise.
+	slackResponsesPath = "/state/responses"
 )
 
 // slackWorkspace is the fake Slack of one run as the proof uses it: the Web
 // API base a gateway on this host calls, the threads and modals the fake
-// recorded, fresh timestamps for the people's messages, and its end.
+// recorded, the private answers posted to an interaction's response_url,
+// fresh timestamps for the people's messages, and its end.
 type slackWorkspace interface {
 	baseURL() string
 	thread(channel, threadTS string) []slackMessage
 	openedViews() []map[string]any
+	responses() []string
 	nextTS() string
 	close()
 }
@@ -93,6 +98,7 @@ const (
 	slackAuthTest      = "auth.test"
 	slackUsersInfo     = "users.info"
 	slackUsersByEmail  = "users.lookupByEmail"
+	slackUserGroups    = "usergroups.list"
 	slackViewsOpen     = "views.open"
 	slackViewsUpdate   = "views.update"
 	slackReplies       = "conversations.replies"
@@ -123,6 +129,11 @@ const (
 	slackMarkdownChunk = "markdown_text"
 	slackBlockActions  = "actions"
 	slackBlockSection  = "section"
+	slackBlockHeader   = "header"
+	slackBlockContext  = "context"
+	slackBlockMarkdown = "markdown"
+	slackBlockRichText = "rich_text"
+	slackPlainText     = "plain_text"
 	slackButton        = "button"
 	slackStaticSelect  = "static_select"
 	// slackSelectedOption is a select's pick in an action or a view's state.
@@ -134,7 +145,9 @@ const (
 	slackKeyBlockID    = "block_id"
 	slackKeyOptions    = "options"
 	slackKeyTriggerID  = "trigger_id"
-	slackKeyElement    = "element"
+	// slackKeyResponseURL is where an interaction's private answers go.
+	slackKeyResponseURL = "response_url"
+	slackKeyElement     = "element"
 )
 
 // The gateway's Block Kit action ids and texts the proof reads.
@@ -142,8 +155,8 @@ const (
 	slackActionApprove = "hitl_approve"
 	slackActionDeny    = "hitl_deny"
 	slackActionSignIn  = "obo_sign_in"
-	// slackRosterHeading opens the roster's text that `@bot agents` posts.
-	slackRosterHeading = "*Available agents*"
+	// slackRosterTitle is the header of the roster `@bot agents` posts.
+	slackRosterTitle = "Agents"
 	// slackActionAgentSelect is a roster row's Select button: its value is
 	// the agent's ref, and it opens the agent picker with that agent
 	// preselected.
@@ -176,6 +189,22 @@ const (
 	slackPickerAgentAction    = "agent"
 	slackPickerQuestionBlock  = "ask_agent_question"
 	slackPickerQuestionAction = "question"
+	// slackPickerWorkspaceBlock prefixes the optional Workspace input's
+	// block_id (a revision follows it); a submission that leaves it empty
+	// picks No workspace.
+	slackPickerWorkspaceBlock  = "ask_agent_workspace"
+	slackPickerWorkspaceAction = "workspace"
+)
+
+// The "Ask an agent here" message shortcut: invoked on a message, it opens the
+// agent picker for that message's thread, whose submission opens the
+// conversation there — with the slash command the only way a conversation
+// opens (klaus-gateway 4.13.0 and later answer a mention outside one with the
+// help). A person with no link is told to sign in first with `@bot login`.
+const (
+	slackShortcutAskAgent = "ask_agent_here"
+	slackLoginWord        = "login"
+	slackSignInFirst      = "sign in first"
 )
 
 // slackMessage is one message of a fake thread as it stands: posted,
@@ -233,27 +262,30 @@ type fakeSlack struct {
 	server   *http.Server
 	// emails is what users.info answers per Slack user id.
 	emails map[string]string
+	// groups are the user groups usergroups.list answers: handle -> user ids.
+	groups map[string][]string
 
 	mu       sync.Mutex
 	seq      int
 	messages []*slackMessage
 	byTS     map[string]*slackMessage
 	calls    map[string]int
-	// responses are the bodies posted to response_url.
-	responses []string
+	// posted are the bodies posted to response_url.
+	posted []string
 	// views are the modals views.open and views.update were asked for, in
 	// order: an update is the modal as the gateway redrew it.
 	views []map[string]any
 }
 
 // startFakeSlack serves the fake Web API on addr (host:port; port 0 picks
-// one). emails maps the proof's Slack user ids to what users.info answers.
-func startFakeSlack(addr string, emails map[string]string) (*fakeSlack, error) {
+// one). emails maps the proof's Slack user ids to what users.info answers,
+// groups the user groups' handles to their members' ids.
+func startFakeSlack(addr string, emails map[string]string, groups map[string][]string) (*fakeSlack, error) {
 	l, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("the fake Slack Web API cannot listen on %s: %w", addr, err)
 	}
-	f := &fakeSlack{listener: l, emails: emails, byTS: map[string]*slackMessage{}, calls: map[string]int{}}
+	f := &fakeSlack{listener: l, emails: emails, groups: groups, byTS: map[string]*slackMessage{}, calls: map[string]int{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST "+slackAPIPath+"/{method}", f.serveAPI)
 	mux.HandleFunc("POST "+slackResponsePath, f.serveResponse)
@@ -262,6 +294,7 @@ func startFakeSlack(addr string, emails map[string]string) (*fakeSlack, error) {
 		writeSlackJSON(w, f.thread(r.URL.Query().Get(slackKeyChannel), r.URL.Query().Get(slackKeyTS)))
 	})
 	mux.HandleFunc("GET "+slackViewsPath, func(w http.ResponseWriter, _ *http.Request) { writeSlackJSON(w, f.openedViews()) })
+	mux.HandleFunc("GET "+slackResponsesPath, func(w http.ResponseWriter, _ *http.Request) { writeSlackJSON(w, f.responses()) })
 	f.server = &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	go func() { _ = f.server.Serve(l) }()
 	return f, nil
@@ -327,8 +360,9 @@ func waitThread(ws slackWorkspace, channel, threadTS string, timeout time.Durati
 // ServeFakeSlack serves the fake Slack Web API on addr until ctx ends:
 // `agentlab slack-fake`, what the proof runs in a container on the kind
 // network. emails are the people's `<slack user id>=<e-mail>` pairs
-// users.info answers.
-func ServeFakeSlack(ctx context.Context, addr string, emails []string) error {
+// users.info answers, groups the user groups' `<handle>=<id>,<id>…`
+// usergroups.list answers.
+func ServeFakeSlack(ctx context.Context, addr string, emails, groups []string) error {
 	people := make(map[string]string, len(emails))
 	for _, pair := range emails {
 		id, email, ok := strings.Cut(pair, "=")
@@ -337,7 +371,15 @@ func ServeFakeSlack(ctx context.Context, addr string, emails []string) error {
 		}
 		people[id] = email
 	}
-	f, err := startFakeSlack(addr, people)
+	members := make(map[string][]string, len(groups))
+	for _, pair := range groups {
+		handle, ids, ok := strings.Cut(pair, "=")
+		if !ok || handle == "" {
+			return fmt.Errorf("--group %q is not <handle>=<slack user id>,…", pair)
+		}
+		members[handle] = strings.Split(ids, ",")
+	}
+	f, err := startFakeSlack(addr, people, members)
 	if err != nil {
 		return err
 	}
@@ -388,6 +430,13 @@ func (c *slackFakeContainer) openedViews() []map[string]any {
 	return views
 }
 
+// responses reads the response_url bodies back; a failed read is none.
+func (c *slackFakeContainer) responses() []string {
+	var bodies []string
+	c.read(slackResponsesPath, &bodies)
+	return bodies
+}
+
 // read decodes what the fake serves at path into v, leaving v as it is when
 // the read fails.
 func (c *slackFakeContainer) read(path string, v any) {
@@ -400,10 +449,13 @@ func (c *slackFakeContainer) read(path string, v any) {
 }
 
 // startSlackFakeContainer runs `<binary> slack-fake` on the kind network.
-func startSlackFakeContainer(cfg *config.Config, binary string, emails map[string]string) (*slackFakeContainer, error) {
+func startSlackFakeContainer(cfg *config.Config, binary string, emails map[string]string, groups map[string][]string) (*slackFakeContainer, error) {
 	var args []string
 	for _, id := range slices.Sorted(maps.Keys(emails)) {
 		args = append(args, "--email", id+"="+emails[id])
+	}
+	for _, handle := range slices.Sorted(maps.Keys(groups)) {
+		args = append(args, "--group", handle+"="+strings.Join(groups[handle], ","))
 	}
 	c, err := startFakeContainer(cfg, binary, fakeContainerSpec{
 		what: "the fake Slack Web API", suffix: "slack-fake", command: slackFakeCommand,
@@ -448,13 +500,16 @@ func (f *fakeSlack) answer(method string, params map[string]any) map[string]any 
 			"profile": map[string]any{"email": f.emails[id], "display_name": name, "real_name": name},
 		}}
 	case slackUsersByEmail:
-		email := paramString(params, "email")
-		for id, e := range f.emails {
-			if e == email {
-				return map[string]any{"ok": true, slackKeyUser: map[string]any{"id": id, slackKeyTeamID: slackFakeTeam}}
-			}
+		if id, found := slackUserByEmail(f.emails, paramString(params, "email")); found {
+			return map[string]any{"ok": true, slackKeyUser: map[string]any{"id": id, slackKeyTeamID: slackFakeTeam}}
 		}
 		return map[string]any{"ok": false, "error": "users_not_found"}
+	case slackUserGroups:
+		groups := []any{}
+		for _, handle := range slices.Sorted(maps.Keys(f.groups)) {
+			groups = append(groups, map[string]any{"handle": handle, "users": f.groups[handle]})
+		}
+		return map[string]any{"ok": true, "usergroups": groups}
 	case slackViewsOpen, slackViewsUpdate:
 		if view, ok := params[slackKeyView].(map[string]any); ok {
 			f.views = append(f.views, view)
@@ -507,6 +562,19 @@ func (f *fakeSlack) answer(method string, params map[string]any) map[string]any 
 	return ok
 }
 
+// slackUserByEmail is the Slack user users.lookupByEmail answers for an
+// e-mail: the lowest of the ids carrying it, so the proof knows whose direct
+// message a notice to that address lands in when several of its people share
+// one lab user.
+func slackUserByEmail(emails map[string]string, email string) (string, bool) {
+	for _, id := range slices.Sorted(maps.Keys(emails)) {
+		if emails[id] == email {
+			return id, true
+		}
+	}
+	return "", false
+}
+
 // directChannel is the conversation a post lands in: a post addressed to a
 // person's user ID is their direct message with the app, D… for U…, as
 // Slack names it in the response.
@@ -529,9 +597,16 @@ func (f *fakeSlack) openedViews() []map[string]any {
 func (f *fakeSlack) serveResponse(w http.ResponseWriter, r *http.Request) {
 	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	f.mu.Lock()
-	f.responses = append(f.responses, string(body))
+	f.posted = append(f.posted, string(body))
 	f.mu.Unlock()
 	w.WriteHeader(http.StatusOK)
+}
+
+// responses are the bodies posted to response_url, in order.
+func (f *fakeSlack) responses() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.posted)
 }
 
 // slackParams reads a Web API call's parameters, form or JSON.
@@ -739,12 +814,12 @@ func (d *slackDriver) pick(user string, msg slackMessage, actionID, value string
 func (d *slackDriver) onMessage(user string, msg slackMessage, action map[string]any) error {
 	return d.interaction(map[string]any{
 		fieldTypeKey: "block_actions", slackKeyUser: map[string]any{"id": user}, slackKeyTeam: map[string]any{"id": slackFakeTeam},
-		slackKeyChannel:   map[string]any{"id": msg.Channel},
-		"container":       map[string]any{fieldTypeKey: slackKeyMessage, "message_ts": msg.TS, "channel_id": msg.Channel, slackKeyThreadTS: msg.ThreadTS},
-		slackKeyMessage:   map[string]any{slackKeyTS: msg.TS, slackKeyThreadTS: msg.ThreadTS, slackKeyBlocks: msg.Blocks},
-		slackBlockActions: []any{action},
-		slackKeyTriggerID: "trigger-" + randomSuffix(),
-		"response_url":    d.responseURL(),
+		slackKeyChannel:     map[string]any{"id": msg.Channel},
+		"container":         map[string]any{fieldTypeKey: slackKeyMessage, "message_ts": msg.TS, "channel_id": msg.Channel, slackKeyThreadTS: msg.ThreadTS},
+		slackKeyMessage:     map[string]any{slackKeyTS: msg.TS, slackKeyThreadTS: msg.ThreadTS, slackKeyBlocks: msg.Blocks},
+		slackBlockActions:   []any{action},
+		slackKeyTriggerID:   "trigger-" + randomSuffix(),
+		slackKeyResponseURL: d.responseURL(),
 	})
 }
 
@@ -782,9 +857,28 @@ func (d *slackDriver) interaction(body map[string]any) error {
 func (d *slackDriver) slashCommand(user, text string) error {
 	form := url.Values{
 		"command": {slackCommand}, slackKeyText: {text}, "user_id": {user}, "channel_id": {d.channel}, slackKeyTeamID: {slackFakeTeam},
-		slackKeyTriggerID: {"trigger-" + randomSuffix()}, "response_url": {d.responseURL()},
+		slackKeyTriggerID: {"trigger-" + randomSuffix()}, slackKeyResponseURL: {d.responseURL()},
 	}
 	return d.post(slackCommandsPath, "application/x-www-form-urlencoded", []byte(form.Encode()))
+}
+
+// shortcut is a person invoking the message shortcut with the callback id on
+// the message msgTS, a reply in threadTS or, with threadTS empty, a lone
+// top-level message: Slack's message_action payload, with a trigger to open
+// a modal on and a response_url for private answers.
+func (d *slackDriver) shortcut(user, callbackID, msgTS, threadTS string) error {
+	msg := map[string]any{slackKeyTS: msgTS, slackKeyUser: user}
+	if threadTS != "" {
+		msg[slackKeyThreadTS] = threadTS
+	}
+	return d.interaction(map[string]any{
+		fieldTypeKey: "message_action", slackKeyCallbackID: callbackID,
+		slackKeyUser: map[string]any{"id": user}, slackKeyTeam: map[string]any{"id": slackFakeTeam},
+		slackKeyChannel:     map[string]any{"id": d.channel},
+		slackKeyMessage:     msg,
+		slackKeyTriggerID:   "trigger-" + randomSuffix(),
+		slackKeyResponseURL: d.responseURL(),
+	})
 }
 
 // submitView is a person submitting a modal the gateway opened: a
@@ -833,24 +927,68 @@ func openCard(msgs []slackMessage) (hitlCard, bool) {
 	return hitlCard{}, false
 }
 
-// shown is a message's text and the text of its section and context
-// blocks: what a person reads of it.
+// shown is what a person reads of a message, as Slack renders it: the text
+// of its blocks, and its fallback text only when no block shows any (with
+// blocks, Slack keeps the text for notifications).
 func (m slackMessage) shown() string {
-	parts := []string{m.Text}
+	var parts []string
 	for _, block := range m.Blocks {
-		if t, ok := block[slackKeyText].(map[string]any); ok {
-			s, _ := t[slackKeyText].(string)
+		if s := blockText(block); s != "" {
 			parts = append(parts, s)
 		}
+	}
+	if len(parts) == 0 {
+		return m.Text
+	}
+	return strings.Join(parts, "\n")
+}
+
+// blockText is the text a block shows: a header's, a section's or a
+// markdown block's text, a context block's text elements, a rich text
+// block's runs; nothing for actions, dividers and images.
+func blockText(block map[string]any) string {
+	switch block[fieldTypeKey] {
+	case slackBlockMarkdown:
+		s, _ := block[slackKeyText].(string)
+		return s
+	case slackBlockHeader, slackBlockSection:
+		t, _ := block[slackKeyText].(map[string]any)
+		s, _ := t[slackKeyText].(string)
+		return s
+	case slackBlockContext:
+		var parts []string
 		elements, _ := block[slackKeyElements].([]any)
 		for _, e := range elements {
-			if el, ok := e.(map[string]any); ok && el[fieldTypeKey] == slackMrkdwn {
+			if el, ok := e.(map[string]any); ok && (el[fieldTypeKey] == slackMrkdwn || el[fieldTypeKey] == slackPlainText) {
 				s, _ := el[slackKeyText].(string)
 				parts = append(parts, s)
 			}
 		}
+		return strings.Join(parts, " ")
+	case slackBlockRichText:
+		elements, _ := block[slackKeyElements].([]any)
+		return richText(elements)
 	}
-	return strings.Join(parts, "\n")
+	return ""
+}
+
+// richText is the text of rich text elements: a section's runs joined, its
+// nested sections and lists on lines of their own.
+func richText(elements []any) string {
+	var b strings.Builder
+	for _, e := range elements {
+		el, _ := e.(map[string]any)
+		if inner, ok := el[slackKeyElements].([]any); ok {
+			if b.Len() > 0 {
+				b.WriteString("\n")
+			}
+			b.WriteString(richText(inner))
+			continue
+		}
+		s, _ := el[slackKeyText].(string)
+		b.WriteString(s)
+	}
+	return b.String()
 }
 
 // findMessage is the first message whose text carries every needle.
@@ -879,12 +1017,21 @@ func streamedSince(msgs []slackMessage, after int) (slackMessage, string) {
 	return last, strings.Join(texts, "\n")
 }
 
-// rosterNames reads the display names of a roster post: its `• *Name*`
-// lines.
-func rosterNames(text string) []string {
+// isRoster is whether a message is the roster `@bot agents` posts: its
+// first block the header slackRosterTitle.
+func (m slackMessage) isRoster() bool {
+	return len(m.Blocks) > 0 && m.Blocks[0][fieldTypeKey] == slackBlockHeader && blockText(m.Blocks[0]) == slackRosterTitle
+}
+
+// rosterNames reads the display names of a roster post: each row is a
+// section whose text opens with the agent's name in bold.
+func rosterNames(m slackMessage) []string {
 	var names []string
-	for _, line := range strings.Split(text, "\n") {
-		rest, ok := strings.CutPrefix(strings.TrimSpace(line), "• *")
+	for _, block := range m.Blocks {
+		if block[fieldTypeKey] != slackBlockSection {
+			continue
+		}
+		rest, ok := strings.CutPrefix(blockText(block), "*")
 		if !ok {
 			continue
 		}

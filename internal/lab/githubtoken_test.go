@@ -2,6 +2,8 @@ package lab
 
 import (
 	"context"
+	"io"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -17,8 +19,9 @@ import (
 // below hunt for it in everything the render writes to state/.
 const gitHubTestToken = "ghp_agentlab_unit_test_sentinel_0000000000" // #nosec G101 -- test sentinel, not a credential
 
-// The values blocks the token lands in: the agent-manager chart's own and
-// the connectivity chart's wiring for it; the chart version of the 3.x line.
+// The values block the token lands in, the agent-manager chart's own; the
+// connectivity chart's wiring for agent-manager, which takes no token; the
+// chart version of the 3.x line.
 const (
 	agentManagerValuesKey = "agent-manager"
 	agentManagerWiringKey = "agentManager"
@@ -61,28 +64,26 @@ func gitHubTokenTestConfig() *config.Config {
 	return cfg
 }
 
-// TestGitHubTokenWiresBothConsumers: with $GITHUB_TOKEN set the values name
-// the Secret for the portal (extraEnvVarsSecrets, read by the overlay's
-// integrations.github reference), agent-manager (skills.github.tokenSecret)
-// and the migrate Job (agentManager.migration.githubToken) — the Secret's
-// NAME only: the token itself appears in nothing the render writes.
+// TestGitHubTokenWiresBothConsumers: with githubToken.source recorded the
+// values name the Secret for the portal (extraEnvVarsSecrets, read by the
+// overlay's integrations.github reference) and agent-manager
+// (skills.github.tokenSecret), the Secret's NAME only: the reference
+// appears in nothing the render writes.
 func TestGitHubTokenWiresBothConsumers(t *testing.T) {
-	t.Setenv(GitHubTokenEnv, gitHubTestToken)
-	s := renderGitHubTokenSurfaces(t, gitHubTokenTestConfig())
+	cfg := gitHubTokenTestConfig()
+	cfg.GitHubToken.Source = gitHubTokenTestSource
+	s := renderGitHubTokenSurfaces(t, cfg)
 
 	if got := dig(s.values, componentBackstage, componentBackstage, "extraEnvVarsSecrets"); !reflect.DeepEqual(got, []any{portalAnthropicSecret, gitHubTokenSecret}) {
 		t.Errorf("backstage.backstage.extraEnvVarsSecrets = %v, want [%s %s]", got, portalAnthropicSecret, gitHubTokenSecret)
 	}
 	tokenSecret := []string{agentManagerValuesKey, "skills", "github", "tokenSecret"}
-	githubToken := []string{agentManagerWiringKey, "migration", "githubToken"}
 	for _, tc := range []struct {
 		path []string
 		want any
 	}{
 		{append(tokenSecret, nameKey), gitHubTokenSecret},
 		{append(tokenSecret, fieldKey), gitHubTokenSecretKey},
-		{append(githubToken, "secretName"), gitHubTokenSecret},
-		{append(githubToken, fieldKey), gitHubTokenSecretKey},
 	} {
 		if got := dig(s.values, tc.path...); got != tc.want {
 			t.Errorf("%s = %v, want %v", strings.Join(tc.path, "."), got, tc.want)
@@ -104,130 +105,158 @@ func TestGitHubTokenWiresBothConsumers(t *testing.T) {
 	}
 
 	for name, text := range s.raw() {
-		if strings.Contains(text, gitHubTestToken) {
-			t.Errorf("%s carries the token itself:\n%s", name, text)
+		if strings.Contains(text, gitHubTokenTestSource) {
+			t.Errorf("%s carries the source reference:\n%s", name, text)
 		}
 	}
 }
 
-// TestGitHubTokenUnsetLeavesTheLabAsItWas: without the variable none of the
-// keys render — the consumers call GitHub unauthenticated, as before; the
-// portal's environment keeps only the Anthropic key.
-func TestGitHubTokenUnsetLeavesTheLabAsItWas(t *testing.T) {
-	t.Setenv(GitHubTokenEnv, "")
+// TestGitHubTokenEnvIsNeverRead: without githubToken.source none of the keys
+// render, a $GITHUB_TOKEN in agentlab's environment notwithstanding — the
+// consumers call GitHub unauthenticated (or as the App); the portal's
+// environment keeps only the Anthropic key.
+func TestGitHubTokenEnvIsNeverRead(t *testing.T) {
+	t.Setenv(GitHubTokenEnv, gitHubTestToken)
 	s := renderGitHubTokenSurfaces(t, gitHubTokenTestConfig())
 	if got := dig(s.values, componentBackstage, componentBackstage, "extraEnvVarsSecrets"); !reflect.DeepEqual(got, []any{portalAnthropicSecret}) {
-		t.Errorf("backstage.backstage.extraEnvVarsSecrets = %v without $%s, want [%s]", got, GitHubTokenEnv, portalAnthropicSecret)
+		t.Errorf("backstage.backstage.extraEnvVarsSecrets = %v without githubToken.source, want [%s]", got, portalAnthropicSecret)
 	}
 	for _, path := range [][]string{
 		{agentManagerValuesKey, "skills"},
 		{agentManagerWiringKey},
 	} {
 		if got := dig(s.values, path...); got != nil {
-			t.Errorf("%s = %v without $%s, want nothing", strings.Join(path, "."), got, GitHubTokenEnv)
+			t.Errorf("%s = %v without githubToken.source, want nothing", strings.Join(path, "."), got)
 		}
 	}
 	if got := dig(s.overlay, "integrations"); got != nil {
-		t.Errorf("overlay integrations = %v without $%s, want nothing", got, GitHubTokenEnv)
+		t.Errorf("overlay integrations = %v without githubToken.source, want nothing", got)
 	}
 	for name, text := range s.raw() {
-		if strings.Contains(text, gitHubTokenSecret) {
-			t.Errorf("%s names %s without $%s:\n%s", name, gitHubTokenSecret, GitHubTokenEnv, text)
+		if strings.Contains(text, gitHubTokenSecret) || strings.Contains(text, gitHubTestToken) {
+			t.Errorf("%s names %s or carries $%s without githubToken.source:\n%s", name, gitHubTokenSecret, GitHubTokenEnv, text)
 		}
 	}
 }
 
+// TestMigrateRunTakesNoGitHubToken: the connectivity chart's agent-manager
+// migrate run reads no GitHub token, so no configuration renders
+// agentManager.migration.githubToken.
+func TestMigrateRunTakesNoGitHubToken(t *testing.T) {
+	withToken := gitHubTokenTestConfig()
+	withToken.GitHubToken.Source = gitHubTokenTestSource
+	legacy := gitHubTokenTestConfig()
+	legacy.GitHubToken.Source = gitHubTokenTestSource
+	legacy.Platform.ChartVersion = legacyChartVersion
+	withApp := gitHubAppTestConfig()
+	withApp.Platform.Enabled, withApp.Platform.Agents, withApp.Backstage.Enabled = true, true, true
+	for name, cfg := range map[string]*config.Config{
+		"no credential":      gitHubTokenTestConfig(),
+		"githubToken.source": withToken,
+		"githubApp":          withApp,
+		"3.x line":           legacy,
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := renderGitHubTokenSurfaces(t, cfg)
+			path := []string{agentManagerWiringKey, "migration", "githubToken"}
+			if got := dig(s.values, path...); got != nil {
+				t.Errorf("%s = %v, want nothing: the migrate run reads no GitHub token\n%s", strings.Join(path, "."), got, s.valuesRaw)
+			}
+		})
+	}
+}
+
 // TestGitHubTokenLegacyChartTakesNoKeys: the 3.x line the rehearsal seeds
-// has neither agent-manager's tokenSecret nor the migrate Job, so a seed run
-// with the variable exported renders none of the keys.
+// has neither agent-manager's tokenSecret nor the migrate run, so a seed run
+// with the source recorded renders none of the keys.
 func TestGitHubTokenLegacyChartTakesNoKeys(t *testing.T) {
-	t.Setenv(GitHubTokenEnv, gitHubTestToken)
 	cfg := gitHubTokenTestConfig()
+	cfg.GitHubToken.Source = gitHubTokenTestSource
 	cfg.Platform.ChartVersion = legacyChartVersion
 	if !cfg.LegacyChart() {
 		t.Fatalf("%s is not the legacy line?", legacyChartVersion)
 	}
 	for name, text := range renderGitHubTokenSurfaces(t, cfg).raw() {
-		if strings.Contains(text, gitHubTokenSecret) || strings.Contains(text, gitHubTestToken) {
+		if strings.Contains(text, gitHubTokenSecret) {
 			t.Errorf("%s wires the GitHub token on the 3.x line:\n%s", name, text)
 		}
 	}
 }
 
-// TestEnsureGitHubTokenSecrets: nothing without the variable; with it the
-// agent-platform Secret, the kagent copy once that namespace exists, an
-// update (not "left alone") on a new token, and no deletion when a later run
-// lacks the variable.
+// TestEnsureGitHubTokenSecrets: without githubToken.source nothing is
+// written and the secret tooling is not called, a $GITHUB_TOKEN in agentlab's
+// environment notwithstanding; a Secret an earlier run placed stays.
 func TestEnsureGitHubTokenSecrets(t *testing.T) {
 	newFakeLab(t)
 	ctx := context.Background()
 	cfg := gitHubTokenTestConfig()
-	tokenIn := func(ns string) string {
+	t.Setenv(GitHubTokenEnv, gitHubTestToken)
+	calls := fakeSecretTool(t, func() error { return nil })
+	exists := func() bool {
 		t.Helper()
-		got, err := secretDataKey(ctx, ns, gitHubTokenSecret, gitHubTokenSecretKey)
-		if err != nil {
-			t.Fatalf("%s/%s: %v", ns, gitHubTokenSecret, err)
-		}
-		return string(got)
-	}
-	exists := func(ns string) bool {
-		t.Helper()
-		ok, err := objectExists(ctx, gvrSecrets, ns, gitHubTokenSecret)
+		ok, err := objectExists(ctx, gvrSecrets, platformNamespace, gitHubTokenSecret)
 		if err != nil {
 			t.Fatal(err)
 		}
 		return ok
 	}
 
-	t.Setenv(GitHubTokenEnv, "")
-	if err := ensureGitHubTokenSecrets(ctx, cfg); err != nil {
+	var err error
+	warned := stderrOf(t, func() { err = ensureGitHubTokenSecrets(ctx, cfg) })
+	if err != nil {
 		t.Fatal(err)
 	}
-	if exists(platformNamespace) {
-		t.Fatalf("a Secret was written without $%s", GitHubTokenEnv)
+	if !strings.Contains(warned, "WARNING") || !strings.Contains(warned, "githubToken.source") || !strings.Contains(warned, "--github-token-source") {
+		t.Errorf("without githubToken.source: stderr %q, want a warning naming the setting and its configure flag", warned)
+	}
+	if exists() || len(*calls) != 0 {
+		t.Fatalf("without githubToken.source: Secret written=%v, secret tooling calls %q; want neither", exists(), *calls)
 	}
 
-	t.Setenv(GitHubTokenEnv, gitHubTestToken)
+	if err := ensureSecret(platformNamespace, gitHubTokenSecret, corev1.SecretTypeOpaque, map[string][]byte{gitHubTokenSecretKey: []byte("placed earlier")}); err != nil {
+		t.Fatal(err)
+	}
 	if err := ensureGitHubTokenSecrets(ctx, cfg); err != nil {
 		t.Fatal(err)
 	}
-	if got := tokenIn(platformNamespace); got != gitHubTestToken {
-		t.Errorf("%s/%s carries %q, want the token from $%s", platformNamespace, gitHubTokenSecret, got, GitHubTokenEnv)
+	if !exists() {
+		t.Errorf("a run without githubToken.source removed %s/%s", platformNamespace, gitHubTokenSecret)
 	}
-	if exists(kagentNamespace) {
-		t.Errorf("the kagent copy landed before the namespace exists (the chart creates it)")
-	}
+}
 
-	if err := ensureNamespace(kagentNamespace); err != nil {
+// A lab whose portal and agents are both off calls GitHub for nothing, so
+// a missing githubToken.source is no warning.
+func TestEnsureGitHubTokenSecretsQuietWithoutConsumers(t *testing.T) {
+	newFakeLab(t)
+	cfg := gitHubTokenTestConfig()
+	cfg.Platform.Agents, cfg.Backstage.Enabled = false, false
+	fakeSecretTool(t, func() error { return nil })
+	var err error
+	if warned := stderrOf(t, func() { err = ensureGitHubTokenSecrets(t.Context(), cfg) }); warned != "" {
+		t.Errorf("stderr %q, want nothing", warned)
+	}
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ensureGitHubTokenSecrets(ctx, cfg); err != nil {
-		t.Fatal(err)
-	}
-	if got := tokenIn(kagentNamespace); got != gitHubTestToken {
-		t.Errorf("%s/%s carries %q after the namespace exists, want the token", kagentNamespace, gitHubTokenSecret, got)
-	}
+}
 
-	rotated := gitHubTestToken + "-rotated"
-	t.Setenv(GitHubTokenEnv, rotated)
-	if err := ensureGitHubTokenSecrets(ctx, cfg); err != nil {
+// stderrOf is what fn prints on stderr.
+func stderrOf(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
 		t.Fatal(err)
 	}
-	for _, ns := range []string{platformNamespace, kagentNamespace} {
-		if got := tokenIn(ns); got != rotated {
-			t.Errorf("%s/%s carries %q after a re-run with a new token, want the rotation", ns, gitHubTokenSecret, got)
-		}
-	}
-
-	t.Setenv(GitHubTokenEnv, "")
-	if err := ensureGitHubTokenSecrets(ctx, cfg); err != nil {
+	stderr := os.Stderr
+	os.Stderr = w
+	defer func() { os.Stderr = stderr }()
+	fn()
+	_ = w.Close()
+	out, err := io.ReadAll(r)
+	if err != nil {
 		t.Fatal(err)
 	}
-	for _, ns := range []string{platformNamespace, kagentNamespace} {
-		if !exists(ns) {
-			t.Errorf("a run without $%s removed %s/%s", GitHubTokenEnv, ns, gitHubTokenSecret)
-		}
-	}
+	return string(out)
 }
 
 // TestDeploymentSetsEnv: E4/E5 run only when agent-manager's Deployment
@@ -268,34 +297,20 @@ func TestDeploymentSetsEnv(t *testing.T) {
 // nothing resolves it, the fake secret tooling stands in.
 const gitHubTokenTestSource = "op://lab/github-token/credential" // #nosec G101 -- a reference, not a credential
 
-// TestGitHubTokenSourceWiresBothConsumers: a recorded githubToken.source
-// wires the consumers without $GITHUB_TOKEN on the host — the lab started by
-// an agent, whose environment never carries the token — and the render
-// carries the Secret's name, never the reference's value.
-func TestGitHubTokenSourceWiresBothConsumers(t *testing.T) {
-	t.Setenv(GitHubTokenEnv, "")
-	cfg := gitHubTokenTestConfig()
-	cfg.GitHubToken.Source = gitHubTokenTestSource
-	s := renderGitHubTokenSurfaces(t, cfg)
-	if got := dig(s.values, agentManagerValuesKey, "skills", "github", "tokenSecret", nameKey); got != gitHubTokenSecret {
-		t.Errorf("agent-manager.skills.github.tokenSecret.name = %v with githubToken.source, want %s", got, gitHubTokenSecret)
-	}
-	if got := dig(s.values, componentBackstage, componentBackstage, "extraEnvVarsSecrets"); !reflect.DeepEqual(got, []any{portalAnthropicSecret, gitHubTokenSecret}) {
-		t.Errorf("backstage.backstage.extraEnvVarsSecrets = %v with githubToken.source, want [%s %s]", got, portalAnthropicSecret, gitHubTokenSecret)
-	}
-}
-
 // TestEnsureGitHubTokenSecretsFromSource: a recorded source is handed to the
-// secret tooling for each namespace, the source winning over $GITHUB_TOKEN;
-// a placement that fails fails the run, since the values already name the
-// Secret.
+// secret tooling for agent-platform/ only, agentlab writing nothing itself,
+// and a kagent/ copy an earlier run placed is removed; a placement that
+// fails fails the run, since the values already name the Secret.
 func TestEnsureGitHubTokenSecretsFromSource(t *testing.T) {
 	newFakeLab(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := gitHubTokenTestConfig()
 	cfg.GitHubToken.Source = gitHubTokenTestSource
 	t.Setenv(GitHubTokenEnv, gitHubTestToken)
 	if err := ensureNamespace(kagentNamespace); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureSecret(kagentNamespace, gitHubTokenSecret, corev1.SecretTypeOpaque, map[string][]byte{gitHubTokenSecretKey: []byte("placed earlier")}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -305,13 +320,15 @@ func TestEnsureGitHubTokenSecretsFromSource(t *testing.T) {
 	}
 	want := [][]string{
 		secretCopyArgs(gitHubTokenTestSource, secretTarget(cfg, platformNamespace, gitHubTokenSecret, gitHubTokenSecretKey)),
-		secretCopyArgs(gitHubTokenTestSource, secretTarget(cfg, kagentNamespace, gitHubTokenSecret, gitHubTokenSecretKey)),
 	}
 	if !reflect.DeepEqual(*calls, want) {
 		t.Errorf("secret tooling calls = %q, want %q", *calls, want)
 	}
 	if exists, err := objectExists(ctx, gvrSecrets, platformNamespace, gitHubTokenSecret); err != nil || exists {
 		t.Errorf("agentlab wrote %s/%s itself (exists=%v, err=%v); the source is the tooling's to place", platformNamespace, gitHubTokenSecret, exists, err)
+	}
+	if exists, err := objectExists(ctx, gvrSecrets, kagentNamespace, gitHubTokenSecret); err != nil || exists {
+		t.Errorf("%s/%s from an earlier run stays (exists=%v, err=%v); nothing there reads it", kagentNamespace, gitHubTokenSecret, exists, err)
 	}
 
 	fakeSecretTool(t, nil)

@@ -54,7 +54,9 @@ import (
 // The proof: `@bot agents` lists the proof's AgentTemplate and hides one no
 // Harness admits, which the agent picker its Select button opens hides too, and
 // a selection of it is refused with the reason; a person with no
-// link is asked to sign in and reaches no controller; a turn streams under the
+// link is asked to sign in and reaches no controller; every conversation opens
+// the way a person opens one, through the Ask an agent here shortcut and the
+// picker (a mention outside a conversation gets the help); a turn streams under the
 // template's display name and icon, attributed to the person at muster; a tool
 // call bound with requireApproval pauses the task at input-required, Approve
 // resumes it in place and Deny ends another without the call; `stop` cancels
@@ -78,7 +80,10 @@ const (
 	// klausGatewayTestToolset is the toolset the fixture's muster carrier
 	// declares (X-Muster-Toolset), the fleet's read-only preset.
 	klausGatewayTestToolset = "preset:read-only"
-	klausGatewayTestPrompt  = "You are a terse assistant of the agentlab Swarmgeist proof. Answer in one short line. " +
+	// klausGatewayTestPrompt keeps answers to one line except a count: a
+	// model told to be terse otherwise declines the long turns ("No.").
+	klausGatewayTestPrompt = "You are a terse assistant of the agentlab Swarmgeist proof. Answer in one short line, " +
+		"except when the user asks you to write out numbers: then write every one of them, one per line, however long that takes. " +
 		"When the user asks you to reply with a word, reply with exactly that word and nothing else. " +
 		"When the user asks about namespaces of the cluster, use your tools to list them once and answer with their count."
 	// klausGatewayMusterURL is muster's in-cluster MCP endpoint, the
@@ -101,14 +106,16 @@ const (
 	gatewayStateKey       = "obo-state.key"
 	gatewayStoreKey       = "obo-store.key"
 	gatewayReadyPath      = "/readyz"
-	gatewayContainer      = "agentlab-klaus-gateway-test"
-	gatewayLogLevel       = "info"
-	recordBound           = "session_bound"
-	recordTurnDone        = "turn_complete"
-	recordDispatch        = "turn_dispatch"
-	recordRefresh         = "token_refresh"
-	recordTurnResume      = "turn_resume"
-	recordLeftRunning     = "task_left_running"
+	// gatewayContainerSuffix names the image shape's container after the
+	// lab's cluster name, so two labs' proofs never remove each other's.
+	gatewayContainerSuffix = "klaus-gateway-test"
+	gatewayLogLevel        = "info"
+	recordBound            = "session_bound"
+	recordTurnDone         = "turn_complete"
+	recordDispatch         = "turn_dispatch"
+	recordRefresh          = "token_refresh"
+	recordTurnResume       = "turn_resume"
+	recordLeftRunning      = "task_left_running"
 	// gatewayResubscribeFailed is the warning of a recovery attempt whose
 	// resubscription did not reach the controller.
 	gatewayResubscribeFailed = "resubscribe to a turn left running failed"
@@ -125,16 +132,29 @@ const (
 	klausGatewayWord         = "pong"
 	klausGatewayWordPrompt   = "Reply with exactly the word " + klausGatewayWord + "."
 	klausGatewayRecallPrompt = "Which single word did I ask you to reply with earlier in this conversation? Answer with just that word."
-	klausGatewayToolPrompt   = "How many namespaces does the cluster have? Use your tools to list them."
-	klausGatewayEssayPrompt  = "Write a long essay of at least 1500 words about the history of container orchestration, without using any tools."
+	// klausGatewayToolPrompt names the MCP tools: a coding Harness's model
+	// otherwise tries kubectl in its shell, which no approval gates.
+	klausGatewayToolPrompt = "How many namespaces does the cluster have? List them with your MCP tools, not the shell."
+	// klausGatewayStopPrompt is step 4's long turn, the one `stop`
+	// interrupts: a mechanical count that runs for minutes on every model.
+	// An open-ended ask for length does not: a codex model answers it in a
+	// few lines, the task settled before the stop arrives.
+	klausGatewayStopPrompt = "Without using any tools, write out every number from one to one thousand in English words, one number per line, and nothing else."
 	// klausGatewayCountPrompt is step 5b's long turn: plain text that streams
 	// from its first line and runs for minutes, on a small local model too.
 	klausGatewayCountPrompt = "Without using any tools, write out every number from one to five hundred in English words, one number per line, and nothing else."
+	// klausGatewayCountMark is the line of the count a long turn's answer
+	// must reach before the proof acts on the turn: a model that complies
+	// streams it within seconds and runs on for minutes, one that declines
+	// or shortens the ask never writes it.
+	klausGatewayCountMark   = "five"
 	klausGatewayTurnTimeout = 4 * time.Minute
 	klausGatewayReplyWait   = 90 * time.Second
 	klausGatewayCancelWait  = 90 * time.Second
-	klausGatewayStartWait   = 30 * time.Second
-	klausGatewayStopWait    = 20 * time.Second
+	// klausGatewayStartWait bounds the gateway's readiness once it runs; an
+	// image's pull is not counted (pullGatewayImage).
+	klausGatewayStartWait = 30 * time.Second
+	klausGatewayStopWait  = 20 * time.Second
 	// klausGatewayGateClosed is how long the controller stays out of the
 	// restarted gateway's reach in step 5b: longer than a few quick retries,
 	// so only a recovery that keeps trying delivers the turn.
@@ -160,7 +180,13 @@ const (
 // Muster's audit and protocol records the attribution reads.
 const (
 	musterTokenAccepted = "forwarded_id_token_accepted"
-	musterToolCall      = `"msg":"tools/call request"`
+	// musterActorBearerAccepted is muster's audit record of a call that
+	// carried the Session's actor JWT, served as the person the actor is
+	// bound to: kagent lists muster on a Session agent-manager's
+	// start_session binds, and the egress gateway replaces the forwarded
+	// id_token with that JWT.
+	musterActorBearerAccepted = "action=actor_bearer outcome=success"
+	musterToolCall            = `"msg":"tools/call request"`
 )
 
 // KlausGatewayTestOptions tunes the proof.
@@ -173,7 +199,7 @@ type KlausGatewayTestOptions struct {
 	GatewayBinary string
 	// Port is the host port of the gateway's Slack endpoints; the admin
 	// endpoints take Port+1, the fake Slack Web API Port+2 when it runs in
-	// this process. Default 18090.
+	// this process. Default the lab's own block, gatewayTestPort.
 	Port int
 	// SlackFakeBinary is the static Linux agentlab the fake Slack Web API
 	// container runs when the component's pods call it (default: this
@@ -190,10 +216,9 @@ type KlausGatewayTestOptions struct {
 	// RunDir holds the stores, the keys and the gateway's log; empty picks
 	// a temporary directory removed at the end.
 	RunDir string
-	// Workspaces adds the workspaces steps, the workspace a thread's Session works in
-	// (klausgatewaytest_workspaces.go); a lab without the workspace-manager
-	// fails it before anything runs.
-	Workspaces bool
+	// RefusalOnly runs the component's egress refusal notice step alone
+	// (klausgatewaytest_refusal.go): no host gateway, no fixture.
+	RefusalOnly bool
 }
 
 // KlausGatewayTest is the headless Swarmgeist proof: klaus-gateway against
@@ -210,12 +235,11 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	if user == nil {
 		return fmt.Errorf("no user %q in %s", email, config.File)
 	}
-	opts = opts.withDefaults()
-	if opts.Workspaces {
-		if err := klausGatewayWorkspacesPreflight(cfg, user.Email); err != nil {
-			return err
-		}
+	if opts.RefusalOnly && !cfg.KlausGatewayEnabled() {
+		return fmt.Errorf("--refusal-only proves the meta chart's klaus-gateway component, which is off in this lab (platform.klausGateway; `agentlab configure --klaus-gateway` turns it on)")
 	}
+	opts.Port = cmp.Or(opts.Port, gatewayTestPort(cfg))
+	opts = opts.withDefaults()
 	if err := portsFree(opts.Port, opts.Port+1, opts.Port+3); err != nil {
 		return err
 	}
@@ -250,6 +274,11 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	// every exit path.
 	klausGatewayCleanup(api)
 	defer klausGatewayCleanup(api)
+	endWorkspaces, err := startWorkspaceRun()
+	defer endWorkspaces()
+	if err != nil {
+		return err
+	}
 
 	// The fake workspace: the linked person, a person with no link, and the
 	// component half's linked person (klausgatewaytest_component.go), all
@@ -263,16 +292,11 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 		component: slackUserPrefix + run + "C",
 	}
 	emails := map[string]string{people.person: user.Email, people.stranger: "stranger@lab.local", people.component: user.Email}
-	if opts.Workspaces {
-		// The workspaces steps' colleague, linked when they start.
-		people.colleague = slackUserPrefix + run + "W"
-		emails[people.colleague] = accessDefaultSecond
-	}
 	var fake slackWorkspace
 	if cfg.KlausGatewayEnabled() {
 		step("Starting the fake Slack Web API as a container on the %s network (%s slack-fake, in %s) and pointing the component's Service %s/%s at it",
 			kindDockerNetwork, opts.SlackFakeBinary, probeImage, platformNamespace, klausGatewaySlackAPIService)
-		c, err := startSlackFakeContainer(cfg, opts.SlackFakeBinary, emails)
+		c, err := startSlackFakeContainer(cfg, opts.SlackFakeBinary, emails, nil)
 		if err != nil {
 			return err
 		}
@@ -284,12 +308,16 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 		defer removeService()
 		fake = c
 	} else {
-		f, err := startFakeSlack(net.JoinHostPort("127.0.0.1", strconv.Itoa(opts.Port+2)), emails)
+		f, err := startFakeSlack(net.JoinHostPort("127.0.0.1", strconv.Itoa(opts.Port+2)), emails, nil)
 		if err != nil {
 			return err
 		}
 		defer f.close()
 		fake = f
+	}
+
+	if opts.RefusalOnly {
+		return klausGatewayRefusalOnly(cfg, token, user, fake, emails)
 	}
 
 	step("Applying the fixtures in namespace %s: Agent %s on Harness %s (muster carrier %s with %s, requireApproval on the binding) and Agent %s on a Harness that does not exist (%s)",
@@ -321,7 +349,9 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	if err != nil {
 		return err
 	}
-	gate, err := startTCPGate(net.JoinHostPort("127.0.0.1", strconv.Itoa(opts.Port+3)), edge)
+	// The gate listens where the lab's hostnames resolve on the host: a
+	// second lab's domain resolves to its own loopback address.
+	gate, err := startTCPGate(net.JoinHostPort(cfg.GatewayHostAddress(), strconv.Itoa(opts.Port+3)), edge)
 	if err != nil {
 		return fmt.Errorf("the gate in front of the edge: %w", err)
 	}
@@ -332,6 +362,7 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 		return err
 	}
 	gw := newGatewayProcess(opts, runDir, caFile, target, fake.baseURL(), cfg.MusterBaseURL())
+	gw.container = gatewayContainerName(cfg)
 	// The gateway starts a thread's Session through agent-manager's
 	// start_session, a muster call it makes itself as the person, so it
 	// trusts the lab CA for muster as it does for the a2a target.
@@ -350,13 +381,13 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 		logs: func() (string, error) { return gw.logs(), nil },
 	}
 
-	step("1. Discovery: `@bot %s` as %s lists %q and hides %s; its Select button opens the picker, which hides it too, and a submitted selection of it is refused with the reason and starts nothing; %s, who has no link, is asked to sign in and reaches no controller",
-		slackAgentsWord, user.Email, klausGatewayTestDisplay, klausGatewayTestUnadmitted, people.stranger)
+	step("1. Discovery: `@bot %s` as %s lists %q and hides %s; its Select button opens the picker, which hides it too, and a submitted selection of it is refused with the reason and starts nothing; %s, who has no link, invokes the Ask an agent here shortcut, is told to sign in first, gets the Sign in button from `@bot %s` and reaches no controller",
+		slackAgentsWord, user.Email, klausGatewayTestDisplay, klausGatewayTestUnadmitted, people.stranger, slackLoginWord)
 	roster, err := p.roster(people.person)
 	if err != nil {
 		return fmt.Errorf("discovery: %w", err)
 	}
-	names := rosterNames(roster.shown())
+	names := rosterNames(roster)
 	if err := assertSlackRoster(names); err != nil {
 		return fmt.Errorf("discovery: %w", err)
 	}
@@ -367,17 +398,17 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	if err := assertNoSessions(api, klausGatewayTestUnadmitted); err != nil {
 		return err
 	}
-	signIn, err := p.signInPrompt(people.stranger, klausGatewayWordPrompt)
+	signInFirst, signIn, err := p.signInPrompt(people.stranger)
 	if err != nil {
 		return err
 	}
 	if err := assertNoSessions(api, klausGatewayTestAgent); err != nil {
-		return fmt.Errorf("after the unlinked person's message: %w", err)
+		return fmt.Errorf("after the unlinked person's shortcut and login: %w", err)
 	}
-	note("roster: %s; %s refused: %q; %s asked to sign in (%s), no Session of either Agent",
-		strings.Join(names, ", "), klausGatewayTestUnadmitted, excerpt(refusal, 160), people.stranger, excerpt(signIn, 80))
+	note("roster: %s; %s refused: %q; %s's shortcut answered %q, `@bot %s` offered the Sign in button (%s); no Session of either Agent",
+		strings.Join(names, ", "), klausGatewayTestUnadmitted, excerpt(refusal, 160), people.stranger, excerpt(signInFirst, 120), slackLoginWord, excerpt(signIn, 80))
 
-	step("2. One streamed turn as %s: the thread's first turn creates the Session, the answer carries the Agent's display name and icon", user.Email)
+	step("2. One streamed turn as %s: the Ask an agent here shortcut on a message opens the picker, its submission with %s opens the conversation in that message's thread, the first turn creates the Session, the answer carries the Agent's display name and icon", user.Email, klausGatewayTestAgent)
 	main := &slackThread{user: people.person}
 	turn, err := p.firstTurn(main, klausGatewayWordPrompt)
 	if err != nil {
@@ -423,11 +454,11 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	note("%d approval(s) on task %s (%s); GetTask=%s; nothing of the session left at input-required; answered %q",
 		approved.rounds, approved.taskID, strings.Join(approved.cards, "; "), approved.finalState, excerpt(approved.answer, 80))
 
-	step("The turn is attributed to %s at muster (the forwarded id_token accepted, the tool calls under that subject)", user.Email)
+	step("The turn is attributed to %s at muster (the forwarded id_token accepted or the Session's actor bound to the person, the tool calls under that subject)", user.Email)
 	if err := assertMusterAttribution(user.Email, identity.subject, toolTurnStart); err != nil {
 		return err
 	}
-	note("muster's audit log: %s email=%s; tools/call requests under subject %.8s…", musterTokenAccepted, user.Email, identity.subject)
+	note("muster's audit log: %s email=%s or %s for subject %.8s…; tools/call requests under that subject", musterTokenAccepted, user.Email, musterActorBearerAccepted, identity.subject)
 
 	step("3b. Deny in a second thread: the tool call never reaches muster and the task ends")
 	denied := &slackThread{user: people.person}
@@ -450,22 +481,28 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	if !declined.finalState.Terminal() {
 		return fmt.Errorf("after %d denial(s) task %s is still %s at the controller", declined.rounds, declined.taskID, declined.finalState)
 	}
-	calls, err := musterCallsSince(declineStart, user.Email, identity.subject)
+	// Judged by the denied task's own tool calls: the person's other muster
+	// clients (a Dev Portal tab polling as them) call muster meanwhile.
+	deniedTools, err := musterToolNames(declined.tools)
+	if err != nil {
+		return fmt.Errorf("task %s: %w", declined.taskID, err)
+	}
+	ran, err := musterTaskCallsSince(declineStart, identity.subject, deniedTools)
 	if err != nil {
 		return err
 	}
-	if calls.calls != 0 {
-		return fmt.Errorf("muster logged %d tools/call by %s during the denied task — the denied tool ran anyway", calls.calls, user.Email)
+	if len(ran) != 0 {
+		return fmt.Errorf("muster logged %s by %s during the denied task — the denied tool ran anyway", strings.Join(ran, ", "), user.Email)
 	}
-	note("%d denial(s) on task %s → %s at the controller (turn outcome %s); no tools/call by %s reached muster; the thread shows %q",
-		declined.rounds, declined.taskID, declined.finalState, declined.outcome, user.Email, excerpt(declined.answer, 80))
+	note("%d denial(s) on task %s → %s at the controller (turn outcome %s); none of its tools (%s) reached muster as %s; the thread shows %q",
+		declined.rounds, declined.taskID, declined.finalState, declined.outcome, strings.Join(deniedTools, ", "), user.Email, excerpt(declined.answer, 80))
 
 	step("4. `stop`: a long turn is stopped from the thread; the gateway cancels the task at the controller and the thread takes a following turn")
 	tasksBefore, err := api.taskIDs(context.Background(), session)
 	if err != nil {
 		return err
 	}
-	stopped, err := p.stop(main, klausGatewayEssayPrompt)
+	stopped, err := p.stop(main, klausGatewayStopPrompt)
 	if err != nil {
 		return err
 	}
@@ -520,8 +557,8 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	var signedIn *slackTurn
 	var approvedAfter *decisionOutcome
 	if gatewayKeepsHeld(gw.version()) {
-		step("5c. Restart mid-sign-in: %s, who has no link, asks in a new thread and is prompted to sign in; the gateway stops, the link a completed sign-in leaves is written, the gateway starts — the parked message is answered without being sent again", people.stranger)
-		if signedIn, err = p.restartMidSignIn(gw, filepath.Join(runDir, gatewayLinksFile), keys.store, people.stranger, identity.link(user.Email, token)); err != nil {
+		step("5c. Restart mid-sign-in: %s, who has no link, asks in %s's conversation and is prompted to sign in; the gateway stops, the link a completed sign-in leaves is written, the gateway starts — the parked message comes back as %s's access prompt, and after Allow it is answered without being sent again", people.stranger, user.Email, user.Email)
+		if signedIn, err = p.restartMidSignIn(gw, filepath.Join(runDir, gatewayLinksFile), keys.store, main, people.stranger, identity.link(user.Email, token)); err != nil {
 			return err
 		}
 		note("the restarted gateway replayed the message parked before the restart: answered %q", excerpt(signedIn.answer, 40))
@@ -536,35 +573,23 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 		note("%s predates klaus-gateway %s, which keeps a parked message and a paused approval across a restart: steps 5c and 5d skipped", gw.version(), klausGatewayHeldSince)
 	}
 
-	var workspaces *gatewayWorkspacesOutcome
-	if opts.Workspaces {
-		ws := &gatewayWorkspaces{cfg: cfg, timeout: opts.ReadyTimeout, p: p, gw: gw, people: people, api: api}
-		defer func() {
-			if err := ws.cleanup(); err != nil {
-				warn("removing what the workspaces steps left: %v", err)
-			}
-		}()
-		if workspaces, err = ws.run(user, keys, filepath.Join(runDir, gatewayLinksFile)); err != nil {
-			return err
-		}
-		step("W. Removing the workspaces steps' Sessions, Agent, workspaces and provider sign-ins")
-		if err := ws.cleanup(); err != nil {
-			return err
-		}
-		if left := gatewayWSLeftovers(ws); len(left) > 0 {
-			return fmt.Errorf("the workspaces steps left behind: %s", strings.Join(left, "; "))
-		}
-		note("the Agent %s, its Sessions and the workspaces %s and %s are gone, both people disconnected from %s", gatewayWSAgent, gatewayWSPublic, gatewayWSPrivate, config.WorkspaceProviderFake)
-	}
-
 	// The component half (klausgatewaytest_component.go) while the meta
 	// chart's klaus-gateway runs in this lab: its fixtures are the ones
 	// above, its Slack Web API the same fake, and the session its turn
 	// creates is removed by the cleanup.
 	var component *componentOutcome
+	var egressRefusal, deletedRefusal *refusalOutcome
 	if cfg.KlausGatewayEnabled() {
-		if component, err = klausGatewayComponentProof(token, identity, user, fake, people.component); err != nil {
+		if component, err = klausGatewayComponentProof(cfg, token, identity, user, fake, people.component); err != nil {
 			return err
+		}
+		if egressRefusal, err = klausGatewayRefusalProof(cfg, token, user, fake, emails, false); err != nil {
+			return err
+		}
+		if egressRefusal != nil {
+			if deletedRefusal, err = klausGatewayRefusalProof(cfg, token, user, fake, emails, true); err != nil {
+				return err
+			}
 		}
 	} else {
 		note("the meta chart's klaus-gateway component is off in this lab (platform.klausGateway; `agentlab configure --klaus-gateway` turns it on): the host-mode assertions alone")
@@ -585,28 +610,29 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	note("nothing left in the kagent namespace; gateway stopped, run directory %s", runDirFate)
 
 	fmt.Println()
-	fmt.Printf("PASS: klaus-gateway %s ran on the host against %s (TLS with the lab CA, JWT validated at the edge) with Slack in events mode on a fake Web API; `@bot agents` as %s listed %q and hid %s, as did the picker its Select button opened, and a selection of it was refused with the reason; a person with no link was asked to sign in and reached no controller\n",
+	fmt.Printf("PASS: klaus-gateway %s ran on the host against %s (TLS with the lab CA, JWT validated at the edge) with Slack in events mode on a fake Web API; `@bot agents` as %s listed %q and hid %s, as did the picker its Select button opened, and a selection of it was refused with the reason; a person with no link was told by the Ask an agent here shortcut to sign in first, got the Sign in button from `@bot login` and reached no controller\n",
 		gw.describe(), target, user.Email, klausGatewayTestDisplay, klausGatewayTestUnadmitted)
-	fmt.Printf("PASS: one streamed turn in a Slack thread, answered as %q with the Agent's icon, bound the thread to Session %s, the only session of the Agent; the gateway forwarded %s's linked id_token and muster ran the agent's tool calls under that subject\n", klausGatewayTestDisplay, sessionID, user.Email)
+	fmt.Printf("PASS: one streamed turn in a Slack thread the Ask an agent here shortcut opened, answered as %q with the Agent's icon, bound the thread to Session %s, the only session of the Agent; the gateway forwarded %s's linked id_token and muster ran the agent's tool calls under that subject\n", klausGatewayTestDisplay, sessionID, user.Email)
 	fmt.Printf("PASS: the requireApproval binding paused task %s at input-required; %d Approve click(s) on the card resumed it in place to %s; in a second thread %d Deny click(s) ended task %s (%s) without the call reaching muster\n",
 		approved.taskID, approved.rounds, approved.finalState, declined.rounds, declined.taskID, declined.finalState)
 	fmt.Printf("PASS: `stop` in the thread had the gateway cancel task %s at the controller (TASK_STATE_CANCELED); the thread took a following turn\n", canceled)
 	fmt.Printf("PASS: a gateway restart on the bolt stores kept the thread → Session mapping: the next turn continued %s and recalled the earlier word; no link refresh in the run\n", sessionID)
 	fmt.Printf("PASS: a restart in the middle of a turn, the controller out of reach for %s after it: the restarted gateway kept retrying and posted task %s's answer into its thread %s later, without a reply\n", klausGatewayGateClosed, resumed.taskID, resumed.after.Round(time.Second))
 	if signedIn != nil {
-		fmt.Printf("PASS: a restart between the sign-in prompt and the sign-in lost nothing: the restarted gateway replayed %s's parked message, answered %q\n", people.stranger, excerpt(signedIn.answer, 40))
+		fmt.Printf("PASS: a restart between the sign-in prompt and the sign-in lost nothing: the restarted gateway replayed %s's parked message, which after the owner's Allow was answered %q\n", people.stranger, excerpt(signedIn.answer, 40))
 		fmt.Printf("PASS: a restart while task %s waited on its approval card lost nothing: %d Approve click(s) after the restart resumed it in place to %s\n", approvedAfter.taskID, approvedAfter.rounds, approvedAfter.finalState)
-	}
-	if workspaces != nil {
-		for _, line := range gatewayWorkspacesPASS(workspaces) {
-			fmt.Printf("PASS: %s\n", line)
-		}
 	}
 	if component != nil {
 		fmt.Printf("PASS: the meta chart's %s component runs the OBO link store in Secret %s — Role %s grants get/update/patch on that Secret alone, no store volume, RollingUpdate\n", klausGatewayComponent, klausGatewayLinksSecret, klausGatewayLinksSecret)
 		fmt.Printf("PASS: two links written through pkg/auth/musterlink with the lab's store-key survived the loss of pod %s: %s was Ready %s after the deletion and read %d links (%d before the proof), both read back unchanged, the proof's records removed\n",
 			component.pod, component.replacement, component.elapsed, component.links, component.baseline)
 		fmt.Printf("PASS: one Slack turn through the component (%s, the in-cluster target %s) as %s answered %q in the fake thread\n", component.version, klausGatewayInClusterTarget, user.Email, excerpt(component.answer, 40))
+	}
+	if egressRefusal != nil {
+		egressRefusal.printPass(user.Email)
+	}
+	if deletedRefusal != nil {
+		deletedRefusal.printPass(user.Email)
 	}
 	fmt.Printf("PASS: nothing left behind — the Agents, the AgentTemplates, the RemoteMCPServer, the Sessions, the gateway process and its stores are gone\n")
 	return nil
@@ -615,7 +641,7 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 // withDefaults fills the zero options.
 func (o KlausGatewayTestOptions) withDefaults() KlausGatewayTestOptions {
 	if o.Port == 0 {
-		o.Port = 18090
+		o.Port = defaultGatewayTestPort
 	}
 	if o.Harness == "" {
 		o.Harness = kagentHarness
@@ -632,6 +658,33 @@ func (o KlausGatewayTestOptions) withDefaults() KlausGatewayTestOptions {
 		}
 	}
 	return o
+}
+
+// The host ports of the host-mode gateway proofs: each lab a block of
+// gatewayTestPortStride ports (a proof takes at most five), the lab on the
+// default API server port at defaultGatewayTestPort.
+const (
+	defaultGatewayTestPort = 18090
+	gatewayTestPortStride  = 10
+	// gatewayTestPortBlocks keeps the last block's ports below 65536.
+	gatewayTestPortBlocks = (65536 - defaultGatewayTestPort) / gatewayTestPortStride
+)
+
+// gatewayTestPort is the lab's default first host port of the gateway
+// proofs, derived from its API server port: no two labs on a machine share
+// that one (another lab's recorded ports are refused), so their blocks never
+// overlap and two labs run the proofs at the same time.
+func gatewayTestPort(cfg *config.Config) int {
+	block := (cfg.APIServerPort - config.DefaultAPIServerPort) % gatewayTestPortBlocks
+	if block < 0 {
+		block += gatewayTestPortBlocks
+	}
+	return defaultGatewayTestPort + block*gatewayTestPortStride
+}
+
+// gatewayContainerName is the image shape's container of the lab's proofs.
+func gatewayContainerName(cfg *config.Config) string {
+	return cfg.ClusterName + "-" + gatewayContainerSuffix
 }
 
 // portsFree refuses to start on a port something else already listens on.
@@ -686,7 +739,8 @@ func edgeHostPort(httpsBase string) (string, error) {
 
 // gatedTarget is the gateway's grpcs:// target through the gate on port: the
 // edge's own hostname, so TLS verifies against the lab CA as usual — the
-// lab's domain resolves to loopback, where the gate listens.
+// lab's domain resolves to the lab's loopback address, where the gate
+// listens.
 func gatedTarget(edge string, port int) string {
 	host, _, _ := net.SplitHostPort(edge)
 	return "grpcs://" + net.JoinHostPort(host, strconv.Itoa(port))
@@ -857,9 +911,10 @@ const klausGatewayNoHarness = "agentlab-no-such-harness"
 
 // klausGatewayCleanup removes what the proof creates: the Sessions of the
 // fixture (the controller's, listed as the person), the Agents, the
-// AgentTemplates and the RemoteMCPServer. Best effort; klausGatewayLeftovers
-// reports what stayed.
+// AgentTemplates and the RemoteMCPServer, and the refusal step's agents.
+// Best effort; klausGatewayLeftovers reports what stayed.
 func klausGatewayCleanup(api *kagentAPI) {
+	removeRefusalAgents()
 	listCtx, listCancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	sessions, err := fixtureSessions(listCtx, api)
 	listCancel()
@@ -909,6 +964,9 @@ func klausGatewayLeftovers(api *kagentAPI) []string {
 		if exists, _ := objectExists(ctx, gvr, kagentNamespace, obj.name); exists {
 			left = append(left, obj.resource+" "+obj.name)
 		}
+	}
+	for _, name := range refusalAgents() {
+		left = append(left, "agent "+name)
 	}
 	return left
 }
@@ -1064,8 +1122,18 @@ type gatewayProcess struct {
 	// network is the container's docker network (default host); host the
 	// address the proof reaches its endpoints on (default 127.0.0.1).
 	network, host string
-	cmd           *exec.Cmd
-	logFile       *os.File
+	// publish are the container's published ports (docker run -p) and
+	// addHosts its extra host entries (--add-host), for the image shape on a
+	// network the host has no route into.
+	publish, addHosts []string
+	// container names the image shape's container (default the first lab's,
+	// gatewayContainerName); startWait bounds the readiness once it runs and
+	// stopWait the end after stop() asked for it (defaults
+	// klausGatewayStartWait and klausGatewayStopWait).
+	container           string
+	startWait, stopWait time.Duration
+	cmd                 *exec.Cmd
+	logFile             *os.File
 	// exited is closed once the process has ended; exitErr is its Wait result.
 	// A closed channel satisfies every later wait, so a gateway that died
 	// before serving is noticed by the readiness probe and stop() still
@@ -1095,6 +1163,10 @@ func (g *gatewayProcess) adminURL() string {
 }
 
 func (g *gatewayProcess) logPath() string { return filepath.Join(g.runDir, gatewayLogFile) }
+
+func (g *gatewayProcess) containerName() string {
+	return cmp.Or(g.container, config.DefaultClusterName+"-"+gatewayContainerSuffix)
+}
 
 // gatewayFlags is where the gateway listens, what it talks to and where its
 // files are, for one shape.
@@ -1147,17 +1219,33 @@ func gatewayArgs(f gatewayFlags) []string {
 // (the loopback ports, the fake and the edge's public hostname as the host
 // sees them), the caller's uid so the stores are writable in the run
 // directory, the run directory and the CA mounted read-write and read-only.
+// Rootless Podman maps a container uid other than root to a subordinate uid
+// of the host, which cannot write the caller's run directory; keep-id maps
+// the caller's uid to itself.
 func dockerRunArgs(image, name, network, runDir, caFile string, uid, gid int, args []string) []string {
-	return append(dockerRun(name, cmp.Or(network, "host"), "--rm",
+	flags := []string{"--rm"}
+	if rootlessPodmanOnLinux() {
+		flags = append(flags, "--userns=keep-id")
+	}
+	flags = append(flags,
 		"--user", fmt.Sprintf("%d:%d", uid, gid),
 		"-v", runDir+":"+gatewayDataPath,
 		"-v", caFile+":"+gatewayCAPath+":ro",
 		image,
-	), args...)
+	)
+	return append(dockerRun(name, cmp.Or(network, "host"), flags...), args...)
 }
 
 // start launches the gateway and waits for its readiness.
 func (g *gatewayProcess) start() error {
+	startWait := cmp.Or(g.startWait, klausGatewayStartWait)
+	if g.opts.GatewayBinary == "" {
+		// The pull is not the gateway's start: an uncached image is in the
+		// host's cache before the readiness wait begins.
+		if err := pullGatewayImage(g.opts.GatewayImage, startWait); err != nil {
+			return err
+		}
+	}
 	logFile, err := os.OpenFile(g.logPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return err
@@ -1174,9 +1262,9 @@ func (g *gatewayProcess) start() error {
 			g.cmd.Env = append(g.cmd.Env, "SSL_CERT_FILE="+g.caFile)
 		}
 	} else {
-		_ = command(dockerBin, "rm", "-f", gatewayContainer).Run()
+		_ = command(dockerBin, "rm", "-f", g.containerName()).Run()
 		flags.dataDir, flags.caFile = gatewayDataPath, gatewayCAPath
-		args := dockerRunArgs(g.opts.GatewayImage, gatewayContainer, g.network, g.runDir, g.caFile, os.Getuid(), os.Getgid(), append(gatewayArgs(flags), g.extraArgs...))
+		args := dockerRunArgs(g.opts.GatewayImage, g.containerName(), g.network, g.runDir, g.caFile, os.Getuid(), os.Getgid(), append(gatewayArgs(flags), g.extraArgs...))
 		// The mounts and the variables go before the image, which
 		// dockerRunArgs puts right after its own flags.
 		var extra []string
@@ -1185,6 +1273,12 @@ func (g *gatewayProcess) start() error {
 		}
 		if g.trustLabCA {
 			extra = append(extra, "-e", "SSL_CERT_FILE="+gatewayCAPath)
+		}
+		for _, p := range g.publish {
+			extra = append(extra, "-p", p)
+		}
+		for _, h := range g.addHosts {
+			extra = append(extra, "--add-host", h)
 		}
 		args = slices.Insert(args, slices.Index(args, g.opts.GatewayImage), extra...)
 		g.cmd = command(dockerBin, args...)
@@ -1199,7 +1293,7 @@ func (g *gatewayProcess) start() error {
 	go func(cmd *exec.Cmd, exited chan<- struct{}) { g.exitErr = cmd.Wait(); close(exited) }(g.cmd, g.exited)
 
 	client := &http.Client{Timeout: 2 * time.Second}
-	ready := waitFor(int(klausGatewayStartWait/(500*time.Millisecond)), 500*time.Millisecond, func() bool {
+	ready := waitFor(int(startWait/(500*time.Millisecond)), 500*time.Millisecond, func() bool {
 		if g.ended() {
 			return true
 		}
@@ -1211,7 +1305,7 @@ func (g *gatewayProcess) start() error {
 		return resp.StatusCode == http.StatusOK
 	})
 	if g.ended() || !ready {
-		why := fmt.Sprintf("did not become ready at %s%s within %s", g.adminURL(), gatewayReadyPath, klausGatewayStartWait)
+		why := fmt.Sprintf("did not become ready at %s%s within %s", g.adminURL(), gatewayReadyPath, startWait)
 		if g.ended() {
 			why = fmt.Sprintf("exited before serving %s (%v)", gatewayReadyPath, g.exitErr)
 		}
@@ -1233,27 +1327,46 @@ func (g *gatewayProcess) ended() bool {
 }
 
 // stop ends the gateway: SIGTERM (docker stop for the container) and a
-// bounded wait, SIGKILL after it. Idempotent; a gateway that never started
-// is nothing to stop.
+// bounded wait, SIGKILL after it. The container is removed whatever the
+// docker client did: a client killed while the daemon still created or ran
+// the container leaves it holding the lab's ports. Idempotent; a gateway
+// that never started is nothing to stop.
 func (g *gatewayProcess) stop() error {
 	if g.cmd == nil {
 		return nil
 	}
-	if g.opts.GatewayBinary == "" {
-		_ = command(dockerBin, "stop", "-t", "15", gatewayContainer).Run()
+	image := g.opts.GatewayBinary == ""
+	if image {
+		_ = command(dockerBin, "stop", "-t", "15", g.containerName()).Run()
 	} else {
 		_ = g.cmd.Process.Signal(syscall.SIGTERM)
 	}
 	select {
 	case <-g.exited:
-	case <-time.After(klausGatewayStopWait):
+	case <-time.After(cmp.Or(g.stopWait, klausGatewayStopWait)):
 		_ = g.cmd.Process.Kill()
 		<-g.exited
+	}
+	if image {
+		_ = command(dockerBin, "rm", "-f", g.containerName()).Run()
 	}
 	g.cmd, g.exited = nil, nil
 	if g.logFile != nil {
 		_ = g.logFile.Close()
 		g.logFile = nil
+	}
+	return nil
+}
+
+// pullGatewayImage puts the image in the host's docker cache unless it is
+// there already.
+func pullGatewayImage(image string, wait time.Duration) error {
+	if _, err := outputQuiet(dockerBin, "image", "inspect", image); err == nil {
+		return nil
+	}
+	note("pulling %s (not counted against the %s readiness wait)", image, wait)
+	if _, err := outputQuiet(dockerBin, "pull", "-q", image); err != nil {
+		return fmt.Errorf("pulling the klaus-gateway image: %w", err)
 	}
 	return nil
 }
@@ -1362,10 +1475,9 @@ func tailLines(s string, n int) string {
 // --- Slack, driven as the people -----------------------------------------------
 
 // slackPeople are the Slack users of the fake workspace: the linked person,
-// one with no link, the person the component half links in its Secret, and
-// the workspaces steps' colleague (empty without --workspaces).
+// one with no link, and the person the component half links in its Secret.
 type slackPeople struct {
-	person, stranger, component, colleague string
+	person, stranger, component string
 }
 
 // slackThread is one conversation of the proof: the thread's ts (empty until
@@ -1406,18 +1518,128 @@ func (p *slackProof) records(kind, thread string) []gatewayRecord {
 	return threadRecords(gatewayRecords(logs, kind), thread)
 }
 
-// say posts text as a mention in the thread (its first message opens it)
-// and waits for the turn's end.
+// say posts text as a mention in the thread and waits for the turn's end; a
+// thread not opened yet is opened through the shortcut (open).
 func (p *slackProof) say(t *slackThread, text string) (*slackTurn, error) {
+	if t.ts == "" {
+		return p.open(t, text)
+	}
 	before := len(p.fake.thread(p.channel, t.ts))
-	ts, err := p.driver.mention(t.user, t.ts, text)
+	if _, err := p.driver.mention(t.user, t.ts, text); err != nil {
+		return nil, err
+	}
+	return p.awaitTurn(t, before)
+}
+
+// open starts a conversation in a new thread the way a person does: the "Ask
+// an agent here" shortcut on a message of theirs in the channel opens the
+// agent picker for that message's thread, and the picker submitted with the
+// fixture and the question posts the question there and runs the thread's
+// first turn. A mention outside a conversation gets the help, so this is the
+// only opener besides the slash command.
+func (p *slackProof) open(t *slackThread, text string) (*slackTurn, error) {
+	root := p.fake.nextTS()
+	picker, err := p.shortcutPicker(t.user, root)
 	if err != nil {
 		return nil, err
 	}
-	if t.ts == "" {
-		t.ts, before = ts, 0
+	ref, ok := pickerRef(picker, klausGatewayTestAgent)
+	if !ok {
+		return nil, fmt.Errorf("the picker the shortcut opened offers %s, not %s", strings.Join(pickerOptions(picker), ", "), klausGatewayTestAgent)
 	}
+	t.ts = root
+	if err := p.driver.submitView(t.user, picker, pickerValues(picker, ref, text)); err != nil {
+		return nil, err
+	}
+	return p.awaitPastWorkspace(t, 0)
+}
+
+// shortcutPicker invokes the shortcut as user on the lone message ts and
+// returns the agent picker it opened; a private answer instead is the error.
+func (p *slackProof) shortcutPicker(user, ts string) (map[string]any, error) {
+	picker, answer, err := p.invokeShortcut(user, ts)
+	switch {
+	case err != nil:
+		return nil, err
+	case picker == nil:
+		return nil, fmt.Errorf("the %s shortcut opened no picker for %s but answered %q", slackShortcutAskAgent, user, excerpt(answer, 300))
+	case picker[slackKeyCallbackID] != slackPickerCallback:
+		return nil, fmt.Errorf("the %s shortcut opened modal %v, not the agent picker %s", slackShortcutAskAgent, picker[slackKeyCallbackID], slackPickerCallback)
+	}
+	return picker, nil
+}
+
+// shortcutRefused invokes the shortcut as user on the lone message ts and
+// returns the private answer it got; a picker opening is the error.
+func (p *slackProof) shortcutRefused(user, ts string) (string, error) {
+	picker, answer, err := p.invokeShortcut(user, ts)
+	if err != nil {
+		return "", err
+	}
+	if picker != nil {
+		return "", fmt.Errorf("the %s shortcut opened modal %v for %s instead of answering", slackShortcutAskAgent, picker[slackKeyCallbackID], user)
+	}
+	return answer, nil
+}
+
+// invokeShortcut invokes the "Ask an agent here" shortcut as user on the lone
+// message ts and returns what came of it: the modal it opened, or the answer
+// posted to the person alone through its response_url. Neither within
+// klausGatewayReplyWait is the error.
+func (p *slackProof) invokeShortcut(user, ts string) (map[string]any, string, error) {
+	views, answers := len(p.fake.openedViews()), len(p.fake.responses())
+	if err := p.driver.shortcut(user, slackShortcutAskAgent, ts, ""); err != nil {
+		return nil, "", err
+	}
+	var view map[string]any
+	var answer string
+	if !waitFor(int(klausGatewayReplyWait/slackPoll), slackPoll, func() bool {
+		if opened := p.fake.openedViews(); len(opened) > views {
+			view = opened[len(opened)-1]
+		} else if posted := p.fake.responses(); len(posted) > answers {
+			answer = responseText(posted[len(posted)-1])
+		}
+		return view != nil || answer != ""
+	}) {
+		return nil, "", fmt.Errorf("the %s shortcut as %s opened no modal and got no answer within %s", slackShortcutAskAgent, user, klausGatewayReplyWait)
+	}
+	return view, answer, nil
+}
+
+// awaitPastWorkspace waits for the thread's next turn; a workspace prompt
+// the gateway posts first (the person has workspaces the picker did not
+// list in time — whatever an earlier proof left in their name) is answered
+// with No workspace, since the turn proves the gateway, not a workspace.
+func (p *slackProof) awaitPastWorkspace(t *slackThread, before int) (*slackTurn, error) {
+	var prompt slackMessage
+	var asked bool
+	waitFor(int(klausGatewayReplyWait/slackPoll), slackPoll, func() bool {
+		if prompt, asked = workspacePromptIn(p.fake.thread(p.channel, t.ts)); asked {
+			return true
+		}
+		return len(p.records(recordTurnDone, t.ts)) > t.turns
+	})
+	if !asked {
+		return p.awaitTurn(t, before)
+	}
+	before = len(p.fake.thread(p.channel, t.ts))
+	if err := p.driver.click(t.user, prompt, slackWorkspaceNone); err != nil {
+		return nil, fmt.Errorf("answering the workspace prompt with No workspace: %w", err)
+	}
+	note("asked for a workspace (%q); answered No workspace", excerpt(prompt.shown(), 60))
 	return p.awaitTurn(t, before)
+}
+
+// responseText is the text of a body the gateway posted to a response_url
+// (JSON with a text field), or the body as it came.
+func responseText(body string) string {
+	var msg struct {
+		Text string `json:"text"`
+	}
+	if json.Unmarshal([]byte(body), &msg) == nil && msg.Text != "" {
+		return msg.Text
+	}
+	return body
 }
 
 // slackPoll is how often the proof reads the gateway's log for a turn's end:
@@ -1446,7 +1668,13 @@ func (p *slackProof) awaitTurn(t *slackThread, before int) (*slackTurn, error) {
 // firstTurn is a thread's first message with one visible retry: a cold
 // worker's first resume can hit Substrate's ResumeActor deadline once.
 func (p *slackProof) firstTurn(t *slackThread, text string) (*slackTurn, error) {
-	turn, err := p.say(t, text)
+	return p.firstTurnBy(p.say, t, text)
+}
+
+// firstTurnBy is firstTurn whose first message is sent by first; the retry
+// is a plain say in the thread it opened.
+func (p *slackProof) firstTurnBy(first func(*slackThread, string) (*slackTurn, error), t *slackThread, text string) (*slackTurn, error) {
+	turn, err := first(t, text)
 	if err == nil && (turn.record.Outcome == outcomeCompleted || turn.record.Outcome == outcomeInputReq) {
 		return turn, nil
 	}
@@ -1498,14 +1726,12 @@ func (p *slackProof) roster(user string) (slackMessage, error) {
 		return slackMessage{}, err
 	}
 	msgs, ok := waitThread(p.fake, p.channel, ts, klausGatewayReplyWait, func(msgs []slackMessage) bool {
-		_, found := findMessage(msgs, slackRosterHeading)
-		return found
+		return slices.ContainsFunc(msgs, slackMessage.isRoster)
 	})
 	if !ok {
 		return slackMessage{}, fmt.Errorf("`@bot %s` got no roster within %s; the thread shows: %s", slackAgentsWord, klausGatewayReplyWait, threadLine(msgs))
 	}
-	post, _ := findMessage(msgs, slackRosterHeading)
-	return post, nil
+	return msgs[slices.IndexFunc(msgs, slackMessage.isRoster)], nil
 }
 
 // assertSlackRoster checks the roster lists the admitted fixture by its
@@ -1562,10 +1788,7 @@ func (p *slackProof) refusal(user string, roster slackMessage, question string) 
 		return "", fmt.Errorf("the picker offers %s; wanted %s and not %s", strings.Join(offered, ", "), ref, unadmitted)
 	}
 	shown := len(p.fake.thread(p.channel, roster.ThreadTS))
-	if err := p.driver.submitView(user, picker, map[string]any{
-		slackPickerAgentBlock:    map[string]any{slackPickerAgentAction: map[string]any{fieldTypeKey: slackStaticSelect, slackSelectedOption: map[string]any{slackKeyValue: unadmitted}}},
-		slackPickerQuestionBlock: map[string]any{slackPickerQuestionAction: map[string]any{fieldTypeKey: slackPlainTextInput, slackKeyValue: question}},
-	}); err != nil {
+	if err := p.driver.submitView(user, picker, pickerValues(picker, unadmitted, question)); err != nil {
 		return "", err
 	}
 	msgs, ok := waitThread(p.fake, p.channel, roster.ThreadTS, klausGatewayReplyWait, func(msgs []slackMessage) bool {
@@ -1606,18 +1829,69 @@ func pickerOptions(view map[string]any) []string {
 	return refs
 }
 
-// signInPrompt posts a message as a person with no link and returns the
-// sign-in link: the Sign in button (obo_sign_in) the gateway shows that
-// person alone, pointing at its link route. The prose around it is the
-// gateway's to word.
-func (p *slackProof) signInPrompt(user, text string) (string, error) {
-	ts, err := p.driver.mention(user, "", text)
-	if err != nil {
-		return "", err
+// pickerRef is the agent ref the picker offers for the Agent name: the bare
+// name for an agent of the gateway's namespace, else <namespace>/<name>.
+func pickerRef(view map[string]any, name string) (string, bool) {
+	for _, ref := range pickerOptions(view) {
+		if ref == name || strings.HasSuffix(ref, "/"+name) {
+			return ref, true
+		}
 	}
+	return "", false
+}
+
+// pickerValues is a submission's state.values for the picker: the agent ref
+// selected, the question typed and, where the picker carries the optional
+// Workspace input, that input left empty — No workspace.
+func pickerValues(view map[string]any, ref, question string) map[string]any {
+	values := map[string]any{
+		slackPickerAgentBlock:    map[string]any{slackPickerAgentAction: map[string]any{fieldTypeKey: slackStaticSelect, slackSelectedOption: map[string]any{slackKeyValue: ref}}},
+		slackPickerQuestionBlock: map[string]any{slackPickerQuestionAction: map[string]any{fieldTypeKey: slackPlainTextInput, slackKeyValue: question}},
+	}
+	blocks, _ := view[slackKeyBlocks].([]any)
+	for _, b := range blocks {
+		block, _ := b.(map[string]any)
+		if id, _ := block[slackKeyBlockID].(string); strings.HasPrefix(id, slackPickerWorkspaceBlock+".") {
+			values[id] = map[string]any{slackPickerWorkspaceAction: map[string]any{fieldTypeKey: slackStaticSelect}}
+		}
+	}
+	return values
+}
+
+// signInPrompt is what a person with no link meets: the shortcut on a
+// message of theirs opens no picker — the agents are listed with the
+// person's permissions — and answers them privately to sign in first with
+// `@bot login`; `@bot login` in that message's thread then shows them alone
+// the Sign in button (obo_sign_in) pointing at the gateway's link route. It
+// returns the shortcut's answer and the link; the prose is the gateway's to
+// word.
+func (p *slackProof) signInPrompt(user string) (string, string, error) {
+	ts := p.fake.nextTS()
+	answer, err := p.shortcutRefused(user, ts)
+	if err != nil {
+		return "", "", err
+	}
+	if !strings.Contains(answer, slackSignInFirst) || !strings.Contains(answer, slackLoginWord) {
+		return "", "", fmt.Errorf("the unlinked %s's shortcut was answered %q, not told to %s with %s", user, excerpt(answer, 300), slackSignInFirst, slackLoginWord)
+	}
+	if _, err := p.driver.mention(user, ts, slackLoginWord); err != nil {
+		return "", "", err
+	}
+	link, _, err := p.awaitSignIn(user, ts, 0)
+	if err != nil {
+		return "", "", fmt.Errorf("after `@bot %s`: %w", slackLoginWord, err)
+	}
+	first, _, _ := strings.Cut(answer, "\n")
+	return first, link, nil
+}
+
+// awaitSignIn waits for the Sign in button (obo_sign_in) the gateway shows
+// user in the thread past its first from messages, and returns the button's
+// link — the gateway's link route — and the thread as it then stood.
+func (p *slackProof) awaitSignIn(user, threadTS string, from int) (string, []slackMessage, error) {
 	var button map[string]any
-	msgs, ok := waitThread(p.fake, p.channel, ts, klausGatewayReplyWait, func(msgs []slackMessage) bool {
-		for _, m := range msgs {
+	msgs, ok := waitThread(p.fake, p.channel, threadTS, klausGatewayReplyWait, func(msgs []slackMessage) bool {
+		for _, m := range msgs[min(from, len(msgs)):] {
 			if b, found := m.action(slackActionSignIn); found && (m.Recipient == user || m.Method == slackPostMessage) {
 				button = b
 				return true
@@ -1626,13 +1900,13 @@ func (p *slackProof) signInPrompt(user, text string) (string, error) {
 		return false
 	})
 	if !ok {
-		return "", fmt.Errorf("the unlinked %s got no sign-in prompt (a %s button shown to them) within %s; the thread shows: %s", user, slackActionSignIn, klausGatewayReplyWait, threadLine(msgs))
+		return "", msgs, fmt.Errorf("the unlinked %s got no sign-in prompt (a %s button shown to them) within %s; the thread shows: %s", user, slackActionSignIn, klausGatewayReplyWait, threadLine(msgs))
 	}
 	link, _ := button[slackKeyURL].(string)
 	if !strings.Contains(link, musterlink.LinkPath) {
-		return "", fmt.Errorf("the sign-in button points at %q, not the gateway's %s route", link, musterlink.LinkPath)
+		return "", msgs, fmt.Errorf("the sign-in button points at %q, not the gateway's %s route", link, musterlink.LinkPath)
 	}
-	return link, nil
+	return link, msgs, nil
 }
 
 // boundSession is the Session the gateway bound the thread to (its
@@ -1666,9 +1940,12 @@ func (p *slackProof) dispatch(t *slackThread, subject, email string) (gatewayRec
 
 // decisionOutcome is how an approval round trip ended.
 type decisionOutcome struct {
-	taskID     string
-	rounds     int
-	cards      []string
+	taskID string
+	rounds int
+	cards  []string
+	// tools are the tool calls the decisions answered, as the paused task's
+	// tool_approval_request named them.
+	tools      []hitlTool
 	finalState a2a.TaskState
 	outcome    string
 	answer     string
@@ -1712,6 +1989,9 @@ func (p *slackProof) decideUntilSettled(api *kagentAPI, session *apiv1alpha1.Ses
 		if state := task.Status.State; state != a2a.TaskStateInputRequired {
 			return nil, fmt.Errorf("the thread shows an approval card for task %s but the controller has it %s, not TASK_STATE_INPUT_REQUIRED", out.taskID, state)
 		}
+		if req := parseToolApprovalRequest(task.Status.Message); req != nil {
+			out.tools = append(out.tools, req.decidedTools()...)
+		}
 		before := len(turn.msgs)
 		if err := p.driver.click(t.user, card.msg, action); err != nil {
 			return nil, fmt.Errorf("decision %d: %w", out.rounds, err)
@@ -1741,22 +2021,66 @@ func (p *slackProof) decideUntilSettled(api *kagentAPI, session *apiv1alpha1.Ses
 	return out, nil
 }
 
-// stop posts a long question in the thread, and once its answer streams,
+// longTurn asks for a count in the thread and waits until its answer reaches
+// klausGatewayCountMark: the model complies and the turn runs on for
+// minutes, so the proof's next act meets it running. A turn that completes
+// first is the model's doing — it declined or shortened the count — and is
+// asked once more with the reason logged; a second early end fails as the
+// model's, not the gateway's. It returns the thread's length before the
+// turn's question.
+func (p *slackProof) longTurn(t *slackThread, text, purpose string) (int, error) {
+	for attempt := 1; ; attempt++ {
+		before := len(p.fake.thread(p.channel, t.ts))
+		if _, err := p.driver.mention(t.user, t.ts, text); err != nil {
+			return 0, err
+		}
+		ended := false
+		msgs, counting := waitThread(p.fake, p.channel, t.ts, klausGatewayTurnTimeout, func(msgs []slackMessage) bool {
+			if len(p.records(recordTurnDone, t.ts)) > t.turns {
+				ended = true
+				return true
+			}
+			_, answer := streamedSince(msgs, before)
+			return countReached(answer)
+		})
+		if !counting {
+			return 0, fmt.Errorf("the %s streamed no count up to %q within %s: %s", purpose, klausGatewayCountMark, klausGatewayTurnTimeout, threadLine(msgs))
+		}
+		if !ended {
+			return before, nil
+		}
+		turn, err := p.awaitTurn(t, before)
+		if err != nil {
+			return 0, err
+		}
+		if turn.record.Outcome != outcomeCompleted {
+			return 0, fmt.Errorf("the %s ended before it counted to %q: %s", purpose, klausGatewayCountMark, turnFailure(turn))
+		}
+		if attempt == 2 {
+			return 0, fmt.Errorf("the model ended the %s twice before counting to %q (last answer %q) — the model's doing, not the gateway's", purpose, klausGatewayCountMark, excerpt(turn.answer, 80))
+		}
+		note("the model ended the %s before counting to %q (answered %q) — the model's doing, not the gateway's; asking once more", purpose, klausGatewayCountMark, excerpt(turn.answer, 80))
+	}
+}
+
+// countReached is whether a count written one number per line has reached
+// klausGatewayCountMark; a numbered or bulleted list counts too.
+func countReached(answer string) bool {
+	for _, line := range strings.Split(answer, "\n") {
+		word := strings.Trim(strings.ToLower(line), " \t*-.,:;0123456789")
+		if word == klausGatewayCountMark {
+			return true
+		}
+	}
+	return false
+}
+
+// stop posts a long question in the thread, and once its count runs,
 // `stop` as a reply: the turn must end canceled with the thread told so.
 func (p *slackProof) stop(t *slackThread, text string) (*slackTurn, error) {
-	before := len(p.fake.thread(p.channel, t.ts))
-	if _, err := p.driver.mention(t.user, t.ts, text); err != nil {
+	before, err := p.longTurn(t, text, "turn to stop")
+	if err != nil {
 		return nil, err
-	}
-	msgs, streaming := waitThread(p.fake, p.channel, t.ts, klausGatewayTurnTimeout, func(msgs []slackMessage) bool {
-		if len(p.records(recordTurnDone, t.ts)) > t.turns {
-			return true // over already; reported below
-		}
-		_, answer := streamedSince(msgs, before)
-		return answer != ""
-	})
-	if !streaming {
-		return nil, fmt.Errorf("the turn to stop streamed nothing within %s: %s", klausGatewayTurnTimeout, threadLine(msgs))
 	}
 	if _, err := p.driver.reply(t.user, t.ts, slackStopWord); err != nil {
 		return nil, err
@@ -1788,22 +2112,15 @@ type resumedTurn struct {
 }
 
 // restartMidTurn asks a long question in the thread (one whose Session
-// is warm, so the answer streams soon) and, once its answer streams, restarts
+// is warm, so the answer streams soon) and, once its count runs, restarts
 // the gateway with the gate closed: the stopping process
 // leaves the task running and promises the post, the new one cannot reach the
 // controller for klausGatewayGateClosed. Once the gate opens again, the
 // thread must get the rest of the answer with no message from the person.
 func (p *slackProof) restartMidTurn(gw *gatewayProcess, gate *tcpGate, t *slackThread, text string) (*resumedTurn, error) {
-	asked := len(p.fake.thread(p.channel, t.ts))
-	if _, err := p.driver.mention(t.user, t.ts, text); err != nil {
+	asked, err := p.longTurn(t, text, "turn to restart under")
+	if err != nil {
 		return nil, err
-	}
-	msgs, streaming := waitThread(p.fake, p.channel, t.ts, klausGatewayTurnTimeout, func(msgs []slackMessage) bool {
-		_, answer := streamedSince(msgs, asked)
-		return answer != ""
-	})
-	if !streaming {
-		return nil, fmt.Errorf("the turn to restart under streamed nothing within %s: %s", klausGatewayTurnTimeout, threadLine(msgs))
 	}
 	if err := gw.stop(); err != nil {
 		return nil, err
@@ -1811,7 +2128,7 @@ func (p *slackProof) restartMidTurn(gw *gatewayProcess, gate *tcpGate, t *slackT
 	if len(p.records(recordLeftRunning, t.ts)) == 0 {
 		return nil, fmt.Errorf("the stopping gateway left no task running for thread %s (no %s record)", t.ts, recordLeftRunning)
 	}
-	msgs = p.fake.thread(p.channel, t.ts)
+	msgs := p.fake.thread(p.channel, t.ts)
 	if _, ok := findMessage(msgs[asked:], slackRestartPromise); !ok {
 		return nil, fmt.Errorf("the stopping gateway did not promise the post (%q): %s", slackRestartPromise, threadLine(msgs))
 	}
@@ -1863,9 +2180,11 @@ func (p *slackProof) recoveryFailures(thread string) []string {
 }
 
 // assertMusterAttribution reads muster's log since the tool-using turn began:
-// the forwarded id_token of the person accepted (the audit record with the
-// email), and tools/call requests under the token's subject — the agent's
-// muster calls ran as the person, not as the gateway or the Harness.
+// the person's credential accepted — the forwarded id_token (the audit record
+// with the email) or the Session's actor JWT served as the person it is bound
+// to (the actor bearer record with the subject) — and tools/call requests
+// under the token's subject: the agent's muster calls ran as the person, not
+// as the gateway or the Harness.
 func assertMusterAttribution(email, subject string, since time.Time) error {
 	var accepted, calls int
 	var lines []string
@@ -1880,17 +2199,18 @@ func assertMusterAttribution(email, subject string, since time.Time) error {
 		return accepted > 0 && calls > 0
 	})
 	if accepted == 0 {
-		return fmt.Errorf("muster's log since %s carries no %s record for %s: the agent's tool calls did not ride the person's forwarded id_token", since.UTC().Format(time.RFC3339), musterTokenAccepted, email)
+		return fmt.Errorf("muster's log since %s carries no %s record for %s and no %s record for subject %.8s…: the agent's tool calls rode neither the person's forwarded id_token nor an actor bound to the person", since.UTC().Format(time.RFC3339), musterTokenAccepted, email, musterActorBearerAccepted, subject)
 	}
 	if calls == 0 {
-		return fmt.Errorf("muster's log since %s carries %d %s record(s) for %s but no tools/call request under subject %.8s…: %s", since.UTC().Format(time.RFC3339), accepted, musterTokenAccepted, email, subject, strings.Join(lines, " | "))
+		return fmt.Errorf("muster's log since %s carries %d accepted credential record(s) for %s but no tools/call request under subject %.8s…: %s", since.UTC().Format(time.RFC3339), accepted, email, subject, strings.Join(lines, " | "))
 	}
 	return nil
 }
 
 // musterAttribution counts, in muster's log lines stamped after since, the
-// accepted-token audit records naming the email and the tools/call requests
-// whose (truncated) subject is a prefix of the token's subject.
+// accepted-credential audit records — a forwarded id_token naming the email,
+// or an actor bearer whose (truncated) subject is a prefix of the token's
+// subject — and the tools/call requests whose (truncated) subject is.
 func musterAttribution(logs, email, subject string, since time.Time) (accepted, calls int, subjects []string) {
 	for _, line := range strings.Split(logs, "\n") {
 		// A line may carry a pod prefix before its JSON record.
@@ -1913,6 +2233,10 @@ func musterAttribution(logs, email, subject string, since time.Time) (accepted, 
 		switch {
 		case strings.Contains(line, musterTokenAccepted) && strings.Contains(line, `"email":"`+email+`"`):
 			accepted++
+		case strings.Contains(line, musterActorBearerAccepted):
+			if logged := strings.TrimSuffix(auditField(line, "subject"), "..."); logged != "" && strings.HasPrefix(subject, logged) {
+				accepted++
+			}
 		case strings.Contains(line, musterToolCall):
 			call := rec
 			logged := strings.TrimSuffix(call.Subject, "...")
@@ -1923,4 +2247,15 @@ func musterAttribution(logs, email, subject string, since time.Time) (accepted, 
 		}
 	}
 	return accepted, calls, subjects
+}
+
+// auditField is the value of key=value in a muster [AUDIT] line, up to the
+// next space; empty when the line has none.
+func auditField(line, key string) string {
+	_, rest, ok := strings.Cut(line, " "+key+"=")
+	if !ok {
+		return ""
+	}
+	value, _, _ := strings.Cut(rest, " ")
+	return value
 }

@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"cmp"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -23,22 +24,25 @@ import (
 	apiv1alpha1 "github.com/giantswarm/agentlab/internal/kagent/gen/kagent/api/v1alpha1"
 )
 
-// The harness stage of the workspaces proof: a claude Harness Session
-// admitted on the proof's workspace volume with a workspace grant, running
-// one headless turn. The rig is the lab's (workspacegrant.go): the
+// The harness stage of the workspaces proof: a Session admitted on the
+// proof's workspace volume with a workspace grant, running one headless turn,
+// on the claude Harness or another coding Harness the lab renders
+// (--harness, such as codex). The rig is the lab's (workspacegrant.go): the
 // workspace-manager signs with the lab's key and publishes it, kagent's jwt
-// admission trusts that key set, and the claude Harness runs the Session.
+// admission trusts that key set, and the Harness runs the Session.
 //
 //  1. The rig in place: the manager's key set publishes the lab's key, the
 //     controller's admission names that key set, the manager's issuer and
-//     the audience, and the claude Harness is Ready.
+//     the audience, and the Session's Harness is Ready.
 //  2. The volume laid out as the workspace sync lays it out: a bare mirror
 //     at mirrors/<owner>/<repository>.git.
-//  3. A claude Agent Ready on the claude Harness.
+//  3. An Agent Ready on the Session's Harness.
 //  4. A Session without a volume: its turn works in its default directory
 //     and sees no mirrors. Its creator is the person the grants name.
 //  5. Refusals at create: a volume without a grant, a grant signed by a key
-//     the manager does not publish, and a grant for another person.
+//     the manager does not publish, a grant for another person, and, naming
+//     another namespace, a grant for another namespace's Agents and one
+//     naming no Agent namespace.
 //  6. A Session admitted with a grant on the volume: its turn works in its
 //     own directory, sees the mirror at <owner>/<repository>.git read-only,
 //     writes a file of its own, and that file is on the volume at
@@ -55,15 +59,22 @@ const (
 	workspacesHarnessWorkspace = "agentlab-workspaces-test"
 	// workspacesHarnessRepository is the mirror the volume holds, as the
 	// workspace sync names it: <owner>/<repository>.
-	workspacesHarnessRepository = "agentlab-org/platform-api"
+	workspacesHarnessRepository = "agentlab/platform-api"
 	// workspacesHarnessOwnFile is the file the Session's turn writes into its
 	// own directory, read back from the volume.
 	workspacesHarnessOwnFile = "agentlab-probe"
+	// workspacesHarnessOtherNamespace is the Agent namespace a refused grant
+	// names in place of the lab Agents' own.
+	workspacesHarnessOtherNamespace = "agentlab-workspaces-other"
+	// workspacesHarnessNamespaceRefusal is kagent's refusal of a grant
+	// naming another Agent namespace or none.
+	workspacesHarnessNamespaceRefusal = "admission grant is for another namespace"
 	// workspacesHarnessGrantTTL is how long the proof's grants are valid,
 	// the manager's default.
 	workspacesHarnessGrantTTL = 5 * time.Minute
-	// workspacesHarnessSystemPrompt keeps the turns to the probe.
-	workspacesHarnessSystemPrompt = "You are a probe. Run exactly the command you are given with your Bash tool, once, and reply with the output lines you are asked for, verbatim, nothing else."
+	// workspacesHarnessSystemPrompt keeps the turns to the probe; %s is the
+	// runtime's shell tool.
+	workspacesHarnessSystemPrompt = "You are a probe. Run exactly the command you are given with your %s, once, and reply with the output lines you are asked for, verbatim, nothing else."
 	// workspaceManagerHTTPPort is the manager's HTTP port, where it serves
 	// its key set.
 	workspaceManagerHTTPPort = 8080
@@ -100,10 +111,26 @@ func workspacesHarnessProbeCommand() string {
 		`echo session > ./` + workspacesHarnessOwnFile + ` && echo "` + probeMarker + ` own-write=$(cat ./` + workspacesHarnessOwnFile + `)"`
 }
 
-// workspacesHarnessProbePrompt asks the agent to run the command once and
-// relay its marker lines.
-func workspacesHarnessProbePrompt() string {
-	return "Run this exact command once with your Bash tool, then reply with every output line that starts with " + probeMarker +
+// workspacesSessionHarness is the stage's Session: the Harness it runs on,
+// the ModelConfig its Agent uses, the Agent's name and the runtime's shell
+// tool the prompts name.
+type workspacesSessionHarness struct {
+	name, modelConfig, agent, shellTool string
+}
+
+// workspacesSessionHarnessFor is the Session on harness (claude when empty)
+// with modelConfig (default-model-config when empty on claude).
+func workspacesSessionHarnessFor(harness, modelConfig string) workspacesSessionHarness {
+	if harness == "" || harness == claudeHarness {
+		return workspacesSessionHarness{name: claudeHarness, modelConfig: cmp.Or(modelConfig, defaultModelConfig), agent: workspacesHarnessAgent, shellTool: "Bash tool"}
+	}
+	return workspacesSessionHarness{name: harness, modelConfig: modelConfig, agent: "agentlab-workspaces-" + harness, shellTool: "shell tool"}
+}
+
+// workspacesHarnessProbePrompt asks the agent to run the command once with
+// its shell tool and relay its marker lines.
+func workspacesHarnessProbePrompt(shellTool string) string {
+	return "Run this exact command once with your " + shellTool + ", then reply with every output line that starts with " + probeMarker +
 		", verbatim and nothing else:\n\n" + workspacesHarnessProbeCommand()
 }
 
@@ -118,7 +145,7 @@ type workspacesHarnessProbe struct {
 }
 
 var (
-	probeLine     = regexp.MustCompile(probeMarker + ` ([a-z-]+)=([^\n]*)`)
+	probeLine     = regexp.MustCompile(probeMarker + ` ([a-z0-9-]+)=([^\n]*)`)
 	ownCloneLine  = regexp.MustCompile(`^rc(\d+) head=(\S*) ?(.*)$`)
 	shortRevision = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
 )
@@ -130,7 +157,7 @@ func parseWorkspacesHarnessProbe(reply string) (workspacesHarnessProbe, error) {
 		values[m[1]] = strings.TrimSpace(strings.Trim(strings.TrimSpace(m[2]), "`"))
 	}
 	if values["pwd"] == "" || values["own-write"] == "" {
-		return workspacesHarnessProbe{}, fmt.Errorf("the reply carries no %s pwd and own-write lines (did the agent run its Bash tool?): %s", probeMarker, excerpt(reply, 300))
+		return workspacesHarnessProbe{}, fmt.Errorf("the reply carries no %s pwd and own-write lines (did the agent run its shell tool?): %s", probeMarker, excerpt(reply, 300))
 	}
 	return workspacesHarnessProbe{
 		pwd: values["pwd"], mirrorsWrite: values["mirrors-write"], ownWrite: values["own-write"],
@@ -212,16 +239,16 @@ func containsString(list []string, s string) bool {
 }
 
 // proveWorkspacesHarnessSession is the stage, on the proof's claim.
-func proveWorkspacesHarnessSession(cfg *config.Config, timeout time.Duration) (string, error) {
+func proveWorkspacesHarnessSession(cfg *config.Config, harness workspacesSessionHarness, timeout time.Duration) (string, error) {
 	ctx := context.Background()
 	rig := workspaceAdmissionValuesFor(cfg, workspacesChartCarries(cfg))
 	if rig == nil {
-		const skipped = "the claude Session skipped (no Session admission: the chart takes no workspaces values)"
-		step("The claude Session on the volume: %s", skipped)
+		skipped := "the " + harness.name + " Session skipped (no Session admission: the chart takes no workspaces values)"
+		step("The %s Session on the volume: %s", harness.name, skipped)
 		return skipped, nil
 	}
 
-	step("The rig: the workspace-manager publishes the lab's grant key, kagent's admission trusts its key set, the claude Harness is Ready")
+	step("The rig: the workspace-manager publishes the lab's grant key, kagent's admission trusts its key set, the %s Harness is Ready", harness.name)
 	key, err := readWorkspaceGrantKey()
 	if err != nil {
 		return "", err
@@ -235,10 +262,10 @@ func proveWorkspacesHarnessSession(cfg *config.Config, timeout time.Duration) (s
 		return "", err
 	}
 	note("kagent's jwt admission: key set %s, issuer %s, audience %s", rig.JWKSURL, rig.Issuer, rig.Audience)
-	if err := waitHarnessReady(ctx, rig.ClaudeHarness, timeout); err != nil {
+	if err := waitHarnessReady(ctx, harness.name, timeout); err != nil {
 		return "", err
 	}
-	note("Harness %s/%s Ready", kagentNamespace, rig.ClaudeHarness)
+	note("Harness %s/%s Ready", kagentNamespace, harness.name)
 
 	step("The volume laid out as the workspace sync lays it out: the mirror %s.git", workspacesHarnessRepository)
 	out, err := runPod(ctx, workspacesTestNamespace, workspacesTestPod("mirror", workspacesHarnessMirrorScript, []corev1.VolumeMount{{Name: workspacesTestVolume, MountPath: workspacesTestMountPath}}, false), timeout)
@@ -252,26 +279,26 @@ func proveWorkspacesHarnessSession(cfg *config.Config, timeout time.Duration) (s
 	}
 	volume := workspaceVolume{Driver: pv.Spec.CSI.Driver, Handle: pv.Spec.CSI.VolumeHandle}
 
-	step("A claude Agent %s Ready on the Harness %s", workspacesHarnessAgent, rig.ClaudeHarness)
-	if agentExists(workspacesHarnessAgent) {
-		if err := removeAgent(workspacesHarnessAgent); err != nil {
+	step("A %s Agent %s on ModelConfig %s Ready on the Harness %s", harness.name, harness.agent, harness.modelConfig, harness.name)
+	if agentExists(harness.agent) {
+		if err := removeAgent(harness.agent); err != nil {
 			return "", err
 		}
 	}
 	defer func() {
-		if err := removeAgent(workspacesHarnessAgent); err != nil {
+		if err := removeAgent(harness.agent); err != nil {
 			note("cleanup: %v", err)
 		}
 	}()
-	if _, err := applyManifests(ctx, []byte(workspacesHarnessAgentManifest(rig.ClaudeHarness))); err != nil {
-		return "", fmt.Errorf("applying the claude Agent: %w", err)
+	if _, err := applyManifests(ctx, []byte(workspacesAgentManifest(harness.agent, harness.name, harness.modelConfig, fmt.Sprintf(workspacesHarnessSystemPrompt, harness.shellTool)))); err != nil {
+		return "", fmt.Errorf("applying the %s Agent: %w", harness.name, err)
 	}
-	boot, err := waitAgentReadyOn(workspacesHarnessAgent, rig.ClaudeHarness, timeout)
+	boot, err := waitAgentReadyOn(harness.agent, harness.name, timeout)
 	if err != nil {
 		return "", err
 	}
 	if !boot.ready {
-		return "", fmt.Errorf("the claude Agent %s is not Ready on Harness %s after %s: %s", workspacesHarnessAgent, rig.ClaudeHarness, boot.elapsed.Round(time.Second), boot.reason)
+		return "", fmt.Errorf("the %s Agent %s is not Ready on Harness %s after %s: %s", harness.name, harness.agent, harness.name, boot.elapsed.Round(time.Second), boot.reason)
 	}
 	note("Ready in %s", boot.elapsed.Round(time.Second))
 
@@ -293,7 +320,7 @@ func proveWorkspacesHarnessSession(cfg *config.Config, timeout time.Duration) (s
 	}
 
 	step("A Session without a volume, as %s: its turn works in %s and sees no mirrors", user.Email, kagentDefaultWorkingDirectory)
-	plain, probe, err := workspacesHarnessTurn(ctx, api, sessions, &apiv1alpha1.CreateSessionRequest{}, timeout)
+	plain, probe, err := workspacesHarnessTurn(ctx, api, sessions, harness, &apiv1alpha1.CreateSessionRequest{}, timeout)
 	if err != nil {
 		return "", err
 	}
@@ -303,10 +330,10 @@ func proveWorkspacesHarnessSession(cfg *config.Config, timeout time.Duration) (s
 	person := plain.GetCreator()
 	// kagent's admission compares the grant's sub with the Session's
 	// creator, the person's email, which the manager's authorize_workspace
-	// signs too (--part access proves its grant admitted).
+	// signs too.
 	note("Session %s (creator %s): %s", plain.GetId(), person, probe)
 
-	step("Refused at create: a volume without a grant, a grant the manager's key set does not verify, a grant for another person")
+	step("Refused at create: a volume without a grant, a grant the manager's key set does not verify, a grant for another person, a grant for another namespace's Agents and one naming none")
 	source := workspacesHarnessVolumeSource(volume)
 	foreign, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -315,22 +342,35 @@ func proveWorkspacesHarnessSession(cfg *config.Config, timeout time.Duration) (s
 	for _, refusal := range []struct {
 		what  string
 		token func() (string, error)
+		// reason is what kagent's refusal must name; empty takes any.
+		reason string
 	}{
-		{"no grant", func() (string, error) { return "", nil }},
+		{"no grant", func() (string, error) { return "", nil }, ""},
 		{"a grant signed by a key the manager does not publish", func() (string, error) {
 			return signWorkspaceGrant(foreign, workspaceGrantJWK(&foreign.PublicKey).Kid, newWorkspaceGrant(rig.Issuer, person, workspacesHarnessWorkspace, volume, time.Now(), workspacesHarnessGrantTTL))
-		}},
+		}, ""},
 		{"a grant for another person", func() (string, error) {
 			return signWorkspaceGrant(key, kid, newWorkspaceGrant(rig.Issuer, "someone-else@lab.local", workspacesHarnessWorkspace, volume, time.Now(), workspacesHarnessGrantTTL))
-		}},
+		}, ""},
+		{fmt.Sprintf("a grant for the Agents of namespace %s presented on Agent %s/%s", workspacesHarnessOtherNamespace, kagentNamespace, harness.agent), func() (string, error) {
+			grant := newWorkspaceGrant(rig.Issuer, person, workspacesHarnessWorkspace, volume, time.Now(), workspacesHarnessGrantTTL)
+			grant.AgentNamespace = workspacesHarnessOtherNamespace
+			return signWorkspaceGrant(key, kid, grant)
+		}, workspacesHarnessNamespaceRefusal},
+		{"a grant without agent_namespace", func() (string, error) {
+			return signGrantWithout(key, kid, newWorkspaceGrant(rig.Issuer, person, workspacesHarnessWorkspace, volume, time.Now(), workspacesHarnessGrantTTL), "agent_namespace")
+		}, workspacesHarnessNamespaceRefusal},
 	} {
 		grant, err := refusal.token()
 		if err != nil {
 			return "", err
 		}
-		reason, err := workspacesHarnessRefused(ctx, api, source, grant)
+		reason, err := workspacesHarnessRefused(ctx, api, harness.agent, source, grant)
 		if err != nil {
 			return "", fmt.Errorf("%s: %w", refusal.what, err)
+		}
+		if !strings.Contains(reason, refusal.reason) {
+			return "", fmt.Errorf("%s: kagent %s refused for another reason than %q: %s", refusal.what, controller, refusal.reason, reason)
 		}
 		note("%s: %s", refusal.what, reason)
 	}
@@ -340,7 +380,7 @@ func proveWorkspacesHarnessSession(cfg *config.Config, timeout time.Duration) (s
 	if err != nil {
 		return "", err
 	}
-	onVolume, probe, err := workspacesHarnessTurn(ctx, api, sessions, &apiv1alpha1.CreateSessionRequest{VolumeSource: source, AdmissionToken: grant}, timeout)
+	onVolume, probe, err := workspacesHarnessTurn(ctx, api, sessions, harness, &apiv1alpha1.CreateSessionRequest{VolumeSource: source, AdmissionToken: grant}, timeout)
 	if err != nil {
 		return "", err
 	}
@@ -369,12 +409,12 @@ func proveWorkspacesHarnessSession(cfg *config.Config, timeout time.Duration) (s
 	if len(probe.clones) > 0 {
 		view = "its clones " + strings.Join(probe.clones, " ")
 	}
-	return fmt.Sprintf("a claude Session admitted on the volume with the manager-verified grant (key %s) answered in its own directory with %s; %s; the refusals named", kid, view, clones), nil
+	return fmt.Sprintf("a %s Session admitted on the volume with the manager-verified grant (key %s) answered in its own directory with %s; %s; the refusals named", harness.name, kid, view, clones), nil
 }
 
 // workspacesHarnessMirrorScript lays the mirror out under
 // mirrors/<owner>/<repository>.git, from the seed's repository.
-const workspacesHarnessMirrorScript = workspacesGitSetup + `mkdir -p /workspace/` + workspacesTestMirrors + `/agentlab-org
+const workspacesHarnessMirrorScript = workspacesGitSetup + `mkdir -p /workspace/` + workspacesTestMirrors + `/agentlab
 git clone -q --bare /workspace/` + workspacesTestMirrors + `/` + workspacesTestRepo + ` /workspace/` + workspacesTestMirrors + `/` + workspacesHarnessRepository + `.git
 echo "mirror ` + workspacesTestMirrors + `/` + workspacesHarnessRepository + `.git at $(git -C /workspace/` + workspacesTestMirrors + `/` + workspacesHarnessRepository + `.git rev-parse --short HEAD)"
 `
@@ -404,13 +444,14 @@ func workspacesHarnessVolumeSource(volume workspaceVolume) *apiv1alpha1.SessionV
 // workspacesHarnessAgentManifest is the proof's claude AgentTemplate on the
 // default ModelConfig and its Agent on the claude Harness.
 func workspacesHarnessAgentManifest(harness string) string {
-	return workspacesAgentManifest(workspacesHarnessAgent, harness)
+	claude := workspacesSessionHarnessFor(claudeHarness, "")
+	return workspacesAgentManifest(claude.agent, harness, claude.modelConfig, fmt.Sprintf(workspacesHarnessSystemPrompt, claude.shellTool))
 }
 
 // workspacesAgentManifest is a workspaces proof's AgentTemplate on the
-// default ModelConfig with the probe's system prompt, and its Agent of the
-// same name on the Harness.
-func workspacesAgentManifest(name, harness string) string {
+// ModelConfig with the probe's system prompt, and its Agent of the same name
+// on the Harness.
+func workspacesAgentManifest(name, harness, modelConfig, systemPrompt string) string {
 	return fmt.Sprintf(`apiVersion: %[1]s
 kind: AgentTemplate
 metadata:
@@ -424,16 +465,16 @@ spec:
     name: %[6]s
   systemPrompt: %[7]q
 ---
-%[8]s`, agentTemplateAPIVersion, name, kagentNamespace, managedByLabel, managedByAgentlabValue, defaultModelConfig, workspacesHarnessSystemPrompt,
+%[8]s`, agentTemplateAPIVersion, name, kagentNamespace, managedByLabel, managedByAgentlabValue, modelConfig, systemPrompt,
 		agentManifest(name, name, harness, nil))
 }
 
-// workspacesHarnessTurn creates a Session of the proof's Agent from req and
+// workspacesHarnessTurn creates a Session of the stage's Agent from req and
 // runs the probe turn on it.
-func workspacesHarnessTurn(ctx context.Context, api *kagentAPI, sessions *sessionSet, req *apiv1alpha1.CreateSessionRequest, timeout time.Duration) (*apiv1alpha1.Session, workspacesHarnessProbe, error) {
+func workspacesHarnessTurn(ctx context.Context, api *kagentAPI, sessions *sessionSet, harness workspacesSessionHarness, req *apiv1alpha1.CreateSessionRequest, timeout time.Duration) (*apiv1alpha1.Session, workspacesHarnessProbe, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	req.Agent, req.RequestId = agentRef(workspacesHarnessAgent), uuid.NewString()
+	req.Agent, req.RequestId = agentRef(harness.agent), uuid.NewString()
 	session, err := api.createSessionWith(ctx, req)
 	if session != nil && session.GetId() != "" {
 		sessions.add(session.GetId())
@@ -441,7 +482,7 @@ func workspacesHarnessTurn(ctx context.Context, api *kagentAPI, sessions *sessio
 	if err != nil {
 		return nil, workspacesHarnessProbe{}, err
 	}
-	t, err := api.turn(ctx, session, userMessage(workspacesHarnessProbePrompt()))
+	t, err := api.turn(ctx, session, userMessage(workspacesHarnessProbePrompt(harness.shellTool)))
 	if err != nil {
 		return session, workspacesHarnessProbe{}, fmt.Errorf("the turn on Session %s: %w", session.GetId(), err)
 	}
@@ -453,13 +494,13 @@ func workspacesHarnessTurn(ctx context.Context, api *kagentAPI, sessions *sessio
 	return session, probe, err
 }
 
-// workspacesHarnessRefused creates a Session on the volume with grant and
-// expects PermissionDenied: the controller's reason.
-func workspacesHarnessRefused(ctx context.Context, api *kagentAPI, source *apiv1alpha1.SessionVolumeSource, grant string) (string, error) {
+// workspacesHarnessRefused creates a Session of agent on the volume with
+// grant and expects PermissionDenied: the controller's reason.
+func workspacesHarnessRefused(ctx context.Context, api *kagentAPI, agent string, source *apiv1alpha1.SessionVolumeSource, grant string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, kubeReadTimeout)
 	defer cancel()
 	resp, err := api.sessions.CreateSession(api.callCtx(ctx), &apiv1alpha1.CreateSessionRequest{
-		Agent: agentRef(workspacesHarnessAgent), RequestId: uuid.NewString(), VolumeSource: source, AdmissionToken: grant,
+		Agent: agentRef(agent), RequestId: uuid.NewString(), VolumeSource: source, AdmissionToken: grant,
 	})
 	if err == nil {
 		id := resp.GetSession().GetId()

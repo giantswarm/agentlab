@@ -138,7 +138,7 @@ func TestUnreachableLabRegistryNamesTheContainer(t *testing.T) {
 	if err == nil {
 		t.Fatal("an unreachable lab registry did not stop the boot")
 	}
-	for _, want := range []string{"lab registry " + testLabRegistry + " (read on this host as " + closed + ")", "docker ps -a", "platform.devRegistryPort", "`agentlab platform`"} {
+	for _, want := range []string{"lab registry " + testLabRegistry + " (read on this host as " + closed + ")", "docker ps -a", "platform.devRegistryPort", rerunPlatform} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the stop does not say %q:\n%s", want, err)
 		}

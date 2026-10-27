@@ -1,7 +1,7 @@
 # The migration rehearsal (3.x → 4.x in place)
 
 > **Scope.** This rehearsal covers the 3.x → 4.x line (kagent 0.10 → kagent
-> 1.x) and its migrate Job. The kagent line after 1.x rewrites its baseline
+> 1.x) and its migrate run. The kagent line after 1.x rewrites its baseline
 > database schema in place and refuses a 1.x database at startup, so the next
 > cut-over is not an in-place upgrade: the kagent database is dropped and
 > recreated (every Session and share is lost), the `kagent.dev` CRDs are
@@ -9,11 +9,20 @@
 > objects. The scripts below stay as the record of the 3.x → 4.x run; they do
 > not drive that cut-over.
 
+The run this page records was made on 4.7.x connectivity charts, which
+rendered the migrate run as a Job of the release. Current charts ship the
+suspended CronJob `agent-platform-connectivity-agent-manager-migrate` in
+`kagent`, and the `post-install,post-upgrade` hook
+`agent-platform-connectivity-agent-manager-migrate-start` creates each run
+`agent-platform-connectivity-agent-manager-migrate-<hash>` from it (see
+[The GitHub token](agents.md#the-github-token)). The scripts find and re-run
+the migrate run in either shape.
+
 A lab on a **released 3.x meta chart** — kagent 0.10 (`kagent.dev/v1alpha2`
 `Agent`s) — seeded with the four shapes agents take on an installation,
 upgraded **in place** with `agentlab platform` to the 4.x line (kagent API
 v2, `kagent.dev/v1alpha3` `AgentTemplate`s on the platform Harness), and
-agent-manager's migrate Job asserted through its three phases: **expand**
+agent-manager's migrate run asserted through its three phases: **expand**
 (the Generic-chart releases rewritten to chart 1.x values, the GitOps-owned
 one reported as a diff), **contract** (the leftover v1alpha2 `Agent`s and the
 five retired CRDs deleted) and **complete** (a re-run changes nothing). Then
@@ -27,14 +36,14 @@ The scripts and manifests live in `hack/migration-rehearsal/`:
 | File | Role |
 |---|---|
 | `seed.sh` | Stage 1: `agentlab down && up` on the 3.x chart, the four shapes seeded and asserted Accepted |
-| `upgrade.sh` | Stage 2a: `agentlab platform` in place to the 4.x target, the platform asserted, run 1 of the migrate Job (expand), the operator's diff PR applied |
+| `upgrade.sh` | Stage 2a: `agentlab platform` in place to the 4.x target, the platform asserted, migrate run 1 (expand), the operator's diff PR applied |
 | `contract.sh` | Stage 2b: the releases on the 1.x agent chart, run 2 (contract) and run 3 (complete), one turn per migrated agent through the edge |
 | `lib.sh` | Helpers the three share: logging, the status log, the lab lock, the Anthropic key, HelmRelease readers |
 | `values-3x-example-agent.yaml` | 3.x overlay: the bundled `k8s-agent` example on (`kagent.k8s-agent.enabled` **and** `kagent.kagent-tools.enabled` — the agent binds the tool server the subchart renders) |
-| `values-4x-migration.yaml` | 4.x overlay: `agentManager.migration.gitopsNamespaces: [flux-giantswarm]` — the namespaces whose releases the Job reports as a diff and never rewrites |
+| `values-4x-migration.yaml` | 4.x overlay: `agentManager.migration.gitopsNamespaces: [flux-giantswarm]` — the namespaces whose releases the migrate run reports as a diff and never rewrites |
 | `seed-narrow.yaml` | Shape 2: a hand-applied Generic-chart `HelmRelease` on 0.x values (`muster.toolNames`, `muster.serverRef.namespace: agent-platform`, `agent.runtime: python`) |
 | `seed-gitops.yaml` | Shape 3 as seeded: the tenant namespace `flux-giantswarm`, its `OCIRepository agent` (`>=0.2.1 <1.0.0`) and `HelmRelease sre-agent` with the Kustomization ownership labels, `targetNamespace: kagent`, `driftDetection.ignore` on the two securityContext paths of the v1alpha2 `Agent` |
-| `seed-gitops-1x.yaml` | Shape 3 after the operator's PR: the same objects with the Job's diff applied |
+| `seed-gitops-1x.yaml` | Shape 3 after the operator's PR: the same objects with the migrate run's diff applied |
 
 The four shapes, in the order the seed creates them:
 
@@ -51,16 +60,16 @@ The recipe needs **agentlab v0.39.1 or newer** — the release that renders the
 3.x lab shape for a `chartVersion` below 4.0.0 (`config.LegacyChart`; see
 [The agent platform](platform.md)) — and, for `contract.sh`, the release that
 carries `agentlab turn` (the one this page ships with). A mikefarah `yq` v4,
-`kubectl`, `helm`, `jq` and `kind` on the machine; the Anthropic key is read
-from the Secret `kagent/kagent-anthropic` of the running lab unless
-`ANTHROPIC_API_KEY` is set, and never printed. The migrate Job resolves every
-seeded skill through GitHub: with `GITHUB_TOKEN` exported when `upgrade.sh`
-runs `agentlab platform`, the Job (and agent-manager) call GitHub
-authenticated through the Secret the lab creates (see
-[The GitHub token](agents.md#the-github-token)); either way `upgrade.sh` and
-`contract.sh` print the GitHub API window before the Job runs and wait once
-for its reset when it is exhausted (`lib.sh github_window`; the token is never
-logged).
+`kubectl`, `helm`, `jq` and `kind` on the machine. The Anthropic key reaches
+the lab the way `agentlab platform` places it: from the `aiKey.source` that
+`agentlab.yaml` records, else from `ANTHROPIC_API_KEY` in the environment
+(never printed); the scripts never read a Secret's value and stop when neither
+is there. The migrate run resolves every seeded skill through GitHub, as the
+skills GitHub App or with `githubToken.source` (see
+[The GitHub token](agents.md#the-github-token)); `upgrade.sh` and
+`contract.sh` print this machine's anonymous GitHub API window before the run
+starts and wait once for its reset when it is exhausted (`lib.sh
+github_window`, which holds no GitHub credential).
 
 ```sh
 cd <lab dir>                      # agentlab.yaml, state/, certs/
@@ -93,7 +102,7 @@ read. A platform defect (a failed Helm action of a component release, the
 CRD storage-version refusal) stops `upgrade.sh` with exit 2 and a
 `FOUND-ISSUE.md` in the evidence directory. `upgrade.sh` resumes at any step
 on a lab already on the target (`START_STEP=assert-platform|migrate-run1|gitops-pr|record`,
-and `REPORT_RUN1=<saved report>` when the Job ran again since);
+and `REPORT_RUN1=<saved report>` when the migrate run ran again since);
 `contract.sh` resumes at `START_STEP=1..6`. Each script appends its stage to
 the lock owner file; the lock is released by hand when the rehearsal ends.
 
@@ -119,12 +128,12 @@ The run of 2026-09-11/12, lab on one machine (kind), agentlab v0.39.1:
 | Re-pin 4.7.12 → 4.7.13 on the upgraded lab — **stalled** on agent-platform#399 (the migrate Job's immutable pod template) | — |
 | Re-pin to 4.7.14 (the fix; the completed Job re-applied unchanged) | 84 s |
 | Re-pin to 4.7.15 (agent-platform#401: both managers rolled with `--kagent-api-version=v1alpha3`) | 57 s |
-| Migrate Job run 1 — `phase: expand` | 5 s |
+| Migrate run 1 — `phase: expand` | 5 s |
 | Flux: `sre-agent` Ready on chart 1.1.0 after the operator's PR (no schema refusal seen — the `OCIRepository` resolved `1.x` before the release reconciled) | 15 s |
-| Flux: `sre`, `narrow` Ready on chart 1.x after the Job's rewrite | Ready before stage 2b began (since 23:28Z); their schema interval was not timed |
+| Flux: `sre`, `narrow` Ready on chart 1.x after the migrate run's rewrite | Ready before stage 2b began (since 23:28Z); their schema interval was not timed |
 | `AgentTemplate sre-agent` Ready on Harness `kagent` (`sre`, `narrow` already Ready) | 10 s |
-| Migrate Job run 2 — `phase: contract` | 6 s |
-| Migrate Job run 3 — `phase: complete`, `changed: false` | 5 s |
+| Migrate run 2 — `phase: contract` | 6 s |
+| Migrate run 3 — `phase: complete`, `changed: false` | 5 s |
 | `agentlab turn --user admin@lab.local --template sre` (named its skill, 2+2=4) / `--template narrow` | 6 s / 3 s |
 | `platform-test` / `test` / `agents-test` / `toolsets-test` / `skills-test` (golden boot 16 s) | 2 s / 0 s / 27 s / 71 s / 41 s |
 | `a2a-test` / `backstage-test` (25 checks) / `klaus-gateway-test` (roster: narrow, sre, sre-agent) | 43 s / 74 s / 43 s |
@@ -133,7 +142,7 @@ The run of 2026-09-11/12, lab on one machine (kind), agentlab v0.39.1:
 Every proof left the lab as it found it (the after-snapshot equal to the
 before-snapshot, each time).
 
-## What the Job rewrote, refused and deleted
+## What the migrate run rewrote, refused and deleted
 
 **Rewritten** (run 1, `phase: expand`; the Generic-chart releases in `kagent`):
 
@@ -173,12 +182,12 @@ contract. Run 3 (`phase: complete`, `changed: false`) proved the no-op.
 `FluxInstance` goes with it, and with it every component `HelmRelease` — the
 agents' releases included. A following `agentlab platform` on a 4.x version
 installs a fresh platform with no v1alpha2 objects, no 0.x releases and a
-migrate Job that finds nothing to do. That is a reinstall; it proves nothing
+migrate run that finds nothing to do. That is a reinstall; it proves nothing
 about the migration. The installation's path is the **in-place version
 move**: `platform.chartVersion` in `agentlab.yaml` from the 3.x release to
 the 4.x one, `platform.valuesFiles` from the 3.x overlay to the 4.x one, then
 `agentlab platform` — Helm upgrades the one release, the components move in
-dependency order, the hooks and the Job run. `upgrade.sh` does exactly that.
+dependency order, the hooks run and start the migrate run. `upgrade.sh` does exactly that.
 
 ## What an installation's operator does differently
 
@@ -212,20 +221,18 @@ chart's `UPGRADE.md` (3.x → 4.0) as the rehearsal exercised it:
   range, the `driftDetection.ignore` paths). Until it is merged the contract
   phase waits.
 - **The re-run**: the contract phase (once every `AgentTemplate` is Ready and
-  no release is left on 0.x), or any run after a fix, is the Job cloned under
-  a new name — `kubectl create job --from` takes CronJobs only:
+  no release is left on 0.x), or any run after a fix, is a new run from the
+  CronJob under a new name:
 
   ```sh
-  J=$(kubectl -n kagent get job -l app.kubernetes.io/component=agent-manager-migrate -o name | head -1)
-  kubectl -n kagent get "$J" -o json | jq 'del(.status, .metadata.uid, .metadata.resourceVersion,
-      .metadata.creationTimestamp, .metadata.managedFields, .spec.selector,
-      .spec.template.metadata.labels["batch.kubernetes.io/controller-uid"],
-      .spec.template.metadata.labels["controller-uid"],
-      .spec.template.metadata.labels["batch.kubernetes.io/job-name"],
-      .spec.template.metadata.labels["job-name"]) | .metadata.name += "-rerun-1"' | kubectl create -f -
+  kubectl -n kagent create job agent-platform-connectivity-agent-manager-migrate-rerun-1 \
+    --from=cronjob/agent-platform-connectivity-agent-manager-migrate
   ```
 
-  `contract.sh` runs this twice (`agent-manager-migrate-2`, `-3`). The report:
+  On a chart without the CronJob (the 4.7.x charts of this run), the newest
+  run is cloned under a new name instead (`lib.sh` `migrate_rerun`).
+  `contract.sh` re-runs it twice this way, in whichever shape the chart has
+  (`agent-manager-migrate-2`, `-3`). The report:
   `kubectl -n kagent get configmap agent-manager-migrate-report -o yaml`.
 
 ## Observations
@@ -269,7 +276,7 @@ Everything the run taught that a cut-over must know:
   giantswarm/model-manager#77 asks for re-discovery on NotFound.
 - **The report ConfigMap is a single slot.** `agent-manager-migrate-report`
   holds the latest run only; a re-run overwrites the expand report. Save it
-  before cloning the Job (`upgrade.sh` saves it as `run1/report.yaml`;
+  before starting another run (`upgrade.sh` saves it as `run1/report.yaml`;
   `contract.sh` takes that file as its second argument to assert the skill
   pin; `REPORT_RUN1` lets a resumed `upgrade.sh` assert from the copy).
 - **A 3.x lab is verified by the seed's assertions**, because agentlab's
@@ -281,7 +288,7 @@ Everything the run taught that a cut-over must know:
   slowest shape.
 - **A hand-applied 0.x release names muster's namespace**:
   `muster.serverRef.namespace: agent-platform` on the Generic chart 0.6.1; the
-  Job drops the key on 1.x.
+  migrate run drops the key on 1.x.
 - **Helm removes the v1alpha2 `Agent`s with the 1.x upgrades**: the contract
   phase found `agentsDeleted: []` and had only the CRDs to retire. An
   installation whose releases upgrade before the contract run sees the same;

@@ -29,7 +29,12 @@ install: export CGO_ENABLED := 0
 # The generated `test` links the same static way, and -race needs cgo, so it
 # cannot take the pure-Go resolver the way `install` does: its test binaries
 # link dynamically instead, and glibc's getaddrinfo loads its NSS modules.
+# glibc's getaddrinfo crashes under cgo on some releases (2.44 among them), and
+# the release binaries never call it, so the tests resolve hosts with the
+# pure-Go resolver as those binaries do; a GODEBUG from the environment is kept.
 test: EXTLDFLAGS :=
+comma := ,
+test: export GODEBUG := $(if $(GODEBUG),$(GODEBUG)$(comma))netdns=go
 
 # Commit of giantswarm/kagent-upstream the kagent.api.v1alpha1 protos under
 # hack/kagent-proto/ are copied from: the tag of the kagent line the platform

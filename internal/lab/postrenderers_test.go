@@ -109,12 +109,6 @@ func TestComponentPostRenderers(t *testing.T) {
 	if raw, ok := rendered[config.DevImageHarness]; ok {
 		t.Errorf("harness: the Harness pins its image through the values, got postRenderers:\n%s", raw)
 	}
-	// Without agentgateway targets the connectivity chart is not patched:
-	// its kagent controller metrics Service selects kagent's own release
-	// since agent-platform 3.20.2 (patch 8: TestAgentgatewayIPv4Patches).
-	if raw, ok := rendered[connectivityComponent]; ok {
-		t.Errorf("connectivity: the lab patches nothing on the wiring chart, got postRenderers:\n%s", raw)
-	}
 	parse := func(component string) postRenderer {
 		raw, ok := rendered[component]
 		if !ok {
@@ -141,8 +135,8 @@ func TestComponentPostRenderers(t *testing.T) {
 
 	for _, c := range []string{componentMuster, componentBackstage} {
 		got := patchOn(c, kindDeployment, c)
-		if len(got) == 0 || !strings.Contains(got[0], "hostNetwork: true") || !strings.Contains(got[0], "maxSurge: 0") {
-			t.Errorf("%s: want the hostNetwork + maxSurge 0 patch, got %q", c, got)
+		if len(got) == 0 || !strings.Contains(got[0], "hostNetwork: true") || !strings.Contains(got[0], "maxSurge: 0") || !strings.Contains(got[0], "replicas: 1") {
+			t.Errorf("%s: want the hostNetwork + one replica + maxSurge 0 patch, got %q", c, got)
 		}
 	}
 	for _, c := range []string{componentMCPKubernetes, modelManagerMCPServer, agentManagerMCPServer, clusterManager} {
@@ -160,6 +154,18 @@ func TestComponentPostRenderers(t *testing.T) {
 		!strings.Contains(got[0], "port: 8080\n      protocol: TCP") {
 		t.Errorf("kagent: want the kagent-ui NodePort pin on the chart's 8080/TCP port entry, got %q", got)
 	}
+	// The wiring chart's one patch: the portal's route drops HSTS.
+	if got := patchOn(config.ConnectivityChartName, kindHTTPRoute, componentBackstage); len(got) != 1 ||
+		!strings.Contains(got[0], "path: /spec/rules/0/filters") || !strings.Contains(got[0], "- "+hstsHeader) {
+		t.Errorf("connectivity: want the HSTS-dropping filter on the backstage route, got %q", got)
+	}
+	cfg.Backstage.Enabled = false
+	if off, err := componentPostRenderers(cfg, names, sidecars, nil); err != nil {
+		t.Fatal(err)
+	} else if raw, ok := off[config.ConnectivityChartName]; ok {
+		t.Errorf("connectivity: without Backstage the lab patches nothing on the wiring chart, got postRenderers:\n%s", raw)
+	}
+	cfg.Backstage.Enabled = true
 
 	// The dev images: the override to the fully qualified local ref and the
 	// pull policy on the chart's container.
@@ -230,14 +236,14 @@ func TestComponentPostRenderers(t *testing.T) {
 		}
 	}
 	// Every Deployment target of the config's list has a render target — the
-	// list and the lab's table cannot drift apart; the harness and the
-	// agentgateway proxy are the two keys that travel as values.
+	// list and the lab's table cannot drift apart; the Harness images and the
+	// agentgateway proxy are the keys that travel as values.
 	for _, c := range config.DevImageComponents {
-		if _, ok := devImageTargets[c]; !ok && c != config.DevImageHarness && c != agentgatewayComponent {
+		if _, ok := devImageTargets[c]; !ok && !config.RegistryDevImage(c) && c != agentgatewayComponent {
 			t.Errorf("config.DevImageComponents names %s, but devImageTargets has no render target for it", c)
 		}
 	}
-	for _, c := range []string{config.DevImageHarness, agentgatewayComponent} {
+	for _, c := range []string{config.DevImageHarness, config.DevImageClaudeHarness, config.DevImageCodexHarness, config.DevImageOmpHarness, agentgatewayComponent} {
 		if _, ok := devImageTargets[c]; ok {
 			t.Errorf("the %s target is in no chart render; devImageTargets must not list it", c)
 		}
@@ -276,7 +282,7 @@ func TestDexLocalhostPatchRestricted(t *testing.T) {
 	}
 	patches := map[string]kustomizePatch{
 		componentMCPKubernetes: dexLocalhostPatch(componentMCPKubernetes, config.Default().DexPort),
-		"mcp-prometheus":       sidecarPostRenderer("mcp-prometheus", config.Default().DexPort).Kustomize.Patches[0],
+		"mcp-prometheus":       mcpPrometheusPostRenderers(config.Default(), nil)[0].Kustomize.Patches[0],
 	}
 	for name, p := range patches {
 		var d struct {
@@ -522,14 +528,14 @@ spec:
 }
 
 // substrateComponent is the meta chart's Substrate component, whose atenet
-// router and egress run agentgateway containers of their own (patch 8).
+// router and egress run agentgateway containers of their own (patch 9).
 const substrateComponent = "substrate"
 
-// labAgentgatewayTargets is patch 8's targets as the rule finds them on the
+// labAgentgatewayTargets is patch 9's targets as the rule finds them on the
 // renders of the 4.x line (TestAgentgatewayIPv4Targets): the connectivity
 // chart's AgentgatewayParameters and Substrate's atenet containers.
 var labAgentgatewayTargets = map[string][]agentgatewayTarget{
-	connectivityComponent: {{kind: kindAgentgatewayParameters, name: connectivityComponent}},
+	config.ConnectivityChartName: {{kind: kindAgentgatewayParameters, name: config.ConnectivityChartName}},
 	substrateComponent: {
 		{kind: kindDeployment, name: atenetRouter, container: agentgatewayImage},
 		{kind: kindDeployment, name: atenetEgress, container: agentgatewayImage},
@@ -613,18 +619,18 @@ spec:
 `
 )
 
-// Patch 8 selects, off the renders, every AgentgatewayParameters and every
+// Patch 9 selects, off the renders, every AgentgatewayParameters and every
 // container that runs the agentgateway data-plane image — not the
 // controller, not a sibling container, nothing in a chart without either.
 func TestAgentgatewayIPv4Targets(t *testing.T) {
 	got := agentgatewayIPv4Targets(map[string]string{
-		connectivityComponent: connectivityGatewayRender,
+		config.ConnectivityChartName: connectivityGatewayRender,
 		substrateComponent:    substrateGatewayRender,
 		componentMuster:       "apiVersion: apps/v1\nkind: Deployment\nmetadata: {name: muster}\nspec:\n  template:\n    spec:\n      containers:\n        - {name: muster, image: gsoci.azurecr.io/giantswarm/muster:5.0.0}\n",
 	})
 	want := map[string][]agentgatewayTarget{
-		connectivityComponent: {
-			{kind: kindAgentgatewayParameters, name: connectivityComponent},
+		config.ConnectivityChartName: {
+			{kind: kindAgentgatewayParameters, name: config.ConnectivityChartName},
 			{kind: kindAgentgatewayParameters, name: modelsGatewayName},
 		},
 		substrateComponent: labAgentgatewayTargets[substrateComponent],
@@ -637,7 +643,7 @@ func TestAgentgatewayIPv4Targets(t *testing.T) {
 	}
 }
 
-// Patch 8 as Flux's helm-controller applies it — kustomize over the chart's
+// Patch 9 as Flux's helm-controller applies it — kustomize over the chart's
 // render: agentgateway's IPv6 switch off in the AgentgatewayParameters'
 // rawConfig (the controller merges it into the data plane's config file) and
 // on the atenet agentgateway containers, every other field and env entry of
@@ -645,7 +651,7 @@ func TestAgentgatewayIPv4Targets(t *testing.T) {
 // a host that boots with ipv6.disable=1.
 func TestAgentgatewayIPv4Patches(t *testing.T) {
 	gateways := agentgatewayIPv4Targets(map[string]string{
-		connectivityComponent: connectivityGatewayRender,
+		config.ConnectivityChartName: connectivityGatewayRender,
 		substrateComponent:    substrateGatewayRender,
 	})
 	rendered, err := componentPostRenderers(config.Default(), nil, nil, gateways)
@@ -661,7 +667,7 @@ func TestAgentgatewayIPv4Patches(t *testing.T) {
 		Spec map[string]any `yaml:"spec"`
 	}
 	objects := map[string]object{}
-	for component, render := range map[string]string{connectivityComponent: connectivityGatewayRender, substrateComponent: substrateGatewayRender} {
+	for component, render := range map[string]string{config.ConnectivityChartName: connectivityGatewayRender, substrateComponent: substrateGatewayRender} {
 		out := kustomizeRender(t, render, rendered[component])
 		dec := yaml.NewDecoder(strings.NewReader(out))
 		for {
@@ -689,14 +695,14 @@ func TestAgentgatewayIPv4Patches(t *testing.T) {
 		}
 		return cur
 	}
-	for _, name := range []string{connectivityComponent, modelsGatewayName} {
+	for _, name := range []string{config.ConnectivityChartName, modelsGatewayName} {
 		if got := at(name, "rawConfig", "config", "enableIpv6"); got != false {
 			t.Errorf("AgentgatewayParameters %s: rawConfig.config.enableIpv6 = %v, want false", name, got)
 		}
 	}
-	if at(connectivityComponent, "deployment", "spec", "replicas") != 2 || at(connectivityComponent, "deployment", "spec", "template", "spec", "containers", 0, "env", 0, "value") != "grpc" ||
+	if at(config.ConnectivityChartName, "deployment", "spec", "replicas") != 2 || at(config.ConnectivityChartName, "deployment", "spec", "template", "spec", "containers", 0, "env", 0, "value") != "grpc" ||
 		at(modelsGatewayName, "service", "spec", "type") != "LoadBalancer" {
-		t.Errorf("the patch must keep the chart's fields: %+v / %+v", objects[connectivityComponent].Spec, objects[modelsGatewayName].Spec)
+		t.Errorf("the patch must keep the chart's fields: %+v / %+v", objects[config.ConnectivityChartName].Spec, objects[modelsGatewayName].Spec)
 	}
 	envOf := func(deployment, container string) map[string]any {
 		env := map[string]any{}

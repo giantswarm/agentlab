@@ -2,6 +2,7 @@ package lab
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -23,6 +24,19 @@ import (
 // is Unauthorized until the cached set expires, up to 9 min 30 s after the
 // apiserver's last fetch. ensureApiserverAcceptsDex tells that window from
 // any other refusal and waits it out.
+
+// apiserverAcceptsDex is the apiserver OIDC stage: every proof that presents
+// a Dex token to the apiserver, to muster or to the Dev Portal runs it before
+// its first one (platform-test, test, backstage-test, agents-test). A seam for
+// the proofs' tests.
+var apiserverAcceptsDex = ensureApiserverAcceptsDex
+
+// checkApiserverOIDC runs the apiserver OIDC stage as a step of a proof
+// without proofStages.
+func checkApiserverOIDC(cfg *config.Config) error {
+	step("%s: checking the apiserver accepts a fresh Dex token", stageApiserverOIDC)
+	return apiserverAcceptsDex(context.Background(), cfg)
+}
 
 // apiserverJWKSWindow bounds the wait: Dex's max-age plus a margin for the
 // first token after the expiry to make the fetch.
@@ -184,4 +198,13 @@ func parseJWKSKeyIDs(body []byte) ([]string, error) {
 		ids = append(ids, k.KeyID)
 	}
 	return ids, nil
+}
+
+// decodeJWTPart decodes one base64url part of a JWT into v.
+func decodeJWTPart(part string, v any) error {
+	raw, err := base64.RawURLEncoding.DecodeString(part)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(raw, v)
 }

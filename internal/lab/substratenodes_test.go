@@ -104,7 +104,7 @@ func TestKindConfigSubstrateNodes(t *testing.T) {
 // The values pin atelet and the WorkerPool's workers to the substrateNodes
 // workers with the matching toleration, and leave both alone by default.
 func TestPlatformValuesSubstrateNodes(t *testing.T) {
-	toleration := []any{map[string]any{"key": config.SubstrateNodeKey, "operator": "Equal", "value": substrateNodeLabelValue, "effect": "NoSchedule"}}
+	toleration := []any{map[string]any{fieldKey: config.SubstrateNodeKey, "operator": "Equal", "value": substrateNodeLabelValue, "effect": "NoSchedule"}}
 	for _, n := range []int{0, 2} {
 		cfg := config.Default()
 		cfg.SubstrateNodes = n

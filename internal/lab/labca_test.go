@@ -26,7 +26,6 @@ func init() {
 // which dials the models Gateway for the actors, gets the lab CA as its extra
 // upstream trust, verbatim.
 func TestPlatformValuesTrustTheLabCAAtTheEgress(t *testing.T) {
-	t.Setenv(GitHubTokenEnv, "")
 	out, err := renderTemplate(config.Default(), platformValuesTemplate, nil)
 	if err != nil {
 		t.Fatal(err)

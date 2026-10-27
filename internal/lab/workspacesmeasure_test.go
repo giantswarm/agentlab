@@ -4,20 +4,15 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/json"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
-
-// wsGeneratedMiB is the generated repository request's size field.
-const wsGeneratedMiB = "generatedMiB"
 
 func TestMeasureStats(t *testing.T) {
 	for _, tc := range []struct {
@@ -40,7 +35,7 @@ func TestMeasureStats(t *testing.T) {
 }
 
 func TestJudgeMirror(t *testing.T) {
-	within := judgeMirror("o/a", 100, 120*1024)
+	within := judgeMirror(measureTestSmallRepo, 100, 120*1024)
 	if within.Factor == nil || *within.Factor != 1.2 || !*within.WithinEstimate {
 		t.Errorf("a mirror 1.2 × the provider's size = %+v, want factor 1.2 within the estimate", within)
 	}
@@ -108,11 +103,11 @@ func TestMeasureReportMarkdown(t *testing.T) {
 	requested, resized := 0.8, 2.25
 	r := measureReport{Target: "the lab agentlab", Runs: 1, WorkspaceManager: "0.5.1", Harness: claudeHarness,
 		Started: time.Unix(0, 0), Ended: time.Unix(60, 0),
-		Workspaces: []measureWorkspaceReport{{Name: measureSmallWorkspace, Kind: measureSmall, Repositories: measureLabSmallRepos, Pushed: syncMovingRepo, Worked: syncListRepoB,
+		Workspaces: []measureWorkspaceReport{{Name: measureSmallWorkspace, Kind: measureSmall, Repositories: []string{"o/docs", "o/kagent"}, Pushed: "o/docs", Worked: "o/kagent",
 			Figures: s.figures(),
 			Storage: measureStorage{StorageClass: workspacesStorageClass, Driver: workspacesCSIDriver, ProvisionsSize: true, CapacityBytes: &capacity,
 				MirrorsBytes: 2048, SessionsBytes: 4096,
-				Mirrors:   []measureMirror{judgeMirror(syncMovingRepo, 10, 30*1024)},
+				Mirrors:   []measureMirror{judgeMirror("o/docs", 10, 30*1024)},
 				Headroom:  judgeHeadroom(6144, &capacity, ""),
 				Expansion: &measureExpansion{From: "5Gi", To: "6Gi", RequestedSeconds: &requested, ResizedSeconds: &resized}}}},
 	}
@@ -143,29 +138,36 @@ func TestMeasureStorageUnread(t *testing.T) {
 	}
 }
 
+// The options' cluster and repositories in the tests.
+const (
+	measureTestContext   = "ctx"
+	measureTestSmallRepo = "o/a"
+)
+
+// measureTestTarget names a whole target: the cluster, the Organization,
+// the provider instance and both workspaces' repositories.
+func measureTestTarget() WorkspacesMeasureOptions {
+	return WorkspacesMeasureOptions{KubeContext: measureTestContext, MusterURL: "https://muster.example.com", Organization: "org", Provider: config.WorkspaceProviderGitHub,
+		SmallRepos: []string{measureTestSmallRepo, "o/b"}, LargeRepo: "o/big"}
+}
+
 func TestWorkspacesMeasureOptionsValidate(t *testing.T) {
-	remote := WorkspacesMeasureOptions{KubeContext: "ctx", MusterURL: "https://muster.example.com", Organization: "org", Provider: config.WorkspaceProviderGitHub,
-		SmallRepos: []string{"o/a", "o/b"}, LargeRepo: "o/big"}
-	withAgent := remote
+	target := measureTestTarget()
+	withAgent := target
 	withAgent.Agent, withAgent.AgentgatewayURL = "kagent/coder", "https://agentgateway.example.com"
 	for _, tc := range []struct {
 		name string
 		opts WorkspacesMeasureOptions
 		want string
 	}{
-		{"the lab", WorkspacesMeasureOptions{}, ""},
-		{"the lab as dev with a large repository", WorkspacesMeasureOptions{Email: testDevUser, LargeRepoMiB: 512, Runs: 3}, ""},
-		{"negative runs", WorkspacesMeasureOptions{Runs: -1}, "--runs"},
-		{"a large repository too large", WorkspacesMeasureOptions{LargeRepoMiB: githubFakeMaxGeneratedMiB + 1}, "--large-repo-mib"},
-		{"another cluster's flag in the lab", WorkspacesMeasureOptions{LargeRepo: "o/big"}, "--large-repo names another cluster's"},
-		{"another cluster's git URL in the lab", WorkspacesMeasureOptions{GitURL: "https://git.example.com"}, "--git-url names another cluster's"},
-		{"another cluster with a git URL", func() WorkspacesMeasureOptions { o := remote; o.GitURL = "https://git.example.com"; return o }(), ""},
-		{"another cluster", remote, ""},
-		{"another cluster with an Agent", withAgent, ""},
-		{"a half target", WorkspacesMeasureOptions{KubeContext: "ctx"}, "--muster-url"},
-		{"the lab's email on another cluster", func() WorkspacesMeasureOptions { o := remote; o.Email = testDevUser; return o }(), "[email] is the lab's"},
-		{"a repository without an owner", func() WorkspacesMeasureOptions { o := remote; o.LargeRepo = "big"; return o }(), "owner/name"},
-		{"an Agent without the agentgateway", func() WorkspacesMeasureOptions { o := remote; o.Agent = "kagent/coder"; return o }(), "go together"},
+		{"nothing named", WorkspacesMeasureOptions{}, "--kube-context"},
+		{"negative runs", func() WorkspacesMeasureOptions { o := target; o.Runs = -1; return o }(), "--runs"},
+		{"a git URL", func() WorkspacesMeasureOptions { o := target; o.GitURL = "https://git.example.com"; return o }(), ""},
+		{"a cluster", target, ""},
+		{"a cluster with an Agent", withAgent, ""},
+		{"a half target", WorkspacesMeasureOptions{KubeContext: measureTestContext}, "--muster-url"},
+		{"a repository without an owner", func() WorkspacesMeasureOptions { o := target; o.LargeRepo = "big"; return o }(), "owner/name"},
+		{"an Agent without the agentgateway", func() WorkspacesMeasureOptions { o := target; o.Agent = "kagent/coder"; return o }(), "go together"},
 		{"an Agent without a namespace", func() WorkspacesMeasureOptions { o := withAgent; o.Agent = "coder"; return o }(), "namespace/name"},
 	} {
 		err := tc.opts.validate()
@@ -181,19 +183,19 @@ func TestMeasureScriptsParse(t *testing.T) {
 		t.Skip("no sh")
 	}
 	for name, script := range map[string]string{
-		"git":          measureGitScript(syncListRepoB, measureLabBranch, ""),
-		"git, remote":  measureGitScript("o/a", "", "https://proxy.example,direct"),
+		"git":          measureGitScript("o/kagent", measureTestBranch, ""),
+		"git, remote":  measureGitScript(measureTestSmallRepo, "", "https://proxy.example,direct"),
 		"storage":      measureStorageScript,
 		"owners":       sessionOwnersScript,
 		"clear":        measureClearSessionsScript(volumeOwner{65532, 65532}),
-		"fetch (turn)": measureFetchCommand(syncMovingRepo, measureLabBranch),
+		"fetch (turn)": measureFetchCommand("o/docs", measureTestBranch),
 	} {
 		// #nosec G204 -- the test's own scripts, parsed and not run
 		if out, err := exec.Command(sh, "-n", "-c", script).CombinedOutput(); err != nil {
 			t.Errorf("the %s script does not parse: %v\n%s", name, err, out)
 		}
 	}
-	git := measureGitScript(syncListRepoB, measureLabBranch, "")
+	git := measureGitScript("o/kagent", measureTestBranch, "")
 	for _, want := range []string{"switch -q", "status --porcelain", "go build", "--config checkout.workers=0", "rm -rf /workspace/" + measureBuildDir + " 2>/dev/null && break"} {
 		if !strings.Contains(git, want) {
 			t.Errorf("the git script lacks %q", want)
@@ -218,75 +220,11 @@ func TestParseFetch(t *testing.T) {
 	}
 }
 
-func TestMeasureLabFixtureBuilds(t *testing.T) {
-	fixture, err := loadGitHubFixture("")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, repo := range []string{measureLabLargeRepo, syncListRepoB} {
-		i := slices.IndexFunc(fixture.Repositories, func(r githubFixtureRepo) bool { return r.fullName() == repo })
-		if i < 0 || fixture.Repositories[i].Files[goModFile] == "" || fixture.Repositories[i].Files[mainGoFile] == "" {
-			t.Errorf("the fixture's %s carries no Go module for the measurement's build", repo)
-		}
-	}
-	if !slices.Contains(measureLabSmallRepos, syncMovingRepo) || !slices.Contains(measureLabSmallRepos, syncListRepoB) {
-		t.Errorf("the small workspace %v holds neither the pushed %s nor the built %s", measureLabSmallRepos, syncMovingRepo, syncListRepoB)
-	}
-}
-
-func TestWorkspaceGitHubGeneratedRepo(t *testing.T) {
-	f := startWorkspaceFake(t)
-	path := githubFakeReposPath + "/" + wsOrg + "/monorepo-2mib"
-	if resp := f.call(t, http.MethodPut, path, "", map[string]any{wsGeneratedMiB: 0}, nil); resp.StatusCode != http.StatusUnprocessableEntity {
-		t.Fatalf("a generated repository of 0 MiB = %d, want 422", resp.StatusCode)
-	}
-	if resp := f.call(t, http.MethodPut, githubFakeReposPath+"/nobody/x", "", map[string]any{wsGeneratedMiB: 1}, nil); resp.StatusCode != http.StatusUnprocessableEntity {
-		t.Fatalf("an unknown owner = %d, want 422", resp.StatusCode)
-	}
-	var created struct {
-		Size int64 `json:"size"`
-	}
-	if resp := f.call(t, http.MethodPut, path, "", map[string]any{wsGeneratedMiB: 2, "language": "Go"}, &created); resp.StatusCode != http.StatusCreated || created.Size < 2048 {
-		t.Fatalf("adding 2 MiB = %d, size %d KiB", resp.StatusCode, created.Size)
-	}
-	if resp := f.call(t, http.MethodPut, path, "", map[string]any{wsGeneratedMiB: 2}, nil); resp.StatusCode != http.StatusOK {
-		t.Fatalf("the same request again = %d, want 200", resp.StatusCode)
-	}
-	if resp := f.call(t, http.MethodPut, path, "", map[string]any{wsGeneratedMiB: 3}, nil); resp.StatusCode != http.StatusConflict {
-		t.Fatalf("another size under the same name = %d, want 409", resp.StatusCode)
-	}
-	var repo map[string]any
-	f.call(t, http.MethodGet, githubFakeAPIPath+"/repos/"+wsOrg+"/monorepo-2mib", "", nil, &repo)
-	if repo[wsFullName] != wsOrg+"/monorepo-2mib" || repo["language"] != "Go" || repo["private"] != false {
-		t.Fatalf("the generated repository = %v", repo)
-	}
-	dir := t.TempDir()
-	// #nosec G204 -- git against the test's own fake
-	if out, err := exec.Command("git", "-c", "http.sslCAInfo="+f.caPath, "clone", "-q", f.url+"/"+wsOrg+"/monorepo-2mib.git", dir+"/c").CombinedOutput(); err != nil {
-		t.Fatalf("cloning the generated repository: %v\n%s", err, out)
-	}
-	if out, err := exec.Command("git", "-C", dir+"/c", "ls-files", goModFile, mainGoFile).Output(); err != nil || strings.Count(string(out), "\n") != 2 { // #nosec G204 -- the test's clone
-		t.Fatalf("the generated repository's Go module = %q, %v", out, err)
-	}
-	if resp := f.call(t, http.MethodDelete, githubFakeReposPath+"/"+wsPublic, "", nil, nil); resp.StatusCode != http.StatusConflict {
-		t.Fatalf("removing the fixture's %s = %d, want 409", wsPublic, resp.StatusCode)
-	}
-	if resp := f.call(t, http.MethodDelete, path, "", nil, nil); resp.StatusCode != http.StatusNoContent {
-		t.Fatalf("removing the generated repository = %d, want 204", resp.StatusCode)
-	}
-	if resp := f.call(t, http.MethodGet, githubFakeAPIPath+"/repos/"+wsOrg+"/monorepo-2mib", "", nil, nil); resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("the removed repository answers %d, want 404", resp.StatusCode)
-	}
-	if resp := f.call(t, http.MethodDelete, path, "", nil, nil); resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("removing it again = %d, want 404", resp.StatusCode)
-	}
-}
-
 // A run that ends at the preconditions has no samples: the report is still
 // written, every figure not available.
 func TestMeasureWriteReportWithoutSamples(t *testing.T) {
 	m := &measurement{runDir: t.TempDir(), ws: []*measureWorkspace{
-		{name: "agentlab-measure-small", kind: "small", repos: []string{"o/a"}},
+		{name: "agentlab-measure-small", kind: "small", repos: []string{measureTestSmallRepo}},
 		{name: "agentlab-measure-large", kind: "large", repos: []string{"o/b"}},
 	}}
 	m.report = measureReport{Runs: 5, Error: "workspace agentlab-measure-small is not gone"}
@@ -471,7 +409,7 @@ func TestParseGitProbeKeepsFigures(t *testing.T) {
 	p := parseGitProbe(out)
 	s := newMeasureSamples()
 	for _, f := range measureGitFigures {
-		if v, why := p.value(f.key, "o/a"); why != "" {
+		if v, why := p.value(f.key, measureTestSmallRepo); why != "" {
 			s.notAvailable(f.fig, why)
 		} else {
 			s.add(f.fig, v)
@@ -506,18 +444,27 @@ func TestMeasureReportFailedProbes(t *testing.T) {
 }
 
 func TestWorkspacesMeasureOptionsGoProxy(t *testing.T) {
-	if err := (WorkspacesMeasureOptions{GoProxy: "https://proxy.example,direct"}).validate(); err != nil {
+	with := func(goproxy string) WorkspacesMeasureOptions {
+		o := measureTestTarget()
+		o.GoProxy = goproxy
+		return o
+	}
+	if err := with("https://proxy.example,direct").validate(); err != nil {
 		t.Errorf("a GOPROXY list: %v", err)
 	}
 	for _, bad := range []string{"x' ; rm -rf /", "a b"} {
-		if err := (WorkspacesMeasureOptions{GoProxy: bad}).validate(); err == nil {
+		if err := with(bad).validate(); err == nil {
 			t.Errorf("--goproxy %q accepted", bad)
 		}
 	}
 }
 
 // measureTestPushed is the repository the pusher tests push to.
-const measureTestPushed = "o/pushed"
+// The pushed repository and its default branch.
+const (
+	measureTestPushed = "o/pushed"
+	measureTestBranch = "main"
+)
 
 // measureTestRepo is a bare repository with one commit on main, served to
 // the pusher at a file:// URL.
@@ -533,14 +480,14 @@ func measureTestRepo(t *testing.T) (bare, url, head string) {
 		}
 		return out
 	}
-	run(dir, "init", "-q", "--bare", "-b", measureLabBranch, bare)
-	run(dir, "init", "-q", "-b", measureLabBranch, work)
+	run(dir, "init", "-q", "--bare", "-b", measureTestBranch, bare)
+	run(dir, "init", "-q", "-b", measureTestBranch, work)
 	if err := os.WriteFile(filepath.Join(work, "README.md"), []byte("# a\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	run(work, "add", "README.md")
 	run(work, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "a")
-	run(work, "push", "-q", bare, measureLabBranch)
+	run(work, "push", "-q", bare, measureTestBranch)
 	return bare, "file://" + bare, run(work, "rev-parse", "HEAD")
 }
 
@@ -562,7 +509,7 @@ func TestMeasurePusher(t *testing.T) {
 	t.Run("scratch", func(t *testing.T) {
 		bare, url, start := measureTestRepo(t)
 		m := &measurement{pushers: map[string]*measurePusher{}}
-		pu := &measurePusher{repo: measureTestPushed, branch: "agentlab-workspaces-measure-x", scratch: true, git: personGit}
+		pu := &measurePusher{repo: measureTestPushed, branch: "agentlab-workspaces-measure-x", git: personGit}
 		if err := m.clonePusher(pu, url); err != nil {
 			t.Fatal(err)
 		}
@@ -577,8 +524,8 @@ func TestMeasurePusher(t *testing.T) {
 		if first == second || ref(bare, pu.branch) != second {
 			t.Errorf("the scratch branch is at %q after pushes %s and %s, want the second", ref(bare, pu.branch), first, second)
 		}
-		if ref(bare, measureLabBranch) != start {
-			t.Errorf("a scratch push moved main to %s from %s", ref(bare, measureLabBranch), start)
+		if ref(bare, measureTestBranch) != start {
+			t.Errorf("a scratch push moved main to %s from %s", ref(bare, measureTestBranch), start)
 		}
 		if err := pu.unpush(); err != nil {
 			t.Fatal(err)
@@ -587,26 +534,8 @@ func TestMeasurePusher(t *testing.T) {
 			t.Errorf("the scratch branch is still there at %s", got)
 		}
 	})
-	t.Run("the lab's default branch", func(t *testing.T) {
-		bare, url, start := measureTestRepo(t)
-		m := &measurement{pushers: map[string]*measurePusher{}}
-		pu := &measurePusher{repo: measureTestPushed, branch: measureLabBranch, git: personGit}
-		if err := m.clonePusher(pu, url); err != nil {
-			t.Fatal(err)
-		}
-		head, err := m.push(measureTestPushed)
-		if err != nil || ref(bare, measureLabBranch) != head {
-			t.Fatalf("main at %s after a push of %s: %v", ref(bare, measureLabBranch), head, err)
-		}
-		if err := pu.unpush(); err != nil {
-			t.Fatal(err)
-		}
-		if ref(bare, measureLabBranch) != start {
-			t.Errorf("main at %s after the cleanup, want back at %s", ref(bare, measureLabBranch), start)
-		}
-	})
 	t.Run("no push", func(t *testing.T) {
-		pu := &measurePusher{repo: measureTestPushed, branch: "b", scratch: true, git: func(string, ...string) (string, error) {
+		pu := &measurePusher{repo: measureTestPushed, branch: "b", git: func(string, ...string) (string, error) {
 			t.Fatal("unpush ran git without a push")
 			return "", nil
 		}}

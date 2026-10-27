@@ -2,6 +2,7 @@ package labs
 
 import (
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,14 +11,19 @@ import (
 	"github.com/giantswarm/agentlab/internal/config"
 )
 
-// setup points the registry at a temporary directory and changes into an
-// empty working directory, so every test starts with no lab anywhere.
+// setup points the registry and the freedesktop folders at temporary
+// directories and changes into an empty working directory, so every test
+// starts with no lab anywhere.
 func setup(t *testing.T) (cwd string) {
 	t.Helper()
 	regDir := t.TempDir()
 	prev := Dir
 	Dir = func() (string, error) { return regDir, nil }
-	t.Cleanup(func() { Dir = prev })
+	prevConfig, prevState := configHome, stateHome
+	cfgDir, stateDir := t.TempDir(), t.TempDir()
+	configHome = func() (string, error) { return cfgDir, nil }
+	stateHome = func() (string, error) { return stateDir, nil }
+	t.Cleanup(func() { Dir, configHome, stateHome = prev, prevConfig, prevState })
 	cwd = t.TempDir()
 	t.Chdir(cwd)
 	return cwd
@@ -46,7 +52,7 @@ func writeConfig(t *testing.T, dir, name string) {
 func TestResolveOrder(t *testing.T) {
 	t.Run("nothing registered: the current directory", func(t *testing.T) {
 		setup(t)
-		got, err := Resolve("", false, nil)
+		got, err := Resolve("", Enter, nil)
 		if err != nil || got.Dir != "" {
 			t.Fatalf("Resolve() = %+v, %v; want the current directory", got, err)
 		}
@@ -54,7 +60,7 @@ func TestResolveOrder(t *testing.T) {
 	t.Run("one registered lab off a terminal: refused naming it and --lab", func(t *testing.T) {
 		setup(t)
 		dir := newLab(t, "one")
-		_, err := Resolve("", false, nil)
+		_, err := Resolve("", Enter, nil)
 		if err == nil || !strings.Contains(err.Error(), "one in "+dir) || !strings.Contains(err.Error(), "--lab") {
 			t.Fatalf("Resolve() = %v, want a refusal naming one and --lab", err)
 		}
@@ -63,7 +69,7 @@ func TestResolveOrder(t *testing.T) {
 		setup(t)
 		dir := newLab(t, "one")
 		asked := false
-		got, err := Resolve("", false, func(labs []Lab) (Lab, error) { asked = true; return labs[0], nil })
+		got, err := Resolve("", Enter, func(labs []Lab) (Lab, error) { asked = true; return labs[0], nil })
 		if err != nil || !asked || got.Dir != dir {
 			t.Fatalf("Resolve() = %+v, %v (picker asked: %v); want %s from the picker", got, err, asked, dir)
 		}
@@ -72,7 +78,7 @@ func TestResolveOrder(t *testing.T) {
 		cwd := setup(t)
 		newLab(t, "one")
 		writeConfig(t, cwd, "two")
-		got, err := Resolve("", false, func([]Lab) (Lab, error) { t.Fatal("picker asked"); return Lab{}, nil })
+		got, err := Resolve("", Enter, func([]Lab) (Lab, error) { t.Fatal("picker asked"); return Lab{}, nil })
 		if err != nil || got.Dir != "" {
 			t.Fatalf("Resolve() = %+v, %v; want the current directory", got, err)
 		}
@@ -84,7 +90,7 @@ func TestResolveOrder(t *testing.T) {
 		if err := Register("two", cwd); err != nil {
 			t.Fatal(err)
 		}
-		got, err := Resolve("", false, nil)
+		got, err := Resolve("", Enter, nil)
 		if err != nil || got.Dir != "" {
 			t.Fatalf("Resolve() = %+v, %v; want the current directory", got, err)
 		}
@@ -94,7 +100,7 @@ func TestResolveOrder(t *testing.T) {
 		newLab(t, "agentlab")
 		second := newLab(t, "agentlab-2")
 		writeConfig(t, cwd, "agentlab-2")
-		got, err := Resolve("", false, func([]Lab) (Lab, error) { t.Fatal("picker asked"); return Lab{}, nil })
+		got, err := Resolve("", Enter, func([]Lab) (Lab, error) { t.Fatal("picker asked"); return Lab{}, nil })
 		if err != nil || got.Name != "agentlab-2" || got.Dir != second {
 			t.Fatalf("Resolve() = %+v, %v; want agentlab-2 in %s", got, err, second)
 		}
@@ -105,7 +111,7 @@ func TestResolveOrder(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(cwd, config.File), []byte("dexPort: 32000\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		_, err := Resolve("", false, nil)
+		_, err := Resolve("", Enter, nil)
 		if err == nil || !strings.Contains(err.Error(), "clusterName") {
 			t.Fatalf("Resolve() = %v, want a refusal naming clusterName", err)
 		}
@@ -113,15 +119,32 @@ func TestResolveOrder(t *testing.T) {
 	t.Run("create: an empty directory stays the lab", func(t *testing.T) {
 		setup(t)
 		newLab(t, "one")
-		got, err := Resolve("", true, nil)
+		got, err := Resolve("", Create, nil)
 		if err != nil || got.Dir != "" {
 			t.Fatalf("Resolve() = %+v, %v; want the current directory", got, err)
+		}
+	})
+	t.Run("here: a copy of a registered lab's agentlab.yaml is this directory", func(t *testing.T) {
+		cwd := setup(t)
+		newLab(t, "agentlab-2")
+		writeConfig(t, cwd, "agentlab-2")
+		got, err := Resolve("", Here, func([]Lab) (Lab, error) { t.Fatal("picker asked"); return Lab{}, nil })
+		if err != nil || got.Dir != "" {
+			t.Fatalf("Resolve() = %+v, %v; want the current directory", got, err)
+		}
+	})
+	t.Run("here: without an agentlab.yaml the registered labs are offered", func(t *testing.T) {
+		setup(t)
+		dir := newLab(t, "one")
+		got, err := Resolve("", Here, func(labs []Lab) (Lab, error) { return labs[0], nil })
+		if err != nil || got.Dir != dir {
+			t.Fatalf("Resolve() = %+v, %v; want %s from the picker", got, err, dir)
 		}
 	})
 	t.Run("two labs off a terminal: refused naming both and --lab", func(t *testing.T) {
 		setup(t)
 		a, b := newLab(t, "a"), newLab(t, "b")
-		_, err := Resolve("", false, nil)
+		_, err := Resolve("", Enter, nil)
 		if err == nil {
 			t.Fatal("Resolve() = nil error, want a refusal")
 		}
@@ -136,7 +159,7 @@ func TestResolveOrder(t *testing.T) {
 		newLab(t, "a")
 		b := newLab(t, "b")
 		var offered []Lab
-		got, err := Resolve("", false, func(labs []Lab) (Lab, error) { offered = labs; return labs[1], nil })
+		got, err := Resolve("", Enter, func(labs []Lab) (Lab, error) { offered = labs; return labs[1], nil })
 		if err != nil || got.Dir != b {
 			t.Fatalf("Resolve() = %+v, %v; want %s", got, err, b)
 		}
@@ -149,7 +172,7 @@ func TestResolveOrder(t *testing.T) {
 		a := newLab(t, "a")
 		newLab(t, "b")
 		writeConfig(t, cwd, "b")
-		got, err := Resolve("a", false, func([]Lab) (Lab, error) { t.Fatal("picker asked"); return Lab{}, nil })
+		got, err := Resolve("a", Enter, func([]Lab) (Lab, error) { t.Fatal("picker asked"); return Lab{}, nil })
 		if err != nil || got.Dir != a {
 			t.Fatalf("Resolve(a) = %+v, %v; want %s", got, err, a)
 		}
@@ -157,7 +180,7 @@ func TestResolveOrder(t *testing.T) {
 	t.Run("an unknown --lab is refused naming the registered ones", func(t *testing.T) {
 		setup(t)
 		a := newLab(t, "a")
-		_, err := Resolve("nope", false, nil)
+		_, err := Resolve("nope", Enter, nil)
 		if err == nil || !strings.Contains(err.Error(), `"nope"`) || !strings.Contains(err.Error(), "a in "+a) {
 			t.Fatalf("Resolve(nope) = %v, want a refusal naming a", err)
 		}
@@ -180,7 +203,7 @@ func TestPruning(t *testing.T) {
 	}
 	// The vanished lab is not offered.
 	var offered []Lab
-	if _, err := Resolve("", false, func(labs []Lab) (Lab, error) { offered = labs; return labs[0], nil }); err != nil {
+	if _, err := Resolve("", Enter, func(labs []Lab) (Lab, error) { offered = labs; return labs[0], nil }); err != nil {
 		t.Fatal(err)
 	}
 	if len(offered) != 1 || offered[0].Dir != kept {
@@ -256,5 +279,113 @@ func TestRenameDropsTheOldName(t *testing.T) {
 	}
 	if len(labs) != 1 || labs[0].Name != "new" {
 		t.Fatalf("List() = %+v, want only new", labs)
+	}
+}
+
+func TestFreeName(t *testing.T) {
+	t.Run("a free name is kept", func(t *testing.T) {
+		setup(t)
+		newLab(t, "other")
+		if got, err := FreeName(config.DefaultClusterName, "."); err != nil || got != config.DefaultClusterName {
+			t.Fatalf("FreeName() = %q, %v; want agentlab", got, err)
+		}
+	})
+	t.Run("a taken name moves to the first free suffix", func(t *testing.T) {
+		setup(t)
+		newLab(t, "agentlab")
+		newLab(t, "agentlab-2")
+		if got, err := FreeName(config.DefaultClusterName, "."); err != nil || got != "agentlab-3" {
+			t.Fatalf("FreeName() = %q, %v; want agentlab-3", got, err)
+		}
+	})
+	t.Run("the name this directory holds is its own", func(t *testing.T) {
+		cwd := setup(t)
+		writeConfig(t, cwd, "agentlab")
+		if err := Register("agentlab", cwd); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := FreeName(config.DefaultClusterName, "."); err != nil || got != config.DefaultClusterName {
+			t.Fatalf("FreeName() = %q, %v; want agentlab", got, err)
+		}
+	})
+	t.Run("a stale registration frees its name", func(t *testing.T) {
+		setup(t)
+		dir := newLab(t, "agentlab")
+		if err := os.Remove(filepath.Join(dir, config.File)); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := FreeName(config.DefaultClusterName, "."); err != nil || got != config.DefaultClusterName {
+			t.Fatalf("FreeName() = %q, %v; want agentlab", got, err)
+		}
+	})
+}
+
+// Every other registered lab's ports are recorded, stopped labs included
+// (nothing here runs); the lab asking is not its own obstacle.
+func TestRecordedPorts(t *testing.T) {
+	cwd := setup(t)
+	other := t.TempDir()
+	if err := os.WriteFile(filepath.Join(other, config.File), []byte("clusterName: agentlab\ndexPort: 32001\napiServerPort: 6444\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Register("agentlab", other); err != nil {
+		t.Fatal(err)
+	}
+	writeConfig(t, cwd, "agentlab-2")
+	if err := Register("agentlab-2", cwd); err != nil {
+		t.Fatal(err)
+	}
+	ports, err := RecordedPorts(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"127.0.0.1:32001", "127.0.0.1:6444"} {
+		if ports[p] != "agentlab" {
+			t.Errorf("%s recorded by %q, want agentlab", p, ports[p])
+		}
+	}
+	for p, name := range ports {
+		if name != "agentlab" {
+			t.Errorf("%s recorded by %q: the asking lab counted itself", p, name)
+		}
+	}
+}
+
+// Every other registered lab's domain is recorded, the default of a file that
+// names none included, under the first lab by name; the lab asking is not its
+// own obstacle.
+// The labs and the domain TestRecordedDomains registers.
+const (
+	secondLab  = config.DefaultClusterName + "-2"
+	thirdLab   = config.DefaultClusterName + "-3"
+	lab3Domain = "lab3.127.0.0.1.nip.io"
+)
+
+func TestRecordedDomains(t *testing.T) {
+	cwd := setup(t)
+	for name, body := range map[string]string{
+		config.DefaultClusterName: "clusterName: " + config.DefaultClusterName + "\n",
+		thirdLab:                  "clusterName: " + thirdLab + "\nplatform:\n  domain: " + lab3Domain + "\n",
+		"scratch":                 "clusterName: scratch\n",
+	} {
+		other := t.TempDir()
+		if err := os.WriteFile(filepath.Join(other, config.File), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := Register(name, other); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeConfig(t, cwd, secondLab)
+	if err := Register(secondLab, cwd); err != nil {
+		t.Fatal(err)
+	}
+	domains, err := RecordedDomains(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{config.Default().Platform.Domain: config.DefaultClusterName, lab3Domain: thirdLab}
+	if !maps.Equal(domains, want) {
+		t.Errorf("RecordedDomains() = %v, want %v", domains, want)
 	}
 }

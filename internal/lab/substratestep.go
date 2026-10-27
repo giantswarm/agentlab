@@ -302,7 +302,7 @@ func (r *substrateStepRun) seed(email string) error {
 	if _, err := r.turn(ctx, session, codewordPrompt(r.codeword)); err != nil {
 		return fmt.Errorf("turn 1 (the codeword): %w", err)
 	}
-	reply, err := r.turn(ctx, session, writeMarkerPrompt(r.marker))
+	reply, err := r.turn(ctx, session, writeMarkerPrompt(substrateStepDir, substrateStepFile, r.marker))
 	if err != nil {
 		return fmt.Errorf("turn 2 (the file): %w", err)
 	}
@@ -354,19 +354,26 @@ func (r *substrateStepRun) turn(ctx context.Context, session *apiv1alpha1.Sessio
 // awaitSuspended polls the session until the controller reports it
 // SUSPENDED: the snapshot is written.
 func (r *substrateStepRun) awaitSuspended(ctx context.Context, session *apiv1alpha1.Session) (*apiv1alpha1.Session, error) {
+	return awaitSessionSuspended(ctx, r.api, session)
+}
+
+// awaitSessionSuspended polls the session until the controller reports it
+// SUSPENDED: the snapshot is written.
+func awaitSessionSuspended(ctx context.Context, api *kagentAPI, session *apiv1alpha1.Session) (*apiv1alpha1.Session, error) {
+	id := session.GetId()
 	var err error
 	suspended := waitFor(int(sessionReadyTimeout/pollInterval), pollInterval, func() bool {
 		if session.GetState() == apiv1alpha1.RuntimeState_RUNTIME_STATE_SUSPENDED {
 			return true
 		}
-		session, err = r.api.getSession(ctx, r.session)
+		session, err = api.getSession(ctx, id)
 		return err != nil
 	})
 	if err != nil {
 		return session, err
 	}
 	if !suspended {
-		return session, fmt.Errorf("session %s is still %s %s after the suspend", r.session, sessionState(session), sessionReadyTimeout)
+		return session, fmt.Errorf("session %s is still %s %s after the suspend", id, sessionState(session), sessionReadyTimeout)
 	}
 	return session, nil
 }
@@ -465,7 +472,7 @@ func (r *substrateStepRun) resume() error {
 		return fmt.Errorf("%s: %w", r.restoreCause(session), err)
 	}
 	note("Session %s resumed: %s", r.session, sessionState(session))
-	reply, err := r.turn(ctx, session, resumePrompt)
+	reply, err := r.turn(ctx, session, resumePrompt(substrateStepFile))
 	if err != nil {
 		return fmt.Errorf("the turn after the resume: %w (%s)", err, r.restoreCause(nil))
 	}
@@ -893,15 +900,22 @@ func (r *substrateStepRun) removeSession() {
 
 // stepBack returns the lab to the Substrate the chart installs.
 func (r *substrateStepRun) stepBack() error {
-	step("Returning the lab to the chart's Substrate (%s before the step)", r.before.version)
-	_ = os.Remove(filepath.Join(StateDir, substrateStepValues))
-	if err := clearRustfsServiceAccount(r.before.version); err != nil {
-		return fmt.Errorf("returning to the chart's Substrate: %w (the lab still runs the step's: `agentlab platform`)", err)
+	return returnToChartSubstrate(r.cfg, r.before.version, substrateStepValues)
+}
+
+// returnToChartSubstrate removes a proof's values overlay (a file in
+// StateDir) and upgrades the platform onto the lab's own configuration: the
+// Substrate the chart installs, the release before the proof pinned another.
+func returnToChartSubstrate(cfg *config.Config, before, overlay string) error {
+	step("Returning the lab to the chart's Substrate (%s before the proof)", before)
+	_ = os.Remove(filepath.Join(StateDir, overlay))
+	if err := clearRustfsServiceAccount(before); err != nil {
+		return fmt.Errorf("returning to the chart's Substrate: %w (the lab still runs the proof's: `agentlab platform`)", err)
 	}
-	if err := PlatformUp(r.cfg, Offers{}); err != nil {
-		return fmt.Errorf("returning to the chart's Substrate: %w (the lab still runs the step's: `agentlab platform`)", err)
+	if err := PlatformUp(cfg, Offers{}); err != nil {
+		return fmt.Errorf("returning to the chart's Substrate: %w (the lab still runs the proof's: `agentlab platform`)", err)
 	}
-	back, err := readSubstrateRelease(r.cfg)
+	back, err := readSubstrateRelease(cfg)
 	if err != nil {
 		return err
 	}
@@ -1047,25 +1061,40 @@ const (
 	// snapshotLayoutPerVolume is one rootfs-upper tar per container and one
 	// durable-dir-<volume>.tar per durable volume.
 	snapshotLayoutPerVolume int32 = 2
+	// snapshotLayoutGVisorNightly20260909 is PerVolume with the checkpoint
+	// image of the gVisor nightly of 2026-09-09: runsc restores only its own
+	// build's checkpoint images, so a golden of an older build is taken again.
+	snapshotLayoutGVisorNightly20260909 int32 = 3
 )
 
-// snapshotLayoutRecordedFrom is the first Substrate release that records the
-// layout on the goldens it takes.
-var snapshotLayoutRecordedFrom = semver.MustParse("1.8.1-rc.4")
+// snapshotLayouts is the layout each Substrate release writes, from the first
+// release that writes it on, oldest first; a release before the first records
+// none (snapshotLayoutUnrecorded).
+var snapshotLayouts = []struct {
+	from   *semver.Version
+	layout int32
+}{
+	{semver.MustParse("1.8.1-rc.4"), snapshotLayoutPerVolume},
+	{semver.MustParse("1.17.5-rc.2"), snapshotLayoutGVisorNightly20260909},
+}
 
 // currentSnapshotLayout is the snapshot layout a Substrate release writes and
 // records on the goldens it takes (the release's snapshotlayout.Current): a
 // golden in an older layout, or recorded without one, it takes again; a
 // golden in this layout it keeps, so a step that keeps the layout (1.8.1 to
 // 1.8.2) keeps its goldens. Substrate exposes the constant on no API, so the
-// proof keeps it per release: PerVolume from 1.8.1-rc.4 on, none recorded
-// before. A release that writes a new layout is added here; until then the
-// proof reports its goldens taken again into a layout it does not expect.
+// proof keeps it per release (snapshotLayouts). A release that writes a new
+// layout is added there; until then the proof reports its goldens taken again
+// into a layout it does not expect.
 func currentSnapshotLayout(release *semver.Version) int32 {
-	if release.LessThan(snapshotLayoutRecordedFrom) {
-		return snapshotLayoutUnrecorded
+	layout := snapshotLayoutUnrecorded
+	for _, l := range snapshotLayouts {
+		if release.LessThan(l.from) {
+			break
+		}
+		layout = l.layout
 	}
-	return snapshotLayoutPerVolume
+	return layout
 }
 
 // substrateStepOverlay is the step's values overlay: the substrate and
@@ -1081,19 +1110,34 @@ func substrateStepOverlay(to string) ([]byte, error) {
 }
 
 // substrateStepConfig is the lab's configuration for the step: the overlay
-// after the lab's own values files, the step's dev images over the lab's.
-// The lab's configuration is left as it is — agentlab.yaml is never written
-// with the step in it — and the result is validated like agentlab.yaml.
+// after the lab's own values files, the step's dev images over the lab's
+// (steppedConfig).
 func substrateStepConfig(cfg *config.Config, to, overlay string, devImages map[string]string) (*config.Config, error) {
+	stepped, err := steppedConfig(cfg, overlay, devImages)
+	if err != nil {
+		return nil, fmt.Errorf("the step to Substrate %s: %w", to, err)
+	}
+	return stepped, nil
+}
+
+// steppedConfig is the lab's configuration with a proof's values overlay
+// after the lab's own values files ("" for none) and the proof's dev images
+// over the lab's. The lab's configuration is left as it is — agentlab.yaml is
+// never written with the step in it — and the result is validated like
+// agentlab.yaml.
+func steppedConfig(cfg *config.Config, overlay string, devImages map[string]string) (*config.Config, error) {
 	stepped := *cfg
-	stepped.Platform.ValuesFiles = append(slices.Clone(cfg.Platform.ValuesFiles), overlay)
+	stepped.Platform.ValuesFiles = slices.Clone(cfg.Platform.ValuesFiles)
+	if overlay != "" {
+		stepped.Platform.ValuesFiles = append(stepped.Platform.ValuesFiles, overlay)
+	}
 	stepped.Platform.DevImages = maps.Clone(cfg.Platform.DevImages)
 	if len(devImages) > 0 && stepped.Platform.DevImages == nil {
 		stepped.Platform.DevImages = map[string]string{}
 	}
 	maps.Copy(stepped.Platform.DevImages, devImages)
 	if err := stepped.Validate(); err != nil {
-		return nil, fmt.Errorf("the step to Substrate %s: %w", to, err)
+		return nil, err
 	}
 	return &stepped, nil
 }
@@ -1234,16 +1278,22 @@ const (
 	newConversationPrompt = "Reply with the single word " + newConversationAnswer + "."
 )
 
-var resumePrompt = "What is the codeword I gave you at the start of our conversation? Then run this exact command once with your bash tool: cat " + substrateStepFile +
-	" — and reply in one line: the codeword, then the command's output verbatim."
+// resumePrompt is the turn after a step's resume: the codeword of the first
+// turn and the file on the durable volume read back.
+func resumePrompt(file string) string {
+	return "What is the codeword I gave you at the start of our conversation? Then run this exact command once with your bash tool: cat " + file +
+		" — and reply in one line: the codeword, then the command's output verbatim."
+}
 
 func codewordPrompt(codeword string) string {
 	return "Remember this codeword for later in our conversation: " + codeword + ". Reply with OK only."
 }
 
-func writeMarkerPrompt(marker string) string {
+// writeMarkerPrompt is the turn that writes the marker to the file in dir on
+// the durable volume and reads it back.
+func writeMarkerPrompt(dir, file, marker string) string {
 	return fmt.Sprintf("Run this exact command once with your bash tool, then reply with its output verbatim and nothing else:\n\nmkdir -p %s && printf '%%s\\n' '%s' > %s && cat %s",
-		substrateStepDir, marker, substrateStepFile, substrateStepFile)
+		dir, marker, file, file)
 }
 
 // resumedReplyProves judges the turn after the resume: the codeword of the
@@ -1253,10 +1303,7 @@ func resumedReplyProves(reply, codeword, marker string) (conversation, volume bo
 }
 
 // substrateStepTemplate is the proof's AgentTemplate on the platform
-// Harness and its Agent. The template carries the skills proof's public
-// skill for its side effect: the Go ADK gives an agent its execution tools —
-// bash, which writes and reads the file on the durable volume — only with
-// skills.
+// Harness, with the bash tool (bashToolSkills), and its Agent.
 func substrateStepTemplate(modelConfig string) string {
 	return fmt.Sprintf(`apiVersion: %[1]s
 kind: AgentTemplate
@@ -1270,15 +1317,22 @@ spec:
   modelConfig:
     name: %[6]s
   systemPrompt: %[7]q
-  skills:
-    - name: %[8]s
+%[8]s---
+%[9]s`, agentTemplateAPIVersion, substrateStepAgent, kagentNamespace, managedByLabel, managedByAgentlabValue, modelConfig, substrateStepSystemMsg,
+		bashToolSkills(), agentManifest(substrateStepAgent, substrateStepAgent, kagentHarness, nil))
+}
+
+// bashToolSkills is the skills block of a step proof's AgentTemplate spec:
+// the skills proof's public skill, carried for its side effect — the Go ADK
+// gives an agent its execution tools (bash, which writes and reads the file
+// on the durable volume) only with skills.
+func bashToolSkills() string {
+	return fmt.Sprintf(`  skills:
+    - name: %[1]s
       source:
         git:
-          url: %[9]s
-          commit: %[10]s
-        path: %[8]s
----
-%[11]s`, agentTemplateAPIVersion, substrateStepAgent, kagentNamespace, managedByLabel, managedByAgentlabValue, modelConfig, substrateStepSystemMsg,
-		skillsTestSkill, skillsTestRepo, skillsTestCommit,
-		agentManifest(substrateStepAgent, substrateStepAgent, kagentHarness, nil))
+          url: %[2]s
+          commit: %[3]s
+        path: %[1]s
+`, skillsTestSkill, skillsTestRepo, skillsTestCommit)
 }

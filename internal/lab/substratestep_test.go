@@ -119,7 +119,9 @@ func TestStepFrom(t *testing.T) {
 // TestCurrentSnapshotLayout: the layout a release writes is PerVolume from
 // the first release that records one (1.8.1-rc.4) and none recorded before
 // it, so the released line's step 1.8.1 -> 1.8.2 keeps the layout and its
-// goldens, while 1.8.0 -> 1.8.1 (and 1.7.x -> 1.8.x) takes them again.
+// goldens, while 1.8.0 -> 1.8.1 (and 1.7.x -> 1.8.x) takes them again; from
+// 1.17.5-rc.2 on it is the gVisor nightly's layout 3, so a step onto it takes
+// every golden again before the proof's new conversation starts.
 func TestCurrentSnapshotLayout(t *testing.T) {
 	v := func(major, minor, patch uint64, pre string) *semver.Version {
 		return semver.New(major, minor, patch, pre, "")
@@ -136,6 +138,12 @@ func TestCurrentSnapshotLayout(t *testing.T) {
 		{v(1, 8, 2, "rc.5"), snapshotLayoutPerVolume},
 		{v(1, 8, 2, ""), snapshotLayoutPerVolume},
 		{v(1, 9, 0, ""), snapshotLayoutPerVolume},
+		{v(1, 17, 4, ""), snapshotLayoutPerVolume},
+		{v(1, 17, 5, "rc.1"), snapshotLayoutPerVolume},
+		{v(1, 17, 5, "rc.2"), snapshotLayoutGVisorNightly20260909},
+		{v(1, 17, 5, "rc.3"), snapshotLayoutGVisorNightly20260909},
+		{v(1, 17, 5, ""), snapshotLayoutGVisorNightly20260909},
+		{v(1, 18, 0, ""), snapshotLayoutGVisorNightly20260909},
 	} {
 		if got := currentSnapshotLayout(tc.release); got != tc.want {
 			t.Errorf("currentSnapshotLayout(%s) = %d, want %d", tc.release, got, tc.want)
@@ -146,6 +154,9 @@ func TestCurrentSnapshotLayout(t *testing.T) {
 	}
 	if currentSnapshotLayout(v(1, 8, 0, "")) == currentSnapshotLayout(v(1, 8, 1, "")) {
 		t.Error("the step to 1.8.1 changes the recorded layout: its goldens are taken again")
+	}
+	if currentSnapshotLayout(v(1, 17, 4, "")) == currentSnapshotLayout(v(1, 17, 5, "rc.2")) {
+		t.Error("the step 1.17.4 -> 1.17.5-rc.2 changes the layout (the gVisor nightly's checkpoint image): its goldens are taken again before a new conversation")
 	}
 }
 
@@ -272,14 +283,14 @@ func TestResumedReplyProves(t *testing.T) {
 // TestSubstrateStepPrompts: the file is written to the durable directory and
 // read back from it; the marker reaches the shell quoted.
 func TestSubstrateStepPrompts(t *testing.T) {
-	write := writeMarkerPrompt("substrate-step 00ff")
+	write := writeMarkerPrompt(substrateStepDir, substrateStepFile, "substrate-step 00ff")
 	for _, want := range []string{"mkdir -p /data/agentlab-substrate-step", "printf '%s\\n' 'substrate-step 00ff' > /data/agentlab-substrate-step/marker", "cat /data/agentlab-substrate-step/marker"} {
 		if !strings.Contains(write, want) {
 			t.Errorf("the write prompt lacks %q:\n%s", want, write)
 		}
 	}
-	if !strings.Contains(resumePrompt, "cat "+substrateStepFile) {
-		t.Errorf("the resume prompt must read %s back: %s", substrateStepFile, resumePrompt)
+	if resume := resumePrompt(substrateStepFile); !strings.Contains(resume, "cat "+substrateStepFile) {
+		t.Errorf("the resume prompt must read %s back: %s", substrateStepFile, resume)
 	}
 	if !strings.Contains(codewordPrompt("step-ab"), "step-ab") {
 		t.Error("the first turn carries the codeword")

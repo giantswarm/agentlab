@@ -37,6 +37,10 @@ stringData:
       https: 0.0.0.0:5556
       tlsCert: /etc/dex/tls/tls.crt
       tlsKey: /etc/dex/tls/tls.key
+      # The key set in plain http for the kagent controller, which verifies
+      # people's tokens against it and trusts the system roots only: the
+      # in-cluster shape an installation's Dex serves (dex-keys below).
+      http: 0.0.0.0:{{ .DexKeysPort }}
 
     telemetry:
       http: 0.0.0.0:5558
@@ -136,13 +140,15 @@ stringData:
           # exactly, no DNS lookups -- unlike muster's own authorization
           # server, whose SSRF guards reject every lab hostname.
           - {{ .MusterBaseURL }}/oauth/proxy/callback
-          {{- if .WorkspacesEnabled }}
-          # The workspace-manager's browser sign-in (platform.workspaces, its
-          # provider instances): it signs the person in with this client
-          # before a provider connect, and Dex returns the browser to
-          # <base>/signin.
-          - {{ .WorkspaceManagerSignInURL }}
-          {{- end }}
+{{- if .TenantsEnabled }}
+          # platform.tenants: a server in an organization namespace signs in
+          # through that namespace's own callback (giantswarm/muster#1598),
+          # never the one above; tenants-test's sign-in fixtures in its two
+          # namespaces use this client (tenantstest_muster.go).
+{{- range .TenantsTestNamespaces }}
+          - {{ $.MusterBaseURL }}/oauth/ns/{{ . }}/callback
+{{- end }}
+{{- end }}
       # Cross-client audience target. Backstage's GS auth provider requests
       # the scope audience:server:client_id:dex-k8s-authenticator by default
       # (components.backstage.extraScopes); Dex only honors that when the
@@ -229,6 +235,7 @@ spec:
 {{- end }}
           ports:
             - { name: https, containerPort: 5556 }
+            - { name: http, containerPort: {{ .DexKeysPort }} }
             - { name: telemetry, containerPort: 5558 }
           volumeMounts:
             - { name: config, mountPath: /etc/dex/cfg, readOnly: true }
@@ -270,6 +277,19 @@ spec:
       port: 5556
       targetPort: 5556
       nodePort: {{ .DexPort }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .DexKeysService }}
+  namespace: dex
+spec:
+  type: ClusterIP
+  selector: { app: dex }
+  ports:
+    - name: http
+      port: {{ .DexKeysPort }}
+      targetPort: {{ .DexKeysPort }}
 {{- if .Platform.TLS.Set }}
 ---
 # The issuer under platform.domain (platform.tls): inside pods

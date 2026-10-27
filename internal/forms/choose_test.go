@@ -14,12 +14,13 @@ func TestChooseDrive(t *testing.T) {
 		{name: "down then enter takes the second", keys: []string{"\x1b[B", "\r"}, want: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			testHook = newDriver(tc.keys...).attach
+			d := newDriver(tc.keys...)
+			testHook = d.attach
 			defer func() { testHook = nil }()
 
 			got, err := Choose("Which lab?", "two are registered", []string{"a  /labs/a", "b  /labs/b"})
 			if err != nil {
-				t.Fatalf("Choose: %v", err)
+				t.Fatalf("Choose: %v", d.failure(err))
 			}
 			if got != tc.want {
 				t.Errorf("Choose() = %d, want %d", got, tc.want)

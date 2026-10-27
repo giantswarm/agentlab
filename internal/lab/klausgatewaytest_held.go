@@ -37,27 +37,22 @@ func gatewayAtLeast(described, since string) bool {
 	return !v.LessThan(mastersemver.MustParse(since))
 }
 
-// restartMidSignIn has user, who has no link, open a thread; once the thread
-// shows the sign-in prompt the gateway stops, the link a completed sign-in
-// leaves is written to its link store, and the gateway starts again. The
-// parked message must be answered without being sent again: the restarted
-// gateway read it back from its routing store and replayed it for the now
-// linked user.
-func (p *slackProof) restartMidSignIn(gw *gatewayProcess, linksPath string, key []byte, user string, link *musterlink.Link) (*slackTurn, error) {
-	ts, err := p.driver.mention(user, "", klausGatewayWordPrompt)
-	if err != nil {
+// restartMidSignIn has user, who has no link, ask in owner's conversation —
+// a person with no link opens none, the picker lists the agents with their
+// permissions — so the gateway parks the message and prompts them to sign
+// in. Once the thread shows the prompt the gateway stops, the link a
+// completed sign-in leaves is written to its link store, and the gateway
+// starts again. The parked message must come back without being sent again:
+// the restarted gateway reads it back from its routing store and replays it
+// for the now linked user, which, a newcomer's, asks the owner to allow them;
+// Allow runs it in the thread.
+func (p *slackProof) restartMidSignIn(gw *gatewayProcess, linksPath string, key []byte, owner *slackThread, user string, link *musterlink.Link) (*slackTurn, error) {
+	shown := len(p.fake.thread(p.channel, owner.ts))
+	if _, err := p.driver.mention(user, owner.ts, klausGatewayWordPrompt); err != nil {
 		return nil, err
 	}
-	msgs, ok := waitThread(p.fake, p.channel, ts, klausGatewayReplyWait, func(msgs []slackMessage) bool {
-		for _, m := range msgs {
-			if _, found := m.action(slackActionSignIn); found && (m.Recipient == user || m.Method == slackPostMessage) {
-				return true
-			}
-		}
-		return false
-	})
-	if !ok {
-		return nil, fmt.Errorf("the unlinked %s got no sign-in prompt within %s; the thread shows: %s", user, klausGatewayReplyWait, threadLine(msgs))
+	if _, _, err := p.awaitSignIn(user, owner.ts, shown); err != nil {
+		return nil, err
 	}
 	if err := gw.stop(); err != nil {
 		return nil, err
@@ -68,9 +63,30 @@ func (p *slackProof) restartMidSignIn(gw *gatewayProcess, linksPath string, key 
 	if err := gw.start(); err != nil {
 		return nil, fmt.Errorf("restarting the gateway: %w", err)
 	}
-	turn, err := p.awaitTurn(&slackThread{ts: ts, user: user}, len(msgs))
+	var consent slackMessage
+	msgs, ok := waitThread(p.fake, p.channel, owner.ts, klausGatewayReplyWait, func(msgs []slackMessage) bool {
+		for _, m := range msgs[min(shown, len(msgs)):] {
+			if _, found := m.action(slackAccessAllow); found && m.Recipient == owner.user {
+				consent = m
+				return true
+			}
+		}
+		return false
+	})
+	if !ok {
+		return nil, fmt.Errorf("the message parked before the restart was not replayed: %s got no access prompt for %s within %s; the thread shows: %s", owner.user, user, klausGatewayReplyWait, threadLine(msgs))
+	}
+	// The owner's thread went through restarts before (5b's ends its turn
+	// left running with a shutdown record), so the turn to wait for is the
+	// first one recorded after the Allow.
+	before := len(p.fake.thread(p.channel, owner.ts))
+	owner.turns = len(p.records(recordTurnDone, owner.ts))
+	if err := p.driver.click(owner.user, consent, slackAccessAllow); err != nil {
+		return nil, err
+	}
+	turn, err := p.awaitTurn(owner, before)
 	if err != nil {
-		return nil, fmt.Errorf("the message parked before the restart was not replayed: %w", err)
+		return nil, fmt.Errorf("the replayed message after Allow: %w", err)
 	}
 	if err := assertSlackTurnSaid(turn, klausGatewayWord); err != nil {
 		return nil, fmt.Errorf("the replayed message: %w", err)

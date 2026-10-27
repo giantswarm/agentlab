@@ -205,3 +205,45 @@ func TestPrintStatus(t *testing.T) {
 		}
 	}
 }
+
+// TestStatusReportsTheLabRegistry: a lab whose registry container is gone —
+// atelet and the node's containerd still point at it — says so on its own
+// line with the fix, a running one reads as running, a stopped one names its
+// state, and JSON carries the state; a disabled platform prints no line.
+func TestStatusReportsTheLabRegistry(t *testing.T) {
+	for _, c := range []struct {
+		state string
+		want  []string
+	}{
+		{registryMissing, []string{"registry    regtest-registry missing", "`agentlab platform` recreates it"}},
+		{stateRunning, []string{"registry    regtest-registry running"}},
+		{stateExited, []string{"registry    regtest-registry exited", "`agentlab platform` starts it"}},
+	} {
+		var out bytes.Buffer
+		if err := PrintStatus(&out, &Status{Name: "regtest", Dir: "/labs/regtest", Configured: "agent-platform " + releaseInPlace, Registry: c.state}, false); err != nil {
+			t.Fatal(err)
+		}
+		for _, w := range c.want {
+			if !strings.Contains(out.String(), w) {
+				t.Errorf("%s: status lacks %q:\n%s", c.state, w, out.String())
+			}
+		}
+	}
+
+	var out bytes.Buffer
+	if err := PrintStatus(&out, &Status{Name: "regtest", Registry: registryMissing}, true); err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct{ Registry string }
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil || decoded.Registry != registryMissing {
+		t.Errorf("json registry = %q (%v)\n%s", decoded.Registry, err, out.String())
+	}
+
+	out.Reset()
+	if err := PrintStatus(&out, &Status{Name: "sandbox", Dir: "/labs/sandbox"}, false); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "registry") {
+		t.Errorf("a disabled platform prints a registry line:\n%s", out.String())
+	}
+}

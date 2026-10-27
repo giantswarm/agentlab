@@ -14,11 +14,9 @@ GOOS=windows go vet ./...  # and GOOS=linux, GOOS=darwin
 `make build` and `make install` build with `CGO_ENABLED=0`, as the releases
 are built: a static binary with the pure-Go resolver. A plain `go build` on a
 glibc host links the binary dynamically, and the lab runs copies of its own
-binary in containers on the kind network — the lab's GitHub for the
-workspace-manager's [provider instance `fake`](workspaces.md#the-provider-instance-fake),
-the proofs' fakes — whose image has no dynamic loader: `agentlab up` and
-`agentlab platform` refuse such a binary before their first step, naming the
-build. (A static link with cgo left on crashes instead, in glibc's resolver.)
+binary in containers on the kind network — the skill host, the proofs'
+fakes — whose image has no dynamic loader: the step that starts such a
+container refuses the binary, naming the build. (A static link with cgo left on crashes instead, in glibc's resolver.)
 
 `make lint` is the lint CI runs, not an approximation of it: the golangci-lint
 version the generated pre-commit workflow pins (installed under `bin/` on first
@@ -126,7 +124,8 @@ must stay in agreement.
 main.go                          the CLI (cobra): one subcommand per lifecycle step, no logic
 internal/config/                 agentlab.yaml schema, defaults, validation; the fixed group vocabulary and the static OAuth clients
 internal/forms/                  the interactive configuration form (huh), the lab's confirm and picker; tests drive them with scripted keystrokes
-internal/labs/                   the registry of the labs on this machine and the order a command picks its lab in (--lab, ./agentlab.yaml, the one lab, a picker)
+internal/labs/                   the registry of the labs on this machine, the order a command picks its lab in (--lab, ./agentlab.yaml, the one lab, a picker), and Settle: a lab's place in the freedesktop folders
+internal/xdg/                    the freedesktop folders: configuration, state, cache, ~/.local/bin
 internal/telemetry/              the anonymous usage signals (TelemetryDeck): one per command, one per platform install
   machineid/                       the identifier the OS keeps for the computer (kern.uuid / machine-id / MachineGuid)
 internal/update/                 agentlab self-update + the newer-release hint before every command (go-selfupdate)
@@ -149,6 +148,7 @@ internal/lab/                    everything operational:
   helm.go restclient.go            the embedded Helm 4 (upgrade-or-install with the kstatus wait, offline renders, probes, uninstalls); the lab kubeconfig as a client-go REST client getter
   resources.go                     docker CPU/memory: the requests table and the floors `up` enforces
   oauthfixture.go                  the Auth Required MCPServer fixture + the per-server sign-in proof
+  signintest.go                    `signin-test`: an MCP URL elicitation paused at input-required and answered, per Harness
   infrastructure.go servergroups.go  the lab's cluster as the infrastructure families' member (tool-group label proof); the portal's grouping arithmetic
   agent.go agenttemplate.go        an agent on the platform (the Generic chart 1.x contract: the two writers, the one readiness wait, the cleanup) and the AgentTemplate as the proofs read it
   toolsetstest*.go                 the toolset proof: muster, kagent, the portal

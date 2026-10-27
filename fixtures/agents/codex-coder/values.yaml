@@ -1,0 +1,14 @@
+# The agent-platform values the codex coder needs beside the codex Harness
+# (platform.coding with codex among platform.coding.harnesses): its model, a
+# ChatGPT subscription login (docs/chatgpt-login.md in giantswarm/agent-platform).
+# The login Secret kagent-chatgpt-login is the installation's own, never in
+# these values.
+kagent:
+  modelConfigs:
+    - name: openai-chatgpt-codex
+      displayName: GPT-5.6 Luna (ChatGPT)
+      provider: OpenAI
+      model: gpt-5.6-luna
+      apiKeySecret: kagent-chatgpt-login
+      credentialType: chatgptOAuth
+      apiFormat: responses

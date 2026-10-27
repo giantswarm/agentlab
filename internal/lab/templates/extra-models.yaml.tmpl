@@ -5,6 +5,8 @@
 # platform` creates from the entry's apiKeyEnv on the host (or with a
 # placeholder for keyless endpoints: the kagent ADK runtime requires the
 # provider's env var to exist even when the endpoint never checks it).
+# A ChatGPT login (credentialType chatgptOAuth) names its Secret without a
+# key: the operator places it, agentlab only labels it for kagent's refresher.
 # The managed-by label scopes pruning: entries removed from agentlab.yaml
 # are deleted on the next run; the chart's default ModelConfig is never
 # touched.
@@ -26,7 +28,9 @@ spec:
   model: {{ .Model }}
 {{- if .NeedsSecret }}
   apiKeySecret: {{ .SecretName }}
+{{- if .SecretKey }}
   apiKeySecretKey: {{ .SecretKey }}
+{{- end }}
 {{- end }}
 {{- if .InsecureTLS }}
   tls:
@@ -43,13 +47,19 @@ spec:
   anthropic:
     baseUrl: {{ .BaseURL }}
 {{- end }}
-{{- else if or .BaseURL .ReasoningEffort }}
+{{- else if or .BaseURL .ReasoningEffort .APIFormat .CredentialType }}
   openAI:
 {{- if .BaseURL }}
     baseUrl: {{ .BaseURL }}
 {{- end }}
 {{- if .ReasoningEffort }}
     reasoningEffort: {{ .ReasoningEffort }}
+{{- end }}
+{{- if .APIFormat }}
+    apiFormat: {{ .APIFormat }}
+{{- end }}
+{{- if .CredentialType }}
+    credentialType: {{ .CredentialType }}
 {{- end }}
 {{- end }}
 {{- end }}

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -104,10 +105,11 @@ func find(root *cobra.Command, name string) *cobra.Command {
 	return nil
 }
 
-// A command run in a lab directory the registry does not know registers it:
-// a lab from before the registry, or one whose entry is gone, is found from
-// any directory again.
-func TestEnterLabRegistersTheLabHere(t *testing.T) {
+// A command run in a lab directory the registry does not know settles it:
+// a lab from before the registry or the freedesktop folders, or one whose
+// entry is gone, moves into its Home, is registered there and found from any
+// directory again; its old directory keeps links to the moved files.
+func TestEnterLabSettlesTheLabHere(t *testing.T) {
 	regDir := t.TempDir()
 	prev := labs.Dir
 	labs.Dir = func() (string, error) { return regDir, nil }
@@ -116,27 +118,89 @@ func TestEnterLabRegistersTheLabHere(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, config.File), []byte("clusterName: unregistered\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(filepath.Join(dir, "certs"), 0o750); err != nil {
+		t.Fatal(err)
+	}
 	t.Chdir(dir)
 
-	if err := enterLab(false); err != nil {
+	if err := enterLab(labs.Enter); err != nil {
+		t.Fatal(err)
+	}
+	home, err := labs.Home("unregistered")
+	if err != nil {
 		t.Fatal(err)
 	}
 	got, err := labs.List()
-	if err != nil || len(got) != 1 || got[0].Name != "unregistered" || got[0].Dir != dir {
-		t.Fatalf("labs.List() = %+v, %v; want unregistered in %s", got, err, dir)
+	if err != nil || len(got) != 1 || got[0].Name != "unregistered" || got[0].Dir != home {
+		t.Fatalf("labs.List() = %+v, %v; want unregistered in %s", got, err, home)
+	}
+	if cwd, _ := os.Getwd(); cwd != home {
+		t.Errorf("the command runs in %s, want the lab's Home %s", cwd, home)
+	}
+	for _, f := range []string{config.File, "certs"} {
+		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
+			t.Errorf("the old directory's %s does not resolve: %v", f, err)
+		}
 	}
 }
 
-// The help of --workspaces-cleanup-after names the range the sessions part's
-// precondition requires, taken from the same constants.
-func TestCleanupAfterHelpNamesTheSessionsRange(t *testing.T) {
-	flag := find(rootCmd(), "configure").Flags().Lookup("workspaces-cleanup-after")
-	if flag == nil {
-		t.Fatal("configure has no --workspaces-cleanup-after flag")
+// `render` from a copy of a registered lab's agentlab.yaml renders the copy
+// into its own directory and leaves the registered lab's certs/ and state/
+// untouched; a scratch lab of an unregistered name renders where it is too.
+func TestRenderStaysInTheDirectoryOfItsConfig(t *testing.T) {
+	regDir := t.TempDir()
+	prev := labs.Dir
+	labs.Dir = func() (string, error) { return regDir, nil }
+	t.Cleanup(func() { labs.Dir = prev })
+	for _, tc := range []struct{ name, clusterName string }{
+		{"a copy of a registered lab's config", "registered"},
+		{"a scratch lab of an unregistered name", "scratch"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			registered := t.TempDir()
+			t.Chdir(registered)
+			cfg := config.Default()
+			cfg.ClusterName = "registered"
+			if err := cfg.Save(); err != nil {
+				t.Fatal(err)
+			}
+			if err := labs.Register(cfg.ClusterName, registered); err != nil {
+				t.Fatal(err)
+			}
+			copyDir := t.TempDir()
+			t.Chdir(copyDir)
+			cfg.ClusterName = tc.clusterName
+			if err := cfg.Save(); err != nil {
+				t.Fatal(err)
+			}
+
+			cmd := renderCmd()
+			cmd.SetArgs(nil)
+			cmd.SilenceUsage = true
+			if err := cmd.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			for _, d := range []string{lab.StateDir, "certs"} {
+				if _, err := os.Stat(filepath.Join(registered, d)); !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("the registered lab's %s/ was written (stat: %v)", d, err)
+				}
+				if _, err := os.Stat(filepath.Join(copyDir, d)); err != nil {
+					t.Errorf("the render left no %s/ in its own directory: %v", d, err)
+				}
+			}
+		})
 	}
-	for _, want := range []string{lab.SessionsCleanupWindowRange(), lab.SessionsCleanupWindowExample()} {
-		if !strings.Contains(flag.Usage, want) {
-			t.Errorf("--workspaces-cleanup-after help %q does not name %q", flag.Usage, want)
+}
+
+// backstage-test documents --agent in its help: the flag and what it skips.
+func TestBackstageTestHelpDocumentsAgent(t *testing.T) {
+	cmd := find(rootCmd(), "backstage-test")
+	if cmd.Flags().Lookup("agent") == nil {
+		t.Fatal("backstage-test has no --agent flag")
+	}
+	for _, want := range []string{"--agent <namespace>/<name>", "skipped", "left in place"} {
+		if !strings.Contains(cmd.Long, want) {
+			t.Errorf("backstage-test help does not say %q", want)
 		}
 	}
 }
@@ -164,5 +228,81 @@ func TestConfigureWithoutATerminalNamesDefaults(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
 		t.Fatalf("configure wrote %d entries before refusing", len(entries))
+	}
+}
+
+// A new lab beside a registered lab named agentlab takes the first free
+// name instead of being refused; --cluster-name is validated before
+// anything is discovered or written.
+func TestConfigureClusterName(t *testing.T) {
+	regDir := t.TempDir()
+	prev := labs.Dir
+	labs.Dir = func() (string, error) { return regDir, nil }
+	t.Cleanup(func() { labs.Dir = prev })
+	other := t.TempDir()
+	if err := os.WriteFile(filepath.Join(other, config.File), []byte("clusterName: agentlab\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := labs.Register("agentlab", other); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(t.TempDir())
+
+	t.Run("the default name moves past a registered lab", func(t *testing.T) {
+		cfg := config.Default()
+		if err := freeClusterName(cfg); err != nil {
+			t.Fatal(err)
+		}
+		if cfg.ClusterName != "agentlab-2" {
+			t.Fatalf("clusterName = %q, want agentlab-2", cfg.ClusterName)
+		}
+	})
+	t.Run("an invalid --cluster-name is refused before anything is written", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Chdir(dir)
+		cmd := configureCmd()
+		cmd.SetArgs([]string{"--defaults", "--cluster-name", "Not_A_Name"})
+		cmd.SilenceUsage = true
+		cmd.SilenceErrors = true
+		err := cmd.Execute()
+		if err == nil || !strings.Contains(err.Error(), "--cluster-name") {
+			t.Fatalf("configure --cluster-name Not_A_Name = %v, want a refusal naming the flag", err)
+		}
+		if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+			t.Fatalf("configure wrote %d entries before refusing", len(entries))
+		}
+	})
+}
+
+// A new lab beside a registered, stopped lab moves its ports off the ones
+// that lab's agentlab.yaml records: nothing listens on them while it is down,
+// yet both labs could never be up together.
+func TestApplyPortsAvoidsAStoppedRegisteredLab(t *testing.T) {
+	regDir := t.TempDir()
+	prev := labs.Dir
+	labs.Dir = func() (string, error) { return regDir, nil }
+	t.Cleanup(func() { labs.Dir = prev })
+	recorded := map[int]bool{}
+	for _, l := range []struct {
+		name               string
+		dexPort, apiServer int
+	}{{"agentlab", 32000, 6443}, {"agentlab-2", 32001, 6444}} {
+		dir := t.TempDir()
+		yaml := "clusterName: " + l.name + "\ndexPort: " + strconv.Itoa(l.dexPort) + "\napiServerPort: " + strconv.Itoa(l.apiServer) + "\n"
+		if err := os.WriteFile(filepath.Join(dir, config.File), []byte(yaml), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := labs.Register(l.name, dir); err != nil {
+			t.Fatal(err)
+		}
+		recorded[l.dexPort], recorded[l.apiServer] = true, true
+	}
+	t.Chdir(t.TempDir())
+
+	cfg := config.Default()
+	cfg.ClusterName = "agentlab-3"
+	applyPorts(cfg, &lab.Discovery{})
+	if recorded[cfg.DexPort] || recorded[cfg.APIServerPort] {
+		t.Fatalf("dexPort %d, apiServerPort %d: a stopped registered lab records them", cfg.DexPort, cfg.APIServerPort)
 	}
 }

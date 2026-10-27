@@ -3,11 +3,11 @@
 A workspace is one read-write-many volume shared by its sync and every Session
 on it: bare mirrors of its repositories and a directory per Session. Each
 Session's actor mounts its own directory read-write and the mirrors read-only,
-at sub-paths, through Agent Substrate. The lab brings two things the workspace
-proofs need and a kind cluster lacks: the [storage](#storage) and
-[a GitHub of its own](#the-labs-github), which it gives the workspace-manager
-as its [provider instance `fake`](#the-provider-instance-fake); a
-[real GitHub App](#the-provider-instance-github) is the other instance.
+at sub-paths, through Agent Substrate. The lab brings what the workspace
+proofs need and a kind cluster lacks, the [storage](#storage), and gives the
+workspace-manager its [provider instances](#the-provider-instances): a
+[real GitHub App](#the-provider-instance-github) of the lab's own and a
+[real GitLab](#the-provider-instance-gitlab).
 
 ## Storage
 
@@ -40,7 +40,7 @@ names a missing module (on Debian and Ubuntu the kernel's
 `linux-modules-extra` package carries them).
 
 `agentlab status` prints a `workspaces` line: the NFS server and its node, the
-controller with its proxy, the node plugin, the class, whose
+controller with its proxy (a leftover without it worded as such), the node plugin, the class, whose
 CSIDriverConfig registers the driver, and the chart's CSI companion when it
 runs ([The CSI companion](#the-csi-companion)). `agentlab platform-down`, `agentlab
 down` and `agentlab platform` with the switch off take it apart in one order:
@@ -52,23 +52,107 @@ namespace, or with the cluster on `down`) and the export's bytes with it. A
 server that stopped first would leave a node's NFS client waiting on it for
 good, a node that can then be neither stopped nor removed.
 
+### Rootless Podman: the moosefs and hostpath storages
+
+Under rootless Podman on Linux the nodes run in your user's user namespace,
+where the kernel mounts neither the `nfsd` filesystem nor an NFS export: the
+`nfs-server` pod logs `Unable to access /proc/fs/nfsd` and never listens, and
+every NFS mount is refused. `platform.workspaces.storage` picks what backs the
+volumes:
+
+| Value | What |
+|---|---|
+| `nfs` | The NFS server and csi-driver-nfs above |
+| `moosefs` | A MooseFS 4.59.2 master and chunkserver in the cluster and moosefs-csi 1.0.0: every volume a directory of the MooseFS filesystem, which the plugins mount through FUSE (a user namespace allows it) and publish with a bind mount |
+| `hostpath` | kubernetes-csi/csi-driver-host-path v1.17.1, as Substrate's own `ate-setup csi hostpath` installs it: every volume a directory of the node's `/var/lib/agentlab-workspaces` (beside the driver's `state.json`), published with a bind mount, which a user namespace allows |
+| empty (the default) | `moosefs` under rootless Podman on Linux without the companion, `nfs` everywhere else |
+
+`agentlab configure --workspaces-storage <nfs|moosefs|hostpath>` sets it;
+`""` returns to the default.
+
+The MooseFS storage serves the whole workspace flow, where the hostpath
+storage meets the staging limits below: moosefs-csi stages nothing, as
+csi-driver-nfs does not, so the kubelet and atelet publish one volume side
+by side; and its plugins read the master's address from their flags, never
+from a request's secrets, which Substrate's CSI calls carry none of (a
+driver that mounts with per-request secrets, JuiceFS's for one, cannot serve
+Substrate's actors). Its pieces:
+
+| Piece | What |
+|---|---|
+| The `mfsmaster` and `mfschunkserver` Deployments (namespace `agentlab-workspaces`) | On the control plane; the master's metadata under the node's `/var/lib/agentlab-workspaces/moosefs/master` (seeded empty on the first start), the chunkserver's chunks and identity beside it; the master's Service is the address the chunkserver and the plugins dial |
+| The `csi-moosefs-controller` Deployment | The driver `csi.moosefs.com` in controller mode with the provisioner and the resizer, and the same Envoy mTLS proxy as the NFS controller's, behind the Service `csi-moosefs-controller` (port 50051, TLS server name `csi-moosefs-controller.agentlab-workspaces.svc`); the driver's FUSE mount at the node's `/var/lib/agentlab-workspaces/moosefs/mnt`, so the node sees the volumes' directories |
+| The `csi-moosefs-node` DaemonSet | The driver in node mode on every node, registered at `/var/lib/kubelet/plugins/csi.moosefs.com/csi.sock`, the kubelet's pods directory and Substrate's `/var/lib/ate` mounted `Bidirectional` |
+| The StorageClass `agentlab-workspaces` | Read-write-many on every node, `Immediate` binding, delete-reclaiming, expandable (a volume's quota is the claim's size); no mount options |
+| The `CSIDriverConfig` `csi.moosefs.com` | As the NFS driver's, from the same `workspaces:` values |
+
+`csiCompanion` is refused with it: the companion's preset mounts the lab's
+NFS volumes. The images are Docker Hub's community editions, pinned by
+digest (gsoci carries no mirror of them). A volume's root is the driver's
+`0755`, owned by root: a pod's `fsGroup` opens it to the group (moosefs-csi
+applies it as the volume's group, `0775`), where csi-driver-nfs's class
+opens it to everyone (`mountPermissions: 0777`). The FUSE mounts live in the
+plugins' containers: a node plugin's restart takes its node's publishes
+with it until the pods using them are started again.
+
+The hostpath storage:
+
+| Piece | What |
+|---|---|
+| The `csi-hostpath-node` DaemonSet (namespace `agentlab-workspaces`) | The driver `hostpath.csi.k8s.io` on the control plane, serving the controller and the node service on `/var/lib/kubelet/plugins/csi-hostpath/csi.sock`, with the provisioner, the resizer and the registrar beside it; Substrate's `/var/lib/ate` mounted `Bidirectional` |
+| The controller endpoint | The `csi-hostpath-controller` Deployment: the same Envoy mTLS proxy as the NFS controller's, alone, dialling the driver's socket on the node, behind the Service `csi-hostpath-controller` (port 50051, TLS server name `csi-hostpath-controller.agentlab-workspaces.svc`) |
+| The StorageClass `agentlab-workspaces` | Read-write-many on the one node, `Immediate` binding, delete-reclaiming, expandable; no mount options |
+| The `CSIDriverConfig` `hostpath.csi.k8s.io` | As the NFS driver's, from the same `workspaces:` values |
+
+A volume is a directory of one node, so the hostpath storage needs the
+single-node lab: `substrateNodes` above 0 is refused with it, and so is
+`csiCompanion`, whose preset mounts the lab's NFS volumes. Nothing is
+installed on the host and no kernel module is needed. The plugin image is
+`registry.k8s.io`'s, pinned by digest (gsoci carries no mirror of it).
+
+The hostpath driver keeps one staging path per volume on a node and refuses
+a second (`volume … is already staged at …`). Two orchestrators stage on the
+node, each at its own path: the kubelet for a pod's claim and atelet for an
+actor's existing volume. So a pod and an actor cannot hold one volume at the
+same time on this storage: a workspace sync beside a running Session, or
+`workspaces-test --storage-only`'s report pod reading the volume its actors
+hold. Actors sharing a volume among themselves (a Session's directory
+read-write and the mirrors read-only, two Sessions of one workspace) need a
+Substrate that stages a multi-node volume once per node; earlier releases
+stage it once per target and are refused at the second mount. The claims,
+the sessions' sub-paths and the controller endpoint's refusal pass on any
+release. csi-driver-nfs advertises no staging, which is why the NFS storage
+meets neither limit; the whole workspace flow needs it.
+
 ### Turning it on
 
 ```sh
-agentlab configure --workspaces   # needs --agents (on by default)
+agentlab configure --workspaces   # with --agents (on by default); without, see below
 agentlab up                       # or `agentlab platform` on a running lab
 agentlab workspaces-test          # --storage-only: the storage alone
-agentlab workspaces-test --part sync   # workspaces defined through the manager, their mirrors
-agentlab workspaces-test --part access # provider sign-in and the access check at a Session's start
-agentlab workspaces-test --part gitlab # the provider instance gitlab, end to end (skips without one)
-agentlab configure --workspaces-cleanup-after 10m && agentlab platform   # the sessions part's short cleanup window
-agentlab workspaces-test --part sessions # ten parallel Sessions in their session directories, and the cleanup
-agentlab configure --workspaces-provider fake,fake-bearer && agentlab platform   # a Bearer provider
-agentlab workspaces-test --part caller-credential # a Session's actor JWT on its Bearer provider's API host
+agentlab workspaces-test --harness codex --model-config <name> # the Session on the codex Harness
+agentlab workspaces-test --part sync     # every kind of sync cycle on the github instance's proof repositories
+agentlab workspaces-test --part sessions # Sessions on both Harnesses with a requested sync cycle
+agentlab workspaces-test --part git      # git and gh as the person from a Session on both Harnesses, on GitHub (--toolchains github: gh from the toolchain)
+agentlab workspaces-test --part gitlab   # the provider instance gitlab, end to end (skips without one)
 ```
 
 With the switch off, nothing of it is installed, and `agentlab platform` on a
 lab that had it removes it.
+
+### Workspaces need the agents
+
+The workspaces live in kagent's namespace, where every Session runs and mounts
+its workspace, and the workspace-manager applies its sync account and Roles
+there; Agent Substrate comes with the agents (`platform.agents`). The lab
+refuses `platform.workspaces` without `platform.agents` before anything
+installs, as the platform chart refuses `workspaces.enabled` without
+`components.kagent.enabled` at render time. Switching the agents off in place
+takes `--workspaces=false` with it; once the chart's substrate release is gone,
+`agentlab platform` removes the lab's own `CSIDriverConfig` and the
+`ate-system` and `podcertificate-controller-system` namespaces (Substrate's
+CRDs stay), and `agentlab status` words a `CSIDriverConfig` left while
+Substrate's control plane is not running as a leftover, never as registered.
 
 ### The CSI companion
 
@@ -144,7 +228,12 @@ workspace volumes with it, and installs it under the new name.
    resumed: its heartbeat carries on with the same boot id, still reading its
    file and the mirrors. Both actors are deleted; the PersistentVolume and
    every file stay. A Substrate without existing volumes refuses the
-   template, and the step reports the skip with that refusal.
+   template, and the step reports the skip with that refusal. A fresh lab
+   has no atespace `kagent` until kagent runs an actor there: the step
+   creates it through ate-api-server, the way kagent does, and says so. The
+   template's golden actor gets neither volume (Substrate supplies an
+   existing volume only to an actor that names it), so the actor script idles
+   there instead of exiting, which would crash the golden.
 9. A claude Session admitted on the volume ([the Session admission](#the-session-admission)),
    left out with `--storage-only`:
    - The rig: the workspace-manager's `/.well-known/jwks.json` publishes the
@@ -152,30 +241,36 @@ workspace volumes with it, and installs it under the new name.
      key set, the manager's issuer and the audience, and the Harness `claude`
      is Ready.
    - The mirror laid out the way the workspace sync lays it out:
-     `mirrors/agentlab-org/platform-api.git`.
+     `mirrors/agentlab/platform-api.git`.
    - A claude Agent `agentlab-workspaces-claude` Ready on the Harness
      `claude`.
    - A Session without a volume, as the admin: its turn, a Bash probe, runs in
      `/data/workspace` and sees no `/mirrors`. Its creator is the person the
      grants name.
    - Refused at create, each with kagent's reason: a volume without a grant,
-     a grant signed by a key the manager does not publish, and a grant for
-     another person.
+     a grant signed by a key the manager does not publish, a grant for
+     another person, and two refused naming
+     `admission grant is for another namespace`: a grant for the Agents of
+     namespace `agentlab-workspaces-other` presented on the Agent in `kagent`,
+     and a grant without `agent_namespace`.
    - A Session with the volume source the manager's grant allows
      (`sessions/${SESSION_ID}` read-write at `/workspace`, `mirrors`
      read-only at `/mirrors`) and a grant signed with the lab's key: its turn
-     runs in `/workspace`, sees `agentlab-org/platform-api.git` under
+     runs in `/workspace`, sees `agentlab/platform-api.git` under
      `/mirrors`, is refused a write into the mirrors, and writes a file that
      a pod then reads on the volume at `sessions/<Session id>`.
    - The session directory: the turn's own
-     `git clone /mirrors/agentlab-org/platform-api.git` succeeds as the
+     `git clone /mirrors/agentlab/platform-api.git` succeeds as the
      harness user (its uid:gid quoted), and the runtime's setup clone
-     `agentlab-org/platform-api` is in its directory (its `origin/HEAD`
+     `agentlab/platform-api` is in its directory (its `origin/HEAD`
      quoted). Either failing fails the step with git's message and the
      controller's version.
    - The Sessions and the Agent removed.
 10. Everything removed: the proof's namespace `agentlab-workspaces-test` with
-    its claim, and the volume's directory gone from the export.
+    its claim, and the volume's directory gone from the export. A
+    directory a live PersistentVolume of the class still backs (another
+    Workspace's) is named and left in place; one no volume backs fails the
+    run.
 
 `--ready-timeout` bounds each wait (default 5m). A resume on
 another node is proven on a cloud installation, not in the lab: the lab's
@@ -183,354 +278,295 @@ export is one node's disk.
 
 ### The sync part
 
-`agentlab workspaces-test --part sync [email]` defines workspaces through the
-workspace-manager's tools, through muster as `[email]` (default the admin; a
-member of [the lab's Organization](#the-labs-organization)), and proves what
-the sync keeps on their volumes. It runs on [the provider instance
-`fake`](#the-provider-instance-fake), which it drives as an owner would: a
-push, a force-push and a topic removed, as the App's installation, with the
-key the lab generated. Without the workspace-manager registered with muster,
-or without the instance `fake`, it fails at once with the reason. It runs no
-Session and no model.
+`agentlab workspaces-test --part sync [--provider github|gitlab]` proves the
+workspace-manager's sync cycles on the real provider, never a stand-in: a
+workspace over the instance's two proof repositories
+(`platform.workspaces.<instance>.proofRepositories`, see
+[the proof repositories](#the-proof-repositories)), defined through the
+manager's tools through muster as the admin, a member of the lab's
+Organization. A fetch is read on the volume: `git fetch` writes a mirror's
+`FETCH_HEAD`, which a clone and a mirror left unchanged never touch.
 
-1. **Preview**: `preview_workspace` for two drafts. The filter draft has the
-   languages `HCL` and `MDX` and the topics `infrastructure` and `docs` on
-   both owners, `agentlab-org` and `agentlab-oss`, and selects the private
-   `agentlab-org/platform-infra` and the public `agentlab-oss/docs`. The
-   list draft names `agentlab-org/platform-api` and `agentlab-oss/kagent` (a
-   fork, which a name selects). Each repository is printed with the selector
-   that takes it. Where the App is not installed on `agentlab-org`, the
-   private repository's step is skipped with that reason and the filter
-   covers `agentlab-oss` alone.
-2. **Create**: `create_workspace` for both, `agentlab-sync-filter` and
-   `agentlab-sync-list`; `list_workspaces` for `lab` lists both and
-   `get_workspace` answers each.
-3. **Outside the Organization**: the viewer is refused `list_workspaces` for
-   `lab` as not a member, its own listing is empty, and `get_workspace` of
-   each answers permission denied.
-4. **The first cycle**, which the create starts: a bare mirror of each
-   repository at `mirrors/<owner>/<name>.git` on the workspace's volume, read
-   by a pod: bare, its `HEAD`, branches and tags, `gc.auto=0` and
-   `gc.pruneExpire=never`. Each head is the provider's (`git ls-remote`) and
-   the manifest's. The request log holds a fetch of each of the four
-   repositories.
-5. **No-op**: `sync_workspace` with nothing changed. The cycle ends
-   `NoChange` without a sync job, the request log holds listings and no git
-   request, and the manifest (the ConfigMap the sync writes) is byte for byte
-   the one before.
-6. **Push**: a commit pushed to `agentlab-oss/docs`, then a cycle. The
-   request log holds git requests for `docs` alone, the manifest carries its
-   new head, and the other head is unchanged.
-7. **Force-push**: a session directory `sessions/agentlab-sync-proof` with a
-   `git clone --shared` of the mirror (its objects borrowed through git
-   alternates, none of its own), then a force-push of `docs` and a cycle that
-   fetches only it. The mirror's branch is at the new head, the overwritten
-   commit stays in the mirror unreachable (repacked with
-   `--keep-unreachable` while a session directory borrows from it), and the
-   clone reads every object it reaches: none missing, `git fsck
-   --connectivity-only` clean, the overwritten commit's file readable.
-   `get_workspace` lists the session directory.
-8. **Topic removed**: the topic `docs` taken off `agentlab-oss/docs`. The next
-   cycle drops it from the selection (`droppedAt` in the manifest, one
-   repository selected), fetches nothing, and its mirror stays on the volume
-   with its borrower.
-9. **Borrower gone**: the session directory removed, as its Session's end
-   would remove it. The next cycle, `NoChange` with a sync job that looks
-   after the volume, deletes the dropped mirror and its manifest entry.
-10. **Update**: `update_workspace` replaces `kagent` with `docs` by name in
-    the list workspace. Its cycle mirrors `docs` and deletes `kagent`'s
-    mirror, which no session directory borrows.
-11. **Delete**: `delete_workspace` for both. Each workspace, its claim and its
-    PersistentVolume go, nothing of it is left under the export, no session
-    directory being left.
-12. **Restore**: `agentlab-oss/docs` back to the fixture's topics and the head
-    it had, and this host's clone removed. A failed run removes the same.
+1. **Preconditions**: the workspace-manager reachable through muster, the
+   admin holding the instance's grant ([the grant](#the-grant-a-proof-waits-for)),
+   the pushed repository cloned on this host (shallow, no working tree) and
+   the scratch branch `agentlab-workspaces-proof` an interrupted run left
+   deleted.
+2. **First cycle**: `create_workspace`; the cycle the create starts mirrors
+   both repositories bare at `mirrors/<owner>/<name>.git`, each default
+   branch at the provider's head (`git ls-remote`), `gc.pruneExpire=never`,
+   the manifest naming each; a requested cycle then settles the listing the
+   first one may have read from the manager's minute-long cache.
+3. **No-op**: `sync_workspace` with nothing changed ends `NoChange` with no
+   sync Job, no mirror's `FETCH_HEAD` moves, and the manifest is byte for
+   byte the same.
+4. **Push**: an empty commit pushed to the scratch branch of the first
+   repository with the person's own git credentials, then requested cycles
+   (up to five, 15 s apart, while the provider's listing catches up) until
+   one fetches it: that mirror alone fetched, the branch at the pushed commit
+   in it, no default branch moved, the second repository untouched.
+5. **Force-push**: a session directory with a `git clone --shared` of the
+   mirror (git alternates), a force-push over the pushed commit, and the
+   cycle after which the clone still reads every object (`fsck
+   --connectivity-only`, the overwritten commit's tree), the overwritten
+   commit kept unreachable in the mirror; `get_workspace` lists the session
+   directory.
+6. **Dropped**: `update_workspace` selecting the second repository alone:
+   the first leaves the selection, marked dropped in the manifest, its mirror
+   kept while the session directory borrows from it.
+7. **Borrower gone**: the session directory removed, the next cycle deletes
+   the dropped mirror and its manifest entry.
+8. **Update**: `update_workspace` selecting both again clones the first
+   anew at the provider's head.
+9. **Delete**: `delete_workspace`; the claim and the volume go, nothing of
+   it left on the export. The scratch branch and the host's clone are
+   removed on every path; no default branch is ever written.
 
-The workspace-manager answers an owner's listing from its cache for a
-minute: a cycle that must see a change at the provider is requested once a
-minute has passed since the last listing, and the part starts a minute after
-the provider's last change in the request log. The no-op is shown by the
-request log and the manifest, never by timing. The run takes about six
-minutes; `--ready-timeout` bounds each cycle.
+### The sessions part
 
-### The access part
+`agentlab workspaces-test --part sessions [--provider github|gitlab]
+[--sessions n]` proves many Sessions on one workspace at once, the shape of
+a Session's setup racing the sync: on a workspace over the instance's proof
+repositories, after a push to the scratch branch of the first since the
+workspace's first cycle:
 
-`agentlab workspaces-test --part access [email]` proves the access check at a
-Session's start: a person signed in to every provider of a workspace, and able
-to read every repository of its last sync, gets a workspace grant from the
-workspace-manager's `authorize_workspace` and starts a Session with it through
-agent-manager's `start_session`. Anyone else is refused, naming what is
-missing, and nothing of the refused start exists. It runs as two people of
-[the lab's Organization](#the-labs-organization): the admin and `[email]`
-(default `dev@lab.local`, who does not read `agentlab-org/platform-infra`). It
-uses [the provider instance `fake`](#the-provider-instance-fake), the
-[Session admission](#the-session-admission) and agent-manager 1.12.0 or later
-(`start_session` with `workspaceGrant`). Without any of them it fails at once
-with the reason.
+1. **Preconditions**: the workspace-manager with its kagent address and a
+   cleanup window of 5m to 15m (`agentlab configure
+   --workspaces-cleanup-after 10m`, then `agentlab platform`), the
+   [Session admission](#the-session-admission), an Agent Ready on the claude
+   and on the kagent (Go ADK) Harness, the admin holding the instance's
+   grant.
+2. **Push**: one grant per Session from `authorize_workspace`, each naming
+   the pushed repository changed since the sync.
+3. **Start**: `sync_workspace` and every Session's `start_session` with its
+   grant released at once (`--sessions`, default 10, at least 3, alternating
+   the Harnesses); each first turn lists its directory and every clone's
+   heads and writes a file only it knows.
+4. **Directories**: one directory per Session, each set up once, whose setup
+   record (`.kagent/workspace.json`) names the pushed repository fetched from
+   the provider exactly once and nothing else; every clone at the
+   provider's default heads, the pushed repository's scratch branch at the
+   pushed commit; the requested cycle fetched the pushed commit into the
+   mirror.
+5. **Isolation**: a second turn on each Session finds only its own file
+   anywhere it can look, and a write into the mirrors is refused.
+6. **Delete**: a deleted Session's directory goes with no cycle requested
+   (the manager's Session poll), the mirrors' heads and every other
+   directory untouched.
+7. **No workspace**: a Session started without a workspace on each Harness
+   works in an empty directory with no mirrors.
+8. **Cleanup**: the Sessions suspended, the window waited out, a cycle
+   removes every directory and the Workspace reads `SessionsCleanedUp=True`;
+   one Session per Harness resumed works in a fresh directory.
+9. **Report**: each Session's timings (`start_session` called and answered,
+   first turn sent, directory set up, first turn ended) in
+   `workspaces-sessions-report.json` in the state directory, and as `timing`
+   lines.
 
-1. **Preconditions**: the workspace-manager reachable through muster. The
-   manager publishes the lab's grant key, kagent's admission trusts its key
-   set, and the claude Agent `agentlab-workspaces-claude` is Ready on the
-   Harness `claude`. Both people are signed in to muster and to kagent.
-2. **Private repository**: `agentlab-org/platform-infra` is in the workspace
-   where the lab GitHub's App is installed on `agentlab-org`. Otherwise the
-   step is skipped with that reason, and so is step 5.
-3. **Workspace**: `create_workspace` for `agentlab-access`, over
-   `agentlab-oss/docs` and the private repository, as the admin. The part
-   waits for its first cycle and reads the volume's CSI driver and handle.
-4. **Not connected**: `[email]` is disconnected first (`list_providers` shows
-   no sign-in). `authorize_workspace` answers `connect_required`, with the
-   reason and the provider's sign-in link, and no grant. A start on the
-   workspace's volume without a grant (kagent `CreateSession` as the person)
-   is refused by the admission. `start_session` names a workspace only
-   through a grant. Without one it starts a Session with no volume and no
-   provider token, as before workspaces.
-5. **Connect**: `connect_provider` as `[email]`. Its link is walked through
-   the lab GitHub's consent and the manager's callback
-   ([a person's sign-in, headlessly](#a-persons-sign-in-headlessly)), and
-   `list_providers` then shows `fake` connected.
-6. **Refused**: `authorize_workspace` as the connected `[email]` answers
-   `refused`, naming `agentlab-org/platform-infra` in its reason and its
-   `unreadable`.
-7. **Grant**: a commit pushed to `agentlab-oss/docs` after the sync, the
-   admin connected, then `authorize_workspace` as the admin. Within the
-   manager's one-minute listing cache, the call repeats until the push shows.
-   The grant names the admin (`sub`), the workspace, its volume (driver and
-   handle), the mounts (`sessions/${SESSION_ID}` read-write, `mirrors`
-   read-only) and `agentlab-oss/docs` as changed since the sync.
-8. **Start**: `start_session` as the admin with the grant. agent-manager
-   creates the Session on kagent as the person, and kagent reports it on the
-   workspace's volume.
-9. **Admission**: three grants refused by kagent's admission, each sent
-   straight to kagent's `CreateSession` with the workspace's volume:
-   - the admin's grant used by `[email]`;
-   - an expired grant: the manager's claims re-signed with the lab's grant
-     key, the manager's own, with the expiry five minutes past;
-   - a grant for another workspace and its volume, signed the same way.
+### The git part
 
-   For the first two, `start_session` is also refused, by agent-manager
-   before kagent, each with its reason. The default proof's admission step
-   already refuses a grant signed by a key the manager does not publish, so
-   that refusal is not repeated here.
-10. **Disconnect**: `disconnect_provider` as the admin. The lab GitHub's
-    request log shows the revocation (`DELETE
-    /api/v3/applications/<client>/grant` or `/token`, answered 2xx),
-    `list_providers` no sign-in, and `authorize_workspace` answers
-    `connect_required` again. A grant issued before stays valid until it
-    expires: a revocation after the start is not checked again.
-11. **Latency**: every `authorize_workspace` call is timed, and the count,
-    minimum, median and maximum are printed.
-12. **Restore**: the Sessions, both sign-ins, the Agent, the session
-    directories, the workspace and its volume removed, and `agentlab-oss/docs`
-    back to its head. A failed run removes the same.
+`agentlab workspaces-test --part git` proves a workspace Session works with
+git and `gh` as the person, on GitHub through the `github` instance's App,
+on the claude and the kagent (Go ADK) Harness, with the person's token never
+in the sandbox and no GitHub MCP server. What happened at GitHub is read back
+from GitHub's own API, by the Session as the person; nothing stands in for
+GitHub.
 
-After every refused start (steps 4, 6 and 9), the part lists what exists for
-the person: the Agent's Sessions in kagent, agent-manager's `list_sessions`,
-and Substrate's actors. Nothing may be new. One Session runs a model turn,
-the admitted one: its first message is a one-word reply on the default
-ModelConfig. On the instance `github`, the same steps need one recorded
-browser sign-in of a person's account; the headless part does not run them.
+1. **Preconditions**: the instance's [proof repositories](#the-proof-repositories),
+   the workspace-manager, the [Session admission](#the-session-admission), an
+   Agent Ready on each Harness, the admin holding the instance's
+   [grant](#the-grant-a-proof-waits-for); the branches
+   `agentlab-workspaces-git-*` an interrupted run left on the pushed
+   repository deleted.
+2. **Workspace**: `create_workspace agentlab-git` over the pushed repository,
+   its first cycle.
+3. **Push and pull request**, per Harness: a Session started through
+   `start_session` with the admin's grant; one turn in its clone switches to
+   `agentlab-workspaces-git-<run>-<harness>`, commits and `git push`es,
+   runs `gh api user` (a person's login, type `User`: an App's installation
+   token answers no `/user`), `gh pr create`, reads the pull request's author
+   and the push's actor (GitHub's repository activity) back, both the
+   person, and closes the pull request with its branch deleted. The commit's
+   committer is the turn's person. `GH_TOKEN` is the Harness's inert
+   placeholder, and no GitHub token (`gh?_…`, `github_pat_…`) is in the
+   environment, `/data`, `/workspace`, the working directory or the home
+   directory: names are printed, never values.
+4. **Pause and resume**, per Harness: the same Session leaves a file
+   uncommitted on a new branch and asks the person whether to commit it; it
+   is suspended while the person answers, resumed, and the answer's turn
+   finds the same volume, working directory, branch and untracked file, the
+   setup record's time unchanged (not set up again).
+5. **No workspace**, per Harness: a Session started without a grant;
+   `gh api user` and a `git push` to the pushed repository are refused, and
+   no GitHub token is anywhere it looks.
+
+`--toolchains github[@<version>],…` starts every Session of the part with
+those toolchains through `start_session` (agent-manager's toolchains, see
+[The toolchains part](platform.md#the-toolchains-part) for what the lab
+needs). With `github` the write turn's `gh` must be the toolchain's,
+`/opt/kagent/tools/github/bin/gh`: the part then proves the workspace's git
+and `gh` work on a Harness image that ships no `gh` of its own.
+
+The Sessions, the Agents, the workspace and every branch of the run are
+removed on every path.
+
+### The proof repositories
+
+The sync, sessions and git parts run on a provider instance's two proof
+repositories, recorded in `agentlab.yaml`:
+
+```yaml
+platform:
+  workspaces:
+    github:
+      proofRepositories:
+        - example-org/workspace-proof  # pushed to: its scratch branch only
+        - example-org/other-repo       # left as it is
+    gitlab:
+      proofRepositories:               # <group>/<project>, nested groups too
+        - workspaces/workspace-proof
+        - workspaces/other
+```
+
+The instance's App reaches both. The first takes pushes to the scratch
+branch `agentlab-workspaces-proof`, which the parts create and delete: a
+default branch protected against direct pushes stays untouched. On
+`github` the pushes go out with the person's own git credentials (their
+credential helper, `gh auth git-credential` for one); on `gitlab` as the
+instance's person, with the password the GitLab part reads, handed to git
+through its environment. Without the list the part skips with the reason.
+
+### The grant a proof waits for
+
+A GitHub App's grant takes github.com's sign-in in a browser, which no
+headless walk makes. A part that finds the admin without the grant of the
+`github` instance's App prints muster's sign-in link, writes it to
+`workspaces-grant-github.url` in the state directory and waits up to 15
+minutes for `list_providers` to show it connected: open the link in a
+browser signed in to GitHub, which takes GitHub's consent of the lab's App
+once and redirects to muster's callback. The grant is dropped at the run's
+end, as every proof's. A GitLab's grant is walked headlessly through its
+sign-in form, as in the GitLab part.
 
 ### The GitLab part
 
 `agentlab workspaces-test --part gitlab [email]` proves
 [the provider instance `gitlab`](#the-provider-instance-gitlab) end to end
-against a real GitLab, as the admin (connected to GitLab as
-`platform.workspaces.gitlab.person`) and `[email]` (default `dev@lab.local`,
-never connected). Without the instance, or without any of its settings, every
+against a real GitLab, with muster pinning the workspace-manager to the
+GitLab OAuth application (`platform.workspaces.grantProvider: gitlab`), or
+keeping one provider App per instance, GitLab's beside GitHub's
+(`grantProvider: apps`, [provider Apps side by side](#provider-apps-side-by-side)),
+as the admin (granting it as `platform.workspaces.gitlab.person`) and
+`[email]` (default `dev@lab.local`, never granting it). Without the
+instance, any of its settings, or with the pin on another instance, every
 stage skips with the reason and the part passes: it never fails for a lab
-that has no GitLab.
+that has no GitLab. With `apps`, the part grants and drops GitLab's App by
+its name (`core_auth_login` / `core_auth_logout` with `app=gitlab`): the
+second person's `list_providers` shows `gitlab` not connected and
+`core_auth_login app=gitlab` answers the sign-in link; the admin's
+`list_providers` after the grant lists every instance with its own status
+(`github` connected too when the admin granted the GitHub App in a
+browser); after the drop `gitlab` is not connected and every other instance
+reads as before.
 
-1. **Preconditions**: the workspace-manager reachable through muster with the
-   instance `gitlab` in `list_providers`, the token exchange's client in
-   place, the [Session admission](#the-session-admission), the claude Agent
-   Ready, both people signed in.
-2. **Picker**: `list_repositories` for the group as the admin lists its
+1. **Preconditions**: the workspace-manager reachable through muster and
+   pinned to the instance's application, the
+   [Session admission](#the-session-admission), the claude Agent Ready, both
+   people signed in to muster.
+2. **Not connected**: `[email]`, who has not granted GitLab's application,
+   gets muster's sign-in link from `list_providers`.
+3. **Connect**: the admin grants it: `core_auth_login`'s link walked
+   headlessly through GitLab's sign-in form and the application's consent to
+   muster's callback; `list_providers` lists `gitlab` of kind `gitlab`,
+   connected.
+4. **Picker**: `list_repositories` for the group as the admin lists its
    projects, what the Dev Portal's workspace editor shows, with no
    provider-specific request.
-3. **Not connected**: the token exchange (`POST /token` as kagent's client)
-   for `[email]` and the audience `gitlab` answers `invalid_target` with the
-   connect link as `error_uri`.
-4. **Connect**: `connect_provider` as the admin, walked headlessly through
-   GitLab's sign-in form, the OAuth application's consent and the manager's
-   callback; `list_providers` reads connected.
-5. **Token**: the exchange releases the admin's GitLab token for the audience
-   `gitlab` and refuses an unknown audience. GitLab's API names the person
-   with it (Bearer), git's smart HTTP lists the project with it (Basic, user
-   `oauth2`), and the person writes a branch, a commit and a merge request
-   with it from the host, all removed again.
-6. **Workspace**: `create_workspace` over the project, its first cycle: the
-   bare mirror at GitLab's head and the manifest naming it.
-7. **Start**: `authorize_workspace` grants, naming GitLab's host for the
+5. **Workspace**: `create_workspace` over the project, its first cycle: the
+   bare mirror on the volume at the head the manifest names.
+6. **Start**: `authorize_workspace`, which reads the project with the
+   admin's GitLab token muster attaches, grants, naming GitLab's host for the
    audience `gitlab` and no token; `start_session` through agent-manager
    creates the Session on the volume, whose turn works in its directory with
-   the clone at GitLab's head and holds no credential beyond the platform's
-   own variables.
-8. **Push from the Session**: the Session pushes an empty commit to a proof
-   branch as the person. It reaches GitLab only through kagent's token
-   broker, which exchanges the turn caller's token at the workspace-manager
-   for each host the grant names; until the platform wires that broker, and
-   while GitLab's API (Bearer) and git (Basic) on one host need two
-   credentials where the egress binds one per host, the stage reports the
-   push's answer and skips.
-9. **No workspace**: a Session started without a workspace works in the
-   default directory, holds no credential beyond the platform's own, and
-   `git ls-remote` of the private project is refused.
-10. **Disconnect**: `disconnect_provider`: the exchange answers with the
-    connect link again, and GitLab refuses the token released before.
-11. **Restore**: the Sessions, the Agent, the workspace, its volume, the proof
-    branches and merge requests removed.
-
-### The sessions part
-
-`agentlab workspaces-test --part sessions [--sessions n]` proves what a
-workspace is for: Sessions started in parallel on one workspace, each at once
-in a session directory of its own on the workspace's one volume, on every
-Harness, and the directories' cleanup after their Session's last turn. It runs
-as the admin on [the provider instance `fake`](#the-provider-instance-fake),
-with the [Session admission](#the-session-admission), agent-manager 1.13.0 or
-later (`start_session` without a first message), workspace-manager 0.4.0 or
-later run with kagent's address (agent-platform 4.128.0 or later derives it)
-and a short cleanup window: `agentlab configure --workspaces-cleanup-after
-10m` (`platform.workspaces.sessionsCleanupAfter`, the manager's
-`sessions.cleanupAfter`; the part takes 5 to 15 minutes), then `agentlab
-platform`. Without any of them it fails at once with the reason.
-
-1. **Preconditions**: the workspace-manager reachable through muster, with
-   `--kagent-address` and the window; the lab's grant key published and
-   trusted by kagent's admission; the Agents `agentlab-workspaces-claude` on
-   the Harness `claude` and `agentlab-workspaces-kagent` on the Harness
-   `kagent` (the Go ADK) Ready.
-2. **Workspace**: the sync part's filter workspace `agentlab-sync-filter`
-   (`agentlab-oss/docs`, and the private `agentlab-org/platform-infra` where
-   the App is installed on its owner), created as the admin; its first
-   cycle.
-3. **Push**: a push to `agentlab-oss/docs` after that cycle; the admin
-   connected to `fake`.
-4. **Start**: `--sessions` Sessions (default 10, at least 3), alternating the
-   two Harnesses, started at once: each asks `authorize_workspace` for a grant
-   that names `docs` changed since the sync, starts through `start_session`
-   with it, and runs its first turn. The turn lists its working directory
-   (`/workspace`) and the `origin/HEAD` of every clone at
-   `<owner>/<repository>`, `docs` at the pushed head, and writes a file only
-   it knows (`agentlab-only-<token>`).
-5. **Directories**: a probe on the volume reads one directory per Session
-   under `sessions/<session id>`, each with the setup's record
-   (`.kagent/workspace.json`: when it was set up, what was cloned, `docs`
-   fetched) and its own file alone. The lab GitHub's request log since the
-   push holds exactly one fetch (`GET .../info/refs`) of `docs` per Session
-   and none of any other repository.
-6. **Isolation**: a second turn on every Session at once looks for every
-   `agentlab-only-*` file it can reach and tries a write into `/mirrors`: it
-   finds its own file only, and the write is refused.
-7. **Delete**: a cycle brings the mirrors up to the push; the last Session is
-   deleted, and no cycle is requested: within 2 minutes its directory is
-   gone and the workspace's last cycle has the trigger `sessionDeleted` (the
-   workspace-manager lists kagent's Sessions every `--sessions-poll` and
-   removes a deleted one's directory at once, from 0.6.0; before, without
-   that flag, the stage requests the next cycle, which removes it), the
-   other directories, the mirrors' heads and the volume untouched.
-8. **No workspace**: a Session started without a grant on each Harness works
-   in an empty directory, sees no `/mirrors`, and its turn completes.
-9. **Cleanup**: the Sessions suspended, the window waited out, a cycle:
-   every directory removed and the Workspace's `SessionsCleanedUp` condition
-   `True` (the part fails naming its reason otherwise). One Session per
-   Harness resumed works in a fresh directory, the clones back and its file
-   of before gone; the kagent Harness's first turn says the directory was set
-   up again. The claude Harness does not say so yet: the part notes it as a
-   known gap.
-10. **Report**: per Session the times of `start_session` called and
-    answered, the first turn sent, the directory set up (the setup's record)
-    and the first turn ended, and the setup's seconds, as `timing
-    session=<id> harness=<h> ... setupSeconds=<s>` lines and in
-    `state/workspaces-sessions-report.json` with the directories, the heads,
-    the fetch counts and the condition.
-
-Everything is removed on every path: the Sessions, the Agents, the session
-directories, the workspace, the admin's sign-in, and `docs` back at its head.
-
-### The caller-credential part
-
-`agentlab workspaces-test --part caller-credential` proves a Session's caller
-credential on its Bearer provider end to end: kagent compiles, on the Actor of
-a Session admitted with a grant, a credential header on each of the grant's
-**Bearer** providers' hosts, an actor JWT that Substrate's egress gateway mints
-for that Actor, bound to the provider's audience, and injects in place of the
-`Authorization` the sandbox sent. A **Basic** provider's host (a git host) gets
-none yet. It runs as the admin on [the provider instance
-`fake-bearer`](#the-provider-instance-fake-bearer), the only instance whose
-grant names a Bearer host (the API of `fake` is on its git host), with the
-[Session admission](#the-session-admission) and agent-manager's
-`start_session`: `agentlab configure --workspaces-provider fake,fake-bearer`,
-then `agentlab platform`. Without them it fails at once with the reason.
-
-1. **Preconditions**: the workspace-manager reachable through muster and listing
-   `fake-bearer`; the lab's grant key published and trusted by kagent's
-   admission; the Agent `agentlab-workspaces-bearer` on the Harness `claude`
-   Ready, its egress `https://github-bearer.<domain>` and
-   `https://api.github-bearer.<domain>`.
-2. **Workspace**: the admin connected to `fake-bearer`; the workspace
-   `agentlab-caller-credential` over `agentlab-oss/docs` on it and its first
-   cycle.
-3. **Session**: the admin's grant names `api.github-bearer.<domain>` as a
-   `Bearer` provider of audience `fake-bearer` (a grant without it fails
-   here, naming the manager); `start_session` with it, and the providers
-   kagent records on the Session noted.
-4. **The Actor's JWT**: a turn runs `curl` (else `wget`) in the sandbox to
-   `https://api.github-bearer.<domain>/agentlab/caller-credential/<token>`
-   with `Authorization: Bearer agentlab-placeholder`, and names the
-   environment variables and the files under `/data`, `/workspace` and its
-   working directory that hold a JWT. The lab GitHub's request log must hold
-   that request with the credential `jwt`, `aud` containing `fake-bearer` and
-   `sub` `actor/<atespace>/session-<id>`, the Session's Actor; the
-   sandbox must hold no JWT. A kagent that compiles no caller credential lets
-   the placeholder through: the stage fails naming the credential the API host
-   received (`placeholder`) instead of the Actor's JWT; a request that never
-   reached the fake fails naming the sandbox's answer (the gateway's 403 when
-   the host is not in the Actor's egress).
-5. **No workspace**: a Session of the same Agent without a grant sends the
-   same request: no `jwt` entry for it in the log.
-
-The fake verifies no JWT it did not sign: it answers such a bearer GitHub's
-401 and logs its `aud` and `sub`, never the token. Everything is removed on
-every path: the Sessions, the Agent, the session directories, the workspace
-and the admin's sign-in to `fake-bearer`.
+   the clone at the mirrored head and holds no credential beyond the
+   platform's own variables (`GH_TOKEN` and `GITLAB_TOKEN`, the Harness's
+   inert placeholder the egress gateway replaces, `GLAB_IS_OAUTH2` and
+   `GLAB_CONFIG_DIR`, glab's configuration naming the workspace's GitLab
+   hosts, are among them; a `GITLAB_TOKEN` of any other value is a credential).
+7. **Push and merge request from the Session**: the Session pushes an empty
+   commit to a proof branch and deletes the branch again. It holds no GitLab
+   credential, so GitLab accepts both only through Substrate's egress
+   gateway, which fetches the person's token from muster for a Session bound
+   to them and sends it as Basic with the user `oauth2` (muster's
+   `credentialProvider.gitUsers`, `gitlab: oauth2`). Between the two, on a
+   Harness that gives `glab` its placeholder (`GITLAB_TOKEN` set to kagent's inert placeholder, sent as an
+   OAuth2 bearer through `GLAB_IS_OAUTH2`), `glab api user` names the person
+   and `glab mr create` opens a merge request of the branch authored by them,
+   which the Session closes before it deletes the branch; on an older Harness
+   the stage reports glab's answer and leaves the merge request unjudged.
+8. **No workspace**: a Session started without a workspace works in the
+   default directory, holds no credential beyond the platform's own and no
+   `GITLAB_TOKEN`, and `git ls-remote` of the private project is refused.
+9. **Disconnect**: the admin drops the grant in muster (`core_auth_logout`),
+   and `list_providers` answers muster's sign-in link again; the admin grants
+   it once more for the restore.
+10. **Restore**: the Sessions, the Agent, the workspace and its volume
+    removed, and the admin's grant dropped.
 
 ### The measurements
 
-`agentlab workspaces-measure [email]` measures what the parts prove: how long
-a workspace's sync, a Session's directory and the git work in it take on the
-workspace volume, how much the volume stores, and whether the design's sizing
-defaults hold (a repository not yet mirrored counts 1.5 × the size its
-provider reports, once synced its measured mirror; the headroom is max(4 GiB,
-50 % of the need); an online expansion where the class provisions a size). It
-works through muster as `[email]` (default the admin, a member of the lab's
-Organization) on [the provider instance `fake`](#the-provider-instance-fake),
-with the [Session admission](#the-session-admission) and agent-manager's
-`start_session`; Kubernetes is only read, apart from the probe pods.
+`agentlab workspaces-measure` measures what the proofs prove, on a cluster
+with the platform, a lab's or an installation's: how long a workspace's
+sync, a Session's directory and the git work in it take on the workspace
+volume, how much the volume stores, and whether the design's sizing defaults
+hold (a repository not yet mirrored counts 1.5 × the size its provider
+reports, once synced its measured mirror; the headroom is max(4 GiB, 50 % of
+the need); an online expansion where the class provisions a size). It names
+the cluster with `--kube-context <context>` (of your own kubeconfig) and
+`--muster-url <url>`, and works through muster as the person `muster auth
+login --endpoint <url>` signed in, with `--organization`, `--provider` (the
+provider instance), `--small-repos owner/a,owner/b` (the first is checked
+out, built and pushed to) and `--large-repo owner/name`, all required;
+Kubernetes is only read, apart from the probe pods.
+
+```sh
+agentlab workspaces-measure --kube-context <context> --muster-url <url> \
+  --organization <organization> --provider <instance> \
+  --small-repos owner/a,owner/b --large-repo owner/big \
+  --agentgateway-url <url> --agent <namespace>/<name>
+```
 
 Two workspaces, each created and deleted once per run (`--runs`, default 5):
-
-| Workspace | Repositories | Pushes go to | Checkout, status and build in |
-|---|---|---|---|
-| `agentlab-measure-small` | `agentlab-oss/docs`, `agentlab-oss/kagent` | `docs` | `kagent` |
-| `agentlab-measure-large` | `agentlab-org/monorepo` (64 MiB), or with `--large-repo-mib <n>` a repository of n MiB the command adds to the lab's GitHub (`agentlab-org/monorepo-<n>mib`) and removes afterwards | the large one | the large one |
-
-The two have an owner each, so the manager's one-minute listing cache of one
-never shortens the other's cycle. Per run and workspace, each figure from the
-call to the first read that sees its end (reads every 500 ms):
+`agentlab-measure-small` over the small repositories and
+`agentlab-measure-large` over the large one. Give them an owner each, so the
+manager's one-minute listing cache of one never shortens the other's cycle.
+Per run and workspace, each figure from the call to the first read that sees
+its end (reads every 500 ms):
 
 | Figure | From → to |
 |---|---|
 | First sync | `create_workspace` called → `get_workspace` reports the first cycle's result |
 | No-op cycle | `sync_workspace` called once the listing cache let go, nothing pushed → the cycle's `NoChange` (a cycle ending otherwise is not counted, and says so) |
-| Changed cycle | `sync_workspace` called after a push → the cycle's result: in the lab the mirror at the pushed head, on another cluster `Succeeded` after a push to the scratch branch |
+| Changed cycle | `sync_workspace` called after a push to the scratch branch → the cycle's `Succeeded` |
 | `authorize_workspace` | each call through muster → its granted answer |
 | Session directory setup | `start_session` called with the grant → the setup's record `.kagent/workspace.json` in the session directory: the actor Running, every clone in place, the pushed repository fetched |
 | Setup in the actor | the first turn sent → the same record |
 | On-demand fetch | after another push, the setup's own `git fetch --quiet --prune origin` timed in the Session's sandbox by its second turn → the fetch ended at the pushed head |
 | First checkout, `git status`, build | in a pod with the Session's mounts (its directory at `/workspace`, the mirrors read-only at `/mirrors`): `git switch <default branch>` in the Session's clone (the Harness's first checkout), `git status --porcelain`, then the build with a cold module and build cache beside the clone as two figures: its download (`go list -deps ./...` through the module proxy, `--goproxy`, default the image's `proxy.golang.org`; a vendored module downloads nothing) and its compile (`go build ./...` with the proxy off); then the same in a clone of a copy of the mirror on an `emptyDir`, the node's local disk |
 | Session directory size | `du -sb` of the directory after the turns and the checkout, the build's cache and output removed |
+
+`--agentgateway-url` and `--agent namespace/name` (an Agent whose Sessions
+reach the provider) measure the Sessions; without them the Session figures
+are not available.
+
+The pushes go to a scratch branch `agentlab-workspaces-measure-<start time>`
+of the first small repository and of the large one, with your own git
+credentials (`gh auth setup-git` for GitHub; `--git-url` names another
+provider's git base URL, default `https://github.com`): an empty commit on
+the default branch's head per push, which moves the repository's `pushed_at`
+and so starts a changed cycle, the manager mirroring every ref. The branch is
+deleted at the end. A repository you cannot push to has its changed cycle
+and on-demand fetch not available, with git's answer, and the run goes on.
 
 Run 1 also times **one online expansion** of the small workspace's volume
 where its StorageClass allows volume expansion (`agentlab-workspaces` does):
@@ -557,56 +593,27 @@ pod that fails costs only its own figures of that run: every figure it
 reported is kept, the report lists it under **Probes that failed** (run,
 workspace, probe, reason), and the run goes on. A run that ends early still
 writes the report: the figures no run reached are not available, and the
-report says why the run ended. In the lab the NFS
-export lives on the node's own disk, so the volume against the local disk
-measures the NFS protocol, not a network.
+report says why the run ended. On a lab the NFS export lives on the node's
+own disk, so the volume against the local disk measures the NFS protocol,
+not a network. `--ready-timeout` bounds each wait.
 
 Everything the command creates is removed on every path: the Sessions, the
-session directories, the workspaces and their volumes, the Agent
-`agentlab-workspaces-measure` (Harness `claude`), the probe pods, the
-person's sign-in at `fake`, the pushed repositories back at their heads and a
-generated repository; on another cluster the scratch branch. A Session the
-cleanup cannot delete is named in the report under **Sessions left**, for a
-person to delete in kagent.
+session directories, the workspaces and their volumes, the probe pods and
+the scratch branch. A Session the cleanup cannot delete is named in the
+report under **Sessions left**, for a person to delete in kagent.
 
 Every call to muster and kagent, the cleanup's included, carries the
-person's current token: shortly before it expires a new one is taken, a
-fresh password grant in the lab, the renewed tokens of the person's muster
-sign-in on another cluster (muster renews them once they have expired, so the
-measurement waits those seconds). A measurement of many runs outlives any one
-token; each renewal is said, and the cleanup's last line counts the Sessions
-the measurement started and deleted.
+person's current token: the renewed tokens of the person's muster sign-in,
+taken shortly before the current one expires (muster renews them once they
+have expired, so the measurement waits those seconds). A measurement of many
+runs outlives any one token; each renewal is said, and the cleanup's last
+line counts the Sessions the measurement started and deleted.
 
 A workspace an interrupted run left under a measurement's name has its
 session directories cleared and is deleted before the run. One that is still
 deleting goes only at its manager's next deletion cycle: its session
 directories are cleared so that cycle lets it go, the run measures under
 `<name>-<start time>`, and the report names the leftover.
-
-**Another cluster with the platform**: `--kube-context <context>` (of your own
-kubeconfig) and `--muster-url <url>`, as the person `muster auth login
---endpoint <url>` signed in, with `--organization`, `--provider`,
-`--small-repos owner/a,owner/b` (the first is checked out, built and pushed
-to) and `--large-repo owner/name`. `[email]` and `--large-repo-mib` are the
-lab's only and refused there: the person is the one signed in to muster.
-
-```sh
-agentlab workspaces-measure --kube-context <context> --muster-url <url> \
-  --organization <organization> --provider <instance> \
-  --small-repos owner/a,owner/b --large-repo owner/big \
-  --agentgateway-url <url> --agent <namespace>/<name>
-```
-
-The pushes go to a scratch branch `agentlab-workspaces-measure-<start time>`
-of the first small repository and of the large one, with your own git
-credentials (`gh auth setup-git` for GitHub; `--git-url` names another
-provider's git base URL, default `https://github.com`): an empty commit on
-the default branch's head per push, which moves the repository's `pushed_at`
-and so starts a changed cycle, the manager mirroring every ref. The branch is
-deleted at the end. A repository you cannot push to has its changed cycle
-and on-demand fetch not available, with git's answer, and the run goes on.
-`--agentgateway-url` and `--agent namespace/name` (an Agent whose Sessions
-reach the provider) measure the Sessions, which are otherwise not available.
 
 ## The Session admission
 
@@ -630,9 +637,10 @@ The proof signs its grants itself, with the lab's key, in the manager's
 claims (`iss`, `sub`, `aud`, `exp`, `nbf`, `iat`, `jti`, `workspace`, `volume`,
 `mounts`). A grant verifies only through the key set the manager publishes. It
 does not call `authorize_workspace`: a grant needs a synced workspace and a
-person signed in to its provider, which [the access part](#the-access-part)
-sets up. There, the manager's grant names the person by email, the Session's
-creator as kagent's admission compares it, and admits the Session.
+person who granted its provider's App ([the person's
+grant](#the-persons-grant-musters)). The manager's grant names the person by
+email, the Session's creator as kagent's admission compares it, and admits
+the Session.
 
 A claude Session works in its volume directory, with a clone of each mirror,
 from kagent 1.9.0; its agent's own clone of a mirror needs kagent 1.10.0,
@@ -646,19 +654,92 @@ and on 1.9.x the agent's own clone fails on git's dubious-ownership check.
 ## The provider instances
 
 With workspaces on, the workspace-manager gets the provider instances
-`platform.workspaces.provider` names: `fake`, the default while the key is
-empty; `fake-bearer`, beside `fake` only; `github`; `gitlab`; or several,
-such as `fake,github,gitlab` (`agentlab configure --workspaces-provider …`).
-`fake`, `fake-bearer` and `github` are instances of the chart's `github` kind, `gitlab` of its `gitlab` kind, each
-with a Secret of its own that the rendered values reference and nothing else
-reads. The wiring every instance shares is in place with the switch alone:
-the manager's public base URL `https://workspace-manager.<domain>:<gatewayPort>`,
-the route the chart renders for it, and the lab Dex's redirect URI
-`<base URL>/signin`
+`platform.workspaces.provider` names: `github`, the default while the key is
+empty; `gitlab`; or both, `github,gitlab` (`agentlab configure
+--workspaces-provider …`). `github` is an instance of the chart's `github`
+kind, `gitlab` of its `gitlab` kind, each with a Secret of its own that the rendered values reference and nothing else
+reads. An instance renders once its App or application is in place; with
+workspaces on and none in place yet, no instance renders, and muster's
+credential provider releases the configured instance (github.com's OAuth
+issuer before the App id). The wiring every instance shares is in place with
+the switch alone:
+the manager's public base URL `https://workspace-manager.<domain>:<gatewayPort>`
+and the route the chart renders for it
 ([Platform](platform.md#the-workspace-managers-provider-instances-platformworkspacesprovider)).
 `platform-test` proves the manager registered with muster and reachable,
 rolled out, `list_providers` as the admin naming every configured
 instance and nothing else, and [the lab's Organization](#the-labs-organization).
+
+### The person's grant, muster's
+
+From workspace-manager 0.10.0 a person's sign-in at a provider is muster's:
+muster pins the manager's registration to one instance's App
+(`muster.mcpServer.auth` in the values), the person grants that App once
+(`core_auth_login`, `grantScope: subject`), and muster attaches the person's
+App token to every call of the manager's tools, the Dex ID token beside it.
+A person who has not granted it gets muster's sign-in link instead of a
+tool's answer; the manager stores no token and serves no sign-in pages.
+
+The instance is `platform.workspaces.grantProvider` (`agentlab configure
+--workspaces-grant-provider <instance>`), empty for the first configured one.
+The lab pins only a manager it
+resolves to 0.10.0 or newer, the way Flux resolves
+`components.workspace-manager.versionRange` (from the chart, or a range in
+`platform.valuesFiles` such as a release candidate's); an earlier manager
+keeps its own sign-in and the token exchange the lab registers for it. The
+pin's OAuth client is the instance's Secret, which carries the client id
+under `client-id` for muster beside `client-secret`: the lab writes it into
+`workspace-github` or `workspace-gitlab` ahead of the install. The App's callback URL is muster's,
+`https://muster.<domain>:<gatewayPort>/oauth/proxy/callback`.
+
+#### Provider Apps side by side
+
+`platform.workspaces.grantProvider: apps` (`agentlab configure
+--workspaces-grant-provider apps`, two or more instances) pins nothing: the
+lab renders no `muster.mcpServer.auth.provider`, and an agent-platform chart
+that keeps one muster provider App per instance
+(`agent-platform.workspaceManager.providerApps`) derives an App of each
+instance with person sign-in, GitHub's and GitLab's side by side, and the
+registration's `providerApps` naming them all. A person grants each App once
+by name (`core_auth_login app=<instance>`), `list_providers` lists each
+instance connected or not, and `core_auth_logout app=<instance>` drops one
+App's grant and no other. The lab writes `client-id` into every instance's
+Secret. On a chart without provider Apps the registration falls back to the
+chart's single-App pin; `workspaces-test --part gitlab` then fails its
+preconditions naming the MCPServer's `providerApps`.
+
+A person's grant of a GitHub App takes github.com's sign-in in a person's
+browser: the real GitHub App login, through a browser worker with an SSO
+session; no headless walk grants it. A proof that calls the manager's tools
+as a person finds the grant held, or answers muster's sign-in link, and
+`platform-test` then ends its workspace-manager stage at that link: its
+verdict passes the link and reports `list_providers` and `list_workspaces`
+as SKIP, never as proven. The
+headless sign-in walk exists only for GitLab
+([the GitLab part](#the-gitlab-part)).
+
+### What a run leaves: nothing
+
+The proofs share one lab with each other and with the Dev Portal's
+Playwright suite, so none of them assumes a clean lab or leaves state
+behind (`internal/lab/workspacefixtures.go`):
+
+- Every Workspace a proof creates carries `agentlab.giantswarm.io/fixture:
+  workspace` and the run's id under `agentlab.giantswarm.io/run`; the
+  manager takes no labels, so the lab sets them on its object after
+  `create_workspace`.
+- Every grant of the pinned App a proof uses goes into the run's ledger and
+  is dropped in muster (`core_auth_logout`) when the command ends, on a
+  failure too: after `platform-test`, `workspaces-test` or
+  `klaus-gateway-test` no
+  lab user holds a grant, so the portal's sign-in specs and the gateway's
+  workspace prompt see the same lab used as fresh.
+- `workspaces-test` and `klaus-gateway-test` start by removing what an earlier run left: the lab's
+  labelled Workspaces of another run, and the portal suite's `e2e-ws-<run>-…`
+  of a run that started more than three hours ago (the suite's own
+  leftover age, so a portal run going on keeps its own). Each is deleted
+  with its deletion cycle requested at once; one a live Session's directory
+  still holds stays deleting, which no prompt or picker offers.
 
 ### The lab's Organization
 
@@ -673,100 +754,33 @@ developers]}]`, which the chart turns into the manager's
 the workspaces values, as the subchart's own
 `workspace-manager.organizations` map. `platform-test` calls
 `list_workspaces` for `lab` as the admin, which answers, and as the viewer,
-which is refused as not a member. A workspace a lab user creates names
+who is kept out: refused as not a member when they hold the pinned
+provider App's grant, or asked by muster's `auth_required` and its sign-in
+link to grant it first; the stage's note says which. A workspace a lab user
+creates names
 `organization: lab`.
-
-### The provider instance fake
-
-[The lab's GitHub](#the-labs-github) as a GitHub Enterprise-shaped instance,
-nothing to register and no account needed. `agentlab up` and `agentlab
-platform` run it (`agentlab github-fake --workspaces`) in a container on the
-kind network beside the nodes, the way a proof's fake runs, from a copy of
-the binary under `state/` (a mounted executable stays busy while its
-container runs, and a rebuild over it would be refused); a running one is
-replaced, so the fixture is its state, and `agentlab platform-down` and
-`agentlab down` remove it. The binary must be a static Linux build (`make
-build`, or `CGO_ENABLED=0 go build`; the releases are): the container's image
-has no dynamic loader, so `up` and `platform` refuse a dynamically linked one
-before their first step, naming the build, rather than after the storage
-install when the container would start. Pods reach it as `https://github.<domain>`: CoreDNS
-sends the name to the selector-less Service `agent-platform/agentlab-github`
-(port 443 onto the container), the answer keeps the name, and the fake's TLS
-leaf (the lab CA's) carries it. This host reaches it on the loopback port the
-container publishes, printed by the run with its request log.
-
-The instance is `url: https://github.<domain>` (the API under `/api/v3`, the
-kind's own derivation), the fixture's App (id `1`, client
-`Iv1.agentlab-workspaces`) and its credentials: the App's private key and the
-client secret the lab generated once under `certs/github-fake/`, placed ahead
-of the install as the Secret `agent-platform/workspace-fake` (keys
-`private-key`, `client-secret`) and referenced from the values. The manager's
-HTTP client takes the system roots, so the values name the lab CA file the
-chart mounts for Dex as its `SSL_CERT_FILE`; the image's own roots stay, read
-from its certificate directory regardless, so a `github` instance beside the
-fake still verifies github.com. The App's callback URL,
-`<base URL>/callback/fake`, is any absolute URL to the fake, and the sign-in
-consents at once for the lab user the `login` parameter names.
-
-### The provider instance fake-bearer
-
-The same [lab's GitHub](#the-labs-github), App and Secret as `fake`, shaped
-like github.com: `url: https://github-bearer.<domain>` (the git host, Basic)
-and `apiURL: https://api.github-bearer.<domain>` (the REST API at the root of
-a host of its own, Bearer), so the workspace-manager's grant names a Bearer API
-host beside the Basic git host, as one for github.com does. CoreDNS sends both
-names to the fake's Service, its TLS leaf carries them, and the fake serves
-the API at the root of the API host (`agentlab github-fake --api-host`): the
-answers' web and clone URLs name the git host, their API URLs and `Link`
-headers the API host. `platform.workspaces.provider` names it beside `fake`
-(`fake,fake-bearer`), whose container serves it; the callback URL is
-`<base URL>/callback/fake-bearer`, the audience of its credentials
-`fake-bearer`. [The caller-credential part](#the-caller-credential-part)
-proves it.
-
-#### A person's sign-in, headlessly
-
-`agentlab workspaces-signin-test` connects people to the instance the way a
-browser does and proves what only a connected person sees. A workspace of the
-lab's Organization over `agentlab-org/platform-api` and `platform-infra` is
-created and synced as the admin. The admin and `dev@lab.local` then each
-connect: `connect_provider` through muster as the person, its link walked with
-the person's fixture login added, the fake's consent (302) to the manager's
-`/callback/fake`, which sends a browser without the manager's page session to
-Dex (303), Dex's local login with the person's lab credentials (a connector
-chooser in front of it is passed through), `/signin` setting the page session
-and returning to the callback, which completes the sign-in (200), and
-`list_providers` showing the person connected. The lab's GitHub is then
-replaced and the workspace-manager rolled, as `agentlab platform` does, and
-both sign-ins have to outlive it. `authorize_workspace` then answers `granted` for the admin and `refused` naming
-`agentlab-org/platform-infra` for the developer, who cannot read it. The
-workspace is deleted and both people disconnected at the end.
-
-The walk runs on this host: the platform's names on the edge's loopback port,
-Dex on its issuer URL, and `github.<domain>`, which the edge has no route for,
-on the loopback port the fake's container publishes. Each hop is printed as
-method, URL without its query, and status, and a walk that stops says at which
-hop, with which status and the page's heading. The walk is
-`connectWorkspaceProvider` in `internal/lab/workspacesignin.go`, which any
-proof that needs a connected person calls.
 
 ### The provider instance github
 
-`agentlab configure --workspaces-provider github` (or `fake,github`) gives the
-workspace-manager a real GitHub. The instance renders once a GitHub App of
-the lab's own is in place (the ids in `agentlab.yaml`, the keys in the Secret
+`agentlab configure --workspaces-provider github` (the default, or
+`github,gitlab`) gives the workspace-manager a real GitHub. The instance renders once a GitHub App of
+the lab's own is in place (`--workspaces-github-app-id` and
+`--workspaces-github-client-id` in `agentlab.yaml`, the keys in the Secret
 `agent-platform/workspace-github`:
 [Platform](platform.md#the-workspace-managers-provider-instances-platformworkspacesprovider)).
 With `platform.workspaces.github.privateKeySource` and `clientSecretSource`
-recorded, every `up` and `platform` places the two keys through the
+recorded (`--workspaces-github-private-key-source`,
+`--workspaces-github-client-secret-source`), every `up` and `platform` places the two keys through the
 operator's secret tooling, so a recreated lab keeps the instance; without
-them the Secret is placed by hand, and a lab without it lists only `fake`.
+them the Secret is placed by hand, and a lab without it renders no `github`
+instance.
 
 The App is registered once, by an owner of the organization that holds it,
 in GitHub's UI (Settings, Developer settings, GitHub Apps), and serves every
 lab:
 
-- **Callback URLs**: each lab's `https://workspace-manager.<domain>:<gatewayPort>/callback/github`
+- **Callback URLs**: each lab's muster callback
+  `https://muster.<domain>:<gatewayPort>/oauth/proxy/callback`
   (`agentlab configure` prints it; a GitHub App takes up to ten).
 - **User-to-server tokens with expiry** on; no device flow, no webhook.
 - **Repository permissions**: Metadata read; Contents, Pull requests and
@@ -780,14 +794,14 @@ client with muster's callback.
 
 ### The provider instance gitlab
 
-`agentlab configure --workspaces-provider fake,gitlab` (or any list naming
+`agentlab configure --workspaces-provider github,gitlab` (or any list naming
 `gitlab`) gives the workspace-manager a GitLab, CE or EE, self-managed or
 gitlab.com, of the `gitlab` kind. `agentlab.yaml` records what is public:
 
 ```yaml
 platform:
   workspaces:
-    provider: fake,gitlab
+    provider: github,gitlab
     gitlab:
       url: https://gitlab.example.com   # https, no path
       clientId: <the OAuth application's application id>
@@ -808,9 +822,11 @@ id and the first two keys are in place; the part's person needs the third.
 GitLab's side, set up once by an administrator of the instance:
 
 - An instance-wide **OAuth application** (Admin Area, Applications), scopes
-  `api read_user read_repository write_repository`, redirect URI each lab's
-  `https://workspace-manager.<domain>:<gatewayPort>/callback/gitlab`
-  (`agentlab configure` prints it), confidential.
+  `api read_user read_repository write_repository`, redirect URIs each lab's
+  muster callback `https://muster.<domain>:<gatewayPort>/oauth/proxy/callback`
+  (`agentlab configure` prints it), confidential. A lab with a new muster host
+  adds its callback to the application before its first connect; GitLab
+  answers any other with "The redirect URI included is not valid".
 - A **group access token** of the group, role Reporter, scopes `read_api
   read_repository`: the sync lists the group's projects and mirrors them over
   HTTPS with it.
@@ -820,128 +836,8 @@ GitLab's side, set up once by an administrator of the instance:
 - The lab's node reaches the GitLab host over HTTPS, and the host's
   certificate chains to a public root.
 
-## The lab's GitHub
-
-
-A workspace is a git repository a Session works in, cloned, pushed and turned
-into a pull request as the signed-in person. Proving that end to end needs a
-GitHub with an App, OAuth sign-in for several people with different access, a
-private repository, real pushes and pull requests. Against github.com that
-means browser consent per account and real accounts; the lab instead serves a
-GitHub of its own, `agentlab github-fake --workspaces`, headless and the same
-on every machine. A workspace provider instance points at it the way it points
-at a GitHub Enterprise Server: API base `https://<fake>/api/v3`, git base
-`https://<fake>`.
-
-### The fixture
-
-What the fake holds is a fixture file; the embedded default is
-[`internal/lab/templates/github-fixture.yaml`](../internal/lab/templates/github-fixture.yaml)
-and `--fixture <file>` replaces it.
-
-**The App**: id `1`, slug `agentlab-workspaces`, client id
-`Iv1.agentlab-workspaces`, installed on both owners (installation `1` on
-`agentlab-org`, `2` on `agentlab-oss`), with contents and pull request write.
-
-**The repositories**, each one commit on `main`:
-
-| Repository | Visibility | Language | Topics | Archived | Fork | `pushed_at` |
-|---|---|---|---|---|---|---|
-| `agentlab-org/platform-api` | public | Go | api, go | | | 2026-09-01 |
-| `agentlab-org/platform-infra` | **private** | HCL | infrastructure | | | 2026-08-15 |
-| `agentlab-org/monorepo` | public, **large** | Go | monorepo | | | 2026-09-20 |
-| `agentlab-org/legacy-tool` | public | Python | legacy | yes | | 2025-01-10 |
-| `agentlab-oss/kagent` | public | Go | agents, kubernetes | | yes | 2026-09-25 |
-| `agentlab-oss/docs` | public | MDX | docs | | | 2026-07-01 |
-
-`monorepo` carries 64 MiB of incompressible content (seeded by its name, so
-every lab clones the same bytes) for the measurements; `--large-repo-mib <n>`
-sets another size. Its `size` field is the repository's size on disk in KiB,
-as GitHub reports it. `monorepo` and `kagent` carry a Go module (`go.mod`,
-`main.go`) for the measurements' build.
-
-**The users** are the lab's Dex users (`agentlab.yaml`'s `users`):
-
-| Login | Reads | Pushes to |
-|---|---|---|
-| `admin` | everything | everything (the archived repository refuses every push) |
-| `dev` | everything but `agentlab-org/platform-infra` | `platform-api`, `monorepo`, `agentlab-oss/*` |
-| `viewer` | the public repositories | nothing |
-
-A public repository is read by everyone, a signed-out caller included; a
-private one by the users that name it and by the App's installation on its
-owner. `dev` is the member without access, `viewer` the one who cannot push.
-
-### What it serves
-
-| Area | Endpoints |
-|---|---|
-| The App | `GET /app`, `/app/installations`, `/orgs/{o}/installation`, `/users/{u}/installation`, `/repos/{o}/{r}/installation`; `POST /app/installations/{id}/access_tokens` (optionally limited to `repositories`). The App's JWT is RS256, signed by the key the lab generated, issued by the App id, valid for at most ten minutes. `PUT` and `DELETE /app/installations/{id}/suspended`: a suspended installation is listed with `suspended_at` and `suspended_by`, issues no token (403), its tokens are refused (403), and neither they nor the App's user tokens act on the owner's repositories (its public ones stay readable); `agentlab github-fake suspend <owner>`, `unsuspend <owner>` and `installations` drive it from the host, the lab's stand-in for an organization owner's Suspend on github.com. |
-| Listings | `GET /orgs/{o}/repos`, `/users/{u}/repos` (`type`), `/user/repos` (`visibility`), `/installation/repositories`, `/repos/{o}/{r}`: `language`, `topics`, `archived`, `fork`, `pushed_at`, `size`, `permissions`; `sort` (`full_name`, `pushed`, `updated`), `direction`, `per_page`, `page` with the `Link` header. |
-| Topics | `GET /repos/{o}/{r}/topics`; `PUT /repos/{o}/{r}/topics` with `names` replaces them, lower-cased, for a caller that writes to the repository (an installation token on its owner, a user with write). It is no push: `pushed_at` stays. |
-| OAuth | `GET /login/oauth/authorize` consents at once for the lab user its `login` parameter names and requires PKCE (`S256`); `POST /login/oauth/access_token` answers access tokens valid eight hours and refresh tokens that **rotate**: each redeems once, a second redemption answers `bad_refresh_token`. `DELETE /api/v3/applications/{client_id}/grant` revokes every token of the person, `/token` the one access token (Basic auth with the client id and secret). `GET /user`. With `--token-store <file>` the users' tokens (access and refresh, their expiry, rotated and revoked state) are kept in the file and read at the start, so a sign-in outlives a restart as it outlives GitHub's; the lab's container keeps them in `state/lab-github/tokens/`, so a person connected before `agentlab platform` stays connected after it. |
-| git | Smart HTTP at `https://<fake>/<owner>/<repo>[.git]`, served by git's own `upload-pack` and `receive-pack` in stateless RPC mode (what `git http-backend` runs; protocol v0 to v2): clone, fetch and push, the token as the Basic auth password. A private repository answers 401 without a credential and "not found" to a user who does not read it; a push needs write, 401 without a credential, 403 naming the user otherwise. A push moves `pushed_at`. |
-| Pull requests | `POST` and `GET /repos/{o}/{r}/pulls`, and the GraphQL operations of `gh pr create` on `/api/graphql`; `GET /api/v3/meta` reports a GitHub Enterprise version, as gh expects. |
-
-A credential the fake did not issue (the sandbox's placeholder that the egress
-gateway did not replace, or a JWT such as a Session Actor's) and one it issued
-that expired or was revoked answer GitHub's 401 `Bad credentials` wherever
-they are presented.
-
-### The request log
-
-Every request is a line of the container's log and an entry of
-`GET /_fake/requests`: time, host, method, path (as it came, at the root on
-an API host), status, the user (a login, or `installation/<id>`) and the kind
-of credential: `none`, `placeholder`, `revoked-token`, `app-jwt`,
-`installation-token`, `user-token`, `oauth-client`, or `jwt`, a JWT the fake
-did not issue, with its `aud` and `sub` claims. Only the path and those claims
-are logged: no token, OAuth code or verifier reaches it. `GET /_fake/pulls` lists every pull request with its author.
-`PUT /_fake/repos/{owner}/{repo}` with `generatedMiB` adds a public repository
-of that many generated MiB and a Go module to a fixture owner (the
-measurements' `--large-repo-mib`), `DELETE` removes it again; the fixture's
-repositories are never removed.
-
-### Running it
-
-The fake serves TLS with a leaf from the lab CA, for
-`github.<platform.domain>` and `127.0.0.1` (the CA's name constraints admit
-nothing else), so every lab client and Substrate's egress gateway, which
-trusts the lab's trust bundle, trust it. `agentlab github-fake credentials`
-generates what it reads into `certs/github-fake/`, next to the CA, never
-leaving the machine:
-
-| File | What |
-|---|---|
-| `tls.crt`, `tls.key` | the fake's TLS pair, re-minted when the CA or the domain changes |
-| `app.pem` | the App's private key (PKCS #1, as GitHub hands it out), for the provider |
-| `app.pub` | its public key, for the fake |
-| `client-secret` | the OAuth client secret |
-
-The fake needs `git` on its PATH (any git; the optional `http-backend` is not
-used). With the [provider instance `fake`](#the-provider-instance-fake) the
-lab runs it this way itself, in the Debian golang image the storage proof's
-git runs in, as the lab's own user, with the credentials mounted — the same
-run by hand, for a fake of one's own:
-
-```bash
-./agentlab github-fake credentials
-docker run -d --rm --name agentlab-github --network kind --user "$(id -u):$(id -g)" \
-  -v "$PWD/agentlab:/agentlab:ro" -v "$PWD/certs/github-fake:/credentials:ro" \
-  -p 127.0.0.1:8443:8443 gsoci.azurecr.io/giantswarm/golang:1.25.3 \
-  /agentlab github-fake --workspaces --credentials /credentials --listen 0.0.0.0:8443 --data-dir /tmp/github
-```
-
-A pod reaches it as `github.<platform.domain>` through a host alias to the
-container's address on the kind network; on this host the published port does:
-
-```bash
-host=github.127.0.0.1.nip.io:8443
-git -c http.sslCAInfo=certs/ca.crt clone "https://x-access-token:$TOKEN@$host/agentlab-org/platform-api.git"
-SSL_CERT_FILE=certs/ca.crt GH_HOST=$host GH_ENTERPRISE_TOKEN=$TOKEN \
-  gh pr create -R "$host/agentlab-org/platform-api" --head my-branch --base main --title "…" --body "…"
-```
-
-`$TOKEN` is a user token from the OAuth flow above (authorize with `login=dev`
-and a PKCE challenge, then redeem the code with the client secret and the
-verifier).
+With `grantProvider: gitlab`, muster's pin of the workspace-manager names
+GitLab's endpoints, `/oauth/revoke` included once the workspace-manager's
+chart renders it (0.11.0-rc.6 and newer): a disconnect in muster
+(`core_auth_logout`, muster 5.47.0 or newer) revokes the person's tokens at
+GitLab, and their next sign-in walks the application's consent again.

@@ -50,7 +50,7 @@ func callFake(t *testing.T, f *fakeSlack, method string, params url.Values, body
 
 func startTestFake(t *testing.T, emails map[string]string) *fakeSlack {
 	t.Helper()
-	f, err := startFakeSlack("127.0.0.1:0", emails)
+	f, err := startFakeSlack("127.0.0.1:0", emails, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +243,10 @@ func TestSlackReaders(t *testing.T) {
 		{TS: "1", Text: testCardTitle, Blocks: button("task-old")},
 		{TS: "2", Text: "text"},
 		{TS: "3", Text: testCardTitle, Blocks: button("task-1")},
-		{TS: "4", Text: testApproved, Blocks: []map[string]any{{fieldTypeKey: slackBlockSection, slackKeyText: map[string]any{fieldTypeKey: slackMrkdwn, slackKeyText: "*Approval required* · list"}}}},
+		{TS: "4", Text: testApproved, Blocks: []map[string]any{
+			{fieldTypeKey: slackBlockSection, slackKeyText: map[string]any{fieldTypeKey: slackMrkdwn, slackKeyText: "*Approval required* · list"}},
+			{fieldTypeKey: slackBlockContext, slackKeyElements: []any{map[string]any{fieldTypeKey: slackMrkdwn, slackKeyText: testApproved}}},
+		}},
 	}
 	card, ok := openCard(msgs)
 	if !ok || card.msg.TS != "3" || card.taskID != "task-1" {
@@ -252,7 +255,18 @@ func TestSlackReaders(t *testing.T) {
 	if _, ok := openCard(msgs[3:]); ok {
 		t.Error("a decided card has no buttons left")
 	}
-	roster := slackRosterHeading + ":\n• *agentlab Swarmgeist proof* — Throwaway\n• *Other*"
+	row := func(text string) map[string]any {
+		return map[string]any{fieldTypeKey: slackBlockSection, slackKeyText: map[string]any{fieldTypeKey: slackMrkdwn, slackKeyText: text}}
+	}
+	roster := slackMessage{Text: "*Available agents*:\n• *Fallback only*", Blocks: []map[string]any{
+		{fieldTypeKey: slackBlockHeader, slackKeyText: map[string]any{fieldTypeKey: slackPlainText, slackKeyText: slackRosterTitle}},
+		{fieldTypeKey: slackBlockContext, slackKeyElements: []any{map[string]any{fieldTypeKey: slackMrkdwn, slackKeyText: "2 agents available"}}},
+		row("*agentlab Swarmgeist proof* · default\nThrowaway"),
+		row("*Other*"),
+	}}
+	if !roster.isRoster() || (slackMessage{Text: "*Available agents*:"}).isRoster() {
+		t.Error("isRoster does not go by the header")
+	}
 	if names := rosterNames(roster); !reflect.DeepEqual(names, []string{"agentlab Swarmgeist proof", "Other"}) {
 		t.Errorf("rosterNames = %q", names)
 	}
@@ -273,6 +287,40 @@ func TestSlackReaders(t *testing.T) {
 	}
 	if line := threadLine(nil); !strings.Contains(line, "nothing") {
 		t.Errorf("threadLine(nil) = %q", line)
+	}
+}
+
+// TestSlackShown: a message reads as Slack renders it — its blocks' text
+// alone when a block shows any, its fallback text otherwise; a Connect card
+// whose fallback equals its section shows the sentence once.
+func TestSlackShown(t *testing.T) {
+	const sentence = "Connect *workspace-manager* to let me work on your workspaces."
+	mrkdwn := map[string]any{fieldTypeKey: slackMrkdwn, slackKeyText: sentence}
+	buttons := map[string]any{fieldTypeKey: slackBlockActions, slackKeyElements: []any{map[string]any{fieldTypeKey: slackButton, slackKeyActionID: "connector_connect"}}}
+	for _, c := range []struct {
+		name string
+		msg  slackMessage
+		want string
+	}{
+		{"text alone", slackMessage{Text: "only text"}, "only text"},
+		{"Connect card", slackMessage{Text: sentence, Blocks: []map[string]any{{fieldTypeKey: slackBlockSection, slackKeyText: mrkdwn}, buttons}}, sentence},
+		{"buttons alone", slackMessage{Text: "Sign in first", Blocks: []map[string]any{buttons}}, "Sign in first"},
+		{"header, context and markdown", slackMessage{Text: "fallback", Blocks: []map[string]any{
+			{fieldTypeKey: slackBlockHeader, slackKeyText: map[string]any{fieldTypeKey: slackPlainText, slackKeyText: "Question?"}},
+			{fieldTypeKey: slackBlockMarkdown, slackKeyText: "**body**"},
+			{fieldTypeKey: "divider"},
+			{fieldTypeKey: slackBlockContext, slackKeyElements: []any{mrkdwn}},
+		}}, "Question?\n**body**\n" + sentence},
+		{"rich text", slackMessage{Text: "Commands: help", Blocks: []map[string]any{{fieldTypeKey: slackBlockRichText, slackKeyElements: []any{
+			map[string]any{fieldTypeKey: "rich_text_section", slackKeyElements: []any{map[string]any{fieldTypeKey: slackKeyText, slackKeyText: "Talk"}}},
+			map[string]any{fieldTypeKey: "rich_text_list", slackKeyElements: []any{map[string]any{fieldTypeKey: "rich_text_section", slackKeyElements: []any{
+				map[string]any{fieldTypeKey: slackKeyText, slackKeyText: "help"}, map[string]any{fieldTypeKey: slackKeyText, slackKeyText: "  this list"},
+			}}}},
+		}}}}, "Talk\nhelp  this list"},
+	} {
+		if got := c.msg.shown(); got != c.want {
+			t.Errorf("%s: shown() = %q, want %q", c.name, got, c.want)
+		}
 	}
 }
 
@@ -319,7 +367,7 @@ func TestSlackFakeContainerParts(t *testing.T) {
 	if err := linuxStaticBinary(script, "the fake Slack Web API", "--slack-fake-binary"); err == nil || !strings.Contains(err.Error(), "--slack-fake-binary") {
 		t.Errorf("a script: %v", err)
 	}
-	if err := ServeFakeSlack(t.Context(), "127.0.0.1:0", []string{"UP"}); err == nil || !strings.Contains(err.Error(), "<slack user id>=<e-mail>") {
+	if err := ServeFakeSlack(t.Context(), "127.0.0.1:0", []string{"UP"}, nil); err == nil || !strings.Contains(err.Error(), "<slack user id>=<e-mail>") {
 		t.Errorf("a person without an e-mail: %v", err)
 	}
 }
@@ -338,5 +386,24 @@ func TestSlackFakeContainerReadsViews(t *testing.T) {
 	views := c.openedViews()
 	if len(views) != 2 || views[0]["callback_id"] != "picker" || views[1]["callback_id"] != "decision" {
 		t.Errorf("views read from the container = %v", views)
+	}
+}
+
+// TestFakeSlackUserGroups: usergroups.list answers each group's handle with
+// its members' ids, sorted by handle.
+func TestFakeSlackUserGroups(t *testing.T) {
+	f, err := startFakeSlack("127.0.0.1:0", map[string]string{"UA": testUser}, map[string][]string{"team-b": {"UB"}, "team-a": {"UA", "UC"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(f.close)
+	got := callFake(t, f, slackUserGroups, url.Values{}, nil)
+	groups, _ := got["usergroups"].([]any)
+	if len(groups) != 2 {
+		t.Fatalf("usergroups.list = %v", got)
+	}
+	first, _ := groups[0].(map[string]any)
+	if users, _ := first["users"].([]any); first["handle"] != "team-a" || len(users) != 2 || users[0] != "UA" {
+		t.Errorf("first group = %v, want team-a with UA and UC", first)
 	}
 }

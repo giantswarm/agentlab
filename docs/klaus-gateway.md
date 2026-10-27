@@ -136,63 +136,62 @@ and, on a lab with the component, continues on it:
    the node was gone), and its `obo link store ready` record must report the
    same link count; both records read back unchanged afterwards.
 9. **The in-cluster leg.** Through a port-forward to the replacement pod,
-   one signed `@bot` mention as the person linked in step 7 is answered in
-   the fake thread with the word, its `turn_dispatch` record under the
+   one conversation the person linked in step 7 opens through the signed
+   **Ask an agent here** shortcut and the picker is answered in the fake
+   thread with the word, its `turn_dispatch` record under the
    person's e-mail and subject — the component forwarding the link's cached
    id_token and talking to the controller over the in-cluster plaintext h2c
    target, which the host-mode gateway never touches. Its Session starts
    through agent-manager over muster's public URL, verified with the lab CA;
-   a failed turn names that URL and the CA source.
+   a failed turn names that URL and the CA source. With the
+   workspace-manager behind muster, the person holds the grant of the App
+   muster pins it to before the conversation opens, whatever an earlier step or run
+   left: the gateway lists a new thread's workspaces (klaus-gateway 4.9.0 and
+   later hold a listing muster refuses behind the Connect prompt). The
+   person must have granted the pinned App (a GitHub App's grant takes
+   github.com's sign-in in a person's browser), else the run fails with
+   muster's sign-in link. A workspace prompt (the person has workspaces,
+   whatever an earlier proof left in their name) is answered with No
+   workspace: the turn proves the gateway, not a workspace.
+10. **The egress refusal notice.** The chart runs the notices
+    (`klausGateway.refusals`) where Slack, kagent and Substrate are, from
+    agent-platform 4.154.0 on; the lab sets only `refusals.interval: 10s`.
+    An agent named `agentlab-refusal-<run>` is created through
+    agent-manager as the person (its Agent's
+    `agent-platform.giantswarm.io/created-by` must be the person's e-mail),
+    its egress `https://example.com` alone; one turn in a Session of it
+    fetches `https://proxy.golang.org/`, which the Substrate egress refuses.
+    The Session stays until the notice is in, since the gateway resolves the
+    refusing actor through it. Within 3 minutes the fake must hold exactly
+    one notice for the agent in the person's direct message — the person is
+    the Slack user the fake answers `users.lookupByEmail` with, the lowest
+    id carrying the e-mail — and the section naming `proxy.golang.org:443`
+    must be mrkdwn sent `verbatim` with no link in it, so Slack shows the
+    destination as written. The name is per run because the notice's record
+    covers an agent and a destination for 24 hours: a rerun's notice for the
+    same name would rewrite the last run's message instead of posting. The
+    agent and its Session are removed, and an aborted run's
+    `agentlab-refusal-*` agents first. On an older meta chart the step is
+    skipped with a note. `agentlab klaus-gateway-test --refusal-only` runs
+    this step and 10b alone, without the host gateway and its fixture.
+11. **The notice for a deleted Session (step 10b).** The same with a second
+    agent, except that the Session is gone before the gateway reads it: the
+    Deployment `klaus-gateway` is scaled to 0 replicas and its pods are
+    awaited gone before the turn, the Session is deleted as the person after
+    it (the person's `GetSession` must answer `NotFound`), and only then is
+    the Deployment put back at its replicas. The gateway's first read of the
+    refusing actor is therefore of a deleted Session, which the controller
+    answers its session reader with the Session's tombstone, naming the
+    Agent; without the tombstone the actor is no Session the gateway knows
+    and nobody is told. A series the gateway sees for the first time counts
+    whole, so the refusal made while it was held is still noted. The
+    HelmRelease has no drift detection, so the scale holds until the proof
+    restores it, on every exit path.
 
 Then the proof's records are removed (the count is back where it was), and
 the host-mode cleanup takes the fixtures and the Sessions with it. On a
 lab without the component the proof says so and passes on the host-mode
 assertions alone.
-
-## Workspaces per thread
-
-`agentlab klaus-gateway-test --workspaces` adds the workspace a thread's
-Session works in, after the host-mode assertions and before the component.
-It needs the workspace-manager (`configure --workspaces`, the provider
-instance `fake`) and fails before anything runs without it, naming why; the
-rest of the proof is the same with or without the flag. The host gateway
-restarts on its stores with `--workspace-tools-prefix=x_workspace-manager_`
-and `agentlab-klaus-gateway-test-ws`, an Agent on the `kagent` Harness that
-may reach the lab's GitHub, as its default agent; the person and
-`dev@lab.local` (the colleague, linked too) connect to `fake`. Two
-workspaces: `agentlab-gateway-ws` over the public `agentlab-oss/docs` and
-`agentlab-oss/kagent`, and `agentlab-gateway-ws-private` over
-`agentlab-org/platform-api` and the private `agentlab-org/platform-infra`,
-which only the admin reads (the second only where the App of the lab's
-GitHub is installed on `agentlab-org`; otherwise steps Wf and Wg are skipped
-with the reason).
-
-- **Wa.** A new thread's mention is answered by the workspace prompt and
-  nothing else: no turn, no Session. Picking `agentlab-gateway-ws` starts a
-  Session on its volume, and the held message's turn lists `/workspace`
-  holding a clone of each repository; the volume holds the Session's
-  directory with its setup record naming the same clones.
-- **Wb, Wc.** Two more turns, and one after a gateway restart, ask nothing
-  and run on the same Session (one `session_bound`, one `workspace_chosen`).
-- **Wd.** *No workspace* starts a Session with no volume, in an empty
-  working directory with no mirrors.
-- **We.** The slash command (`/swarmgeist`) opens the agent picker with the
-  Workspace select preset to *No workspace*; a submission with the agent and
-  `agentlab-gateway-ws` starts the Session in it, the thread asks nothing.
-  Reopened, the preset is that workspace with its "Last used with" hint; a
-  change of agent redraws it to *No workspace*, the change back to the
-  workspace.
-- **Wf.** The colleague picks the private workspace: refused privately,
-  naming `agentlab-org/platform-infra` and not the repository they read; kagent
-  (as them), agent-manager's `list_sessions` and Substrate hold nothing new,
-  and the thread is bound to no Session.
-- **Wg.** The admin's thread on the private workspace; the colleague
-  mentions in it, the admin allows them, and the colleague's turn is refused
-  privately naming the repository: no `turn_dispatch` of theirs, the
-  Session's task count unchanged.
-
-The steps' Sessions, Agent, workspaces and provider sign-ins are removed
-before the component runs, and the run fails on any of them left.
 
 ## What the lab cannot prove
 

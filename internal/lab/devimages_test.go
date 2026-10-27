@@ -225,7 +225,7 @@ func TestRegistryManifestDigest(t *testing.T) {
 func TestDevImagesCheckValues(t *testing.T) {
 	cfg := config.Default()
 	pinned := "localhost:5001/golang-adk@sha256:" + strings.Repeat("3f", 32)
-	dev := &devImages{harness: pinned}
+	dev := &devImages{registryDevImages: registryDevImages{harness: pinned}}
 	// The merged values with kagent.harness.image set to img and atelet's
 	// extraArgs as given.
 	merged := func(img any, extraArgs []any) map[string]any {

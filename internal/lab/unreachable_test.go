@@ -3,6 +3,7 @@ package lab
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"os"
@@ -39,6 +40,10 @@ const (
 	gsociAPI = "https://" + gsoci + "/v2/"
 )
 
+// tokenClosed is the registry's token endpoint closing the connection before
+// it answered, as net/http reports it.
+var tokenClosed = &url.Error{Op: "Post", URL: "https://" + gsoci + "/oauth2/token", Err: io.EOF}
+
 // dialFailure is a failed TCP dial as net.Dial reports one.
 func dialFailure(err error) *net.OpError { return &net.OpError{Op: opDial, Net: "tcp", Err: err} }
 
@@ -72,6 +77,8 @@ func TestRegistryUnreachable(t *testing.T) {
 		{"a timeout", &url.Error{Op: opGet, URL: gsociAPI, Err: os.ErrDeadlineExceeded}, true},
 		{"a registry answering 503", status(503), true},
 		{"a registry answering 429", status(429), true},
+		{"a connection the registry closed before its answer", fmt.Errorf("failed to perform %q on source: %w", "FetchReference", tokenClosed), true},
+		{"a connection cut mid-answer", &url.Error{Op: opGet, URL: gsociAPI, Err: io.ErrUnexpectedEOF}, true},
 		{"a tag that is not there", status(404), false},
 		{"a denied pull", status(401), false},
 		{"a chart that refuses its values", &schemaRejection{err: errors.New(helmSchemaPrefix + " x")}, false},
@@ -113,7 +120,14 @@ func TestRetryUnreachable(t *testing.T) {
 		}, &calls
 	}
 
-	render, calls := counting(2, refused)
+	// A connection the registry closed before answering (the token
+	// endpoint's EOF) is one oras-go's transport does not retry.
+	render, calls := counting(2, tokenClosed)
+	if err := retryUnreachable("loading agent-platform", render); err != nil || *calls != 3 {
+		t.Errorf("a registry that closed the connection, back on the last attempt: err %v after %d calls, want nil after 3", err, *calls)
+	}
+
+	render, calls = counting(2, refused)
 	if err := retryUnreachable("rendering component", render); err != nil || *calls != 3 {
 		t.Errorf("a registry back on the last attempt: err %v after %d calls, want nil after 3", err, *calls)
 	}
@@ -135,6 +149,7 @@ func TestRetryUnreachable(t *testing.T) {
 		&url.Error{Op: opGet, URL: gsociAPI, Err: os.ErrDeadlineExceeded},
 		dialFailure(&net.DNSError{Err: "i/o timeout", Name: gsoci, IsTimeout: true}),
 		&errcode.ErrorResponse{Method: "GET", StatusCode: 503},
+		&url.Error{Op: opGet, URL: gsociAPI, Err: io.ErrUnexpectedEOF},
 	} {
 		render, calls = counting(renderAttempts(), spent)
 		if err := retryUnreachable("rendering component", render); !registryUnreachable(err) || *calls != 1 {
@@ -156,7 +171,7 @@ func TestPlatformImagesStopsOnAnUnreachableRegistry(t *testing.T) {
 	closed := writeClosedSchemaChart(t, dir)
 	registry := closedRegistry(t)
 	cfg := &config.Config{}
-	chart := platformChart{ref: config.ChartRepository, version: "0.0.0-test"}
+	chart := platformChart{ref: config.ChartRepository, version: testChartVersion}
 
 	release := func(name, url, values string) fluxRelease {
 		t.Helper()
@@ -188,7 +203,7 @@ func TestPlatformImagesStopsOnAnUnreachableRegistry(t *testing.T) {
 		connectionRefused,
 		"the dex-localhost sidecar, platform.devImages",
 		"network and DNS for " + registry,
-		"`agentlab platform`",
+		rerunPlatform,
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the stop does not say %q:\n%s", want, err)

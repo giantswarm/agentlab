@@ -2,7 +2,7 @@ package lab
 
 import (
 	"errors"
-	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -173,7 +173,7 @@ func TestResolveComponentVersion(t *testing.T) {
 		{name: "range and filter: the branch's newest dev build", url: repo, versionRange: devRange, filter: filter, want: newest},
 		{name: "the filter keeps the range: an old major's build is out", url: repo, versionRange: ">=3.0.0-0 <3.22.1-0", filter: filter, wantErr: "no tag matches"},
 		{name: "another branch's builds", url: repo, versionRange: devRange, filter: `.*-dev\.teams-alignment-branch\..*`, want: "3.22.1-dev.teams-alignment-branch.2026-09-09.21-30-24.hb693e7a"},
-		{name: "no build of the branch: skipped, not fatal", url: repo, versionRange: devRange, filter: `.*-dev\.main\..*`, wantErr: "no tag matches semverFilter"},
+		{name: "no build of the branch: not found", url: repo, versionRange: devRange, filter: `.*-dev\.main\..*`, wantErr: "no tag matches semverFilter"},
 		{name: "a range without a prerelease floor admits no dev build (Flux)", url: repo, versionRange: "3.x", filter: filter, wantErr: "no tag matches"},
 		{name: "an invalid filter", url: repo, versionRange: devRange, filter: "(", wantErr: "semverFilter"},
 		{name: "an invalid range", url: repo, versionRange: "not a range", filter: filter, wantErr: "version range"},
@@ -278,8 +278,9 @@ spec:
 
 // TestPlatformImagesRefusesARejectedComponent: a component chart that refuses
 // the values its HelmRelease carries stops the install, while a component
-// chart that fails otherwise, or is not there, stays a note and the rest of
-// the preload proceeds.
+// chart that fails otherwise stays a note and the rest of the preload
+// proceeds (a chart the registry does not have stops it:
+// TestPlatformImagesStopsOnAMissingComponentChart).
 // These are the two halves of the same step: one predicts the install's
 // outcome, the other only says an image will be pulled in-node. The release's
 // own facts decide the borderline: whose it is changes the advice, a
@@ -297,7 +298,7 @@ func TestPlatformImagesRefusesARejectedComponent(t *testing.T) {
   "required": ["needed"]
 }`)
 	cfg := &config.Config{}
-	chart := platformChart{ref: config.ChartRepository, version: "0.0.0-test"}
+	chart := platformChart{ref: config.ChartRepository, version: testChartVersion}
 
 	rosterFor := func(chartDir, values string) *platformRoster {
 		t.Helper()
@@ -343,13 +344,6 @@ func TestPlatformImagesRefusesARejectedComponent(t *testing.T) {
 	// Accepted values, failing template: nothing here says the install would
 	// fail, so the preload notes it and carries on.
 	proceeds("an ordinary render failure", rosterFor(closed, "    boom: true\n"))
-
-	// A chart that is not there is the same best-effort case: the source
-	// answered, no — unlike a registry that does not answer at all, which
-	// stops the install (TestPlatformImagesStopsOnAnUnreachableRegistry).
-	absent := rosterFor(closed, "    known: a\n")
-	absent.releases[0].URL = filepath.Join(dir, "no-such-chart")
-	proceeds("a component chart that is not there", absent)
 
 	// A release the LAB renders, not the meta chart's: refused all the same
 	// — helm-controller installs it and waits for it like any component —
@@ -560,5 +554,50 @@ func TestRenderFluxReleaseFromTheLocalChart(t *testing.T) {
 	rel.Values = []byte("nosuchkey: 1\n")
 	if _, _, err := renderFluxRelease(rel, nil); err == nil || !isSchemaRejection(err) {
 		t.Errorf("a key the local chart's closed schema forbids rendered: %v", err)
+	}
+}
+
+// A skipped render's note carries a chart's own refusal whole — the key it
+// wants is at the end of a long message — and excerpts anything else.
+func TestRenderFailureText(t *testing.T) {
+	refusal := "kagent (kagent 1.15.0): execution error at (kagent/templates/harnesses.yaml:39:4): harnesses[1] (omp) runs a BYO Harness: set harnesses[1].image (" + strings.Repeat("x", 300) + ") and harnesses[1].displayName"
+	if got := renderFailureText(errors.New(refusal)); got != refusal {
+		t.Errorf("the chart's refusal was cut:\n%s", got)
+	}
+	other := "kagent: " + strings.Repeat("y", 400)
+	if got := renderFailureText(errors.New(other)); len(got) >= len(other) || !strings.Contains(got, " ... ") {
+		t.Errorf("a long non-refusal is not excerpted: %d of %d chars", len(got), len(other))
+	}
+}
+
+// The component renders are told the MutatingAdmissionPolicy is served while
+// the tenants are on, which the connectivity chart requires for them, and
+// not otherwise; the Prometheus Operator's API with the observability stack.
+func TestComponentAPIVersions(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		tenants, observ      bool
+		wantMAP, wantMonitor bool
+	}{
+		{"no switch on", false, false, false, false},
+		{"the tenants alone", true, false, true, false},
+		{"observability on", false, true, false, true},
+		{"tenants and observability on", true, true, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.Default()
+			cfg.Platform.Tenants.Enabled = tc.tenants
+			cfg.Platform.Observability = tc.observ
+			got := componentAPIVersions(cfg)
+			if has := slices.Contains(got, mutatingAdmissionPolicyAPIVersion); has != tc.wantMAP {
+				t.Errorf("componentAPIVersions = %v: MutatingAdmissionPolicy %v, want %v", got, has, tc.wantMAP)
+			}
+			if has := slices.Contains(got, "monitoring.coreos.com/v1"); has != tc.wantMonitor {
+				t.Errorf("componentAPIVersions = %v: monitoring.coreos.com/v1 %v, want %v", got, has, tc.wantMonitor)
+			}
+			if !slices.Equal(offlineAPIVersions, []string{"helm.toolkit.fluxcd.io/v2", "source.toolkit.fluxcd.io/v1", "gateway.networking.k8s.io/v1"}) {
+				t.Errorf("offlineAPIVersions changed under the call: %v", offlineAPIVersions)
+			}
+		})
 	}
 }

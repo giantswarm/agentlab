@@ -43,8 +43,9 @@ import (
 //     through the package unchanged; the proof's records removed, and a
 //     leftover of an aborted run removed first;
 //   - the in-cluster a2a leg: through a port-forward to the replacement pod,
-//     one signed Slack mention by the person whose link the store step
-//     wrote (the lab user's id_token as its cached token) is answered in the
+//     one conversation the person whose link the store step wrote (the lab
+//     user's id_token as its cached token) opens through the signed Ask an
+//     agent here shortcut and the picker is answered in the
 //     proof's fake thread — the component's Slack Web API is the proof's
 //     fake through a selector-less Service the proof points at this host,
 //     and it talks to the controller over the in-cluster plaintext h2c
@@ -100,7 +101,7 @@ type componentOutcome struct {
 // pod by the Service the host-mode half pointed at it (slackUser is the
 // person the turn is sent as). The fixtures of the host-mode half are in
 // place; nothing here is left behind but what was there before.
-func klausGatewayComponentProof(token string, identity linkedIdentity, user *config.User, fake slackWorkspace, slackUser string) (*componentOutcome, error) {
+func klausGatewayComponentProof(cfg *config.Config, token string, identity linkedIdentity, user *config.User, fake slackWorkspace, slackUser string) (*componentOutcome, error) {
 	ctx := context.Background()
 	k, err := labKube()
 	if err != nil {
@@ -230,7 +231,12 @@ func klausGatewayComponentProof(token string, identity linkedIdentity, user *con
 	}
 	note("pod %s Ready %s after the deletion; %s read %d links from %s at start; both records still read back unchanged", out.replacement, out.elapsed, out.version, out.links, klausGatewayLinksSecret)
 
-	step("9. One Slack turn through the component: a port-forward to pod %s, a signed mention as %s answered in the fake thread over the in-cluster target %s", out.replacement, slackUser, klausGatewayInClusterTarget)
+	step("9. One Slack turn through the component: %s holds the grant of the workspace-manager's App, a port-forward to pod %s, a conversation %s opens through the Ask an agent here shortcut answered in the fake thread over the in-cluster target %s", user.Email, out.replacement, slackUser, klausGatewayInClusterTarget)
+	granted, err := grantWorkspaceManager(cfg, user)
+	if err != nil {
+		return nil, err
+	}
+	note("%s and the workspace-manager's App: %s", user.Email, granted)
 	local, stopForward, err := portForwardPod(ctx, platformNamespace, out.replacement, gatewayHTTPPort)
 	if err != nil {
 		return nil, err
@@ -272,6 +278,37 @@ func klausGatewayComponentProof(token string, identity linkedIdentity, user *con
 		return nil, fmt.Errorf("the link Secret holds %d entries after the proof's records were removed, want the %d it had before; the store said: %s", count, out.baseline, excerpt(storeLog.String(), 400))
 	}
 	return out, nil
+}
+
+// grantWorkspaceManager checks that the person whose link step 7 wrote
+// holds the grant of the App muster pins the workspace-manager to: a gateway
+// that lists the person's workspaces for a new thread (klaus-gateway 4.9.0
+// and later) holds a listing muster answers with its sign-in challenge
+// behind the workspace-manager's Connect prompt, and step 9's turn never
+// runs. It returns how, worded. The grant of a provider's App takes a
+// browser, so a person without one gets its sign-in link in the error.
+func grantWorkspaceManager(cfg *config.Config, user *config.User) (string, error) {
+	if reason, err := workspaceManagerSkip(cfg); err != nil {
+		return "", err
+	} else if reason != "" {
+		return "no grant needed, " + reason, nil
+	}
+	pinned, err := workspaceManagerPinnedProvider(cfg)
+	if err != nil {
+		return "no grant needed, the workspace-manager is pinned to no provider App", nil
+	}
+	p, err := openWorkspacePerson(cfg, user)
+	if err != nil {
+		return "", err
+	}
+	link, err := p.grantLink(pinned)
+	if err != nil {
+		return "", err
+	}
+	if link == "" {
+		return "already granted", nil
+	}
+	return "", fmt.Errorf("%s has not granted the App of %s, which muster pins the workspace-manager to and no headless walk grants, so the component would hold step 9's thread behind its Connect prompt: sign in once at %s", user.Email, pinned, link)
 }
 
 // assertStoreDeployment checks the Deployment runs the Secret link store: the
@@ -317,15 +354,8 @@ func assertStoreDeployment(d *appsv1.Deployment) error {
 // by an agentlab without it answers on slack.com, where the placeholder
 // credentials fail.
 func assertFakeSlackAPI(d *appsv1.Deployment) error {
-	for _, c := range d.Spec.Template.Spec.Containers {
-		if c.Name != klausGatewayComponent {
-			continue
-		}
-		for _, e := range c.Env {
-			if e.Name == slackAPIBaseEnv && e.Value == klausGatewaySlackAPIBase {
-				return nil
-			}
-		}
+	if containerEnv(d.Spec.Template.Spec.Containers, klausGatewayComponent)[slackAPIBaseEnv] == klausGatewaySlackAPIBase {
+		return nil
 	}
 	return fmt.Errorf("the Deployment %s does not set %s=%s: run `agentlab platform` to render the lab's patch", d.Name, slackAPIBaseEnv, klausGatewaySlackAPIBase)
 }
@@ -580,4 +610,22 @@ func storeReadyLinks(logs string) (int, error) {
 		return *rec.Links, nil
 	}
 	return 0, fmt.Errorf("no %s record in the gateway's log", storeReadyRecord)
+}
+
+// The gateway's Block Kit ids of the workspace prompt a new thread may get:
+// its select and its No workspace button.
+const (
+	slackWorkspaceSelect = "workspace_select"
+	slackWorkspaceNone   = "workspace_none"
+)
+
+// workspacePromptIn is the thread's workspace prompt: a message carrying the
+// workspace select.
+func workspacePromptIn(msgs []slackMessage) (slackMessage, bool) {
+	for _, m := range msgs {
+		if _, found := m.action(slackWorkspaceSelect); found {
+			return m, true
+		}
+	}
+	return slackMessage{}, false
 }

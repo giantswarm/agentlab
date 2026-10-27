@@ -14,6 +14,13 @@ func TestExtraModelValidate(t *testing.T) {
 		m.BaseURL = "http://h:11434"
 		return m
 	}
+	// chatgpt turns the valid entry into a valid ChatGPT-login one.
+	chatgpt := func(m ExtraModel) ExtraModel {
+		m.BaseURL = ""
+		m.APIFormat = APIFormatResponses
+		m.CredentialType = CredentialTypeChatGPT
+		return m
+	}
 
 	cases := []struct {
 		name    string
@@ -62,7 +69,31 @@ func TestExtraModelValidate(t *testing.T) {
 		{"unknown reasoning effort", func(m ExtraModel) ExtraModel { m.ReasoningEffort = "maximal"; return m }, "unknown reasoningEffort"},
 		{"ollama think off", func(m ExtraModel) ExtraModel { m = ollama(m); m.Think = new(false); return m }, ""},
 		{"think on openai", func(m ExtraModel) ExtraModel { m.Think = new(false); return m }, "Ollama provider only"},
+		{"openai api format responses", func(m ExtraModel) ExtraModel { m.APIFormat = "responses"; return m }, ""},
+		{"openai api format chat completions", func(m ExtraModel) ExtraModel { m.APIFormat = "chatCompletions"; return m }, ""},
+		{"unknown api format", func(m ExtraModel) ExtraModel { m.APIFormat = "Responses"; return m }, "unknown apiFormat"},
+		{"api format on anthropic", func(m ExtraModel) ExtraModel {
+			m.Provider = ProviderAnthropic
+			m.APIFormat = "responses"
+			return m
+		}, "OpenAI provider only"},
 		{"reasoning effort on ollama", func(m ExtraModel) ExtraModel { m = ollama(m); m.ReasoningEffort = "none"; return m }, "OpenAI provider only"},
+		{"chatgpt login", chatgpt, ""},
+		{"api key credential type", func(m ExtraModel) ExtraModel { m.CredentialType = "apiKey"; return m }, ""},
+		{"unknown credential type", func(m ExtraModel) ExtraModel { m.CredentialType = "oauth"; return m }, "unknown credentialType"},
+		{"credential type on anthropic", func(m ExtraModel) ExtraModel {
+			m = chatgpt(m)
+			m.Provider = ProviderAnthropic
+			m.APIFormat = ""
+			return m
+		}, "credentialType applies to the OpenAI provider"},
+		{"chatgpt login on chat completions", func(m ExtraModel) ExtraModel { m = chatgpt(m); m.APIFormat = "chatCompletions"; return m }, "needs apiFormat responses"},
+		{"chatgpt login with key env", func(m ExtraModel) ExtraModel { m = chatgpt(m); m.APIKeyEnv = "OPENAI_API_KEY"; return m }, "takes no apiKeyEnv"},
+		{"chatgpt login with base url", func(m ExtraModel) ExtraModel {
+			m = chatgpt(m)
+			m.BaseURL = "https://chatgpt.com/backend-api/codex"
+			return m
+		}, "takes no baseUrl"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -90,6 +121,10 @@ func TestExtraModelSecretWiring(t *testing.T) {
 	}
 	if (ExtraModel{Provider: ProviderOllama}).NeedsSecret() {
 		t.Errorf("Ollama is keyless")
+	}
+	login := ExtraModel{Name: "codex", Provider: ProviderOpenAI, CredentialType: CredentialTypeChatGPT}
+	if login.SecretName() != "kagent-codex" || login.SecretKey() != "" || !login.NeedsSecret() {
+		t.Errorf("ChatGPT login wiring: secret=%s key=%q needs=%v, want its Secret without a key", login.SecretName(), login.SecretKey(), login.NeedsSecret())
 	}
 }
 

@@ -65,6 +65,41 @@ data:
     # platform.gatewayPort when it is not 443 (HACKS.md U15).
     app:
       baseUrl: {{ .BackstageBaseURL }}
+      # The portal mode (backstage.portal, `agentlab configure --portal`):
+      # the Agent Platform shell, or the classic Platform Portal alone. The
+      # chart's app-config switches the shell on from 4.132.0; this file is
+      # merged last, so it decides for every chart, a checkout of an older
+      # one included. An app-config key, never an APP_CONFIG_* entry of
+      # backstage.extraEnvVars: Helm replaces that list, which would drop the
+      # chart's own entries (NODE_EXTRA_CA_CERTS among them) and hang
+      # Backstage at start on the Dex TLS.
+      portals:
+        agentPlatform: {{ .Backstage.AgentPlatformPortal }}
+{{- if not .Backstage.AgentPlatformPortal }}
+      # The chart redirects / to the shell's /agent-platform, which the
+      # classic portal does not route; / is the classic home page.
+      rootRedirect: /
+{{- end }}
+{{- with .BackstageTelemetry }}
+      # Usage data into agentlab's TelemetryDeck app (docs/telemetry.md): the
+      # deployment ID the CLI's signals carry too, and a salt of the lab's
+      # own, so this lab's users count apart from every other lab's.
+      telemetrydeck:
+        # Quoted: a hex salt such as 123e45… would otherwise read as a number.
+        appID: "{{ .AppID }}"
+        salt: "{{ .Salt }}"
+        deploymentID: "{{ .DeploymentID }}"
+{{- if .TestMode }}
+        testMode: true
+{{- end }}
+{{- else }}
+      # Usage data is off (AGENTLAB_TELEMETRY_OPTOUT, DO_NOT_TRACK) or the lab
+      # has not booted yet. An empty app ID, not null: a portal from before
+      # giantswarm/backstage#3294 sends test signals for a null one, and an
+      # empty app ID sends nothing on every version (with one warning).
+      telemetrydeck:
+        appID: ""
+{{- end }}
     backend:
       baseUrl: {{ .BackstageBaseURL }}
       cors:

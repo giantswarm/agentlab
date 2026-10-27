@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -772,7 +773,13 @@ func (a *kagentAPI) cancelRunningTurn(session *apiv1alpha1.Session, prompt strin
 // them.
 type sessionSet struct {
 	api *kagentAPI
-	ids []string
+	// manager, when set, is the person's muster session the sessions were
+	// started through with agent-manager's start_session: they are deleted
+	// through its delete_session, which also removes muster's binding of a
+	// workspace Session's sandbox (a delete straight at kagent leaves it
+	// until its TTL).
+	manager *musterSession
+	ids     []string
 }
 
 func (s *sessionSet) add(id string) {
@@ -781,13 +788,79 @@ func (s *sessionSet) add(id string) {
 	}
 }
 
+// deleteOne deletes one session the way the set's sessions were started:
+// through agent-manager's delete_session when the set has a manager, else
+// straight at kagent.
+func (s *sessionSet) deleteOne(ctx context.Context, id string) error {
+	if s.manager != nil {
+		_, err := deleteThroughManager(ctx, s.manager, id)
+		return err
+	}
+	return s.api.deleteSession(ctx, id)
+}
+
+// deleteSessionIDArg is delete_session's session id; agentManagerNotFound
+// opens agent-manager's answer for a Session that is not there (or another
+// person's).
+const (
+	deleteSessionIDArg   = "sessionId"
+	agentManagerNotFound = "not_found:"
+)
+
+// sessionDeleted is delete_session's answer, the fields the proofs read.
+type sessionDeleted struct {
+	Session struct {
+		ID    string `json:"id"`
+		State string `json:"state"`
+	} `json:"session"`
+	Warning string `json:"warning"`
+}
+
+// deleteThroughManager is agent-manager's delete_session as the person the
+// muster session signs in as. A Session whose turn just ended is refused as
+// not yet settled until its runtime work is: the delete is retried the way
+// kagent's is. A Session already gone answers nil and no error.
+func deleteThroughManager(ctx context.Context, ms *musterSession, id string) (*sessionDeleted, error) {
+	var env *toolEnvelope
+	if err := untilSettled(ctx, "delete_session", id, sessionSettleTimeout, func(err error) bool {
+		return strings.Contains(err.Error(), notYetSettledMessage)
+	}, func() (err error) {
+		if env, err = ms.callToolEnvelope(agentManagerToolPrefix+"delete_session", map[string]any{deleteSessionIDArg: id}); err != nil {
+			return err
+		}
+		if env.IsError {
+			return fmt.Errorf("refused: %.400s", env.Content[0].Text)
+		}
+		return nil
+	}); err != nil {
+		if env != nil && env.IsError && strings.HasPrefix(env.Content[0].Text, agentManagerNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var deleted sessionDeleted
+	if err := json.Unmarshal([]byte(env.Content[0].Text), &deleted); err != nil || deleted.Session.ID != id {
+		return nil, fmt.Errorf("delete_session answered no Session %s: %.400s", id, env.Content[0].Text)
+	}
+	return &deleted, nil
+}
+
+// remove deletes one tracked session and stops tracking it.
+func (s *sessionSet) remove(ctx context.Context, id string) error {
+	if err := s.deleteOne(ctx, id); err != nil {
+		return err
+	}
+	s.ids = slices.DeleteFunc(s.ids, func(t string) bool { return t == id })
+	return nil
+}
+
 // removeAllNow deletes every tracked session and reports what refused; the
 // sessions that refused stay tracked.
 func (s *sessionSet) removeAllNow() error {
 	var errs, left []string
 	for _, id := range s.ids {
 		ctx, cancel := context.WithTimeout(context.Background(), sessionDeleteTimeout)
-		err := s.api.deleteSession(ctx, id)
+		err := s.deleteOne(ctx, id)
 		cancel()
 		if err != nil {
 			errs = append(errs, err.Error())
@@ -819,14 +892,85 @@ type musterCalls struct {
 // security audit `forwarded_id_token_accepted` carries the person's email,
 // its `tools/call request` the Dex subject (muster prints a prefix of it).
 func musterCallsSince(since time.Time, email, subject string) (musterCalls, error) {
+	logs, err := musterLogSince(since)
+	if err != nil {
+		return musterCalls{}, err
+	}
+	return musterCallsIn(logs, since, email, subject), nil
+}
+
+// musterLogSince is muster's log from a minute before the instant on.
+func musterLogSince(since time.Time) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	window := time.Since(since) + time.Minute
 	logs, err := podLogs(ctx, platformNamespace, "deploy/"+componentMuster, componentMuster, window)
 	if err != nil {
-		return musterCalls{}, fmt.Errorf("reading muster's log: %w", err)
+		return "", fmt.Errorf("reading muster's log: %w", err)
 	}
-	return musterCallsIn(logs, since, email, subject), nil
+	return logs, nil
+}
+
+// musterMetaCallTool is muster's meta-tool that runs another tool by name.
+const musterMetaCallTool = "call_tool"
+
+// musterToolNames are the muster tools a task's approval requests asked to
+// run: each requested tool by its name, and for call_tool the tool it names,
+// the one muster dispatches.
+func musterToolNames(tools []hitlTool) ([]string, error) {
+	if len(tools) == 0 {
+		return nil, errors.New("no tool_approval_request named a tool to judge")
+	}
+	var names []string
+	for _, tool := range tools {
+		name := tool.Name
+		if name == musterMetaCallTool {
+			name = stringOf(tool.Args[nameKey])
+			if name == "" {
+				return nil, fmt.Errorf("the %s request %s names no tool to run", musterMetaCallTool, tool.ID)
+			}
+		}
+		if !slices.Contains(names, name) {
+			names = append(names, name)
+		}
+	}
+	return names, nil
+}
+
+// musterTaskCallsSince reads muster's log since the instant for a task's
+// tool calls by the token's subject.
+func musterTaskCallsSince(since time.Time, subject string, tools []string) ([]string, error) {
+	logs, err := musterLogSince(since)
+	if err != nil {
+		return nil, err
+	}
+	return musterTaskCallsIn(logs, since, subject, tools), nil
+}
+
+// musterTaskCallsIn lists, from the instant on, the subject's muster records
+// of the tools: a meta-tool's tools/call request by its name, any other
+// tool's dispatch through call_tool. A call_tool request itself names no
+// tool, so the subject's other clients — a Dev Portal tab polling as the
+// person — never count.
+func musterTaskCallsIn(logs string, since time.Time, subject string, tools []string) []string {
+	var ran []string
+	for _, line := range strings.Split(logs, "\n") {
+		var entry struct {
+			Time    time.Time `json:"time"`
+			Msg     string    `json:"msg"`
+			Tool    string    `json:"tool"`
+			Subject string    `json:"subject"`
+		}
+		start := strings.IndexByte(line, '{')
+		if start < 0 || json.Unmarshal([]byte(line[start:]), &entry) != nil || entry.Time.Before(since) ||
+			!subjectMatches(entry.Subject, subject) || !slices.Contains(tools, entry.Tool) {
+			continue
+		}
+		if entry.Msg == "tool dispatched" || entry.Msg == "tools/call request" && entry.Tool != musterMetaCallTool {
+			ran = append(ran, entry.Msg+" "+entry.Tool+" at "+entry.Time.UTC().Format(time.RFC3339))
+		}
+	}
+	return ran
 }
 
 // musterCallsIn counts the lines of a muster log for the person from the

@@ -188,7 +188,7 @@ func splitToolset(header string) []string {
 // viewer is refused by the apiserver (the lab's RBAC), which the portal shows
 // as the installation being unreadable — asserted exactly, so a change of
 // the lab's grants is noticed here.
-func proveRoster(sessions []*portalSession, spec agentSpec) ([]string, error) {
+func proveRoster(sessions []*portalSession, want rosterWant) ([]string, error) {
 	var verdicts []string
 	for _, ps := range sessions {
 		step("The agents list through %s as %s", portalKubeProxyAPI, ps.user.Email)
@@ -209,19 +209,13 @@ func proveRoster(sessions []*portalSession, spec agentSpec) ([]string, error) {
 			verdicts = append(verdicts, fmt.Sprintf("PASS: %s's roster read is the apiserver's 403 (the lab grants %s to %s only; the portal shows the installation as unreadable)", ps.user.Email, kagentAPIGroup, platformAdminsGroup))
 			continue
 		}
-		idx := slices.IndexFunc(rows, func(r rosterRow) bool { return r.Name == spec.Name && r.Namespace == kagentNamespace })
+		idx := slices.IndexFunc(rows, func(r rosterRow) bool { return r.Name == want.Name && r.Namespace == kagentNamespace })
 		if idx < 0 {
-			return nil, fmt.Errorf("the roster for %s lists %d agents but not %s/%s", ps.user.Email, len(rows), kagentNamespace, spec.Name)
+			return nil, fmt.Errorf("the roster for %s lists %d agents but not %s/%s", ps.user.Email, len(rows), kagentNamespace, want.Name)
 		}
 		row := rows[idx]
-		if row.Readiness != rosterReady || row.Harness != spec.harnessValue() {
-			return nil, fmt.Errorf("the roster shows %s as %s on Harness %q, wanted %s on %s", spec.Name, row.Readiness, row.Harness, rosterReady, spec.harnessValue())
-		}
-		if !row.Declared || !slices.Equal(row.Toolset, spec.Toolset) {
-			return nil, fmt.Errorf("the roster shows %s's toolset as %v (declared %v), wanted %v off carrier %s", spec.Name, row.Toolset, row.Declared, spec.Toolset, spec.Name)
-		}
-		if row.OwningRelease != spec.Name || row.DisplayName != spec.DisplayName {
-			return nil, fmt.Errorf("the roster shows %s as %q owned by HelmRelease %q, wanted %q owned by %s", spec.Name, row.DisplayName, row.OwningRelease, spec.DisplayName, spec.Name)
+		if err := want.check(row); err != nil {
+			return nil, err
 		}
 		ready := 0
 		for _, r := range rows {
@@ -229,10 +223,41 @@ func proveRoster(sessions []*portalSession, spec agentSpec) ([]string, error) {
 				ready++
 			}
 		}
-		note("%d agents (%d ready): %s is %q, %s on Harness %s, toolset %v, rendered by HelmRelease %s", len(rows), ready, spec.Name, row.DisplayName, row.Readiness, row.Harness, row.Toolset, row.OwningRelease)
-		verdicts = append(verdicts, fmt.Sprintf("PASS: %s's roster (agents + agenttemplates + remotemcpservers through %s) shows %s %s on Harness %s with toolset %v, owned by HelmRelease %s", ps.user.Email, portalKubeProxyAPI, spec.Name, row.Readiness, row.Harness, row.Toolset, row.OwningRelease))
+		note("%d agents (%d ready): %s is %q, %s on Harness %s, toolset %v, rendered by HelmRelease %s", len(rows), ready, want.Name, row.DisplayName, row.Readiness, row.Harness, row.Toolset, row.OwningRelease)
+		verdicts = append(verdicts, fmt.Sprintf("PASS: %s's roster (agents + agenttemplates + remotemcpservers through %s) shows %s %s on Harness %s with toolset %v, owned by HelmRelease %s", ps.user.Email, portalKubeProxyAPI, want.Name, row.Readiness, row.Harness, row.Toolset, row.OwningRelease))
 	}
 	return verdicts, nil
+}
+
+// rosterWant is the row the agents list must show for the proof's agent:
+// Ready on Harness, and — for an agent the run wrote, whose every column it
+// knows (rosterWantFor) — the declared toolset, the display name and the
+// owning release. An existing agent (--agent) leaves Toolset nil and
+// DisplayName empty, unasserted, and OwningRelease empty when it has no
+// HelmRelease.
+type rosterWant struct {
+	Name, Harness              string
+	Toolset                    []string
+	DisplayName, OwningRelease string
+}
+
+// rosterWantFor is the full row of an agent the run wrote from spec.
+func rosterWantFor(spec agentSpec) rosterWant {
+	return rosterWant{Name: spec.Name, Harness: spec.harnessValue(), Toolset: spec.Toolset, DisplayName: spec.DisplayName, OwningRelease: spec.Name}
+}
+
+// check compares the row with what is wanted of it.
+func (w rosterWant) check(row rosterRow) error {
+	if row.Readiness != rosterReady || row.Harness != w.Harness {
+		return fmt.Errorf("the roster shows %s as %s on Harness %q, wanted %s on %s", w.Name, row.Readiness, row.Harness, rosterReady, w.Harness)
+	}
+	if w.Toolset != nil && (!row.Declared || !slices.Equal(row.Toolset, w.Toolset)) {
+		return fmt.Errorf("the roster shows %s's toolset as %v (declared %v), wanted %v off carrier %s", w.Name, row.Toolset, row.Declared, w.Toolset, w.Name)
+	}
+	if (w.OwningRelease != "" && row.OwningRelease != w.OwningRelease) || (w.DisplayName != "" && row.DisplayName != w.DisplayName) {
+		return fmt.Errorf("the roster shows %s as %q owned by HelmRelease %q, wanted %q owned by %s", w.Name, row.DisplayName, row.OwningRelease, w.DisplayName, w.OwningRelease)
+	}
+	return nil
 }
 
 // adminSession is the first session of a platform-admin, nil when none is

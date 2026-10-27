@@ -3,14 +3,10 @@ package lab
 import (
 	"cmp"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"net/url"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -24,31 +20,42 @@ import (
 )
 
 // `agentlab workspaces-test --part gitlab`: the workspace-manager's provider
-// instance gitlab against a real GitLab (platform.workspaces.gitlab), as the
-// lab's admin, whose GitLab account is the configured person, and the second
-// user, who is not connected. Without the instance the part skips every
+// instance gitlab against a real GitLab (platform.workspaces.gitlab), with
+// muster pinning the manager's registration to the GitLab OAuth
+// application (platform.workspaces.grantProvider: gitlab), or keeping one
+// provider App per instance, GitLab's beside GitHub's, with no pin
+// (grantProvider: apps), as the lab's admin, whose GitLab account is the
+// configured person, and the second user, who has not granted it. Without
+// the instance, or with the pin on another instance, the part skips every
 // stage, naming why, and passes. The steps:
 //
+//   - the second user, who has not granted GitLab's application in muster:
+//     the manager's tools answer muster's sign-in link; with no pin,
+//     list_providers shows gitlab not connected and core_auth_login
+//     app=gitlab answers the link;
+//   - the admin grants it: muster's link walked through GitLab's sign-in and
+//     the application's consent to muster's callback, list_providers showing
+//     gitlab connected, with no pin beside every other instance as the
+//     admin's grants of their Apps stand;
 //   - the editor's picker: list_repositories lists the group's projects;
-//   - the second user, not signed in to GitLab: the token exchange refuses
-//     them with the instance's connect link;
-//   - connect_provider as the admin: the link walked through GitLab's
-//     sign-in and the OAuth application's consent to the manager's callback;
-//   - the token exchange releases the admin's GitLab token for the audience
-//     gitlab: GitLab's API names the person, git's smart HTTP lists the
-//     project's refs with it, and the person creates a branch, a commit and
-//     a merge request through GitLab's API with it, all removed again;
 //   - a workspace over the project: its first cycle mirrors it, the mirror on
-//     the volume and the manifest at GitLab's head;
-//   - authorize_workspace grants the admin a grant naming the GitLab hosts,
-//     start_session starts a Session with it on the volume, and its turn finds
-//     its directory with the clone of the project; its push to GitLab is
-//     reported as it stands: a Session gets the person's provider token only
-//     through kagent's token broker, which the platform does not wire yet;
+//     the volume at the manifest's head;
+//   - authorize_workspace, checking the project with the admin's GitLab token
+//     muster attaches, grants the admin a grant naming the GitLab hosts;
+//     start_session starts a Session with it on the volume, and its turn
+//     finds its directory with the clone of the project, holds no
+//     credential beyond the platform's own variables, and pushes to GitLab
+//     as the person through Substrate's egress gateway, which fetches the
+//     person's token from muster (Basic as oauth2); glab, on the Harness's
+//     placeholder token sent as an OAuth2 bearer, names the person and opens
+//     a merge request authored by them, which it closes before the branch is
+//     deleted;
 //   - a Session without a workspace holds no GitLab credential: no
 //     credential in its environment, and git refused at GitLab;
-//   - disconnect_provider: the token exchange refuses the admin again with
-//     the connect link, and GitLab refuses the token it released before.
+//   - the admin drops the grant in muster (core_auth_logout, app=gitlab with
+//     no pin): the manager's tools answer muster's sign-in link again; with
+//     no pin, list_providers shows gitlab not connected and every other
+//     instance as it was.
 
 // WorkspacesPartGitLab is the GitLab part of workspaces-test.
 const WorkspacesPartGitLab = "gitlab"
@@ -58,22 +65,22 @@ const (
 	// gitlabProofBranch is the branch the person's API write and the
 	// Session's push name, with a suffix of the run.
 	gitlabProofBranch = "agentlab-proof-"
-	// gitlabAPIPath is GitLab's REST API under the instance's URL.
-	gitlabAPIPath = "/api/v4"
 	// The probe's lines the GitLab turns relay.
 	gitlabProbeCredentialEnv = "credential-env" // #nosec G101 -- a probe line's name, not a credential
 	gitlabProbePush          = "push"
-	gitlabProbeLsRemote      = "ls-remote"
-	gitlabProbeSetupClone    = "setup-clone"
+	gitlabProbeGitLabToken   = "gitlab-token" // #nosec G101 -- a probe line's name, not a credential
+	gitlabProbeGlabUser      = "glab-user"
+	gitlabProbeMRCreate      = "mr-create"
+	gitlabProbeMRAuthor      = "mr-author"
+	gitlabProbeMRClose       = "mr-close"
+	// What the probe's gitlab-token line says of the Session's GITLAB_TOKEN.
+	gitlabTokenPlaceholder = "harness-placeholder"
+	gitlabTokenUnset       = "none"
+	gitlabTokenForeign     = "foreign"
+	gitlabProbeDelete      = "delete"
+	gitlabProbeLsRemote    = "ls-remote"
+	gitlabProbeSetupClone  = "setup-clone"
 )
-
-// gitlabBlockedPush words why a Session's push and merge request do not
-// reach GitLab as the person yet: the grant names the hosts and their
-// broker, and nothing hands the Session the person's token for them.
-const gitlabBlockedPush = "a Session reaches GitLab as the person only through kagent's token broker, " +
-	"which exchanges the turn caller's token at the workspace-manager for each host the grant names; the platform does not wire that broker yet, " +
-	"and GitLab's API (Bearer) and git (Basic, user oauth2) on one host need two credentials where the egress binds one per host: " +
-	"the push and the merge request from the Session are reported, not judged"
 
 // gitlabProof is the part's state.
 type gitlabProof struct {
@@ -88,11 +95,8 @@ type gitlabProof struct {
 	adminAPI      *kagentAPI
 	sessions      *sessionSet
 	login         *providerLogin
-	http          *http.Client
-	head          string // the project's default branch head at GitLab
+	head          string // the project's head the workspace's first cycle mirrored
 	branch        string
-	mergeRequest  int
-	released      string // the access token the exchange released, held for the revocation check
 	volume        workspaceVolume
 	gitlabHost    string
 }
@@ -105,13 +109,13 @@ func workspacesGitLabPart(cfg *config.Config, email string, timeout time.Duratio
 	err := gp.run(cmp.Or(email, accessDefaultSecond), p)
 	gp.cleanup()
 	if err == nil && gp.admin != nil {
-		fmt.Printf("\nWorkspaces GitLab part passed: list_repositories listed %s's projects, the token exchange refused a person not signed in to GitLab with the connect link and released the admin's GitLab token after the sign-in through GitLab's form and consent, with which GitLab named the person and took a branch, a commit and a merge request; the workspace mirrored %s at GitLab's head; a Session started with the grant found its clone; a Session without the workspace held no GitLab credential; disconnect_provider revoked the token at GitLab.\n", gp.gl.Group, gp.repo)
+		fmt.Printf("\nWorkspaces GitLab part passed: muster answered a person who had not granted GitLab's application with its sign-in link, the admin granted it through GitLab's form and consent, list_repositories listed %s's projects, the workspace mirrored %s, a Session started with the grant found its clone, pushed to GitLab and opened a merge request with glab as the person, a Session without the workspace held no GitLab credential, and dropping the grant in muster closed the workspace-manager to the admin again.\n", gp.gl.Group, gp.repo)
 	}
 	return p.close(err)
 }
 
 // gitlabStages are the part's stages, skipped together without the instance.
-var gitlabStages = []string{"gitlab: picker", "gitlab: not connected", "gitlab: connect", "gitlab: token", "gitlab: workspace", "gitlab: start", "gitlab: push from the Session", "gitlab: no workspace", "gitlab: disconnect", "gitlab: restore"}
+var gitlabStages = []string{"gitlab: not connected", "gitlab: connect", "gitlab: picker", "gitlab: workspace", "gitlab: start", "gitlab: push from the Session", "gitlab: no workspace", "gitlab: disconnect", "gitlab: restore"}
 
 // gitlabSkip says why the lab runs no GitLab part, "" when it does.
 func gitlabSkip(cfg *config.Config) string {
@@ -126,16 +130,18 @@ func gitlabSkip(cfg *config.Config) string {
 	}
 	switch {
 	case !cfg.WorkspaceGitLabProvider():
-		return fmt.Sprintf("platform.workspaces.provider %q configures no instance %s (`agentlab configure --workspaces-provider fake,%s` and platform.workspaces.gitlab, docs/workspaces.md)", cfg.Platform.Workspaces.Provider, config.WorkspaceProviderGitLab, config.WorkspaceProviderGitLab)
+		return fmt.Sprintf("platform.workspaces.provider %q configures no instance %s (`agentlab configure --defaults --workspaces-provider github,%s` and platform.workspaces.gitlab, docs/workspaces.md)", cfg.Platform.Workspaces.Provider, config.WorkspaceProviderGitLab, config.WorkspaceProviderGitLab)
 	case len(missing) > 0:
 		return "the instance gitlab lacks " + strings.Join(missing, ", ")
+	case cfg.WorkspaceGrantProvider() != config.WorkspaceProviderGitLab && !cfg.WorkspaceProviderApps():
+		return fmt.Sprintf("muster pins the workspace-manager to the App of %s: the part grants GitLab's application (platform.workspaces.grantProvider: %s, or %s for one App per instance)", cfg.WorkspaceGrantProvider(), config.WorkspaceProviderGitLab, config.WorkspaceGrantProviderApps)
 	}
 	return ""
 }
 
 func (gp *gitlabProof) run(email string, p *proofStages) error {
 	cfg := gp.cfg
-	p.begin("gitlab: preconditions", "The GitLab part's preconditions: the instance %s, the workspace-manager through muster, the token exchange, the Session admission, the admin and %s signed in", config.WorkspaceProviderGitLab, email)
+	p.begin("gitlab: preconditions", "The GitLab part's preconditions: the instance %s, the workspace-manager through muster pinned to its application, the Session admission, the admin and %s signed in", config.WorkspaceProviderGitLab, email)
 	if skip := gitlabSkip(cfg); skip != "" {
 		p.skip("%s", skip)
 		p.leaveOut(skip, gitlabStages...)
@@ -145,26 +151,18 @@ func (gp *gitlabProof) run(email string, p *proofStages) error {
 		return err
 	}
 
-	p.begin("gitlab: picker", "list_repositories for %s on %s as %s: the workspace editor's picker", gp.gl.Group, config.WorkspaceProviderGitLab, gp.adminUser.Email)
-	if err := gp.picker(); err != nil {
-		return err
-	}
-
-	p.begin("gitlab: not connected", "%s, not signed in to GitLab: the token exchange for the audience %s refuses with the connect link", email, config.WorkspaceProviderGitLab)
+	p.begin("gitlab: not connected", "%s, who has not granted GitLab's application in muster: the workspace-manager's tools answer muster's sign-in link", email)
 	if err := gp.notConnected(); err != nil {
 		return err
 	}
 
-	p.begin("gitlab: connect", "connect_provider as %s: GitLab's sign-in as %s, the OAuth application's consent and the workspace-manager's callback", gp.adminUser.Email, gp.gl.Person)
-	hops, err := connectWorkspaceProviderAs(cfg, gp.admin, config.WorkspaceProviderGitLab, gp.login)
-	if err != nil {
+	p.begin("gitlab: connect", "%s grants GitLab's application: GitLab's sign-in as %s and its consent, to muster's callback", gp.adminUser.Email, gp.gl.Person)
+	if err := gp.connect(); err != nil {
 		return err
 	}
-	note("%s", hops)
-	note("list_providers as %s: %s connected", gp.adminUser.Email, config.WorkspaceProviderGitLab)
 
-	p.begin("gitlab: token", "The token exchange releases %s's GitLab token for the audience %s: GitLab names the person, git lists %s, and the person writes a branch, a commit and a merge request with it", gp.adminUser.Email, config.WorkspaceProviderGitLab, gp.repo)
-	if err := gp.token(); err != nil {
+	p.begin("gitlab: picker", "list_repositories for %s on %s as %s: the workspace editor's picker", gp.gl.Group, config.WorkspaceProviderGitLab, gp.adminUser.Email)
+	if err := gp.picker(); err != nil {
 		return err
 	}
 
@@ -180,8 +178,8 @@ func (gp *gitlabProof) run(email string, p *proofStages) error {
 	}
 
 	p.begin("gitlab: push from the Session", "The Session pushes to %s and opens a merge request as the person, with no token in the sandbox", gp.repo)
-	if pushed := gp.judgePush(probe); !pushed {
-		p.skip("%s; the Session's push answered %q", gitlabBlockedPush, probe[gitlabProbePush])
+	if err := gp.judgeSessionWrite(probe); err != nil {
+		return err
 	}
 
 	p.begin("gitlab: no workspace", "A Session started without a workspace as %s holds no GitLab credential", gp.adminUser.Email)
@@ -189,7 +187,7 @@ func (gp *gitlabProof) run(email string, p *proofStages) error {
 		return err
 	}
 
-	p.begin("gitlab: disconnect", "disconnect_provider as %s: the token exchange refuses with the connect link again, and GitLab refuses the token released before", gp.adminUser.Email)
+	p.begin("gitlab: disconnect", "%s drops the grant in muster (core_auth_logout): the workspace-manager's tools answer muster's sign-in link again", gp.adminUser.Email)
 	if err := gp.disconnect(); err != nil {
 		return err
 	}
@@ -198,16 +196,21 @@ func (gp *gitlabProof) run(email string, p *proofStages) error {
 	return gp.cleanupNow()
 }
 
-// preconditions signs both people in, reads the person's GitLab password
-// from the instance's Secret, checks the instance is listed, the token
-// exchange's client is there and the claude Agent is Ready.
+// preconditions signs both people in to muster, reads the person's GitLab
+// password from the instance's Secret, checks muster pins the manager to the
+// instance and the claude Agent is Ready.
 func (gp *gitlabProof) preconditions(email string) error {
 	cfg, sp := gp.cfg, gp.sp
-	if reason := workspaceManagerSkip(cfg); reason != "" {
+	if reason, err := workspaceManagerSkip(cfg); err != nil {
+		return err
+	} else if reason != "" {
 		return fmt.Errorf("no workspace-manager: %s", reason)
 	}
 	if err := waitMCPServerReachable(workspaceManagerMCPServer); err != nil {
 		return fmt.Errorf("the workspace-manager is not reachable through muster: %w", err)
+	}
+	if err := workspaceManagerReceives(cfg, config.WorkspaceProviderGitLab); err != nil {
+		return err
 	}
 	gp.adminUser, gp.secondUser = cfg.AdminUser(), cfg.FindUser(email)
 	switch {
@@ -226,14 +229,6 @@ func (gp *gitlabProof) preconditions(email string) error {
 		return err
 	}
 	sp.member, sp.memberEmail = gp.admin.session, gp.adminUser.Email
-	status, err := gp.admin.providerStatus(config.WorkspaceProviderGitLab)
-	if err != nil {
-		return fmt.Errorf("%w: the install renders the instance once platform.workspaces.gitlab and the Secret %s/%s are in place", err, platformNamespace, config.WorkspaceGitLabSecretName)
-	}
-	if status.Kind != providerKindGitLab {
-		return fmt.Errorf("list_providers lists %s with kind %q, want %s", config.WorkspaceProviderGitLab, status.Kind, providerKindGitLab)
-	}
-	note("list_providers as %s: %s", gp.adminUser.Email, status)
 
 	u, err := url.Parse(strings.TrimSuffix(gp.gl.URL, "/"))
 	if err != nil {
@@ -241,17 +236,11 @@ func (gp *gitlabProof) preconditions(email string) error {
 	}
 	gp.gitlabHost, gp.repo = u.Host, gp.gl.Group+"/"+gp.gl.Project
 	gp.branch = gitlabProofBranch + time.Now().UTC().Format("20060102150405")
-	if gp.http, err = labHTTPClient(60 * time.Second); err != nil {
-		return err
-	}
 	password, err := gp.personPassword()
 	if err != nil {
 		return err
 	}
 	gp.login = &providerLogin{login: gp.gl.Person, password: password}
-	if _, err := readWorkspaceTokenExchangeSecret(); err != nil {
-		return err
-	}
 
 	rig := workspaceAdmissionValuesFor(cfg, workspacesChartCarries(cfg))
 	if rig == nil {
@@ -264,7 +253,7 @@ func (gp *gitlabProof) preconditions(email string) error {
 	if gp.adminAPI, err = dialKagentAPI(cfg, token); err != nil {
 		return err
 	}
-	gp.sessions = &sessionSet{api: gp.adminAPI}
+	gp.sessions = &sessionSet{api: gp.adminAPI, manager: gp.admin.session}
 	if err := waitHarnessReady(context.Background(), rig.ClaudeHarness, gp.timeout); err != nil {
 		return err
 	}
@@ -282,9 +271,6 @@ func (gp *gitlabProof) preconditions(email string) error {
 	}
 	if !boot.ready {
 		return fmt.Errorf("the claude Agent %s is not Ready on Harness %s after %s: %s", workspacesHarnessAgent, rig.ClaudeHarness, boot.elapsed.Round(time.Second), boot.reason)
-	}
-	if err := gp.sp.removeLeftovers(); err != nil {
-		return err
 	}
 	note("GitLab %s, project %s; signed in to muster as %s (GitLab person %s) and %s; the claude Agent %s Ready", gp.gl.URL, gp.repo, gp.adminUser.Email, gp.gl.Person, email, workspacesHarnessAgent)
 	return nil
@@ -350,289 +336,63 @@ func (gp *gitlabProof) picker() error {
 	return nil
 }
 
-// gitlabExchange is the token exchange's answer, success or error.
-type gitlabExchange struct {
-	status      int
-	AccessToken string `json:"access_token"`
-	IssuedType  string `json:"issued_token_type"`
-	TokenType   string `json:"token_type"`
-	ExpiresIn   int    `json:"expires_in"`
-	Refresh     string `json:"refresh_token"`
-	Error       string `json:"error"`
-	ErrorURI    string `json:"error_uri"`
-	Description string `json:"error_description"`
-}
-
-// exchange asks the manager's token endpoint, as kagent's client, for the
-// person's token at the instance: the person's Dex token as the subject.
-func (gp *gitlabProof) exchange(user *config.User, audience string) (gitlabExchange, error) {
-	var out gitlabExchange
-	subject, err := passwordGrant(gp.cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret, user.Email, user.Password, musterLoginScopes)
-	if err != nil {
-		return out, err
-	}
-	secret, err := readWorkspaceTokenExchangeSecret()
-	if err != nil {
-		return out, err
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
-	defer cancel()
-	pod, err := readyPodOf(ctx, platformNamespace, "app.kubernetes.io/name=workspace-manager")
-	if err != nil {
-		return out, err
-	}
-	port, stop, err := portForwardPod(ctx, platformNamespace, pod, workspaceManagerHTTPPort)
-	if err != nil {
-		return out, err
-	}
-	defer stop()
-	form := url.Values{
-		grantTypeParam: {workspaceTokenExchangeGrantType}, "subject_token": {subject},
-		"subject_token_type": {workspaceTokenExchangeIDToken}, "audience": {audience},
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d%s", port, workspaceTokenExchangePath), strings.NewReader(form.Encode()))
-	if err != nil {
-		return out, err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.SetBasicAuth(workspaceTokenExchangeClientID, secret)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return out, fmt.Errorf("the token exchange: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return out, err
-	}
-	if err := json.Unmarshal(body, &out); err != nil {
-		return out, fmt.Errorf("the token exchange answered %d without JSON: %s", resp.StatusCode, excerpt(string(body), 200))
-	}
-	out.status = resp.StatusCode
-	return out, nil
-}
-
-// words is the exchange's answer without its token.
-func (x gitlabExchange) words() string {
-	if x.AccessToken != "" {
-		return fmt.Sprintf("%d, %s of %d bytes, issued_token_type %s, expires_in %ds, a refresh token: %t", x.status, x.TokenType, len(x.AccessToken), x.IssuedType, x.ExpiresIn, x.Refresh != "")
-	}
-	return fmt.Sprintf("%d %s, error_uri %s (%s)", x.status, x.Error, cmp.Or(x.ErrorURI, "none"), x.Description)
-}
-
-// refusedWithConnect judges an exchange for a person without a sign-in.
-func (gp *gitlabProof) refusedWithConnect(x gitlabExchange, who string) error {
-	if x.status != http.StatusBadRequest || x.Error != "invalid_target" || x.AccessToken != "" || !strings.HasSuffix(x.ErrorURI, "/connect/"+config.WorkspaceProviderGitLab) {
-		return fmt.Errorf("the token exchange for %s at %s answered %s, want 400 invalid_target with the instance's connect link", who, config.WorkspaceProviderGitLab, x.words())
-	}
-	return nil
-}
-
+// notConnected proves the second user, who has not granted GitLab's
+// application, gets muster's sign-in link: from the workspace-manager's
+// tools when the registration is pinned to it; with no pin, list_providers
+// answers the person, gitlab not connected, and core_auth_login app=gitlab
+// answers the link.
 func (gp *gitlabProof) notConnected() error {
 	gp.second.disconnect(config.WorkspaceProviderGitLab)
-	status, err := gp.second.providerStatus(config.WorkspaceProviderGitLab)
+	if !gp.second.perApp {
+		link, err := gp.second.grantRequired("list_providers", nil)
+		if err != nil {
+			return err
+		}
+		note("list_providers as %s: muster's sign-in link %s", gp.secondUser.Email, excerpt(link, 120))
+		return nil
+	}
+	if err := gp.second.notConnectedTo(config.WorkspaceProviderGitLab); err != nil {
+		return err
+	}
+	link, err := gp.second.grantLink(config.WorkspaceProviderGitLab)
 	if err != nil {
 		return err
 	}
-	if status.Connected {
-		return fmt.Errorf("list_providers shows %s still connected for %s after disconnect_provider", config.WorkspaceProviderGitLab, gp.secondUser.Email)
+	if link == "" {
+		return fmt.Errorf("core_auth_login app=%s as %s answered a held grant right after core_auth_logout dropped it", config.WorkspaceProviderGitLab, gp.secondUser.Email)
 	}
-	note("list_providers as %s: %s", gp.secondUser.Email, status)
-	x, err := gp.exchange(gp.secondUser, config.WorkspaceProviderGitLab)
-	if err != nil {
-		return err
-	}
-	if err := gp.refusedWithConnect(x, gp.secondUser.Email); err != nil {
-		return err
-	}
-	note("the token exchange as kagent's client for %s, audience %s: %s", gp.secondUser.Email, config.WorkspaceProviderGitLab, x.words())
+	note("core_auth_login app=%s as %s: muster's sign-in link %s", config.WorkspaceProviderGitLab, gp.secondUser.Email, excerpt(link, 120))
 	return nil
 }
 
-// gitlabAPI calls GitLab's REST API with a Bearer token and decodes the
-// answer into into (nil discards it); it returns the status.
-func (gp *gitlabProof) gitlabAPI(method, path, token string, body any, into any) (int, error) {
-	var r io.Reader = http.NoBody
-	if body != nil {
-		raw, err := json.Marshal(body)
-		if err != nil {
-			return 0, err
-		}
-		r = strings.NewReader(string(raw))
-	}
-	req, err := http.NewRequest(method, strings.TrimSuffix(gp.gl.URL, "/")+gitlabAPIPath+path, r)
-	if err != nil {
-		return 0, err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := gp.http.Do(req)
-	if err != nil {
-		return 0, fmt.Errorf("GitLab %s %s: %w", method, path, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if into != nil && resp.StatusCode/100 == 2 {
-		if err := json.Unmarshal(raw, into); err != nil {
-			return resp.StatusCode, fmt.Errorf("GitLab %s %s: %w", method, path, err)
-		}
-	}
-	return resp.StatusCode, nil
-}
-
-// gitlabNewBranch, gitlabNewCommit and gitlabCommitAction are the bodies of
-// GitLab's branch and commit creation.
-type gitlabNewBranch struct {
-	Branch string `json:"branch"`
-	Ref    string `json:"ref"`
-}
-
-type gitlabNewCommit struct {
-	Branch  string               `json:"branch"`
-	Message string               `json:"commit_message"`
-	Actions []gitlabCommitAction `json:"actions"`
-}
-
-type gitlabCommitAction struct {
-	Action   string `json:"action"`
-	FilePath string `json:"file_path"`
-	Content  string `json:"content"`
-}
-
-// gitlabProjectPath is the project's API path.
-func (gp *gitlabProof) gitlabProjectPath() string {
-	return "/projects/" + url.PathEscape(gp.repo)
-}
-
-// gitRefs lists the project's refs over git's smart HTTP with the token as
-// git sends it to GitLab, Basic with the user oauth2: ref name to head.
-func (gp *gitlabProof) gitRefs(token string) (int, map[string]string, error) {
-	req, err := http.NewRequest(http.MethodGet, strings.TrimSuffix(gp.gl.URL, "/")+"/"+gp.repo+".git/info/refs?service=git-upload-pack", http.NoBody)
-	if err != nil {
-		return 0, nil, err
-	}
-	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("oauth2:"+token)))
-	resp, err := gp.http.Do(req)
-	if err != nil {
-		return 0, nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	refs := map[string]string{}
-	for _, m := range gitAdvertisedRef.FindAllStringSubmatch(string(raw), -1) {
-		refs[m[2]] = m[1]
-	}
-	return resp.StatusCode, refs, nil
-}
-
-// gitAdvertisedRef is one ref of git's smart HTTP advertisement.
-var gitAdvertisedRef = regexp.MustCompile(`([0-9a-f]{40}) (refs/heads/[^\x00\n]+)`)
-
-func (gp *gitlabProof) token() error {
-	x, err := gp.exchange(gp.adminUser, config.WorkspaceProviderGitLab)
+// connect has the admin grant GitLab's application in muster through
+// GitLab's own sign-in and consent, then checks the instance's kind and
+// removes what an earlier run left, now that the manager's tools answer.
+func (gp *gitlabProof) connect() error {
+	hops, err := connectWorkspaceProvider(gp.cfg, gp.admin, config.WorkspaceProviderGitLab, gp.login)
 	if err != nil {
 		return err
 	}
-	if x.status != http.StatusOK || x.AccessToken == "" || !strings.EqualFold(x.TokenType, "Bearer") || x.Refresh != "" {
-		return fmt.Errorf("the token exchange for %s at %s answered %s, want 200 with a Bearer access token and no refresh token", gp.adminUser.Email, config.WorkspaceProviderGitLab, x.words())
-	}
-	gp.released = x.AccessToken
-	note("the token exchange as kagent's client for %s, audience %s: %s", gp.adminUser.Email, config.WorkspaceProviderGitLab, x.words())
-	if other, err := gp.exchange(gp.adminUser, "no-such-instance"); err != nil {
-		return err
-	} else if other.Error != "invalid_target" || other.ErrorURI != "" || other.AccessToken != "" {
-		return fmt.Errorf("the token exchange for an unknown audience answered %s, want invalid_target without a connect link", other.words())
-	} else {
-		note("an unknown audience: %s", other.words())
-	}
-
-	var user struct {
-		Username string `json:"username"`
-	}
-	if status, err := gp.gitlabAPI(http.MethodGet, "/user", x.AccessToken, nil, &user); err != nil {
-		return err
-	} else if status != http.StatusOK || user.Username != gp.gl.Person {
-		return fmt.Errorf("GitLab's /user with the released token answered %d naming %q, want the person %s", status, user.Username, gp.gl.Person)
-	}
-	note("GitLab %s/user with it (Bearer): %s", gitlabAPIPath, user.Username)
-	var project struct {
-		DefaultBranch string `json:"default_branch"`
-	}
-	if status, err := gp.gitlabAPI(http.MethodGet, gp.gitlabProjectPath(), x.AccessToken, nil, &project); err != nil || status != http.StatusOK {
-		return fmt.Errorf("GitLab's project %s with the released token: %d %v", gp.repo, status, err)
-	}
-	status, refs, err := gp.gitRefs(x.AccessToken)
+	note("%s", hops)
+	status, err := gp.admin.providerStatus(config.WorkspaceProviderGitLab)
 	if err != nil {
 		return err
 	}
-	gp.head = refs["refs/heads/"+project.DefaultBranch]
-	if status != http.StatusOK || gp.head == "" {
-		return fmt.Errorf("git's smart HTTP on %s with the released token (Basic, user oauth2) answered %d with %d branches, want %s's head", gp.repo, status, len(refs), project.DefaultBranch)
+	if status.Kind != providerKindGitLab {
+		return fmt.Errorf("list_providers lists %s with kind %q, want %s", config.WorkspaceProviderGitLab, status.Kind, providerKindGitLab)
 	}
-	note("git's smart HTTP on %s with it (Basic, user oauth2): %d, %d branches, %s at %s", gp.repo, status, len(refs), project.DefaultBranch, shortSHA(gp.head))
-
-	// The person's write with the released token: a branch, a commit and a
-	// merge request, each GitLab's record naming the person.
-	if status, err := gp.gitlabAPI(http.MethodPost, gp.gitlabProjectPath()+"/repository/branches", x.AccessToken,
-		gitlabNewBranch{Branch: gp.branch, Ref: project.DefaultBranch}, nil); err != nil || status != http.StatusCreated {
-		return fmt.Errorf("creating the branch %s as %s: %d %v", gp.branch, gp.gl.Person, status, err)
+	listed, err := gp.admin.providerStatuses()
+	if err != nil {
+		return err
 	}
-	var commit struct {
-		ID          string `json:"id"`
-		AuthorEmail string `json:"author_email"`
-		AuthorName  string `json:"author_name"`
-	}
-	if status, err := gp.gitlabAPI(http.MethodPost, gp.gitlabProjectPath()+"/repository/commits", x.AccessToken, gitlabNewCommit{
-		Branch: gp.branch, Message: "agentlab: the GitLab part's write as the person",
-		Actions: []gitlabCommitAction{{Action: "create", FilePath: "agentlab-proof/" + gp.branch + ".md", Content: "written by `agentlab workspaces-test --part gitlab`\n"}},
-	}, &commit); err != nil || status != http.StatusCreated {
-		return fmt.Errorf("committing to %s as %s: %d %v", gp.branch, gp.gl.Person, status, err)
-	}
-	var mr struct {
-		IID    int    `json:"iid"`
-		WebURL string `json:"web_url"`
-		Author struct {
-			Username string `json:"username"`
-		} `json:"author"`
-	}
-	if status, err := gp.gitlabAPI(http.MethodPost, gp.gitlabProjectPath()+"/merge_requests", x.AccessToken, map[string]any{
-		"source_branch": gp.branch, "target_branch": project.DefaultBranch, "title": "agentlab: the GitLab part's merge request as the person", "remove_source_branch": true,
-	}, &mr); err != nil || status != http.StatusCreated {
-		return fmt.Errorf("opening a merge request from %s as %s: %d %v", gp.branch, gp.gl.Person, status, err)
-	}
-	gp.mergeRequest = mr.IID
-	if mr.Author.Username != gp.gl.Person {
-		return fmt.Errorf("the merge request !%d names %q as its author, want %s", mr.IID, mr.Author.Username, gp.gl.Person)
-	}
-	note("as %s with it (GitLab's API, from this host): branch %s, commit %s by %s, merge request !%d by %s (%s)", gp.gl.Person, gp.branch, shortSHA(commit.ID), commit.AuthorName, mr.IID, mr.Author.Username, mr.WebURL)
-	return gp.removeWrite(x.AccessToken)
-}
-
-// removeWrite closes the proof's merge request and deletes its branch.
-func (gp *gitlabProof) removeWrite(token string) error {
-	var errs []error
-	if gp.mergeRequest > 0 {
-		if status, err := gp.gitlabAPI(http.MethodPut, gp.gitlabProjectPath()+"/merge_requests/"+strconv.Itoa(gp.mergeRequest), token, map[string]string{"state_event": "close"}, nil); err != nil || status != http.StatusOK {
-			errs = append(errs, fmt.Errorf("closing the merge request !%d: %d %v", gp.mergeRequest, status, err))
-		} else {
-			note("merge request !%d closed", gp.mergeRequest)
-			gp.mergeRequest = 0
-		}
-	}
-	if status, err := gp.gitlabAPI(http.MethodDelete, gp.gitlabProjectPath()+"/repository/branches/"+url.PathEscape(gp.branch), token, nil, nil); err != nil || (status != http.StatusNoContent && status != http.StatusNotFound) {
-		errs = append(errs, fmt.Errorf("deleting the branch %s: %d %v", gp.branch, status, err))
-	} else if status == http.StatusNoContent {
-		note("branch %s deleted", gp.branch)
-	}
-	return errors.Join(errs...)
+	note("list_providers as %s: %s", gp.adminUser.Email, workspaceProviderStatusesWorded(listed))
+	return gp.sp.removeLeftovers()
 }
 
 func (gp *gitlabProof) workspace() error {
 	sp := gp.sp
 	var created syncWorkspace
-	if err := sp.member.callServerStructured(workspaceManagerToolPrefix+"create_workspace", map[string]any{
+	if err := sp.member.createLabWorkspace(map[string]any{
 		nameKey: gitlabWorkspace, wmOrganizationArg: config.WorkspaceOrganization,
 		wmSourcesArg: []map[string]any{{wmProviderArg: config.WorkspaceProviderGitLab, wmOwnerArg: gp.gl.Group, repositoriesKey: []string{gp.gl.Project}}},
 	}, &created); err != nil {
@@ -649,16 +409,18 @@ func (gp *gitlabProof) workspace() error {
 		return fmt.Errorf("the first cycle of %s mirrored %v, want [%s]", gitlabWorkspace, live, gp.repo)
 	}
 	sp.printManifest(d)
-	if m := d.mirror(gp.repo); m == nil || m.Head != gp.head {
-		return fmt.Errorf("the manifest of %s holds %s at %v, want GitLab's head %s", gitlabWorkspace, gp.repo, m, shortSHA(gp.head))
+	m := d.mirror(gp.repo)
+	if m == nil || m.Head == "" {
+		return fmt.Errorf("the manifest of %s holds no head of %s", gitlabWorkspace, gp.repo)
 	}
+	gp.head = m.Head
 	out, err := sp.onVolume(gitlabWorkspace, "gitlab-mirror", syncMirrorsScript([]string{gp.repo}))
 	if err != nil {
 		return err
 	}
 	probe := parseMirrorProbe(out)[gp.repo]
 	if bare, _ := strconv.ParseBool(probe["bare"]); !bare || probe["head"] != gp.head {
-		return fmt.Errorf("the mirror %s/%s.git on the volume reads %v, want bare at GitLab's head %s", workspacesTestMirrors, gp.repo, probe, shortSHA(gp.head))
+		return fmt.Errorf("the mirror %s/%s.git on the volume reads %v, want bare at the manifest's head %s", workspacesTestMirrors, gp.repo, probe, shortSHA(gp.head))
 	}
 	note("the mirror %s/%s.git on the volume: %s", workspacesTestMirrors, gp.repo, strings.TrimSpace(strings.TrimPrefix(out, gp.repo)))
 	v, err := sp.volume(gitlabWorkspace)
@@ -691,19 +453,37 @@ type gitlabGrantProvider struct {
 
 // gitlabProbeCommand is the GitLab turns' Bash command: the directory, the
 // clones in it, the setup clone's origin/HEAD, the names of every
-// credential-like variable of its environment (names only), and git against
-// GitLab: a push of an empty commit from the clone when there is one, else
-// a listing of the project's refs.
+// credential-like variable of its environment (names only), whether
+// GITLAB_TOKEN is the Harness's placeholder, and git and glab against GitLab:
+// from the clone when there is one, a push of an empty commit to a proof
+// branch, glab's user, a merge request of the branch opened, its author read
+// back and the request closed, and the branch's deletion; else a listing of
+// the project's refs.
 func (gp *gitlabProof) gitlabProbeCommand() string {
 	remote := "https://" + gp.gitlabHost + "/" + gp.repo + ".git"
+	branch := gp.branch + "-session"
+	glab := `GLAB_CHECK_UPDATE=false GLAB_NO_PROMPT=1 timeout 60 glab`
+	project := `projects/` + url.PathEscape(gp.repo)
 	return `echo "` + probeMarker + ` pwd=$(pwd)"; ` +
 		`echo "` + probeMarker + ` mirrors=$(cd /mirrors 2>/dev/null && find . -mindepth 2 -maxdepth 2 -name '*.git' | sed 's|^\./||' | sort | tr '\n' ' ')"; ` +
 		`echo "` + probeMarker + ` clones=$(find . -mindepth 3 -maxdepth 3 -name .git 2>/dev/null | sed 's|^\./||;s|/\.git$||' | sort | tr '\n' ' ')"; ` +
 		`echo "` + probeMarker + ` ` + gitlabProbeSetupClone + `=$(git -C ./` + gp.repo + ` rev-parse origin/HEAD 2>&1 | tr '\n' ' ')"; ` +
 		`echo "` + probeMarker + ` ` + gitlabProbeCredentialEnv + `=$(env | cut -d= -f1 | grep -iE 'token|gitlab|glab|askpass|credential|password' | sort | tr '\n' ' ')"; ` +
+		`case "${GITLAB_TOKEN-unset}" in unset) t=` + gitlabTokenUnset + `;; ` + credentialPlaceholder + `) t=` + gitlabTokenPlaceholder + `;; *) t=` + gitlabTokenForeign + `;; esac; echo "` + probeMarker + ` ` + gitlabProbeGitLabToken + `=$t"; ` +
 		`if [ -d ./` + gp.repo + ` ]; then ` +
-		`out=$(cd ./` + gp.repo + ` && git -c user.name=agentlab -c user.email=agentlab@lab.local commit -q --allow-empty -m agentlab-session-push && GIT_TERMINAL_PROMPT=0 timeout 60 git push ` + remote + ` HEAD:refs/heads/` + gp.branch + `-session 2>&1); rc=$?; ` +
+		`out=$(cd ./` + gp.repo + ` && git -c user.name=agentlab -c user.email=agentlab@lab.local commit -q --allow-empty -m agentlab-session-push && GIT_TERMINAL_PROMPT=0 timeout 60 git push ` + remote + ` HEAD:refs/heads/` + branch + ` 2>&1); rc=$?; ` +
 		`echo "` + probeMarker + ` ` + gitlabProbePush + `=rc$rc $(echo "$out" | tail -n 3 | tr '\n' ' ')"; ` +
+		`out=$(` + glab + ` api --hostname ` + gp.gitlabHost + ` user 2>&1); rc=$?; ` +
+		`echo "` + probeMarker + ` ` + gitlabProbeGlabUser + `=rc$rc $(echo "$out" | grep -o '"username":"[^"]*"' | head -n 1)$(test $rc = 0 || echo "$out" | grep -v '^[[:space:]]*$' | tail -n 4 | tr -s ' \n' ' ')"; ` +
+		`out=$(cd ./` + gp.repo + ` && ` + glab + ` mr create -R https://` + gp.gitlabHost + `/` + gp.repo + ` --source-branch ` + branch + ` --title agentlab-session-merge-request --description 'agentlab workspace proof; closed at once' --yes 2>&1); rc=$?; ` +
+		`echo "` + probeMarker + ` ` + gitlabProbeMRCreate + `=rc$rc $(echo "$out" | grep -o 'https://[^ ]*/merge_requests/[0-9]*' | head -n 1)$(test $rc = 0 || echo "$out" | grep -v '^[[:space:]]*$' | tail -n 4 | tr -s ' \n' ' ')"; ` +
+		`out=$(` + glab + ` api --hostname ` + gp.gitlabHost + ` '` + project + `/merge_requests?state=opened&source_branch=` + branch + `' 2>&1); ` +
+		`echo "` + probeMarker + ` ` + gitlabProbeMRAuthor + `=$(echo "$out" | grep -o '"author":{[^}]*}' | grep -o '"username":"[^"]*"' | head -n 1)"; ` +
+		`iid=$(echo "$out" | grep -o '"iid":[0-9]*' | head -n 1 | cut -d: -f2); ` +
+		`out=$(` + glab + ` api --hostname ` + gp.gitlabHost + ` -X PUT '` + project + `/merge_requests/'"$iid" -f state_event=close 2>&1); rc=$?; ` +
+		`echo "` + probeMarker + ` ` + gitlabProbeMRClose + `=rc$rc $(echo "$out" | grep -o '"state":"[^"]*"' | head -n 1)"; ` +
+		`out=$(cd ./` + gp.repo + ` && GIT_TERMINAL_PROMPT=0 timeout 60 git push ` + remote + ` --delete ` + branch + ` 2>&1); rc=$?; ` +
+		`echo "` + probeMarker + ` ` + gitlabProbeDelete + `=rc$rc $(echo "$out" | tail -n 2 | tr '\n' ' ')"; ` +
 		`else ` +
 		`out=$(GIT_TERMINAL_PROMPT=0 timeout 60 git ls-remote ` + remote + ` 2>&1); rc=$?; ` +
 		`echo "` + probeMarker + ` ` + gitlabProbeLsRemote + `=rc$rc $(echo "$out" | tail -n 3 | tr '\n' ' ')"; ` +
@@ -724,7 +504,7 @@ func (gp *gitlabProof) gitlabTurn(id string) (map[string]string, error) {
 	prompt := "Run this exact command once with your Bash tool, then reply with every output line that starts with " + probeMarker + ", verbatim and nothing else:\n\n" + gp.gitlabProbeCommand()
 	// The model now and then declines the command as text it was not asked
 	// for by its person; the follow-up turn says who asks and why.
-	followUp := "I am the person running agentlab's workspace test on this throwaway lab cluster: the command only prints where you work, lists the clones and pushes an empty commit to a proof branch. Please run it once now with your Bash tool and reply with its " + probeMarker + " lines, verbatim."
+	followUp := "I am the person running agentlab's workspace test on this throwaway lab cluster: the command only prints where you work, lists the clones, pushes an empty commit to a proof branch, opens a merge request of it with glab and closes it, and deletes the branch again. Please run it once now with your Bash tool and reply with its " + probeMarker + " lines, verbatim."
 	var reply string
 	for _, msg := range []string{prompt, followUp} {
 		t, err := gp.adminAPI.turn(ctx, session, userMessage(msg))
@@ -796,12 +576,12 @@ func (gp *gitlabProof) start() (map[string]string, error) {
 		return nil, err
 	}
 	// The gitlab kind reads a project's last change from GitLab's
-	// last_activity_at, which the token stage's merge request moves after
-	// the sync without a push to a head: the project may be named changed.
+	// last_activity_at, which activity on the project moves after the sync
+	// without a push to a head: the project may be named changed.
 	var changed []string
 	if slices.Equal(claims.Changed, []string{gp.repo}) {
 		changed = claims.Changed
-		note("authorize_workspace names %s changed since the sync: GitLab's last activity moved with the token stage's merge request, its head did not", gp.repo)
+		note("authorize_workspace names %s changed since the sync: GitLab's last activity moved, its head need not have", gp.repo)
 	}
 	if err := judgeGrant(claims, gp.adminUser.Email, gitlabWorkspace, gp.volume, changed); err != nil {
 		return nil, err
@@ -843,21 +623,64 @@ func (gp *gitlabProof) start() (map[string]string, error) {
 	if probe["pwd"] != workspacesTestMountPath || !slices.Contains(strings.Fields(probe["clones"]), gp.repo) || setup != gp.head {
 		return nil, fmt.Errorf("the Session %s should work in %s with the clone %s at %s: %v", id, workspacesTestMountPath, gp.repo, shortSHA(gp.head), probe)
 	}
-	note("start_session: Session %s on volume %s; its turn works in %s, mirrors [%s], clones [%s], the setup clone %s at origin/HEAD %s (GitLab's head)",
+	note("start_session: Session %s on volume %s; its turn works in %s, mirrors [%s], clones [%s], the setup clone %s at origin/HEAD %s (the mirrored head)",
 		id, gp.volume.Handle, probe["pwd"], probe["mirrors"], probe["clones"], gp.repo, shortSHA(setup))
-	if env := gitlabCredentialEnv(probe[gitlabProbeCredentialEnv]); len(env) > 0 {
+	if env := gitlabCredentialEnv(probe[gitlabProbeCredentialEnv], probe[gitlabProbeGitLabToken]); len(env) > 0 {
 		return nil, fmt.Errorf("the Session %s carries credential-like variables %v beyond the platform's own %v: the GitLab token stays out of the sandbox", id, env, gitlabPlatformEnv)
 	}
-	note("credential-like variables in its environment: [%s], none beyond the platform's own", probe[gitlabProbeCredentialEnv])
+	note("credential-like variables in its environment: [%s], none beyond the platform's own; GITLAB_TOKEN %s", probe[gitlabProbeCredentialEnv], probe[gitlabProbeGitLabToken])
 	return probe, nil
 }
 
-// judgePush reports the Session's push: true when it reached GitLab as the
-// person, which the part then checks at GitLab.
-func (gp *gitlabProof) judgePush(probe map[string]string) bool {
-	push := probe[gitlabProbePush]
-	note("the Session's git push of an empty commit to %s:%s-session: %s", gp.repo, gp.branch, push)
-	return strings.HasPrefix(push, "rc0 ")
+// judgeSessionWrite judges the Session's write to GitLab as the person: the
+// push of the proof branch accepted and the branch deleted again. The
+// Session holds no GitLab credential, so only the person's token the egress
+// gateway attaches lets GitLab accept either.
+func (gp *gitlabProof) judgeSessionWrite(probe map[string]string) error {
+	branch := gp.branch + "-session"
+	push, del := probe[gitlabProbePush], probe[gitlabProbeDelete]
+	note("the Session's git push of an empty commit to %s:%s: %s", gp.repo, branch, push)
+	if !rcOK(push) {
+		return fmt.Errorf("the Session's push to %s:%s answered %q, want it accepted as %s", gp.repo, branch, push, gp.gl.Person)
+	}
+	if err := gp.judgeSessionMergeRequest(probe); err != nil {
+		return err
+	}
+	note("the Session's deletion of %s: %s", branch, del)
+	if !rcOK(del) {
+		return fmt.Errorf("the Session's deletion of %s:%s answered %q, want it accepted as %s", gp.repo, branch, del, gp.gl.Person)
+	}
+	return nil
+}
+
+// judgeSessionMergeRequest judges glab's write to GitLab as the person: glab
+// names the person, the merge request of the proof branch is opened, authored
+// by them, and closed. glab sends the Harness's placeholder GITLAB_TOKEN as an
+// OAuth2 bearer, which the egress gateway replaces with the person's token; a
+// Harness that gives glab no placeholder is reported and the merge request
+// left unjudged.
+func (gp *gitlabProof) judgeSessionMergeRequest(probe map[string]string) error {
+	if token := probe[gitlabProbeGitLabToken]; token != gitlabTokenPlaceholder {
+		note("the Session's GITLAB_TOKEN is %s, not the Harness's placeholder: this Harness gives glab no credential, so its merge request is not judged (glab user: %s; merge request: %s)", token, probe[gitlabProbeGlabUser], probe[gitlabProbeMRCreate])
+		return nil
+	}
+	person := `"username":"` + gp.gl.Person + `"`
+	user, created, author, closed := probe[gitlabProbeGlabUser], probe[gitlabProbeMRCreate], probe[gitlabProbeMRAuthor], probe[gitlabProbeMRClose]
+	note("glab api user from the Session: %s", user)
+	if user != "rc0 "+person {
+		return fmt.Errorf("glab api user from the Session answered %q, want %s", user, person)
+	}
+	note("glab mr create from the Session: %s; author %s; closed: %s", created, author, closed)
+	if !strings.HasPrefix(created, "rc0 https://"+gp.gitlabHost+"/"+gp.repo+"/-/merge_requests/") {
+		return fmt.Errorf("glab mr create from the Session answered %q, want a merge request of %s", created, gp.repo)
+	}
+	if author != person {
+		return fmt.Errorf("the Session's merge request %s is authored by %q, want %s", strings.TrimPrefix(created, "rc0 "), author, person)
+	}
+	if closed != `rc0 "state":"closed"` {
+		return fmt.Errorf("closing the Session's merge request %s answered %q, want it closed", strings.TrimPrefix(created, "rc0 "), closed)
+	}
+	return nil
 }
 
 func (gp *gitlabProof) noWorkspace() error {
@@ -872,7 +695,10 @@ func (gp *gitlabProof) noWorkspace() error {
 	if probe["pwd"] != kagentDefaultWorkingDirectory || probe["mirrors"] != "" {
 		return fmt.Errorf("the Session %s without a workspace should work in %s with no /mirrors: %v", id, kagentDefaultWorkingDirectory, probe)
 	}
-	if env := gitlabCredentialEnv(probe[gitlabProbeCredentialEnv]); len(env) > 0 {
+	if token := probe[gitlabProbeGitLabToken]; token != gitlabTokenUnset {
+		return fmt.Errorf("the Session %s without a workspace has GITLAB_TOKEN %s, want it unset: glab's placeholder is a workspace Session's", id, token)
+	}
+	if env := gitlabCredentialEnv(probe[gitlabProbeCredentialEnv], probe[gitlabProbeGitLabToken]); len(env) > 0 {
 		return fmt.Errorf("the Session %s without a workspace carries credential-like variables %v beyond the platform's own %v", id, env, gitlabPlatformEnv)
 	}
 	if strings.HasPrefix(probe[gitlabProbeLsRemote], "rc0 ") {
@@ -883,57 +709,59 @@ func (gp *gitlabProof) noWorkspace() error {
 }
 
 // gitlabPlatformEnv are the credential-like variables every Session holds,
-// with or without a workspace: the Harness's messaging channel and kagent's
-// propagation of the turn caller's token to its own broker; neither is a
-// GitLab credential.
-var gitlabPlatformEnv = []string{"CLAUDE_CODE_MESSAGING_TOKEN", "KAGENT_PROPAGATE_TOKEN"}
+// with or without a workspace: the Harness's messaging channel, kagent's
+// propagation of the turn caller's token to its own broker, the Harness's
+// inert GH_TOKEN placeholder the egress gateway replaces (the git part
+// proves it inert), GLAB_IS_OAUTH2, which makes glab send its token as a
+// bearer, and GLAB_CONFIG_DIR, glab's configuration naming the workspace's
+// GitLab hosts; none is a GitLab credential.
+var gitlabPlatformEnv = []string{"CLAUDE_CODE_MESSAGING_TOKEN", "GH_TOKEN", "GLAB_CONFIG_DIR", "GLAB_IS_OAUTH2", "KAGENT_PROPAGATE_TOKEN"}
 
 // gitlabCredentialEnv is the probe's credential-like variable names beyond
-// gitlabPlatformEnv.
-func gitlabCredentialEnv(names string) []string {
+// gitlabPlatformEnv, GITLAB_TOKEN among them unless the probe found it the
+// Harness's placeholder (gitlabToken gitlabTokenPlaceholder).
+func gitlabCredentialEnv(names, gitlabToken string) []string {
 	var extra []string
 	for _, n := range strings.Fields(names) {
-		if !slices.Contains(gitlabPlatformEnv, n) {
+		if !slices.Contains(gitlabPlatformEnv, n) && (n != "GITLAB_TOKEN" || gitlabToken != gitlabTokenPlaceholder) {
 			extra = append(extra, n)
 		}
 	}
 	return extra
 }
 
+// disconnect drops the admin's grant of GitLab's application in muster and
+// proves the workspace-manager's tools answer muster's sign-in link again.
 func (gp *gitlabProof) disconnect() error {
-	env, err := gp.admin.session.callToolEnvelope(workspaceManagerToolPrefix+"disconnect_provider", map[string]any{workspaceProviderArg: config.WorkspaceProviderGitLab})
+	var before []workspaceProviderStatus
+	if gp.admin.perApp {
+		var err error
+		if before, err = gp.admin.providerStatuses(); err != nil {
+			return err
+		}
+	}
+	args := gp.admin.grantArgs(config.WorkspaceProviderGitLab)
+	env, err := gp.admin.session.callToolEnvelope("core_auth_logout", args)
 	if err != nil {
 		return err
 	}
 	if env.IsError {
-		return fmt.Errorf("disconnect_provider as %s refused: %.300s", gp.adminUser.Email, env.Content[0].Text)
+		return fmt.Errorf("core_auth_logout %v as %s refused: %.300s", args, gp.adminUser.Email, env.Content[0].Text)
 	}
-	status, err := gp.admin.providerStatus(config.WorkspaceProviderGitLab)
-	if err != nil {
-		return err
-	}
-	if status.Connected {
-		return fmt.Errorf("list_providers shows %s still connected for %s after disconnect_provider", config.WorkspaceProviderGitLab, gp.adminUser.Email)
-	}
-	note("list_providers as %s: %s", gp.adminUser.Email, status)
-	x, err := gp.exchange(gp.adminUser, config.WorkspaceProviderGitLab)
-	if err != nil {
-		return err
-	}
-	if err := gp.refusedWithConnect(x, gp.adminUser.Email); err != nil {
-		return err
-	}
-	note("the token exchange for %s after disconnect_provider: %s", gp.adminUser.Email, x.words())
-	if gp.released != "" {
-		code, err := gp.gitlabAPI(http.MethodGet, "/user", gp.released, nil, nil)
+	if gp.admin.perApp {
+		if err := gp.admin.othersUnchanged(config.WorkspaceProviderGitLab, before); err != nil {
+			return err
+		}
+	} else {
+		link, err := gp.admin.grantRequired("list_providers", nil)
 		if err != nil {
 			return err
 		}
-		if code != http.StatusUnauthorized {
-			return fmt.Errorf("GitLab answered %d to the token released before disconnect_provider, want 401: the sign-in was not revoked at GitLab", code)
-		}
-		note("GitLab %s/user with the token released before: %d (revoked at GitLab)", gitlabAPIPath, code)
-		gp.released = ""
+		note("list_providers as %s after core_auth_logout: muster's sign-in link %s", gp.adminUser.Email, excerpt(link, 120))
+	}
+	// The cleanup removes the workspace as the admin, through the manager.
+	if _, err := connectWorkspaceProvider(gp.cfg, gp.admin, config.WorkspaceProviderGitLab, gp.login); err != nil {
+		return fmt.Errorf("granting GitLab's application again for the cleanup: %w", err)
 	}
 	return nil
 }
@@ -943,14 +771,6 @@ func (gp *gitlabProof) cleanupNow() error {
 	var errs []error
 	if gp.sessions != nil {
 		errs = append(errs, gp.sessions.removeAllNow())
-	}
-	if gp.mergeRequest > 0 && gp.released != "" {
-		errs = append(errs, gp.removeWrite(gp.released))
-	}
-	for _, p := range []*workspacePerson{gp.admin, gp.second} {
-		if p != nil {
-			p.disconnect(config.WorkspaceProviderGitLab)
-		}
 	}
 	if gp.adminAPI != nil && agentExists(workspacesHarnessAgent) {
 		errs = append(errs, removeAgent(workspacesHarnessAgent))
@@ -966,6 +786,11 @@ func (gp *gitlabProof) cleanupNow() error {
 			}
 		}
 		errs = append(errs, gp.sp.restore())
+	}
+	for _, p := range []*workspacePerson{gp.admin, gp.second} {
+		if p != nil {
+			p.disconnect(config.WorkspaceProviderGitLab)
+		}
 	}
 	if gp.adminAPI != nil {
 		gp.adminAPI.close()

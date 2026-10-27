@@ -29,14 +29,18 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/giantswarm/go-selfupdate"
 	selfupdatecosign "github.com/giantswarm/selfupdate-cosign"
+	"github.com/google/go-github/v86/github"
 
+	"github.com/giantswarm/agentlab/internal/xdg"
 	"github.com/giantswarm/agentlab/pkg/project"
 )
 
@@ -77,31 +81,45 @@ var remindTimeout = 2 * time.Second
 // `version check`.
 var ErrOutdated = errors.New("a newer agentlab release is available")
 
-// Seams the tests replace: the release source (GitHub), the signature check
-// (the shared cosign validator for releases of Repository: it pins the
-// CircleCI issuer, a CircleCI pipeline as the subject and this repository as
-// the source, against the Sigstore public-good trust root), the cache
-// location ("" disables the cache), the clock, the executable to replace and
-// the running version.
+// The environment variables a GitHub token is read from, in gh's order:
+// GH_TOKEN wins over GITHUB_TOKEN.
+const (
+	ghTokenEnv     = "GH_TOKEN"     // #nosec G101 -- variable NAME, not a credential
+	githubTokenEnv = "GITHUB_TOKEN" // #nosec G101 -- variable NAME, not a credential
+)
+
+// ghAuthTokenSource names a token gh keeps for its signed-in account.
+const ghAuthTokenSource = "`gh auth token`" // #nosec G101 -- a command, not a credential
+
+// Seams the tests replace: the release source (GitHub, read with the token
+// it is handed, anonymously without one) and the API it asks, the token gh
+// keeps, the signature check (the shared cosign validator for releases of
+// Repository: it pins the CircleCI issuer, a CircleCI pipeline as the subject
+// and this repository as the source, against the Sigstore public-good trust
+// root), the cache location ("" disables the cache), the clock, the
+// executable to replace, the folder it settles in and the running version.
 var (
-	newSource = func() selfupdate.Source {
-		// The error is for GitHub Enterprise URLs only; nil makes NewUpdater
-		// build the same public-GitHub source itself. A GITHUB_TOKEN in the
-		// environment lifts the anonymous rate limit, nothing else changes.
-		src, err := selfupdate.NewGitHubSource(selfupdate.GitHubConfig{})
-		if err != nil {
-			return nil
+	newSource    = githubReleases
+	githubAPIURL = ""
+	ghAuthToken  = func(ctx context.Context) string {
+		if _, err := exec.LookPath("gh"); err != nil {
+			return ""
 		}
-		return src
-	}
-	newValidator = func() selfupdate.Validator { return selfupdatecosign.New(Repository) }
-	cacheDir     = func() string {
-		dir, err := os.UserCacheDir()
+		out, err := exec.CommandContext(ctx, "gh", "auth", "token", "--hostname", "github.com").Output()
 		if err != nil {
 			return ""
 		}
-		return filepath.Join(dir, project.Name)
+		return strings.TrimSpace(string(out))
 	}
+	newValidator = func() selfupdate.Validator { return selfupdatecosign.New(Repository) }
+	cacheDir     = func() string {
+		dir, err := xdg.CacheHome()
+		if err != nil {
+			return ""
+		}
+		return dir
+	}
+	binHome        = xdg.BinHome
 	now            = time.Now
 	executable     = selfupdate.ExecutablePath
 	currentVersion = project.Version
@@ -142,7 +160,8 @@ type Options struct {
 // Run is `agentlab self-update`. It looks up the newest release (release
 // candidates included with opts.Pre) and, unless opts.Check, downloads the binary for this OS and architecture and its
 // Sigstore bundle, verifies the one against the other, and only then writes
-// it over the running executable — the flow muster and mcp-kubernetes ship.
+// it over the running executable — the flow muster and mcp-kubernetes ship —
+// which then settles in ~/.local/bin (settle), also when nothing is newer.
 // Progress goes to w. A development build is refused: "dev" compares with
 // nothing and was not installed from a release to begin with. A release
 // without a bundle for this platform's binary is refused before anything is
@@ -162,9 +181,14 @@ func Run(ctx context.Context, w io.Writer, opts Options) error {
 	if opts.Pre {
 		which = "release or release candidate"
 	}
-	_, _ = fmt.Fprintf(w, "Looking up the latest %s of %s...\n", which, Repository)
 	lookup, cancel := context.WithTimeout(ctx, selfUpdateTimeout)
-	up, rel, found, err := detect(lookup, newValidator(), opts.Pre)
+	cred := credential(lookup)
+	as := "anonymously"
+	if cred.source != "" {
+		as = "with the token from " + cred.source
+	}
+	_, _ = fmt.Fprintf(w, "Looking up the latest %s of %s %s...\n", which, Repository, as)
+	up, rel, found, err := detect(lookup, cred, newValidator(), opts.Pre)
 	cancel()
 	if errors.Is(err, selfupdate.ErrValidationAssetNotFound) {
 		// go-selfupdate found the newest release with a binary for this
@@ -172,7 +196,7 @@ func Run(ctx context.Context, w io.Writer, opts Options) error {
 		return fmt.Errorf("the latest %s of %s has no signature bundle for this platform's binary, so it cannot be verified; refusing to install it: %w", which, Repository, err)
 	}
 	if err != nil {
-		return fmt.Errorf("looking up the latest release of %s: %w (is this machine online?)", Repository, err)
+		return lookupFailed(err, cred)
 	}
 	if !found {
 		return fmt.Errorf("no release of %s carries a binary for %s/%s", Repository, runtime.GOOS, runtime.GOARCH)
@@ -189,7 +213,14 @@ func Run(ctx context.Context, w io.Writer, opts Options) error {
 		if cur.Prerelease() != "" && !opts.Pre {
 			_, _ = fmt.Fprintf(w, "%s is a release candidate: `agentlab self-update --pre` follows release candidates too.\n", current)
 		}
-		return nil
+		if opts.Check {
+			return nil
+		}
+		exe, err := executable()
+		if err != nil {
+			return fmt.Errorf("locating the running executable: %w", err)
+		}
+		return settle(w, exe)
 	}
 	_, _ = fmt.Fprintf(w, "Newer %s: %s (published %s)\n  %s\n", which, latest, rel.PublishedAt.Format(time.RFC3339), rel.URL)
 	if opts.Check {
@@ -208,23 +239,125 @@ func Run(ctx context.Context, w io.Writer, opts Options) error {
 		return fmt.Errorf("updating %s failed, it is unchanged: %w", exe, err)
 	}
 	_, _ = fmt.Fprintf(w, "Verified the signature and updated to %s.\n", latest)
+	return settle(w, exe)
+}
+
+// settle moves the installed binary at exe into the freedesktop folder of
+// the user's executables (xdg.BinHome, ~/.local/bin) when it lives anywhere
+// else, and leaves a link at exe: whichever of the two folders comes first
+// on PATH, `agentlab` runs the one binary self-update keeps current. A file
+// already in that folder is replaced by the rename, in one step. On
+// Windows, where a link needs a privilege, the binary stays where it is.
+func settle(w io.Writer, exe string) error {
+	if runtime.GOOS == goosWindows {
+		return nil
+	}
+	bin, err := binHome()
+	if err != nil {
+		return fmt.Errorf("locating the folder of your executables: %w", err)
+	}
+	from, err := filepath.EvalSymlinks(exe)
+	if err != nil {
+		return err
+	}
+	if realBin, err := filepath.EvalSymlinks(bin); err == nil && filepath.Dir(from) == realBin {
+		return nil
+	}
+	to := filepath.Join(bin, project.Name)
+	if err := os.MkdirAll(bin, 0o750); err != nil {
+		return err
+	}
+	if err := os.Rename(from, to); err != nil {
+		return fmt.Errorf("moving %s to %s (it stays where it is): %w", from, to, err)
+	}
+	if err := os.Symlink(to, from); err != nil {
+		return fmt.Errorf("moved %s to %s, but the link at the old path is missing: %w", from, to, err)
+	}
+	_, _ = fmt.Fprintf(w, "Installed at %s; %s links to it.\n", to, from)
+	if !onPath(bin) {
+		_, _ = fmt.Fprintf(w, "  %s is not on your PATH: add it, so `agentlab` finds it there.\n", bin)
+	}
 	return nil
 }
 
+// goosWindows is runtime.GOOS on Windows.
+const goosWindows = "windows"
+
+// onPath reports whether dir is one of PATH's folders.
+func onPath(dir string) bool {
+	for _, p := range filepath.SplitList(os.Getenv("PATH")) {
+		if filepath.Clean(p) == filepath.Clean(dir) {
+			return true
+		}
+	}
+	return false
+}
+
 // detect asks GitHub for the newest release with a binary for this platform
-// (found is false when none has one), prereleases included when pre. The updater comes back with the release
+// (found is false when none has one), read with cred's token, prereleases
+// included when pre. The updater comes back with the release
 // because the download has to go through the same source. With a validator,
 // the release must also carry the validator's bundle for that binary — else
 // the error wraps selfupdate.ErrValidationAssetNotFound — and Install checks
 // the download against it; nil asks for no bundle, for a caller that installs
 // nothing.
-func detect(ctx context.Context, validator selfupdate.Validator, pre bool) (up *selfupdate.Updater, rel *selfupdate.Release, found bool, err error) {
-	up, err = selfupdate.NewUpdater(selfupdate.Config{Source: newSource(), Validator: validator, Prerelease: pre})
+func detect(ctx context.Context, cred githubCredential, validator selfupdate.Validator, pre bool) (up *selfupdate.Updater, rel *selfupdate.Release, found bool, err error) {
+	up, err = selfupdate.NewUpdater(selfupdate.Config{Source: newSource(cred.token), Validator: validator, Prerelease: pre})
 	if err != nil {
 		return nil, nil, false, err
 	}
 	rel, found, err = up.DetectLatest(ctx, selfupdate.ParseSlug(Repository))
 	return up, rel, found, err
+}
+
+// githubReleases is the GitHub releases source, authenticated with token
+// when it is not empty: 5,000 calls an hour for the token's account instead
+// of the 60 an hour GitHub grants every anonymous caller behind one address.
+func githubReleases(token string) selfupdate.Source {
+	src, err := selfupdate.NewGitHubSource(selfupdate.GitHubConfig{APIToken: token, EnterpriseBaseURL: githubAPIURL})
+	if err != nil {
+		// Only an unparsable API URL fails; nil makes NewUpdater build the
+		// public-GitHub source itself.
+		return nil
+	}
+	return src
+}
+
+// githubCredential is the token the releases are read with and where it
+// came from: GH_TOKEN, GITHUB_TOKEN, else the token gh keeps for its
+// signed-in account. Both are empty for an anonymous call.
+type githubCredential struct {
+	token, source string
+}
+
+func credential(ctx context.Context) githubCredential {
+	for _, env := range []string{ghTokenEnv, githubTokenEnv} {
+		if token := os.Getenv(env); token != "" {
+			return githubCredential{token: token, source: env}
+		}
+	}
+	if token := ghAuthToken(ctx); token != "" {
+		return githubCredential{token: token, source: ghAuthTokenSource}
+	}
+	return githubCredential{}
+}
+
+// lookupFailed words a failed release lookup. A spent rate limit says
+// whether the call was anonymous, and how to make it authenticated, or
+// which token's limit is spent.
+func lookupFailed(err error, cred githubCredential) error {
+	var limit *github.RateLimitError
+	if !errors.As(err, &limit) {
+		return fmt.Errorf("looking up the latest release of %s: %w (is this machine online?)", Repository, err)
+	}
+	until := ""
+	if reset := limit.Rate.Reset.Time; !reset.IsZero() {
+		until = " until " + reset.Local().Format(time.RFC3339)
+	}
+	if cred.source == "" {
+		return fmt.Errorf("looking up the latest release of %s: the call was anonymous, and GitHub's anonymous rate limit (60 calls an hour, shared by every machine behind this address) is spent%s; set %s or %s, or sign in with `gh auth login`, to read the releases with your token: %w", Repository, until, ghTokenEnv, githubTokenEnv, err)
+	}
+	return fmt.Errorf("looking up the latest release of %s: the rate limit of the token from %s is spent%s: %w", Repository, cred.source, until, err)
 }
 
 // tag is the version in the form the tags and pkg/project use ("v0.19.3");
@@ -262,7 +395,7 @@ func rememberedLatest(ctx context.Context) string {
 	}
 	ctx, cancel := context.WithTimeout(ctx, remindTimeout)
 	defer cancel()
-	_, rel, found, err := detect(ctx, nil, false)
+	_, rel, found, err := detect(ctx, credential(ctx), nil, false)
 	switch {
 	case err != nil:
 		// Keep the previous answer, if any: it is still the best this

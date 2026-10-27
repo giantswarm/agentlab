@@ -15,6 +15,21 @@
 # the chart's companion is Substrate's driver (platform.workspaces.csiCompanion),
 # so the volumes are the ones the companion mounts.
 #
+# With the hostpath storage (platform.workspaces.storage hostpath) the hostpath
+# CSI driver takes the NFS server's and csi-driver-nfs's place: every volume a
+# directory of {{ .Workspaces.ExportDir }} on the one node, published with a bind
+# mount, which a rootless node's user namespace allows where the kernel refuses
+# it nfsd and NFS mounts. Its DaemonSet runs the driver (controller and node
+# service on one socket) with the provisioner, the resizer and the registrar;
+# the controller Deployment is the mTLS proxy alone, dialling that socket.
+#
+# With the MooseFS storage (platform.workspaces.storage moosefs) a MooseFS
+# master and chunkserver take the NFS server's place and moosefs-csi the
+# NFS driver's: every volume a directory of the filesystem, which the
+# plugins mount through FUSE (a rootless node's user namespace allows it)
+# and publish with a bind mount, the master's address their flags. The
+# controller pod is shaped as the NFS one, the proxy beside the driver.
+#
 # Order matters twice: the controller's Service comes before its Deployment,
 # since Substrate's service-DNS signer certifies a pod for the Service that
 # selects it; the NFS server comes before the driver, whose provisioner mounts
@@ -30,6 +45,156 @@ metadata:
     pod-security.kubernetes.io/enforce: privileged
     pod-security.kubernetes.io/audit: privileged
     pod-security.kubernetes.io/warn: privileged
+{{- if .Workspaces.MooseFS }}
+---
+# The MooseFS servers (platform.workspaces.storage moosefs): the master,
+# whose metadata is kept under {{ .Workspaces.MooseFSDir }}/master of the
+# control plane, seeded empty on the first start (the image refuses to start
+# without it), and one chunkserver keeping its chunks and its identity under
+# {{ .Workspaces.MooseFSDir }}. The chunkserver and the plugins dial the
+# master's Service; the clients then read and write the chunkserver's pod
+# directly.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Workspaces.MooseFSMaster }}
+  namespace: {{ .Workspaces.Namespace }}
+spec:
+  selector:
+    app.kubernetes.io/name: {{ .Workspaces.MooseFSMaster }}
+  ports:
+    - name: metalogger
+      port: 9419
+      protocol: TCP
+    - name: chunkservers
+      port: 9420
+      protocol: TCP
+    - name: clients
+      port: {{ .Workspaces.MooseFSMasterPort }}
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Workspaces.MooseFSMaster }}
+  namespace: {{ .Workspaces.Namespace }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Workspaces.MooseFSMaster }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Workspaces.MooseFSMaster }}
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: {{ .Workspaces.Node }}
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      initContainers:
+        - name: seed
+          image: {{ .Workspaces.Images.MooseFSMaster }}
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - test -e /var/lib/mfs/metadata.mfs || test -e /var/lib/mfs/metadata.mfs.back.1 || echo "MFSM NEW" > /var/lib/mfs/metadata.mfs
+          volumeMounts:
+            - name: metadata
+              mountPath: /var/lib/mfs
+      containers:
+        - name: master
+          image: {{ .Workspaces.Images.MooseFSMaster }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: clients
+              containerPort: {{ .Workspaces.MooseFSMasterPort }}
+              protocol: TCP
+          readinessProbe:
+            tcpSocket:
+              port: {{ .Workspaces.MooseFSMasterPort }}
+            periodSeconds: 2
+          volumeMounts:
+            - name: metadata
+              mountPath: /var/lib/mfs
+      volumes:
+        - name: metadata
+          hostPath:
+            path: {{ .Workspaces.MooseFSDir }}/master
+            type: DirectoryOrCreate
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Workspaces.MooseFSChunkserver }}
+  namespace: {{ .Workspaces.Namespace }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Workspaces.MooseFSChunkserver }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Workspaces.MooseFSChunkserver }}
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: {{ .Workspaces.Node }}
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: chunkserver
+          image: {{ .Workspaces.Images.MooseFSChunkserver }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: MASTER_HOST
+              value: {{ .Workspaces.MooseFSMasterHost }}
+          ports:
+            - name: chunks
+              containerPort: 9422
+              protocol: TCP
+          readinessProbe:
+            tcpSocket:
+              port: 9422
+            periodSeconds: 2
+          volumeMounts:
+            - name: chunks
+              mountPath: /mnt/hdd0
+            - name: state
+              mountPath: /var/lib/mfs
+      volumes:
+        - name: chunks
+          hostPath:
+            path: {{ .Workspaces.MooseFSDir }}/chunks
+            type: DirectoryOrCreate
+        - name: state
+          hostPath:
+            path: {{ .Workspaces.MooseFSDir }}/chunkserver
+            type: DirectoryOrCreate
+---
+# moosefs-csi's accounts (deploy/csi-moosefs.yaml): the controller's runs
+# the provisioner and the resizer beside the driver.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Workspaces.Controller }}
+  namespace: {{ .Workspaces.Namespace }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Workspaces.NodePlugin }}
+  namespace: {{ .Workspaces.Namespace }}
+{{- else if not .Workspaces.HostPath }}
 ---
 # The NFS server: the kernel's nfsd (the kind node shares the host's kernel,
 # whose nfsd module it loads on the first export), exporting
@@ -99,8 +264,7 @@ spec:
             path: {{ .Workspaces.ExportDir }}
             type: DirectoryOrCreate
 ---
-# The driver's accounts and roles (csi-driver-nfs deploy/rbac-csi-nfs.yaml,
-# without the snapshot rules: the lab installs no snapshot CRDs).
+# The driver's accounts (csi-driver-nfs deploy/rbac-csi-nfs.yaml).
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -112,11 +276,23 @@ kind: ServiceAccount
 metadata:
   name: csi-nfs-node
   namespace: {{ .Workspaces.Namespace }}
+{{- else }}
 ---
+# The hostpath driver's account: its DaemonSet runs the provisioner and the
+# resizer beside the driver.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Workspaces.ProvisionerAccount }}
+  namespace: {{ .Workspaces.Namespace }}
+{{- end }}
+---
+# The provisioner's and the resizer's roles, without the snapshot rules: the
+# lab installs no snapshot CRDs.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: agentlab-workspaces-csi-nfs-provisioner
+  name: {{ .Workspaces.RBACName }}-provisioner
 rules:
   - apiGroups: [""]
     resources: ["persistentvolumes"]
@@ -133,6 +309,12 @@ rules:
   - apiGroups: ["storage.k8s.io"]
     resources: ["csinodes"]
     verbs: ["get", "list", "watch"]
+  # csi-provisioner watches the attachments of a driver that publishes
+  # through its controller (moosefs-csi): a volume still attached is not
+  # deleted.
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["volumeattachments"]
+    verbs: ["get", "list", "watch"]
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["get", "list", "watch"]
@@ -146,20 +328,20 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: agentlab-workspaces-csi-nfs-provisioner
+  name: {{ .Workspaces.RBACName }}-provisioner
 subjects:
   - kind: ServiceAccount
-    name: csi-nfs-controller
+    name: {{ .Workspaces.ProvisionerAccount }}
     namespace: {{ .Workspaces.Namespace }}
 roleRef:
   kind: ClusterRole
-  name: agentlab-workspaces-csi-nfs-provisioner
+  name: {{ .Workspaces.RBACName }}-provisioner
   apiGroup: rbac.authorization.k8s.io
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: agentlab-workspaces-csi-nfs-resizer
+  name: {{ .Workspaces.RBACName }}-resizer
 rules:
   - apiGroups: [""]
     resources: ["persistentvolumes"]
@@ -180,17 +362,18 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: agentlab-workspaces-csi-nfs-resizer
+  name: {{ .Workspaces.RBACName }}-resizer
 subjects:
   - kind: ServiceAccount
-    name: csi-nfs-controller
+    name: {{ .Workspaces.ProvisionerAccount }}
     namespace: {{ .Workspaces.Namespace }}
 roleRef:
   kind: ClusterRole
-  name: agentlab-workspaces-csi-nfs-resizer
+  name: {{ .Workspaces.RBACName }}-resizer
   apiGroup: rbac.authorization.k8s.io
 ---
-# The driver's registration with the cluster (deploy/csi-nfs-driverinfo.yaml):
+# The driver's registration with the cluster (deploy/csi-nfs-driverinfo.yaml;
+# the hostpath driver's likewise, its attach step off as the driver runs it):
 # no attach step, POSIX permissions applied by the driver.
 apiVersion: storage.k8s.io/v1
 kind: CSIDriver
@@ -212,13 +395,13 @@ spec:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: csi-nfs-proxy
+  name: {{ .Workspaces.ProxyConfig }}
   namespace: {{ .Workspaces.Namespace }}
 data:
   envoy.yaml: |
     node:
-      id: csi-nfs-proxy
-      cluster: csi-nfs-proxy
+      id: {{ .Workspaces.ProxyConfig }}
+      cluster: {{ .Workspaces.ProxyConfig }}
     static_resources:
       listeners:
         - name: csi_tls_listener
@@ -300,10 +483,558 @@ spec:
       port: {{ .Workspaces.ControllerPort }}
       targetPort: {{ .Workspaces.ProxyPort }}
       protocol: TCP
+{{- if .Workspaces.HostPath }}
+---
+# The controller endpoint of the hostpath storage: the mTLS proxy alone, on
+# the node whose driver socket it dials (the DaemonSet's, at
+# {{ .Workspaces.NodeSocketDir }}), only with Substrate, whose signers alone
+# certify it. Privileged like upstream's sidecars, which reach the driver's
+# socket on an SELinux host only so.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Workspaces.Controller }}
+  namespace: {{ .Workspaces.Namespace }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Workspaces.Controller }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Workspaces.Controller }}
+    spec:
+      priorityClassName: system-cluster-critical
+      nodeSelector:
+        kubernetes.io/hostname: {{ .Workspaces.Node }}
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: envoy
+          image: {{ .Workspaces.Images.Proxy }}
+          imagePullPolicy: IfNotPresent
+          command:
+            - /usr/local/bin/envoy
+          args:
+            - -c
+            - /etc/envoy/envoy.yaml
+          securityContext:
+            privileged: true
+            runAsUser: 0
+          ports:
+            - containerPort: {{ .Workspaces.ProxyPort }}
+              name: grpc
+              protocol: TCP
+          volumeMounts:
+            - mountPath: /etc/envoy
+              name: envoy-config
+              readOnly: true
+            - mountPath: /csi
+              name: socket-dir
+            - mountPath: /run/servicedns
+              name: servicedns-certs
+              readOnly: true
+            - mountPath: /run/podidentity-ca
+              name: podidentity-ca
+              readOnly: true
+      volumes:
+        - name: socket-dir
+          hostPath:
+            path: {{ .Workspaces.NodeSocketDir }}
+            type: DirectoryOrCreate
+        - name: envoy-config
+          configMap:
+            name: {{ .Workspaces.ProxyConfig }}
+        - name: servicedns-certs
+          projected:
+            sources:
+              - podCertificate:
+                  signerName: servicedns.podcert.ate.dev/identity
+                  keyType: ECDSAP256
+                  credentialBundlePath: credential-bundle.pem
+        - name: podidentity-ca
+          projected:
+            sources:
+              - clusterTrustBundle:
+                  signerName: podidentity.podcert.ate.dev/identity
+                  labelSelector:
+                    matchLabels:
+                      podcert.ate.dev/canarying: live
+                  path: trust-bundle.pem
+---
+# The hostpath driver (deploy/csi-hostpath-plugin.yaml without the attacher,
+# the snapshotter and the health monitor): the driver serving the controller
+# and the node service on {{ .Workspaces.NodeSocketDir }}/csi.sock, registered
+# with the kubelet there, keeping each volume as a directory of
+# {{ .Workspaces.ExportDir }} beside its state.json, and with Substrate's
+# directory {{ .Workspaces.SubstrateDir }} mounted Bidirectional, so a bind
+# mount the driver makes for atelet's target path is one the actor's sandbox
+# sees. The sidecars are privileged as upstream's are, for the driver's socket
+# on an SELinux host.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ .Workspaces.NodePlugin }}
+  namespace: {{ .Workspaces.Namespace }}
+spec:
+  updateStrategy:
+    rollingUpdate:
+      maxUnavailable: 1
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Workspaces.NodePlugin }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Workspaces.NodePlugin }}
+    spec:
+      serviceAccountName: {{ .Workspaces.ProvisionerAccount }}
+      priorityClassName: system-node-critical
+      nodeSelector:
+        kubernetes.io/hostname: {{ .Workspaces.Node }}
+      tolerations:
+        - operator: "Exists"
+      containers:
+        - name: hostpath
+          image: {{ .Workspaces.Images.HostPathPlugin }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - "--drivername={{ .Workspaces.Driver }}"
+            - "--v=5"
+            - "--endpoint=$(CSI_ENDPOINT)"
+            - "--nodeid=$(KUBE_NODE_NAME)"
+            - "--statedir=/csi-data-dir"
+          env:
+            - name: CSI_ENDPOINT
+              value: unix:///csi/csi.sock
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          securityContext:
+            privileged: true
+          ports:
+            - containerPort: 9898
+              name: healthz
+              protocol: TCP
+          livenessProbe:
+            failureThreshold: 5
+            httpGet:
+              path: /healthz
+              port: healthz
+            initialDelaySeconds: 10
+            timeoutSeconds: 3
+            periodSeconds: 2
+          volumeMounts:
+            - mountPath: /csi
+              name: socket-dir
+            - mountPath: /var/lib/kubelet/pods
+              mountPropagation: Bidirectional
+              name: pods-mount-dir
+            - mountPath: /var/lib/kubelet/plugins
+              mountPropagation: Bidirectional
+              name: plugins-dir
+            - mountPath: /csi-data-dir
+              name: data-dir
+            - mountPath: /dev
+              name: dev-dir
+            - mountPath: {{ .Workspaces.SubstrateDir }}
+              mountPropagation: Bidirectional
+              name: substrate-dir
+        - name: csi-provisioner
+          image: {{ .Workspaces.Images.Provisioner }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - "-v=2"
+            - "--csi-address=/csi/csi.sock"
+            - "--leader-election"
+            - "--leader-election-namespace=$(POD_NAMESPACE)"
+            - "--extra-create-metadata=true"
+            - "--feature-gates=Topology=true,VolumeAttributesClass=false"
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - mountPath: /csi
+              name: socket-dir
+        - name: csi-resizer
+          image: {{ .Workspaces.Images.Resizer }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - "-v=2"
+            - "-csi-address=/csi/csi.sock"
+            - "-leader-election"
+            - "--leader-election-namespace=$(POD_NAMESPACE)"
+            - "-handle-volume-inuse-error=false"
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - mountPath: /csi
+              name: socket-dir
+        - name: node-driver-registrar
+          image: {{ .Workspaces.Images.Registrar }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - --v=2
+            - --csi-address=/csi/csi.sock
+            - --kubelet-registration-path={{ .Workspaces.NodeSocketDir }}/csi.sock
+          env:
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - mountPath: /csi
+              name: socket-dir
+            - mountPath: /registration
+              name: registration-dir
+        - name: liveness-probe
+          image: {{ .Workspaces.Images.LivenessProbe }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - --csi-address=/csi/csi.sock
+            - --health-port=9898
+          volumeMounts:
+            - mountPath: /csi
+              name: socket-dir
+      volumes:
+        - name: socket-dir
+          hostPath:
+            path: {{ .Workspaces.NodeSocketDir }}
+            type: DirectoryOrCreate
+        - name: pods-mount-dir
+          hostPath:
+            path: /var/lib/kubelet/pods
+            type: DirectoryOrCreate
+        - name: plugins-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins
+            type: Directory
+        - name: registration-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins_registry
+            type: Directory
+        - name: data-dir
+          hostPath:
+            path: {{ .Workspaces.ExportDir }}
+            type: DirectoryOrCreate
+        - name: dev-dir
+          hostPath:
+            path: /dev
+            type: Directory
+        - name: substrate-dir
+          hostPath:
+            path: {{ .Workspaces.SubstrateDir }}
+            type: DirectoryOrCreate
+---
+# The class the chart's workspaces values name: a directory of the node per
+# volume, bind-mounted; read-write-many on the one node, POSIX modes and
+# symbolic links as git needs them. Expandable in name, as the NFS class is.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ .Workspaces.StorageClass }}
+provisioner: {{ .Workspaces.Driver }}
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+{{- else if .Workspaces.MooseFS }}
+---
+# moosefs-csi's controller (deploy/csi-moosefs.yaml without the attacher,
+# which a driver registered without an attach step never needs): the
+# provisioner and resizer sidecars for the cluster's PVCs, the driver, and
+# the mTLS proxy for Substrate's direct calls, only with Substrate, whose
+# signers alone certify it. The driver mounts the filesystem through FUSE
+# under /mnt, which is {{ .Workspaces.MooseFSDir }}/mnt of the control plane
+# mounted Bidirectional, so the node sees the volumes' directories.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Workspaces.Controller }}
+  namespace: {{ .Workspaces.Namespace }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Workspaces.Controller }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Workspaces.Controller }}
+    spec:
+      serviceAccountName: {{ .Workspaces.ProvisionerAccount }}
+      priorityClassName: system-cluster-critical
+      nodeSelector:
+        kubernetes.io/hostname: {{ .Workspaces.Node }}
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: csi-provisioner
+          image: {{ .Workspaces.Images.Provisioner }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - "-v=2"
+            - "--csi-address=/csi/csi.sock"
+            - "--leader-election"
+            - "--leader-election-namespace=$(POD_NAMESPACE)"
+            - "--extra-create-metadata=true"
+            - "--feature-gates=VolumeAttributesClass=false"
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          volumeMounts:
+            - mountPath: /csi
+              name: socket-dir
+          securityContext:
+            capabilities:
+              drop:
+                - ALL
+        - name: csi-resizer
+          image: {{ .Workspaces.Images.Resizer }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - "-csi-address=/csi/csi.sock"
+            - "-v=2"
+            - "-leader-election"
+            - "--leader-election-namespace=$(POD_NAMESPACE)"
+            - "-handle-volume-inuse-error=false"
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+          securityContext:
+            capabilities:
+              drop:
+                - ALL
+        - name: moosefs
+          image: {{ .Workspaces.Images.MooseFSPlugin }}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            privileged: true
+            capabilities:
+              add: ["SYS_ADMIN"]
+            allowPrivilegeEscalation: true
+          args:
+            - "--mode=controller"
+            - "--csi-endpoint=unix:///csi/csi.sock"
+            - "--master-host={{ .Workspaces.MooseFSMasterHost }}"
+            - "--master-port={{ .Workspaces.MooseFSMasterPort }}"
+            - "--root-dir=/"
+            - "--plugin-data-dir={{ .Workspaces.MooseFSWorkingDir }}"
+            - "--mfs-logging=false"
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+            - name: mfs-mount
+              mountPath: /mnt
+              mountPropagation: "Bidirectional"
+        - name: envoy
+          image: {{ .Workspaces.Images.Proxy }}
+          imagePullPolicy: IfNotPresent
+          command:
+            - /usr/local/bin/envoy
+          args:
+            - -c
+            - /etc/envoy/envoy.yaml
+          securityContext:
+            # The driver's socket is root-owned; the proxy connects to it as
+            # root and needs nothing else of the node.
+            runAsUser: 0
+          ports:
+            - containerPort: {{ .Workspaces.ProxyPort }}
+              name: grpc
+              protocol: TCP
+          volumeMounts:
+            - mountPath: /etc/envoy
+              name: envoy-config
+              readOnly: true
+            - mountPath: /csi
+              name: socket-dir
+            - mountPath: /run/servicedns
+              name: servicedns-certs
+              readOnly: true
+            - mountPath: /run/podidentity-ca
+              name: podidentity-ca
+              readOnly: true
+      volumes:
+        - name: socket-dir
+          emptyDir: {}
+        - name: mfs-mount
+          hostPath:
+            path: {{ .Workspaces.MooseFSDir }}/mnt
+            type: DirectoryOrCreate
+        - name: envoy-config
+          configMap:
+            name: {{ .Workspaces.ProxyConfig }}
+        - name: servicedns-certs
+          projected:
+            sources:
+              - podCertificate:
+                  signerName: servicedns.podcert.ate.dev/identity
+                  keyType: ECDSAP256
+                  credentialBundlePath: credential-bundle.pem
+        - name: podidentity-ca
+          projected:
+            sources:
+              - clusterTrustBundle:
+                  signerName: podidentity.podcert.ate.dev/identity
+                  labelSelector:
+                    matchLabels:
+                      podcert.ate.dev/canarying: live
+                  path: trust-bundle.pem
+---
+# moosefs-csi's node plugin on every node: registered with the kubelet at
+# {{ .Workspaces.NodeSocketDir }}, its FUSE mount of the filesystem inside
+# the container, and the kubelet's pods directory and Substrate's
+# {{ .Workspaces.SubstrateDir }} mounted Bidirectional, so the bind mount it
+# makes for a pod's or atelet's target path is one the pod's or the actor's
+# sandbox sees.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ .Workspaces.NodePlugin }}
+  namespace: {{ .Workspaces.Namespace }}
+spec:
+  updateStrategy:
+    rollingUpdate:
+      maxUnavailable: 1
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Workspaces.NodePlugin }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Workspaces.NodePlugin }}
+    spec:
+      serviceAccountName: {{ .Workspaces.NodePlugin }}
+      priorityClassName: system-node-critical
+      nodeSelector:
+        kubernetes.io/os: linux
+      tolerations:
+        - operator: "Exists"
+      containers:
+        - name: node-driver-registrar
+          image: {{ .Workspaces.Images.Registrar }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - --v=2
+            - --csi-address=/csi/csi.sock
+            - --kubelet-registration-path={{ .Workspaces.NodeSocketDir }}/csi.sock
+          env:
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+            - name: registration-dir
+              mountPath: /registration
+          securityContext:
+            capabilities:
+              drop:
+                - ALL
+        - name: moosefs
+          image: {{ .Workspaces.Images.MooseFSPlugin }}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            privileged: true
+            capabilities:
+              add: ["SYS_ADMIN"]
+            allowPrivilegeEscalation: true
+          env:
+            - name: NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          args:
+            - "--mode=node"
+            - "--csi-endpoint=unix:///csi/csi.sock"
+            - "--master-host={{ .Workspaces.MooseFSMasterHost }}"
+            - "--master-port={{ .Workspaces.MooseFSMasterPort }}"
+            - "--node-id=$(NODE_ID)"
+            - "--root-dir=/"
+            - "--plugin-data-dir={{ .Workspaces.MooseFSWorkingDir }}"
+            - "--mount-points-count=1"
+            - "--mfs-logging=false"
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+            - name: pods-mount-dir
+              mountPath: /var/lib/kubelet/pods
+              mountPropagation: "Bidirectional"
+            - name: substrate-dir
+              mountPath: {{ .Workspaces.SubstrateDir }}
+              mountPropagation: "Bidirectional"
+            - name: dev-dir
+              mountPath: /dev
+      volumes:
+        - name: socket-dir
+          hostPath:
+            path: {{ .Workspaces.NodeSocketDir }}
+            type: DirectoryOrCreate
+        - name: pods-mount-dir
+          hostPath:
+            path: /var/lib/kubelet/pods
+            type: Directory
+        - name: registration-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins_registry
+            type: Directory
+        - name: substrate-dir
+          hostPath:
+            path: {{ .Workspaces.SubstrateDir }}
+            type: DirectoryOrCreate
+        - name: dev-dir
+          hostPath:
+            path: /dev
+---
+# The class the chart's workspaces values name: a directory of the MooseFS
+# filesystem per volume, its quota the claim's size; read-write-many on
+# every node, POSIX modes and symbolic links as git needs them.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ .Workspaces.StorageClass }}
+provisioner: {{ .Workspaces.Driver }}
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+{{- else }}
 ---
 # The controller (deploy/csi-nfs-controller.yaml without the snapshotter):
 # the provisioner and resizer sidecars for the cluster's PVCs, the liveness
-# probe, the driver, and the mTLS proxy for Substrate's direct calls. On the
+# probe, the driver, and the mTLS proxy for Substrate's direct calls — only
+# with Substrate (platform.agents), whose signers alone certify it: without
+# them the kubelet would hold the pod, and its claims with it. On the
 # node's network like upstream, since the driver mounts the export itself to
 # create a volume's directory; beside the NFS server on the control plane.
 apiVersion: apps/v1
@@ -470,7 +1201,7 @@ spec:
           emptyDir: {}
         - name: envoy-config
           configMap:
-            name: csi-nfs-proxy
+            name: {{ .Workspaces.ProxyConfig }}
         - name: servicedns-certs
           projected:
             sources:
@@ -636,3 +1367,4 @@ allowVolumeExpansion: true
 mountOptions:
   - nfsvers=4.1
   - hard
+{{- end }}

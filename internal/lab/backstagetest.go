@@ -23,8 +23,14 @@ var handlerPayloadRe = regexp.MustCompile(`decodeURIComponent\('([^']+)'\)`)
 // agent-manager as the person, the agents list per user, a streamed and a
 // resumed conversation, HITL and Stop, the detail page's edit, skills update
 // and delete — and with managed models the Models page's model-manager read
-// and write through the same muster hop (backstagetest_models.go).
-func BackstageTest(cfg *config.Config, emails []string) error {
+// and write through the same muster hop (backstagetest_models.go). With
+// opts.Agent the Agent Platform half runs against that existing agent instead
+// (proveExistingAgent).
+func BackstageTest(cfg *config.Config, emails []string, opts BackstageTestOptions) error {
+	existing, err := parseExistingAgent(opts.Agent)
+	if err != nil {
+		return err
+	}
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
 	}
@@ -32,6 +38,15 @@ func BackstageTest(cfg *config.Config, emails []string) error {
 		for _, u := range cfg.Users {
 			emails = append(emails, u.Email)
 		}
+	}
+	if err := checkApiserverOIDC(cfg); err != nil {
+		return err
+	}
+	if err := proveServedPortal(cfg); err != nil {
+		return err
+	}
+	if err := proveNoHSTS(cfg); err != nil {
+		return err
 	}
 	var sessions []*portalSession
 	for i, email := range emails {
@@ -56,10 +71,37 @@ func BackstageTest(cfg *config.Config, emails []string) error {
 	fmt.Println("all sign-ins resolved and reached muster")
 
 	if !cfg.Platform.Agents {
+		if existing != nil {
+			return fmt.Errorf("--agent %s/%s: platform.agents is off in %s, the lab runs no agents", existing.Namespace, existing.Name, config.File)
+		}
 		fmt.Println("agent platform pages skipped (platform.agents off)")
 		return nil
 	}
-	return proveAgentPlatform(cfg, sessions)
+	return proveAgentPlatform(cfg, sessions, existing)
+}
+
+// BackstageTestOptions are the flags of `agentlab backstage-test`.
+type BackstageTestOptions struct {
+	// Agent is an existing agent as <namespace>/<name>: the run creates and
+	// deletes no agent of its own and proves the roster and the chat on it.
+	Agent string
+}
+
+// parseExistingAgent reads --agent: "" is the default run (nil), otherwise
+// <namespace>/<name> in the namespace the lab's agents live in, the one every
+// readiness read of the proof looks in.
+func parseExistingAgent(s string) (*portalAgentRef, error) {
+	if s == "" {
+		return nil, nil
+	}
+	namespace, name, ok := strings.Cut(s, "/")
+	if !ok || namespace == "" || name == "" || strings.Contains(name, "/") {
+		return nil, fmt.Errorf("--agent %q: want <namespace>/<name>, e.g. %s/my-agent", s, kagentNamespace)
+	}
+	if namespace != kagentNamespace {
+		return nil, fmt.Errorf("--agent %q: the lab's agents live in namespace %s", s, kagentNamespace)
+	}
+	return &portalAgentRef{Namespace: namespace, Name: name}, nil
 }
 
 // backstageSignIn drives one user's sign-in and the muster plugin's reads with

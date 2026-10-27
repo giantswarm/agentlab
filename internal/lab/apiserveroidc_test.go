@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"slices"
@@ -101,5 +102,44 @@ func TestDexTemplateRotatesKeysMonthly(t *testing.T) {
 	}
 	if _, ok := parsed.Expiry["signingKeys"]; ok {
 		t.Fatal("expiry.signingKeys next to the signer: Dex warns and ignores it")
+	}
+}
+
+// TestProofsRunApiserverOIDCFirst: test, backstage-test and agents-test run
+// the apiserver OIDC stage before their first Dex token, as platform-test
+// does, so a proof started inside the JWKS window after a Dex key rotation
+// waits it out instead of failing; the stage's refusal is the proof's.
+func TestProofsRunApiserverOIDCFirst(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("KUBECONFIG", "/elsewhere/config")
+	stubKindKubeconfig(t)
+	resetKindKubeconfigCache(t)
+	t.Cleanup(resetLabKube)
+
+	refused := errors.New("the apiserver refuses a fresh Dex token")
+	calls := 0
+	prev := apiserverAcceptsDex
+	apiserverAcceptsDex = func(context.Context, *config.Config) error {
+		calls++
+		return refused
+	}
+	t.Cleanup(func() { apiserverAcceptsDex = prev })
+
+	cfg := config.Default()
+	cfg.Platform.Enabled, cfg.Platform.Agents = true, true
+	for name, proof := range map[string]func() error{
+		"test":           func() error { return Test(cfg) },
+		"backstage-test": func() error { return BackstageTest(cfg, nil, BackstageTestOptions{}) },
+		"agents-test":    func() error { return AgentsTest(cfg, cfg.Users[0].Email) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			calls = 0
+			if err := proof(); !errors.Is(err, refused) {
+				t.Fatalf("%s = %v, want the apiserver OIDC stage's refusal before anything else", name, err)
+			}
+			if calls != 1 {
+				t.Fatalf("%s ran the apiserver OIDC stage %d times, want once", name, calls)
+			}
+		})
 	}
 }

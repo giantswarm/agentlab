@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -56,7 +57,7 @@ const baselineServiceAccount = "system:serviceaccount:" + platformNamespace + ":
 // user and writes the Generic chart 1.x contract, through the platform path
 // only (Dex id_token -> muster -> call_tool x_agent-manager_*): get_info
 // reports identity caller on the 1.x chart and the platform Harness; the
-// admin's create -> ready -> turn -> update -> refreshSkills -> delete round
+// admin's create -> ready -> turn -> update -> refreshSkills -> plugins -> delete round
 // trip succeeds with requestedBy set — the HelmRelease written by
 // agent-manager (its field manager, values.toolset the anchor, the skill
 // pinned to a commit) next to the OCIRepository on the chart line agent-manager declares (its
@@ -80,6 +81,9 @@ func AgentsTest(cfg *config.Config, email string) error {
 	user := cfg.FindUser(email)
 	if user == nil {
 		return fmt.Errorf("no user %q in %s", email, config.File)
+	}
+	if err := checkApiserverOIDC(cfg); err != nil {
+		return err
 	}
 	fixture, err := SkillsFixture{}.resolve()
 	if err != nil {
@@ -352,6 +356,9 @@ func AgentsTest(cfg *config.Config, email string) error {
 	if err != nil {
 		return err
 	}
+	if err := proveAgentsTestPlugins(cfg, session, token); err != nil {
+		return err
+	}
 
 	// The user's identity, not a ServiceAccount: a viewer (the view
 	// ClusterRole, no HelmRelease writes anywhere) is refused by the kind
@@ -386,7 +393,7 @@ func AgentsTest(cfg *config.Config, email string) error {
 		}
 	}
 
-	step("The agent-manager ServiceAccount holds no RBAC of its own (auth can-i --list --as=%s, against a ServiceAccount no binding names)", agentManagerServiceAccount)
+	step("The agent-manager ServiceAccount holds no RBAC of its own beyond what the lab's switches grant — skills.mintGitAuthSecret the skills-Secret Role, tenants.organizations.enabled the tenant reconciler's ClusterRole, the chart-source Role on the agent chart's OCIRepository always (auth can-i --list --as=%s, against a ServiceAccount no binding names)", agentManagerServiceAccount)
 	rules, err := serviceAccountRules(agentManagerServiceAccount, kagentNamespace)
 	if err != nil {
 		return err
@@ -395,11 +402,26 @@ func AgentsTest(cfg *config.Config, email string) error {
 	if err != nil {
 		return err
 	}
-	granted := rulesBeyond(rules, baseline)
-	if len(granted) > 0 {
-		return fmt.Errorf("the agent-manager ServiceAccount still holds permissions in %s beyond every ServiceAccount's:\n%s", kagentNamespace, strings.Join(granted, "\n"))
+	values, err := platformValuesWith(cfg, nil)
+	if err != nil {
+		return err
 	}
-	note("nothing beyond what every ServiceAccount holds (%d rows: discovery, self-subject reviews%s)", len(baseline), bootstrapExtras(baseline))
+	rec, err := readTenantReconciler()
+	if err != nil {
+		return err
+	}
+	if switchedOn, _ := nestedValue(values, "tenants", "organizations", valuesEnabled).(bool); switchedOn && !rec.multiTenant {
+		note("tenants.organizations.enabled is on, but agent-manager runs without --multi-tenant=true: the installed chart does not turn the tenant reconciler on, so its ClusterRole is not allowed")
+	}
+	grants := agentManagerGrants(values, rec.multiTenant)
+	granted, err := rulesBeyondGrants(rulesBeyond(rules, baseline), grants)
+	if err != nil {
+		return err
+	}
+	if len(granted) > 0 {
+		return fmt.Errorf("the agent-manager ServiceAccount still holds permissions in %s beyond every ServiceAccount's%s:\n%s", kagentNamespace, grantsClause(grants), strings.Join(granted, "\n"))
+	}
+	note("nothing beyond what every ServiceAccount holds (%d rows: discovery, self-subject reviews%s)%s", len(baseline), bootstrapExtras(baseline), grantsClause(grants))
 
 	step("An Agent on a Harness that does not exist: HelmRelease %s with agent.harness %s applied directly — get_agent_status says failed with the reason", agentsTestUnadmitted, agentsTestNoHarness)
 	unadmittedSpec := agentSpec{
@@ -464,10 +486,11 @@ func AgentsTest(cfg *config.Config, email string) error {
 		agentManagerFieldManager, agentsTestToolset, kagentHarness, fixture.name(), agentChartOCIRepository, chartLine, displayNameAnnotation, iconURLAnnotation, kagentHarness, agentsTestAgent, toolsetHeader, agentsTestToolset, discoveryLabel, discoveryDisabledValue)
 	fmt.Printf("PASS: get_agent_status agrees with the Agent's status — ready on revision %.12s, and failed with the reason for an Agent on Harness %q\n", harness.LatestSuccessfulRevision, agentsTestNoHarness)
 	fmt.Println(refreshVerdict)
+	fmt.Printf("PASS: on Harness %s, %s @ %.12s bound by update_agent with %s selected lists that skill on a new revision, and with the selection empty no longer\n", kagentHarness, pluginExampleURL, pluginExampleCommit, pluginExampleSkill)
 	if viewer != nil {
 		fmt.Printf("PASS: %s's create is Forbidden by the apiserver as User \"oidc:%s\" (user RBAC, not the ServiceAccount's)\n", viewer.Email, viewer.Email)
 	}
-	fmt.Printf("PASS: %s holds no permissions beyond discovery\n", agentManagerServiceAccount)
+	fmt.Printf("PASS: %s holds no permissions beyond discovery%s\n", agentManagerServiceAccount, grantsClause(grants))
 	return nil
 }
 
@@ -595,6 +618,10 @@ type agentManagerInfo struct {
 	} `json:"muster"`
 	Namespaces struct {
 		Default string `json:"default"`
+		// Managed are the namespaces the caller may create agents in
+		// (agent-manager checks each with a SelfSubjectAccessReview): the
+		// tenants of the portal's create flow.
+		Managed []string `json:"managed"`
 	} `json:"namespaces"`
 }
 
@@ -809,6 +836,226 @@ func rulesBeyond(rows, baseline []string) []string {
 	return granted
 }
 
+// mintedSkillsSecretNames is, with agent-manager.skills.mintGitAuthSecret in
+// the rendered values, the Secrets the agent-manager chart mints and lets its
+// ServiceAccount get and update (templates/skills-token.yaml): the current
+// name, the name before the tenant-credential- prefix, then every
+// skills.previousGitAuthSecretNames entry not already among them. Without
+// minting, nil: the ServiceAccount holds no Role at all.
+func mintedSkillsSecretNames(values map[string]any) []string {
+	if mint, _ := nestedValue(values, agentManagerMCPServer, skillsKey, skillsMintValue).(bool); !mint {
+		return nil
+	}
+	fullname := nestedString(values, agentManagerMCPServer, "fullnameOverride")
+	if fullname == "" {
+		fullname = agentManagerMCPServer
+	}
+	names := []string{"tenant-credential-" + fullname + "-skills-token", fullname + "-skills-token"}
+	previous, _ := nestedValue(values, agentManagerMCPServer, skillsKey, "previousGitAuthSecretNames").([]any)
+	for _, p := range previous {
+		if name, ok := p.(string); ok && name != "" && !slices.Contains(names, name) {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// skillsMintValue is agent-manager's skills value that turns minting on.
+const skillsMintValue = "mintGitAuthSecret"
+
+// mintGrantVerbs are the verbs of the skills-Secret Role minting grants.
+var mintGrantVerbs = []string{"get", "update"}
+
+// chartSourceGrant is the chart-source Role's row: the agent chart's shared
+// OCIRepository by name, get and update like the skills-Secret Role.
+var chartSourceGrant = saGrant{resource: fluxOCIRepositoryResource, names: []string{agentChartOCIRepository}, verbs: mintGrantVerbs, optional: true, by: "agent-manager's chart-source Role"}
+
+// tenantFluxClusterRole is the ClusterRole the tenant reconciler binds in
+// each tenant, the one name its `bind` grant carries (agent-manager's
+// tenantFluxClusterRole helper).
+const tenantFluxClusterRole = "agent-platform-tenant-flux"
+
+// tenantsGrantRows are the rows of the tenant reconciler's ClusterRole
+// (agent-manager's templates/tenants-rbac.yaml) as the rules review words
+// them, but the default ModelConfig's key (tenantsModelKeyRow) and the
+// network policy kind (tenantsPolicyRow), which follow the values.
+const tenantsGrantRows = `namespaces  []  []  [get list watch]
+agents.api.kagent.dev  []  []  [list watch]
+helmreleases.helm.toolkit.fluxcd.io  []  []  [list watch]
+harnesses.api.kagent.dev  []  []  [get list watch create update delete]
+modelconfigs.api.kagent.dev  []  []  [get list watch create update delete]
+workerpools.ate.dev  []  []  [get list watch create update delete]
+ocirepositories.source.toolkit.fluxcd.io  []  []  [get list watch create update]
+serviceaccounts  []  []  [get list watch create delete]
+rolebindings.rbac.authorization.k8s.io  []  []  [get list watch create update delete]
+clusterroles.rbac.authorization.k8s.io  []  [` + tenantFluxClusterRole + `]  [bind]
+secrets  []  []  [create]`
+
+// tenantsModelKeyRow is the tenants' grant on the default ModelConfig's key
+// Secret, by its name.
+const tenantsModelKeyRow = "secrets  []  [%s]  [get list watch update delete]"
+
+// tenantsPolicyRow is the tenants' grant on the workers' network policy
+// kind; tenantsPolicyKinds the kind of each networkPolicy.flavor.
+const tenantsPolicyRow = "%s  []  []  [get list watch create update]"
+
+var tenantsPolicyKinds = map[string]string{"kubernetes": "networkpolicies.networking.k8s.io", "cilium": "ciliumnetworkpolicies.cilium.io"}
+
+// providersDefaultKey is the kagent.providers key naming the default
+// provider, whose apiKeySecretRef is the default ModelConfig's key.
+const providersDefaultKey = "default"
+
+// tenantsGrant is a required grant of tenants.organizations.enabled from
+// its row.
+func tenantsGrant(row string) saGrant {
+	resource, names, verbs, _ := parseRuleRow(row)
+	return saGrant{resource: resource, names: names, verbs: verbs, by: "tenants.organizations.enabled"}
+}
+
+// saGrant is one row a platform switch makes the agent-manager
+// ServiceAccount hold: a resource (as ruleRows words it), the resource names
+// it is narrowed to (none: every name) and its verbs. A required grant must
+// be there in full; an optional one may be missing (a row the chart renders
+// only on conditions the lab's values do not settle). by names the switch.
+type saGrant struct {
+	resource string
+	names    []string
+	verbs    []string
+	optional bool
+	by       string
+}
+
+// String words the grant like a ruleRows row.
+func (g saGrant) String() string {
+	return fmt.Sprintf("%s  []  %v  %v", g.resource, g.names, g.verbs)
+}
+
+// agentManagerGrants is what the switches in the lab's rendered values make
+// the agent-manager ServiceAccount hold in the kagent namespace, nothing
+// without either:
+//   - agent-manager.skills.mintGitAuthSecret: the skills-Secret Role
+//     (templates/skills-token.yaml), secrets get and update by the minted
+//     names;
+//   - tenants.organizations.enabled, where agent-manager runs with
+//     --multi-tenant (a chart that does not pass the switch on renders no
+//     reconciler and no ClusterRole): the tenant reconciler's ClusterRole
+//     (agent-manager's templates/tenants-rbac.yaml) with the default
+//     ModelConfig's key Secret the meta chart derives from
+//     kagent.providers.<default>.apiKeySecretRef, and, with networkPolicy
+//     enabled, the workers' policy kind of networkPolicy.flavor (either kind
+//     for `auto`, which the cluster resolves; optional, as the chart renders
+//     it only with Agent Substrate on).
+//
+// Always allowed, never required: the chart-source Role (agent-manager's
+// templates/chart-source-rbac.yaml), get and update on the agent chart's
+// OCIRepository by name, which a chart with downstream OAuth renders for the
+// source's convergence on start.
+func agentManagerGrants(values map[string]any, multiTenant bool) []saGrant {
+	grants := []saGrant{chartSourceGrant}
+	if minted := mintedSkillsSecretNames(values); minted != nil {
+		grants = append(grants, saGrant{resource: gvrSecrets.Resource, names: minted, verbs: mintGrantVerbs, by: "agent-manager." + skillsKey + "." + skillsMintValue})
+	}
+	if enabled, _ := nestedValue(values, "tenants", "organizations", valuesEnabled).(bool); !enabled || !multiTenant {
+		return grants
+	}
+	for _, row := range strings.Split(tenantsGrantRows, "\n") {
+		grants = append(grants, tenantsGrant(row))
+	}
+	providers, _ := nestedValue(values, "kagent", "providers").(map[string]any)
+	if key := nestedString(providers, nestedString(providers, providersDefaultKey), "apiKeySecretRef"); key != "" {
+		grants = append(grants, tenantsGrant(fmt.Sprintf(tenantsModelKeyRow, key)))
+	}
+	if enabled, _ := nestedValue(values, "networkPolicy", valuesEnabled).(bool); enabled {
+		flavor := nestedString(values, "networkPolicy", "flavor")
+		for _, f := range slices.Sorted(maps.Keys(tenantsPolicyKinds)) {
+			if flavor == f || flavor == "" || flavor == "auto" {
+				g := tenantsGrant(fmt.Sprintf(tenantsPolicyRow, tenantsPolicyKinds[f]))
+				g.optional = true
+				grants = append(grants, g)
+			}
+		}
+	}
+	return grants
+}
+
+// rulesBeyondGrants drops from granted the rows the switches' grants cover
+// and returns the rest. A row is covered by a grant on the same resource
+// whose verbs include the row's and whose names include the row's (a grant
+// on every name covers only a row on every name). Each required grant must
+// be there in full, its names and verbs spread over the rows that match it:
+// a missing one is an error, as agent-manager then cannot do the switch's
+// work. A row on more names, more verbs or any other resource stays granted.
+func rulesBeyondGrants(granted []string, grants []saGrant) ([]string, error) {
+	if len(grants) == 0 {
+		return granted, nil
+	}
+	names := make([][]string, len(grants))
+	verbs := make([][]string, len(grants))
+	var rest []string
+	for _, row := range granted {
+		resource, rowNames, rowVerbs, ok := parseRuleRow(row)
+		covered := false
+		for i, g := range grants {
+			if !ok || resource != g.resource || (len(g.names) == 0) != (len(rowNames) == 0) || !subsetOf(rowNames, g.names) || !subsetOf(rowVerbs, g.verbs) {
+				continue
+			}
+			covered = true
+			names[i] = append(names[i], rowNames...)
+			verbs[i] = append(verbs[i], rowVerbs...)
+		}
+		if !covered {
+			rest = append(rest, row)
+		}
+	}
+	var missing []string
+	for i, g := range grants {
+		if !g.optional && (!subsetOf(g.names, names[i]) || !subsetOf(g.verbs, verbs[i])) {
+			missing = append(missing, fmt.Sprintf("%s (%s), held: %v %v", g, g.by, names[i], verbs[i]))
+		}
+	}
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("the agent-manager ServiceAccount lacks in %s what the lab's switches grant it, so agent-manager cannot do their work:\n%s", kagentNamespace, strings.Join(missing, "\n"))
+	}
+	return rest, nil
+}
+
+// parseRuleRow splits a resource row of ruleRows ("<resource>  []  [<names>]
+// [<verbs>]") into its resource, resource names and verbs; ok is false for a
+// non-resource row.
+func parseRuleRow(row string) (resource string, names, verbs []string, ok bool) {
+	cols := strings.Split(row, "  ")
+	if len(cols) != 4 {
+		return "", nil, nil, false
+	}
+	list := func(col string) []string { return strings.Fields(strings.Trim(col, "[]")) }
+	return cols[0], list(cols[2]), list(cols[3]), true
+}
+
+// subsetOf says whether every element of sub is in set.
+func subsetOf(sub, set []string) bool {
+	for _, s := range sub {
+		if !slices.Contains(set, s) {
+			return false
+		}
+	}
+	return true
+}
+
+// grantsClause names the switches whose grants the check allows, for its
+// lines; "" without any.
+func grantsClause(grants []saGrant) string {
+	var by []string
+	for _, g := range grants {
+		if !slices.Contains(by, g.by) {
+			by = append(by, g.by)
+		}
+	}
+	if len(by) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" and exactly the grants of %s (%d rows)", strings.Join(by, " and "), len(grants))
+}
+
 // bootstrapExtras names the resource rows of the baseline beyond the
 // self-subject reviews — what the cluster's bootstrap policy hands every
 // principal (the ClusterTrustBundle discovery on a 1.36 cluster with the gate
@@ -877,7 +1124,7 @@ func proveAgentsTestRefreshSkills(session *musterSession, fixture SkillsFixture,
 	if !authenticated {
 		step("%supdate_agent refreshSkills: skipped, agent-manager calls GitHub without a token", agentManagerToolPrefix)
 		note("deployment %s/%s carries no GitHub credential (%s): refreshSkills would resolve %s's head on the anonymous window this machine shares", platformNamespace, agentManagerMCPServer, strings.Join(agentManagerGitHubEnv, ", "), fixture.Repo)
-		return fmt.Sprintf("SKIP: update_agent{refreshSkills} — agent-manager calls GitHub unauthenticated, on GitHub's anonymous rate limit (60 requests an hour, shared by this machine); record the skills GitHub App (`agentlab configure --github-app-installation-id <id>` for the workspaces GitHub App's installation, or with --github-app-id and --github-app-private-key-source another App), githubToken.source or $%s, then `agentlab platform`, to prove it", GitHubTokenEnv), nil
+		return "SKIP: update_agent{refreshSkills} — agent-manager calls GitHub unauthenticated, on GitHub's anonymous rate limit (60 requests an hour, shared by this machine); record the skills GitHub App (`agentlab configure --github-app-installation-id <id>` for the workspaces GitHub App's installation, or with --github-app-id and --github-app-private-key-source another App) or githubToken.source, then `agentlab platform`, to prove it", nil
 	}
 	step("%supdate_agent refreshSkills — the skill re-pins to %s's head %.12s", agentManagerToolPrefix, fixture.Repo, head)
 	refreshed, err := agentManagerUpdate(session, map[string]any{nameKey: agentsTestAgent, refreshSkillsKey: true})

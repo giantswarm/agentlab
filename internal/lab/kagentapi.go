@@ -103,6 +103,14 @@ const (
 	crSpec       = "spec"
 	crStatus     = "status"
 	crConditions = "conditions"
+	// The revision an Agent's new conversations start on, set once one
+	// golden snapshot was ready and kept while a newer revision prepares.
+	latestSuccessfulRevisionKey = "latestSuccessfulRevision"
+
+	// A tool result's text parts as omp reports them: {content: [{type:
+	// text, text}]}.
+	toolResultContent = "content"
+	toolResultText    = "text"
 
 	// kagentControllerRoute and kagentControllerJWTPolicy are the
 	// connectivity chart's route objects in front of the controller: the
@@ -531,8 +539,10 @@ type agentListing struct {
 // listingOf derives the roster entry from a listed Agent: the references
 // from its spec, the annotations from its metadata (the AgentTemplate's when
 // the Agent carries none, templates being the namespace's by name), the
-// readiness from status.conditions. An Agent is selectable when it reports
-// Ready=True.
+// readiness from its status. An Agent is selectable once it has a
+// latestSuccessfulRevision: kagent starts new conversations on that revision
+// while a newer one prepares (Ready=False, ActorTemplatePending), as the
+// kagent UI does; one without falls back to Ready=True.
 func listingOf(agent *apiv1alpha1.Agent, templates map[string]*apiv1alpha1.AgentTemplate) agentListing {
 	resource := agent.GetResource().GetValue().AsMap()
 	spec := nestedMap(resource, crSpec)
@@ -558,7 +568,11 @@ func listingOf(agent *apiv1alpha1.Agent, templates map[string]*apiv1alpha1.Agent
 	if l.Description == "" {
 		l.Description = stringOf(nestedMap(spec, "template")[descriptionKey])
 	}
-	conditions, _ := nestedMap(resource, crStatus)[crConditions].([]any)
+	status := nestedMap(resource, crStatus)
+	if stringOf(status[latestSuccessfulRevisionKey]) != "" {
+		return l
+	}
+	conditions, _ := status[crConditions].([]any)
 	if ready, reason := readyConditionOf(conditions); !ready {
 		l.Unavailable = fmt.Sprintf("Agent %s has not compiled a ready revision: %s", l.Name, reason)
 	}
@@ -854,6 +868,20 @@ func (a *kagentAPI) getTask(ctx context.Context, session *apiv1alpha1.Session, t
 	return task, nil
 }
 
+// fullTask is getTask with the task's whole history.
+func (a *kagentAPI) fullTask(ctx context.Context, session *apiv1alpha1.Session, taskID a2a.TaskID) (*a2a.Task, error) {
+	history := fullTaskHistory
+	task, err := a.a2a.GetTask(a.a2aCtx(ctx), &a2a.GetTaskRequest{Tenant: agentTenant(session.GetAgent()), ID: taskID, HistoryLength: &history})
+	if err != nil {
+		return nil, fmt.Errorf("GetTask %s: %w", taskID, err)
+	}
+	return task, nil
+}
+
+// fullTaskHistory is the history length fullTask asks for: more messages
+// than a proof's turn produces.
+const fullTaskHistory = 1000
+
 // listTasks is A2AService/ListTasks narrowed to the session (its context
 // id): its tasks, one page of up to 100 (a proof's session has a handful).
 func (a *kagentAPI) listTasks(ctx context.Context, session *apiv1alpha1.Session) ([]*a2a.Task, error) {
@@ -899,9 +927,18 @@ type turn struct {
 	// working, in order: a runtime's word before the answer, such as the
 	// workspace setup's.
 	notices []string
+	// tools are the results of the tools the turn ran, in order: the
+	// harness's function_response artifacts, each once however often its
+	// artifact is delivered (streamed, then on the task); toolsSeen holds
+	// the results read.
+	tools     []harnessToolResult
+	toolsSeen map[harnessToolResult]bool
 	// approval is the tool_approval_request the task paused on at
 	// input-required, nil otherwise.
 	approval *toolApprovalRequest
+	// signIn is the url_elicitation_request the task paused on at
+	// input-required: an MCP server's sign-in link, nil otherwise.
+	signIn *urlElicitationRequest
 	// message is set for a bare Message answer (no task).
 	message *a2a.Message
 	events  int
@@ -956,10 +993,11 @@ func (t *turn) observe(ev a2a.Event) {
 
 func (t *turn) setStatus(s a2a.TaskStatus) {
 	t.states = append(t.states, s.State)
-	t.approval = nil
+	t.approval, t.signIn = nil, nil
 	switch {
 	case s.State == a2a.TaskStateInputRequired:
 		t.approval = parseToolApprovalRequest(s.Message)
+		t.signIn = parseURLElicitationRequest(s.Message)
 		t.statusText = messageText(s.Message)
 	case s.State.Terminal():
 		t.statusText = messageText(s.Message)
@@ -982,6 +1020,16 @@ func (t *turn) addArtifact(artifact *a2a.Artifact, appendChunk bool) {
 	}
 	if _, seen := t.artifactText[artifact.ID]; !seen {
 		t.artifactOrder = append(t.artifactOrder, artifact.ID)
+	}
+	for _, r := range toolResults(artifact.Parts) {
+		if t.toolsSeen[r] {
+			continue
+		}
+		if t.toolsSeen == nil {
+			t.toolsSeen = map[harnessToolResult]bool{}
+		}
+		t.toolsSeen[r] = true
+		t.tools = append(t.tools, r)
 	}
 	text := partsText(artifact.Parts)
 	if appendChunk {
@@ -1025,6 +1073,88 @@ func partsText(parts a2a.ContentParts) string {
 		}
 	}
 	return strings.Join(texts, "")
+}
+
+// harnessToolResult is one tool's result as the harness reports it: the tool's
+// name (command_execution for a shell command, <server>.<tool> for an MCP
+// tool on codex) and its output, a command's output or the result's JSON;
+// id is the call's, "" where the harness gives none (codex numbers its
+// items per turn, so an id alone does not tell two results apart).
+type harnessToolResult struct {
+	id, name, output string
+}
+
+// toolActivityTypeKeys are the part metadata a harness types its tool
+// activity with (the kagent line's key, then upstream's);
+// functionResponseType is a tool's result.
+var toolActivityTypeKeys = []string{"kagent.dev/a2a/part-type", "kagent_type"}
+
+const functionResponseType = "function_response"
+
+// toolActivityType is the type a harness gave a part, "" for none.
+func toolActivityType(part *a2a.Part) string {
+	for _, key := range toolActivityTypeKeys {
+		if kind := stringOf(part.Metadata[key]); kind != "" {
+			return kind
+		}
+	}
+	return ""
+}
+
+// toolResults reads the tool results among an artifact's parts: data parts
+// typed function_response, carrying {id, name, response: {result}}.
+func toolResults(parts a2a.ContentParts) []harnessToolResult {
+	var results []harnessToolResult
+	for _, part := range parts {
+		if part == nil || toolActivityType(part) != functionResponseType {
+			continue
+		}
+		data, ok := part.Data().(map[string]any)
+		if !ok {
+			continue
+		}
+		response, _ := data["response"].(map[string]any)
+		results = append(results, harnessToolResult{id: stringOf(data["id"]), name: stringOf(data["name"]), output: toolOutput(response["result"])})
+	}
+	return results
+}
+
+// toolOutput words a tool's result: a shell command's output where the
+// harness reports one (codex's output, or the text parts of omp's content),
+// the result as JSON otherwise.
+func toolOutput(result any) string {
+	if fields, ok := result.(map[string]any); ok {
+		if output, ok := fields["output"].(string); ok {
+			return output
+		}
+		if parts, ok := fields[toolResultContent].([]any); ok {
+			var texts []string
+			for _, part := range parts {
+				if p, ok := part.(map[string]any); ok && p[fieldTypeKey] == toolResultText {
+					if text, ok := p[toolResultText].(string); ok {
+						texts = append(texts, text)
+					}
+				}
+			}
+			if len(texts) > 0 {
+				return strings.Join(texts, "\n")
+			}
+		}
+	}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		return ""
+	}
+	return string(raw)
+}
+
+// toolOutputs joins the outputs of the turn's tools, one per line.
+func (t *turn) toolOutputs() string {
+	outputs := make([]string, 0, len(t.tools))
+	for _, tool := range t.tools {
+		outputs = append(outputs, tool.output)
+	}
+	return strings.Join(outputs, "\n")
 }
 
 // turn drives one streamed turn on the session to the end of its stream
@@ -1119,6 +1249,59 @@ func parseToolApprovalRequest(msg *a2a.Message) *toolApprovalRequest {
 	return &req
 }
 
+// urlElicitationRequest is the HITL payload of a task paused at
+// input-required on an MCP server's URL elicitation: the person opens URL,
+// such as muster's sign-in link, then the task resumes.
+type urlElicitationRequest struct {
+	ID      string `json:"id"`
+	Server  string `json:"server"`
+	Message string `json:"message"`
+	URL     string `json:"url"`
+}
+
+// The URL elicitation's payload types and the actions that answer it.
+const (
+	hitlTypeURLElicitationRequest  = "url_elicitation_request"
+	hitlTypeURLElicitationResponse = "url_elicitation_response"
+	signInAccept                   = "accept"
+	signInDecline                  = "decline"
+)
+
+// parseURLElicitationRequest reads the url_elicitation_request a status
+// message carries under the HITL extension; nil without one.
+func parseURLElicitationRequest(msg *a2a.Message) *urlElicitationRequest {
+	if msg == nil || !slices.Contains(msg.Extensions, hitlExtensionURI) {
+		return nil
+	}
+	raw, ok := msg.Metadata[hitlExtensionURI].(map[string]any)
+	if !ok || stringOf(raw[fieldTypeKey]) != hitlTypeURLElicitationRequest {
+		return nil
+	}
+	req := &urlElicitationRequest{ID: stringOf(raw["id"]), Server: stringOf(raw["server"]), Message: stringOf(raw["message"]), URL: stringOf(raw["url"])}
+	if req.ID == "" || req.URL == "" {
+		return nil
+	}
+	return req
+}
+
+// answerSignIn resumes a task paused on a url_elicitation_request with
+// action (signInAccept: the person signed in; signInDecline) and folds the
+// resumed stream. The text part is the transcript's line.
+func (a *kagentAPI) answerSignIn(ctx context.Context, session *apiv1alpha1.Session, paused *turn, action string) (*turn, error) {
+	if paused.signIn == nil {
+		return nil, fmt.Errorf("task %s carries no url_elicitation_request to answer (state %s)", paused.taskID, stateName(paused.state()))
+	}
+	text := "I've signed in."
+	if action != signInAccept {
+		text = "Not now."
+	}
+	msg := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart(text))
+	msg.TaskID = paused.taskID
+	msg.SetMeta(hitlExtensionURI, map[string]any{fieldTypeKey: hitlTypeURLElicitationResponse, "id": paused.signIn.ID, "action": action})
+	msg.Extensions = append(msg.Extensions, hitlExtensionURI)
+	return a.turn(ctx, session, msg)
+}
+
 // decisionMessage answers a paused task's tool_approval_request the way
 // kagent's UI does: a user message on the paused task, the extension
 // declared, under its URI one approval per requested tool — all approved,
@@ -1211,28 +1394,41 @@ func (t *turn) completedText() (string, error) {
 // Shared steps of the proofs call this one; a turn that pauses for a
 // decision is an error (their agents bind nothing that requires approval).
 func agentTurnAs(cfg *config.Config, name, token, prompt string) (string, error) {
+	return agentTurnOf(cfg, agentRef(name), token, prompt)
+}
+
+// agentTurnOf is agentTurnAs for an Agent of any namespace: an organization
+// namespace's agent (tenants-test).
+func agentTurnOf(cfg *config.Config, agent *apiv1alpha1.ResourceReference, token, prompt string) (string, error) {
+	reply, _, err := agentSessionTurnOf(cfg, agent, token, prompt)
+	return reply, err
+}
+
+// agentSessionTurnOf is agentTurnOf that also returns the id of the Session
+// the turn ran in, which names its Substrate actor.
+func agentSessionTurnOf(cfg *config.Config, agent *apiv1alpha1.ResourceReference, token, prompt string) (reply, sessionID string, err error) {
+	name := agent.GetName()
 	api, err := dialKagentAPI(cfg, token)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer api.close()
 	ctx, cancel := context.WithTimeout(context.Background(), kagentTurnTimeout)
 	defer cancel()
-	session, err := api.createSession(ctx, name, uuid.NewString())
+	session, err := api.createSessionOf(ctx, agent, uuid.NewString())
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer api.removeSession(session.GetId())
 	note("Session %s of %s (creator %s, %s)", session.GetId(), name, session.GetCreator(), sessionState(session))
 	t, err := api.turn(ctx, session, userMessage(prompt))
 	if err != nil {
-		return "", fmt.Errorf("A2A turn on %s: %w", name, err)
+		return "", session.GetId(), fmt.Errorf("A2A turn on %s: %w", name, err)
 	}
-	reply, err := t.completedText()
-	if err != nil {
-		return "", fmt.Errorf("A2A turn on %s: %w", name, err)
+	if reply, err = t.completedText(); err != nil {
+		return "", session.GetId(), fmt.Errorf("A2A turn on %s: %w", name, err)
 	}
-	return reply, nil
+	return reply, session.GetId(), nil
 }
 
 // removeSession deletes a session on the cleanup paths, bounded on its own

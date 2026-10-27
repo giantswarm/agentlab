@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"slices"
 	"strings"
 	"time"
 
@@ -101,6 +100,7 @@ const (
 const (
 	iconURLKey       = "iconUrl"
 	skillsKey        = "skills"
+	pluginsKey       = "plugins"
 	refreshSkillsKey = "refreshSkills"
 	// requireApprovalKey is the chart's muster.requireApproval value.
 	requireApprovalKey = "requireApproval"
@@ -117,6 +117,7 @@ const (
 	conditionAccepted   = "Accepted"
 	conditionCompatible = "Compatible"
 	readyReasonPending  = "ActorTemplatePending"
+	readyReasonRetrying = "ActorTemplateRetrying"
 	helmInstallFailed   = "InstallFailed"
 	helmUpgradeFailed   = "UpgradeFailed"
 )
@@ -150,6 +151,13 @@ type agentSpec struct {
 	// decision. The direct writer only — agent-manager's create_agent has no
 	// such argument.
 	RequireApproval bool
+	// Egress is the HTTP(S) origins the agent reaches beyond its compiled
+	// destinations (agent.egress, the Agent's spec.egress); nil declares
+	// none.
+	Egress []string
+	// Plugins are the packages the agent binds (agent-manager's plugins,
+	// the chart's plugins), pinned by commit.
+	Plugins []agentPlugin
 }
 
 // agentSkill is one skills[] entry: a name, a directory and exactly one
@@ -169,6 +177,32 @@ type gitSkill struct {
 	URL    string `json:"url"`
 	Ref    string `json:"ref,omitempty"`
 	Commit string `json:"commit,omitempty"`
+}
+
+// agentPlugin is one plugins[] entry: exactly one source, the plugin's
+// directory in it and the skills to enable from an Agent Plugins format
+// package. Skills nil omits the selection, as a Claude-format plugin takes
+// none; an empty Skills sends [], the selection that enables nothing.
+type agentPlugin struct {
+	Path   string
+	Git    *gitSkill
+	OCI    string
+	Skills []string
+}
+
+func (p agentPlugin) MarshalJSON() ([]byte, error) {
+	type source struct {
+		Path string    `json:"path,omitempty"`
+		Git  *gitSkill `json:"git,omitempty"`
+		OCI  string    `json:"oci,omitempty"`
+	}
+	if p.Skills == nil {
+		return json.Marshal(source{p.Path, p.Git, p.OCI})
+	}
+	return json.Marshal(struct {
+		source
+		Skills []string `json:"skills"`
+	}{source{p.Path, p.Git, p.OCI}, p.Skills})
 }
 
 // harnessValue is the Harness the spec's Agent references (agent.harness).
@@ -313,6 +347,12 @@ func createAgentArgs(spec agentSpec) (map[string]any, error) {
 	}
 	if len(spec.Skills) > 0 {
 		args[skillsKey] = spec.Skills
+	}
+	if len(spec.Egress) > 0 {
+		args[egressKey] = spec.Egress
+	}
+	if len(spec.Plugins) > 0 {
+		args[pluginsKey] = spec.Plugins
 	}
 	return args, nil
 }
@@ -521,6 +561,9 @@ spec:
 // Harness the template is placed on.
 func agentValues(spec agentSpec) map[string]any {
 	agent := map[string]any{nameKey: spec.Name, "harness": spec.harnessValue()}
+	if len(spec.Egress) > 0 {
+		agent[egressKey] = spec.Egress
+	}
 	for key, value := range map[string]string{
 		displayNameKey: spec.DisplayName, descriptionKey: spec.Description, systemMessageKey: spec.SystemMessage, iconURLKey: spec.IconURL,
 	} {
@@ -803,7 +846,8 @@ func readAgentReadinessOn(name, harness string) (agentReadiness, error) {
 // terminalAgentFailure reads an Agent's conditions for a failure the
 // controller will not retry: ResolvedRefs or Compatible False, or Ready False
 // for a reason other than the golden snapshot still pending
-// (ActorTemplatePending). ActorTemplateFailed carries Substrate's own error
+// (ActorTemplatePending) or its boot started over after a failed attempt
+// (ActorTemplateRetrying, while attempts are left). ActorTemplateFailed carries Substrate's own error
 // for the boot, ActorTemplateConflict an immutable-template clash. The text
 // is the condition as the evidence quotes it.
 func terminalAgentFailure(s *agentStatus) (string, bool) {
@@ -815,7 +859,7 @@ func terminalAgentFailure(s *agentStatus) (string, bool) {
 		case conditionResolvedRefs, conditionCompatible:
 			return c.String(), true
 		case conditionReady:
-			if c.Reason != readyReasonPending {
+			if c.Reason != readyReasonPending && c.Reason != readyReasonRetrying {
 				return c.String(), true
 			}
 		}
@@ -944,12 +988,19 @@ func agentExists(name string) bool {
 // so a failed first turn is said and tried once more — never more, and never
 // silently.
 func firstTurnAs(cfg *config.Config, name, token, prompt string) (string, error) {
-	reply, err := agentTurnAs(cfg, name, token, prompt)
+	reply, _, err := firstSessionTurnAs(cfg, name, token, prompt)
+	return reply, err
+}
+
+// firstSessionTurnAs is firstTurnAs that also returns the id of the Session
+// the answered turn ran in.
+func firstSessionTurnAs(cfg *config.Config, name, token, prompt string) (reply, sessionID string, err error) {
+	reply, sessionID, err = agentSessionTurnOf(cfg, agentRef(name), token, prompt)
 	if err == nil {
-		return reply, nil
+		return reply, sessionID, nil
 	}
 	note("the first turn on %s failed (%s) — one retry, a cold worker's ResumeActor deadline is not retried by Substrate", name, excerpt(err.Error(), 200))
-	return agentTurnAs(cfg, name, token, prompt)
+	return agentSessionTurnOf(cfg, agentRef(name), token, prompt)
 }
 
 // toolsetHeaderOf is the X-Muster-Toolset the agent's runtime sends, read
@@ -1001,21 +1052,6 @@ func remoteMCPServerHeader(rms *unstructured.Unstructured, name string) (string,
 		return string(value), true, nil
 	}
 	return "", false, nil
-}
-
-// headerNames lists the names of a RemoteMCPServer's headersFrom, sorted.
-func headerNames(rms *unstructured.Unstructured) []string {
-	headers, _, _ := unstructured.NestedSlice(rms.Object, "spec", "headersFrom")
-	var names []string
-	for _, h := range headers {
-		if m, ok := h.(map[string]any); ok {
-			if n, _, _ := unstructured.NestedString(m, nameKey); n != "" {
-				names = append(names, n)
-			}
-		}
-	}
-	slices.Sort(names)
-	return names
 }
 
 // fieldTypeKey is the `type` key of a headersFrom valueFrom (Secret | ConfigMap).

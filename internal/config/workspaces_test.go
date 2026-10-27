@@ -6,9 +6,11 @@ import (
 	"testing"
 )
 
-// The workspaces switch: it needs the agents runtime (Substrate's signers
-// certify the driver's endpoint); the NFS driver's node plugin runs on every
-// node, so any number of reserved substrate workers is accepted.
+// The workspaces switch: with the agents runtime the workspaces run with
+// Agent Substrate; without it they are refused (the chart's workspaces live
+// in kagent's namespace), with the CSI companion or not; the NFS driver's
+// node plugin runs on every node, so any number of reserved substrate
+// workers is accepted.
 func TestWorkspacesSwitch(t *testing.T) {
 	cfg := Default()
 	if cfg.WorkspacesEnabled() {
@@ -26,14 +28,14 @@ func TestWorkspacesSwitch(t *testing.T) {
 		t.Errorf("workspaces with two substrate nodes: %v, want accepted (the node plugin runs on every node)", err)
 	}
 
-	cfg = Default()
-	cfg.Platform.Workspaces.Enabled = true
-	cfg.Platform.Agents = false
-	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "platform.workspaces requires platform.agents") {
-		t.Errorf("workspaces without agents: err = %v, want the agents requirement", err)
-	}
-	if cfg.WorkspacesEnabled() {
-		t.Error("WorkspacesEnabled true without the agents runtime")
+	for _, companion := range []bool{false, true} {
+		cfg = Default()
+		cfg.Platform.Workspaces.Enabled = true
+		cfg.Platform.Workspaces.CSICompanion = companion
+		cfg.Platform.Agents = false
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "platform.workspaces requires platform.agents") {
+			t.Errorf("workspaces without agents (csiCompanion %v): err = %v, want the agents requirement", companion, err)
+		}
 	}
 
 	cfg = Default()
@@ -48,13 +50,13 @@ func TestWorkspacesSwitch(t *testing.T) {
 	}
 }
 
-// The provider instances: the fake alone by default, github, or both in
-// the workspace-manager's order however they are written; anything else
+// The provider instances: github alone by default, gitlab, or both in the
+// workspace-manager's order however they are written; anything else
 // refused; and they count only with workspaces on.
 func TestWorkspacesProvider(t *testing.T) {
 	cfg := Default()
 	cfg.Platform.Workspaces.Provider = WorkspaceProviderGitHub
-	if cfg.WorkspaceGitHubProvider() || cfg.WorkspaceFakeProvider() || cfg.WorkspaceProviders() != nil {
+	if cfg.WorkspaceGitHubProvider() || cfg.WorkspaceProviders() != nil {
 		t.Error("a provider counts with workspaces off")
 	}
 	cfg.Platform.Workspaces.Enabled = true
@@ -62,14 +64,11 @@ func TestWorkspacesProvider(t *testing.T) {
 		provider string
 		want     []string
 	}{
-		{"", []string{WorkspaceProviderFake}},
-		{"fake", []string{WorkspaceProviderFake}},
+		{"", []string{WorkspaceProviderGitHub}},
 		{"github", []string{WorkspaceProviderGitHub}},
-		{"fake,github", []string{WorkspaceProviderFake, WorkspaceProviderGitHub}},
-		{" github , fake ", []string{WorkspaceProviderFake, WorkspaceProviderGitHub}},
 		{"gitlab", []string{WorkspaceProviderGitLab}},
-		{"gitlab,fake,github", []string{WorkspaceProviderFake, WorkspaceProviderGitHub, WorkspaceProviderGitLab}},
-		{"fake-bearer,fake", []string{WorkspaceProviderFake, WorkspaceProviderFakeBearer}},
+		{"gitlab,github", []string{WorkspaceProviderGitHub, WorkspaceProviderGitLab}},
+		{" gitlab , github ", []string{WorkspaceProviderGitHub, WorkspaceProviderGitLab}},
 	} {
 		cfg.Platform.Workspaces.Provider = tc.provider
 		if err := cfg.Validate(); err != nil {
@@ -78,15 +77,11 @@ func TestWorkspacesProvider(t *testing.T) {
 		if got := cfg.WorkspaceProviders(); !slices.Equal(got, tc.want) {
 			t.Errorf("provider %q: instances %v, want %v", tc.provider, got, tc.want)
 		}
-		if cfg.WorkspaceFakeProvider() != slices.Contains(tc.want, WorkspaceProviderFake) || cfg.WorkspaceGitHubProvider() != slices.Contains(tc.want, WorkspaceProviderGitHub) ||
-			cfg.WorkspaceGitLabProvider() != slices.Contains(tc.want, WorkspaceProviderGitLab) {
-			t.Errorf("provider %q: fake %v, github %v, gitlab %v, want %v", tc.provider, cfg.WorkspaceFakeProvider(), cfg.WorkspaceGitHubProvider(), cfg.WorkspaceGitLabProvider(), tc.want)
-		}
-		if cfg.WorkspaceFakeBearerProvider() != slices.Contains(tc.want, WorkspaceProviderFakeBearer) {
-			t.Errorf("provider %q: fake-bearer %v, want %v", tc.provider, cfg.WorkspaceFakeBearerProvider(), tc.want)
+		if cfg.WorkspaceGitHubProvider() != slices.Contains(tc.want, WorkspaceProviderGitHub) || cfg.WorkspaceGitLabProvider() != slices.Contains(tc.want, WorkspaceProviderGitLab) {
+			t.Errorf("provider %q: github %v, gitlab %v, want %v", tc.provider, cfg.WorkspaceGitHubProvider(), cfg.WorkspaceGitLabProvider(), tc.want)
 		}
 	}
-	for _, provider := range []string{"gitea", "fake,gitea", "fake,fake", "github,", "fake-bearer", "github,fake-bearer"} {
+	for _, provider := range []string{"gitea", "github,gitea", "github,github", "github,", "ghe"} {
 		cfg.Platform.Workspaces.Provider = provider
 		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "platform.workspaces.provider") {
 			t.Errorf("provider %q: err = %v, want refused", provider, err)
@@ -94,20 +89,6 @@ func TestWorkspacesProvider(t *testing.T) {
 		if cfg.WorkspaceProviders() != nil {
 			t.Errorf("provider %q: instances %v, want none for a refused value", provider, cfg.WorkspaceProviders())
 		}
-	}
-	cfg.Platform.Workspaces.Provider = ""
-	if got, want := cfg.WorkspaceManagerSignInURL(), "https://workspace-manager.127.0.0.1.nip.io/signin"; got != want {
-		t.Errorf("sign-in URL %s, want %s (port-free on 443)", got, want)
-	}
-	if got, want := cfg.WorkspaceCallbackURL(WorkspaceProviderFake), "https://workspace-manager.127.0.0.1.nip.io/callback/fake"; got != want {
-		t.Errorf("the fake's callback URL %s, want %s", got, want)
-	}
-	if got, want := cfg.GitHubFakeURL(), "https://github.127.0.0.1.nip.io"; got != want {
-		t.Errorf("the fake's URL %s, want %s", got, want)
-	}
-	cfg.Platform.GatewayPort = 8443
-	if got, want := cfg.GitHubFakeURL(), "https://github.127.0.0.1.nip.io"; got != want {
-		t.Errorf("the fake's URL %s, want %s: pods reach it on 443 whatever the gateway port", got, want)
 	}
 }
 
@@ -137,7 +118,7 @@ func TestWorkspaceGitLabValidate(t *testing.T) {
 	}
 	cfg := Default()
 	cfg.Platform.Workspaces.Enabled = true
-	cfg.Platform.Workspaces.Provider = "fake,gitlab"
+	cfg.Platform.Workspaces.Provider = "github,gitlab"
 	cfg.Platform.Workspaces.GitLab = ok
 	cfg.Platform.Workspaces.GitLab.URL = "ftp://gitlab.example.com"
 	if err := cfg.Validate(); err == nil {
@@ -159,5 +140,134 @@ func TestWorkspacesSessionsCleanupAfter(t *testing.T) {
 		if !ok && (err == nil || !strings.Contains(err.Error(), "sessionsCleanupAfter")) {
 			t.Errorf("%q: err = %v, want refused", value, err)
 		}
+	}
+}
+
+// The refresh threshold: empty keeps the manager's, a positive Go duration
+// is taken, anything else refused.
+func TestWorkspacesSyncRefreshAfter(t *testing.T) {
+	for value, ok := range map[string]bool{"": true, "1m": true, "1h": true, "0s": false, "-1m": false, "a minute": false} {
+		cfg := Default()
+		cfg.Platform.Workspaces.Enabled = true
+		cfg.Platform.Workspaces.SyncRefreshAfter = value
+		err := cfg.Validate()
+		if ok && err != nil {
+			t.Errorf("%q: %v", value, err)
+		}
+		if !ok && (err == nil || !strings.Contains(err.Error(), "syncRefreshAfter")) {
+			t.Errorf("%q: err = %v, want refused", value, err)
+		}
+	}
+}
+
+// The instance muster pins the workspace-manager to: the first instance
+// while grantProvider is empty, the named one otherwise; a name of no
+// configured instance is refused.
+func TestWorkspaceGrantProvider(t *testing.T) {
+	for _, c := range []struct{ provider, grant, want string }{
+		{"", "", WorkspaceProviderGitHub},
+		{WorkspaceProviderGitLab, "", WorkspaceProviderGitLab},
+		{WorkspaceProviderGitHub + "," + WorkspaceProviderGitLab, "", WorkspaceProviderGitHub},
+		{WorkspaceProviderGitHub + "," + WorkspaceProviderGitLab, WorkspaceProviderGitLab, WorkspaceProviderGitLab},
+	} {
+		cfg := Default()
+		cfg.Platform.Workspaces.Enabled = true
+		cfg.Platform.Workspaces.Provider, cfg.Platform.Workspaces.GrantProvider = c.provider, c.grant
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("%q/%q: %v", c.provider, c.grant, err)
+		}
+		if got := cfg.WorkspaceGrantProvider(); got != c.want {
+			t.Errorf("%q/%q: WorkspaceGrantProvider() = %q, want %q", c.provider, c.grant, got, c.want)
+		}
+	}
+	cfg := Default()
+	cfg.Platform.Workspaces.Enabled = true
+	cfg.Platform.Workspaces.Provider, cfg.Platform.Workspaces.GrantProvider = WorkspaceProviderGitHub, WorkspaceProviderGitLab
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "grantProvider") {
+		t.Errorf("a grantProvider of no configured instance: err = %v, want refused", err)
+	}
+	if got := Default().WorkspaceGrantProvider(); got != "" {
+		t.Errorf("workspaces off: WorkspaceGrantProvider() = %q, want none", got)
+	}
+}
+
+// grantProvider apps pins no instance: muster keeps one provider App per
+// instance, which takes two or more instances.
+func TestWorkspaceProviderApps(t *testing.T) {
+	cfg := Default()
+	cfg.Platform.Workspaces.Enabled = true
+	cfg.Platform.Workspaces.Provider = WorkspaceProviderGitHub + "," + WorkspaceProviderGitLab
+	cfg.Platform.Workspaces.GrantProvider = WorkspaceGrantProviderApps
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("apps beside github and gitlab: %v", err)
+	}
+	if !cfg.WorkspaceProviderApps() || cfg.WorkspaceGrantProvider() != "" {
+		t.Errorf("apps: WorkspaceProviderApps() = %t, WorkspaceGrantProvider() = %q, want true and no pin", cfg.WorkspaceProviderApps(), cfg.WorkspaceGrantProvider())
+	}
+	cfg.Platform.Workspaces.Provider = WorkspaceProviderGitLab
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "two or more") {
+		t.Errorf("apps beside one instance: err = %v, want refused", err)
+	}
+	if cfg.WorkspaceProviderApps() {
+		t.Error("apps beside one instance: WorkspaceProviderApps() = true, want false")
+	}
+}
+
+func TestValidateProofRepositories(t *testing.T) {
+	const key = "platform.workspaces.github.proofRepositories"
+	for _, ok := range [][]string{nil, {"example-org/workspace-proof", "example-org/other-repo"}, {"workspaces/sub/a", "workspaces/sub/b"}} {
+		if err := ValidateProofRepositories(key, ok); err != nil {
+			t.Errorf("%v: %v", ok, err)
+		}
+	}
+	for name, bad := range map[string][]string{
+		"one":      {"example-org/workspace-proof"},
+		"three":    {"p/q", "c/d", "e/f"},
+		"no owner": {"workspace-proof", "a/b"},
+		"a URL":    {"https://github.com/a/b", "g/h"},
+		".git":     {"a/b.git", "i/j"},
+		"repeated": {"x/y", "X/Y"},
+	} {
+		if err := ValidateProofRepositories(key, bad); err == nil || !strings.Contains(err.Error(), key) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+// The workspace storage: empty, nfs and hostpath accepted; hostpath refused
+// beside substrate workers and beside the CSI companion; any other value
+// refused.
+func TestWorkspacesStorage(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		storage        string
+		substrateNodes int
+		companion      bool
+		wantErr        string
+	}{
+		{"empty", "", 0, false, ""},
+		{"nfs", WorkspaceStorageNFS, 2, true, ""},
+		{"hostpath", WorkspaceStorageHostPath, 0, false, ""},
+		{"hostpath with workers", WorkspaceStorageHostPath, 1, false, "substrateNodes 1"},
+		{"hostpath with the companion", WorkspaceStorageHostPath, 0, true, "csiCompanion"},
+		{"moosefs", WorkspaceStorageMooseFS, 0, false, ""},
+		{"moosefs with workers", WorkspaceStorageMooseFS, 2, false, ""},
+		{"moosefs with the companion", WorkspaceStorageMooseFS, 0, true, "csiCompanion"},
+		{"another storage", "ceph", 0, false, `platform.workspaces.storage "ceph"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Default()
+			cfg.Platform.Workspaces.Enabled = true
+			cfg.Platform.Workspaces.Storage = tc.storage
+			cfg.Platform.Workspaces.CSICompanion = tc.companion
+			cfg.SubstrateNodes = tc.substrateNodes
+			err := cfg.Validate()
+			switch {
+			case tc.wantErr == "" && err != nil:
+				t.Errorf("Validate: %v, want accepted", err)
+			case tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)):
+				t.Errorf("Validate: %v, want an error naming %q", err, tc.wantErr)
+			}
+		})
 	}
 }

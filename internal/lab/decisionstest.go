@@ -2,6 +2,7 @@ package lab
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -77,7 +78,8 @@ type DecisionsTestOptions struct {
 	GatewayImage  string
 	GatewayBinary string
 	// Port is the host port of the gateway's endpoints; the admin endpoints
-	// take Port+1, the fake Slack Web API Port+2. Default 18090.
+	// take Port+1, the fake Slack Web API Port+2. Default the lab's own block,
+	// gatewayTestPort.
 	Port int
 	// RunDir holds the stores, the keys and the gateway's log; empty picks
 	// a temporary directory removed at the end.
@@ -96,9 +98,7 @@ func DecisionsTest(cfg *config.Config, email string, opts DecisionsTestOptions) 
 	if user == nil {
 		return fmt.Errorf("no user %q in %s", email, config.File)
 	}
-	if opts.Port == 0 {
-		opts.Port = 18090
-	}
+	opts.Port = cmp.Or(opts.Port, gatewayTestPort(cfg))
 	if err := portsFree(opts.Port, opts.Port+1, opts.Port+2); err != nil {
 		return err
 	}
@@ -127,7 +127,7 @@ func DecisionsTest(cfg *config.Config, email string, opts DecisionsTestOptions) 
 	run := strings.ToUpper(randomSuffix())
 	person := slackUserPrefix + run + "P"
 	channel := "CAGENTLAB" + run
-	fake, err := startFakeSlack(net.JoinHostPort("127.0.0.1", strconv.Itoa(opts.Port+2)), map[string]string{person: user.Email})
+	fake, err := startFakeSlack(net.JoinHostPort("127.0.0.1", strconv.Itoa(opts.Port+2)), map[string]string{person: user.Email}, nil)
 	if err != nil {
 		return err
 	}
@@ -166,6 +166,7 @@ func DecisionsTest(cfg *config.Config, email string, opts DecisionsTestOptions) 
 	}
 	gwOpts := KlausGatewayTestOptions{GatewayImage: opts.GatewayImage, GatewayBinary: opts.GatewayBinary, Port: opts.Port}
 	gw := newGatewayProcess(gwOpts, runDir, caFile, "grpcs://"+edge, fake.baseURL(), cfg.MusterBaseURL())
+	gw.container = gatewayContainerName(cfg)
 	gw.extraArgs = []string{"--reviews-enabled=true", "--reviews-allowed-callers=" + caller}
 	gw.kubeconfig = kubeconfig
 	gw.trustLabCA = true
@@ -439,9 +440,9 @@ func (a *decisionsAPI) post(body map[string]any) (decisionReceipt, error) {
 // answered with tool; addressee is {"team", "channel"} or {"person"}.
 func decisionBody(addressee map[string]any, question, tool string) map[string]any {
 	body := map[string]any{
-		"note":      decisionsNote,
-		"question":  question,
-		"statusQuo": "graveler and glean run the release since Tuesday without a restart.",
+		beekeeperKeyNote: decisionsNote,
+		"question":       question,
+		"statusQuo":      "graveler and glean run the release since Tuesday without a restart.",
 		"options": []any{
 			map[string]any{decisionsKeyLabel: "Roll tonight", "consequence": "The lane clears at 22:00."},
 			map[string]any{decisionsKeyLabel: "Wait for Monday", "consequence": "Nothing rolls before Monday."},
