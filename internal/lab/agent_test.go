@@ -2,12 +2,14 @@ package lab
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -590,4 +592,88 @@ func TestPortalCreateAgentReport(t *testing.T) {
 	if _, err := portalCreateAgentReport(http.StatusOK, []byte("")); err == nil || !strings.Contains(err.Error(), "not the expected JSON") {
 		t.Errorf("empty payload error = %v", err)
 	}
+}
+
+// retryingAgent is an Agent whose Ready condition reports crashed golden
+// boot attempt of kagent's six, as a parent quotes its Shared child's.
+func retryingAgent(attempt int) *agentObject {
+	return &agentObject{Status: agentStatus{Conditions: []templateCondition{{
+		Type: conditionReady, Status: condFalseStatus, Reason: readyReasonRetrying,
+		Message: fmt.Sprintf("Agent kagent/hm-c: golden boot %d of 6 failed (GoldenActorCrashed: exit status 1); starting it over", attempt),
+	}}}}
+}
+
+func TestGoldenBootAttempt(t *testing.T) {
+	if got := goldenBootAttempt(&retryingAgent(3).Status); got != 3 {
+		t.Errorf("retrying = %d, want 3", got)
+	}
+	failed := &agentStatus{Conditions: []templateCondition{{
+		Type: conditionReady, Status: condFalseStatus, Reason: "ActorTemplateFailed",
+		Message: "golden boot 6 of 6 failed (GoldenActorCrashed: exit status 1); no retries left",
+	}}}
+	if got := goldenBootAttempt(failed); got != 0 {
+		t.Errorf("failed = %d, want 0 (terminal, not a retry)", got)
+	}
+	pending := &agentStatus{Conditions: []templateCondition{{
+		Type: conditionReady, Status: condFalseStatus, Reason: readyReasonPending, Message: "waiting for the ActorTemplate golden snapshot",
+	}}}
+	if got := goldenBootAttempt(pending); got != 0 {
+		t.Errorf("pending = %d, want 0", got)
+	}
+}
+
+// TestWaitReadinessGoldenBootBudget: a boot that crashes every time outlives
+// the timeout while kagent reports new crashes, and ends on its failure.
+func TestWaitReadinessGoldenBootBudget(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const timeout = 10 * time.Minute
+		started := time.Now()
+		// A crash every 4 minutes, failed for good after the sixth: 24
+		// minutes, past the timeout.
+		read := func() (agentReadiness, error) {
+			attempt := int(time.Since(started)/(4*time.Minute)) + 1
+			if attempt > 6 {
+				return agentReadiness{terminal: true, reason: "Ready=False ActorTemplateFailed: golden boot 6 of 6 failed"}, nil
+			}
+			return agentReadiness{agent: retryingAgent(attempt)}, nil
+		}
+		r, err := waitReadiness(read, timeout)
+		if err != nil || !r.terminal || !strings.Contains(r.reason, "6 of 6") {
+			t.Fatalf("waitReadiness = %+v, %v; want the terminal failure", r, err)
+		}
+		if r.elapsed < 24*time.Minute {
+			t.Errorf("elapsed %s, want past the sixth crash at 24m", r.elapsed)
+		}
+	})
+}
+
+// TestWaitReadinessStalledRetry: a crash kagent stops reporting progress on
+// ends the wait one timeout after it was first seen.
+func TestWaitReadinessStalledRetry(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const timeout = 10 * time.Minute
+		started := time.Now()
+		read := func() (agentReadiness, error) {
+			if time.Since(started) < 3*time.Minute {
+				return agentReadiness{reason: "pending"}, nil
+			}
+			return agentReadiness{agent: retryingAgent(1)}, nil
+		}
+		r, err := waitReadiness(read, timeout)
+		if err != nil || r.ready || r.terminal {
+			t.Fatalf("waitReadiness = %+v, %v; want a timeout", r, err)
+		}
+		if r.elapsed < 13*time.Minute || r.elapsed > 13*time.Minute+2*pollInterval {
+			t.Errorf("elapsed %s, want one timeout after the crash at 3m", r.elapsed)
+		}
+	})
+}
+
+func TestWaitReadinessTimeoutWithoutCrash(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		r, err := waitReadiness(func() (agentReadiness, error) { return agentReadiness{reason: "pending"}, nil }, time.Minute)
+		if err != nil || r.ready || r.elapsed < time.Minute || r.elapsed > time.Minute+pollInterval {
+			t.Errorf("waitReadiness = %+v, %v; want a timeout after 1m", r, err)
+		}
+	})
 }

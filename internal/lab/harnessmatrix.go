@@ -243,7 +243,7 @@ func (m *matrixCell) run(api *kagentAPI, timeout time.Duration) error {
 		m.outcome, m.evidence = "REFUSED", boot.reason
 		return nil
 	case !boot.ready:
-		m.outcome, m.evidence = "NOT READY", fmt.Sprintf("after %s: %s", timeout, boot.reason)
+		m.outcome, m.evidence = "NOT READY", fmt.Sprintf("after %s: %s", boot.elapsed.Round(time.Second), boot.reason)
 		if boot.agent != nil {
 			_, message := boot.agent.Status.condition(conditionReady)
 			m.evidence += "; Ready: " + message

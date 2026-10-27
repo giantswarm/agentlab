@@ -1509,6 +1509,14 @@ written only into the child's system prompt, so the parent can return it only
 by running the child. The skill case adds the reply's `SKILLS=` line, the MCP
 case the tool the child ran (`TOOL=`).
 
+A BYO Harness such as `omp` refuses what its adapter does not support only
+when the golden boot runs: the adapter exits, kagent reports the crash as
+`ActorTemplateRetrying` (`golden boot N of 6 failed`), starts the boot over
+until its retry budget is spent, and only then fails the Agent
+(`ActorTemplateFailed`). Each crashed boot gives the wait a fresh
+`--ready-timeout`, so such a cell reads REFUSED with kagent's last message
+instead of NOT READY at the default timeout.
+
 ```sh
 agentlab harness-matrix-test                                    # every Harness, every case
 agentlab harness-matrix-test --harness kagent --case shared-prompt
