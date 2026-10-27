@@ -80,16 +80,16 @@ data:
       # classic portal does not route; / is the classic home page.
       rootRedirect: /
 {{- end }}
-{{- if .BackstageTelemetry }}
+{{- with .BackstageTelemetry }}
       # Usage data into agentlab's TelemetryDeck app (docs/telemetry.md): the
       # deployment ID the CLI's signals carry too, and a salt of the lab's
       # own, so this lab's users count apart from every other lab's.
       telemetrydeck:
         # Quoted: a hex salt such as 123e45… would otherwise read as a number.
-        appID: "{{ .BackstageTelemetry.AppID }}"
-        salt: "{{ .BackstageTelemetry.Salt }}"
-        deploymentID: "{{ .BackstageTelemetry.DeploymentID }}"
-{{- if .BackstageTelemetry.TestMode }}
+        appID: "{{ .AppID }}"
+        salt: "{{ .Salt }}"
+        deploymentID: "{{ .DeploymentID }}"
+{{- if .TestMode }}
         testMode: true
 {{- end }}
 {{- else }}

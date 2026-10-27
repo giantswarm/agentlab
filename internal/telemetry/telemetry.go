@@ -112,11 +112,17 @@ var (
 	route  *reach
 )
 
-// pending is the command signal Command recorded and EnterLab or Flush
-// sends; deploymentID is the deployment EnterLab named, on every signal
-// after it.
+// StartsDeployment is the annotation of the command that starts a lab's
+// deployment (`up`): its signal waits for StartDeployment, past EnterLab.
+const StartsDeployment = "agentlab.giantswarm.io/telemetry-starts-deployment"
+
+// pending is the command signal Command recorded and EnterLab,
+// StartDeployment or Flush sends; awaitStart holds it past EnterLab for a
+// command that starts a deployment. deploymentID is the deployment named
+// last, on every signal after it.
 var (
 	pending      func()
+	awaitStart   bool
 	deploymentID string
 )
 
@@ -167,8 +173,9 @@ func Enabled() bool {
 
 // Command records one execution of a user-facing command ("agentlab up").
 // The signal leaves once the command has entered its lab (EnterLab), so that
-// it names the lab's deployment, or at Flush for a command that runs against
-// no lab; its HTTP request runs on its own goroutine, and a failure to
+// it names the lab's deployment — for `up`, once it has started one
+// (StartDeployment) — or at Flush for a command that runs against no lab; its
+// HTTP request runs on its own goroutine, and a failure to
 // deliver is swallowed — telemetry must never get in the user's way. Same
 // shape as kubectl-gs: signal type GiantSwarm.command with the command path
 // and the app version in the payload, plus the OS, architecture and SDK
@@ -187,6 +194,7 @@ func Command(cmd *cobra.Command) {
 		return
 	}
 	ctx := cmd.Context()
+	_, awaitStart = cmd.Annotations[StartsDeployment]
 	pending = func() {
 		send(ctx, signalType, map[string]interface{}{
 			"appVersion": project.Version(),
@@ -197,10 +205,20 @@ func Command(cmd *cobra.Command) {
 
 // EnterLab names the deployment of the lab the command runs against: every
 // signal from here on carries it as deploymentID, and the command's own
-// signal (Command) leaves now. An empty ID, a lab without a recorded
-// deployment, sends the command signal without one.
+// signal (Command) leaves now — unless the command starts a deployment
+// (StartsDeployment). An empty ID, a lab without a recorded deployment, sends
+// the command signal without one.
 func EnterLab(id string) {
 	deploymentID = id
+	if !awaitStart {
+		sendPending()
+	}
+}
+
+// StartDeployment is EnterLab for the command that starts the lab's
+// deployment: its signal leaves now, naming id.
+func StartDeployment(id string) {
+	deploymentID, awaitStart = id, false
 	sendPending()
 }
 
@@ -220,22 +238,24 @@ func send(ctx context.Context, signalType string, payload map[string]interface{}
 	}
 	c, err := client()
 	if err != nil {
-		logf("creating the TelemetryDeck client: %s", err)
+		Logf("creating the TelemetryDeck client: %s", err)
 		return
 	}
 	if err := c.SendSignal(route.trace(ctx), signalType, payload); err != nil {
-		logf("sending %s: %s", signalType, err)
+		Logf("sending %s: %s", signalType, err)
 	}
 }
 
-// Flush sends the command signal if no lab was entered (EnterLab) and lets
+// Flush sends the command signal if it has not left yet — a command that
+// runs against no lab, or one that failed before entering its lab — and lets
 // the signals sent so far (Command, Platform) finish their trip before the
 // process exits, waiting at most flushTimeout (and no longer than
 // ctx allows): a sub-second command such as `agentlab version` would
 // otherwise exit before its request has left the machine. An endpoint none of
 // them has connected to within connectTimeout of the first one setting out is
 // out of reach, and Flush stops waiting for it then — at once for a command
-// that ran longer than that. Never an error for the caller — a signal that
+// whose signal set out longer ago than that (one that entered its lab early);
+// a signal Flush itself sends costs at most connectTimeout. Never an error for the caller — a signal that
 // did not make it is dropped, and said so only under DebugEnv.
 func Flush(ctx context.Context) {
 	sendPending()
@@ -252,17 +272,17 @@ func Flush(ctx context.Context) {
 	select {
 	case err := <-flushed:
 		if err != nil {
-			logf("a usage signal was not delivered within %s: %s", flushTimeout, err)
+			Logf("a usage signal was not delivered within %s: %s", flushTimeout, err)
 		}
 		return
 	case <-unreachable.C:
 	}
 	if !route.reached() {
-		logf("the ingest endpoint was not reached within %s; not waiting for the usage signal", connectTimeout)
+		Logf("the ingest endpoint was not reached within %s; not waiting for the usage signal", connectTimeout)
 		return
 	}
 	if err := <-flushed; err != nil {
-		logf("a usage signal was not delivered within %s: %s", flushTimeout, err)
+		Logf("a usage signal was not delivered within %s: %s", flushTimeout, err)
 	}
 }
 
@@ -270,7 +290,7 @@ func Flush(ctx context.Context) {
 // shared by every later one, so one Flush waits for all of them.
 func client() (*telemetrydeck.Client, error) {
 	if sender == nil {
-		c, err := newClient(testMode())
+		c, err := newClient(TestMode())
 		if err != nil {
 			return nil, err
 		}
@@ -321,11 +341,6 @@ func AppID() string {
 
 // TestMode says whether AGENTLAB_TELEMETRY_TESTMODE is set.
 func TestMode() bool {
-	return testMode()
-}
-
-// testMode says whether AGENTLAB_TELEMETRY_TESTMODE is set.
-func testMode() bool {
 	return os.Getenv(TestModeEnv) != ""
 }
 
@@ -334,10 +349,10 @@ func debug() bool {
 	return os.Getenv(DebugEnv) != ""
 }
 
-// logf reports a telemetry problem on stderr under DebugEnv; every other run,
+// Logf reports a telemetry problem on stderr under DebugEnv; every other run,
 // test mode included, stays silent, telemetry being nobody's concern but the
 // lab's developers and never part of a command's output.
-func logf(format string, args ...any) {
+func Logf(format string, args ...any) {
 	if debug() {
 		log.Printf("telemetry: "+format, args...)
 	}
@@ -375,7 +390,7 @@ func newClient(testMode bool) (*telemetrydeck.Client, error) {
 	if id, ok := userID(); ok {
 		opts = append(opts, telemetrydeck.WithUserID(id))
 	} else {
-		logf("this computer exposes no stable identifier; the library's own stands in")
+		Logf("this computer exposes no stable identifier; the library's own stands in")
 	}
 	return telemetrydeck.NewClient(appID, opts...)
 }

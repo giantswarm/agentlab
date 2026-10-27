@@ -307,13 +307,17 @@ The lab's own e2e checks are the `*-test` subcommands, not `go test`.
   booleans — never a path (a chart directory reports its Chart.yaml version),
   host name, user or token. Both signals share one client, so the one
   `Flush` covers both. The command signal waits for `enterLab`, which hands
-  it the lab's deployment (`telemetry.EnterLab`; `Flush` sends it for a
-  command without a lab): a random ID and salt the first `up` after a `down`
-  records in `state/telemetry-deployment.json` (`lab.StartTelemetryDeployment`)
-  and `down` removes. Every signal after it carries `deploymentID`, and the
-  Backstage overlay's `app.telemetrydeck` reports the portal into the same app
-  under that ID and salt — an empty app ID with usage data off (never `null`,
-  for which a Backstage before giantswarm/backstage#3294 sends test signals). Opt-outs:
+  it the lab's deployment (`lab.EnterTelemetryLab`; `Flush` sends it for a
+  command without a lab), and `up` (annotated `telemetry.StartsDeployment`)
+  past that for `lab.StartTelemetryDeployment`: a random ID, salt and the test
+  mode, recorded in `state/telemetry-deployment.json` by the `up` that creates
+  the cluster and removed by `down`. Every signal after it carries
+  `deploymentID`, and the Backstage overlay's `app.telemetrydeck`
+  (`tmplData.BackstageTelemetry`) reports the portal into the same app under
+  that ID, salt and test mode — the record's, never the shell's, so the render
+  stays the same across shells — and an empty app ID with usage data off
+  (never `null`, for which a Backstage before giantswarm/backstage#3294 sends
+  test signals). Opt-outs:
   `AGENTLAB_TELEMETRY_OPTOUT`, `DO_NOT_TRACK=1`. When iterating on the lab,
   `AGENTLAB_TELEMETRY_TESTMODE=1` keeps the runs out of the production
   numbers; `AGENTLAB_TELEMETRY_DEBUG=1` alone logs delivery problems — a

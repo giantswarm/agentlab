@@ -396,11 +396,7 @@ func enterLab(mode labs.Mode) error {
 	if err := enterLabDir(mode); err != nil {
 		return err
 	}
-	// The command's usage signal names the lab's deployment. A lab without
-	// one keeps the signal for `up`, which starts the deployment, or Flush.
-	if d, ok := lab.TelemetryDeployment(); ok {
-		telemetry.EnterLab(d.ID)
-	}
+	lab.EnterTelemetryLab()
 	return nil
 }
 
@@ -782,6 +778,9 @@ func upCmd() *cobra.Command {
 		Use:   "up",
 		Short: "Create the kind cluster, deploy Dex and the enabled components, and verify the OIDC chain",
 		Args:  cobra.NoArgs,
+		// Its usage signal names the deployment it starts
+		// (lab.StartTelemetryDeployment), not the one it enters.
+		Annotations: map[string]string{telemetry.StartsDeployment: ""},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadLab(labs.Create)
 			if err != nil {
@@ -792,9 +791,7 @@ func upCmd() *cobra.Command {
 			if err := labs.Register(cfg.ClusterName, "."); err != nil {
 				fmt.Fprintf(os.Stderr, "WARNING: not registering this lab: %v\n", err)
 			}
-			if d, ok := lab.StartTelemetryDeployment(); ok {
-				telemetry.EnterLab(d.ID)
-			}
+			lab.StartTelemetryDeployment(cfg)
 			return lab.Up(cfg, offersFromFlags(cmd, &trust, &open))
 		},
 	}

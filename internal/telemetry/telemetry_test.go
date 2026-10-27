@@ -211,10 +211,10 @@ func enable(t *testing.T, srv *httptest.Server) {
 	t.Setenv(doNotTrackEnv, "")
 	t.Setenv(TestModeEnv, "1")
 	endpoint = srv.URL
-	sender, pending, deploymentID = nil, nil, ""
+	sender, pending, awaitStart, deploymentID = nil, nil, false, ""
 	t.Cleanup(func() {
 		endpoint = ""
-		sender, pending, deploymentID = nil, nil, ""
+		sender, pending, awaitStart, deploymentID = nil, nil, false, ""
 	})
 }
 
@@ -540,5 +540,46 @@ func TestNewDeploymentDrawsDistinctIDsAndSalts(t *testing.T) {
 	}
 	if a.ID == a.Salt || len(a.Salt) != 64 {
 		t.Errorf("salt %q is not 32 random bytes apart from the ID %q", a.Salt, a.ID)
+	}
+}
+
+// TestUpWaitsForTheDeploymentItStarts: the command that starts a deployment
+// (StartsDeployment) sends nothing on entering its lab, which may still name
+// the deployment of a cluster that is gone, and leaves with the one it starts.
+func TestUpWaitsForTheDeploymentItStarts(t *testing.T) {
+	got := capture(t)
+	const old, started = "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"
+	up := lab(t, "up")
+	up.Annotations = map[string]string{StartsDeployment: ""}
+
+	Command(up)
+	EnterLab(old)
+	select {
+	case signals := <-got:
+		t.Fatalf("up's signal left on entering its lab: %v", signals)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	StartDeployment(started)
+	signals := received(t, got)
+	payload, _ := signals[0]["payload"].(map[string]any)
+	if payload["deploymentID"] != started {
+		t.Errorf("up's payload.deploymentID %v, want the started %s", payload["deploymentID"], started)
+	}
+}
+
+// TestALabWithoutADeploymentSendsOnEntering: a command entering a lab that
+// records no deployment (one booted before deployments existed) sends at
+// once, without one, rather than at Flush — which an interrupted command
+// never reaches.
+func TestALabWithoutADeploymentSendsOnEntering(t *testing.T) {
+	got := capture(t)
+
+	Command(lab(t, "up"))
+	EnterLab("")
+	signals := received(t, got)
+	payload, _ := signals[0]["payload"].(map[string]any)
+	if _, ok := payload["deploymentID"]; ok {
+		t.Errorf("payload.deploymentID %v for a lab without one", payload["deploymentID"])
 	}
 }
