@@ -76,9 +76,9 @@ type backstageTelemetry struct {
 	TestMode                  bool
 }
 
-// backstageTelemetryFor is the overlay's app.telemetrydeck, nil — telemetry
-// off in the portal — when usage data is off or the lab records no
-// deployment (a render before the first `up`).
+// backstageTelemetryFor is the overlay's app.telemetrydeck, nil — an empty
+// app ID, telemetry off in the portal — when usage data is off or the lab
+// records no deployment (a render before the first `up`).
 func backstageTelemetryFor() *backstageTelemetry {
 	if !telemetry.Enabled() {
 		return nil

@@ -151,11 +151,13 @@ salt, so the same person counts as a new portal user after every `down`.
 
 The lab writes the portal's `app.telemetrydeck` into its app-config overlay
 on every `up` and `platform`. With usage data off (below), or before
-the first `up`, it writes `app.telemetrydeck: null`, and the portal sends
-nothing; the decision is taken when the overlay is rendered, so an opt-out set
-later takes effect for the portal on the next `up`. Test mode applies to the
-portal's signals as well. A Backstage release from before `deploymentID`
-existed sends its signals without it.
+the first `up`, it writes an empty app ID, and the portal sends nothing (its
+browser console and its backend log say usage data is disabled); the decision
+is taken when the overlay is rendered, so an opt-out set later takes effect
+for the portal on the next `up`. Test mode applies to the portal's signals as
+well. A Backstage release from before `deploymentID` and `testMode` existed
+(giantswarm/backstage#3294) sends its signals without the ID and outside test
+mode.
 
 Data is stored at [TelemetryDeck](https://telemetrydeck.com/) on servers in
 the EU; see their [privacy FAQ](https://telemetrydeck.com/docs/guides/privacy-faq/).

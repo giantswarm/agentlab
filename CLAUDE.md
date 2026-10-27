@@ -312,7 +312,8 @@ The lab's own e2e checks are the `*-test` subcommands, not `go test`.
   records in `state/telemetry-deployment.json` (`lab.StartTelemetryDeployment`)
   and `down` removes. Every signal after it carries `deploymentID`, and the
   Backstage overlay's `app.telemetrydeck` reports the portal into the same app
-  under that ID and salt — `null` with usage data off. Opt-outs:
+  under that ID and salt — an empty app ID with usage data off (never `null`,
+  for which a Backstage before giantswarm/backstage#3294 sends test signals). Opt-outs:
   `AGENTLAB_TELEMETRY_OPTOUT`, `DO_NOT_TRACK=1`. When iterating on the lab,
   `AGENTLAB_TELEMETRY_TESTMODE=1` keeps the runs out of the production
   numbers; `AGENTLAB_TELEMETRY_DEBUG=1` alone logs delivery problems — a

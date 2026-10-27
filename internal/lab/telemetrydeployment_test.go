@@ -60,15 +60,17 @@ func TestTelemetryDeploymentIsNotRecordedWhenOptedOut(t *testing.T) {
 
 // TestBackstageOverlayTelemetry: the lab's portal reports into agentlab's
 // app under the lab's deployment and salt, and sends nothing before the
-// first `up` or with usage data off.
+// first `up` or with usage data off: an empty app ID, which every portal
+// version honours, where a null one would make an older portal send test
+// signals.
 func TestBackstageOverlayTelemetry(t *testing.T) {
 	telemetryOn(t)
 	cfg := config.Default()
 	telemetryOff := func(when string) {
 		t.Helper()
-		app, _ := dig(backstageOverlayAppConfig(t, cfg), "app").(map[string]any)
-		if got, ok := app["telemetrydeck"]; !ok || got != nil {
-			t.Errorf("%s, app.telemetrydeck = %v (set: %v), want null", when, got, ok)
+		td := dig(backstageOverlayAppConfig(t, cfg), "app", "telemetrydeck")
+		if got, _ := td.(map[string]any); len(got) != 1 || got["appID"] != "" {
+			t.Errorf("%s, app.telemetrydeck = %#v, want only an empty appID", when, td)
 		}
 	}
 
@@ -86,6 +88,19 @@ func TestBackstageOverlayTelemetry(t *testing.T) {
 			t.Errorf("app.telemetrydeck.%s = %v, want %v", k, got[k], v)
 		}
 	}
+
+	// A salt YAML would read as a number stays a string.
+	withSalt := func(salt string) {
+		t.Helper()
+		if err := writeTelemetryDeployment(telemetry.Deployment{ID: d.ID, Salt: salt}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	withSalt("123e45")
+	if got := dig(backstageOverlayAppConfig(t, cfg), "app", "telemetrydeck", "salt"); got != "123e45" {
+		t.Errorf("app.telemetrydeck.salt = %#v, want the string \"123e45\"", got)
+	}
+	withSalt(d.Salt)
 
 	t.Setenv(telemetry.TestModeEnv, "1")
 	if got := dig(backstageOverlayAppConfig(t, cfg), "app", "telemetrydeck", "testMode"); got != true {
