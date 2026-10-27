@@ -59,14 +59,16 @@ func gitHubTokenWired(cfg *config.Config) bool { return gitHubTokenSet(cfg) && !
 // configuration reference no Secret, so the consumers call GitHub
 // unauthenticated, and a Secret an earlier run created stays, unreferenced,
 // until `agentlab down`: a run that merely lacks an export never destroys a
-// credential. The proofs' window print (githubwindow.go) is where the
-// difference shows.
+// credential. A lab whose portal or agents would call GitHub that way is
+// warned, the setting named.
 func ensureGitHubTokenSecrets(ctx context.Context, cfg *config.Config) error {
 	if !gitHubTokenSet(cfg) {
-		if exists, err := objectExists(ctx, gvrSecrets, platformNamespace, gitHubTokenSecret); err == nil && exists {
+		exists, err := objectExists(ctx, gvrSecrets, platformNamespace, gitHubTokenSecret)
+		if err == nil && exists {
 			note("no githubToken.source — secret %s/%s (key %s) from an earlier run stays, but nothing references it", platformNamespace, gitHubTokenSecret, gitHubTokenSecretKey)
-		} else if err == nil && !gitHubAppWired(cfg) {
-			note("no githubToken.source and no skills GitHub App — no secret %s/%s (key %s): skill discovery and resolution call GitHub unauthenticated (60 requests an hour, shared by this machine)", platformNamespace, gitHubTokenSecret, gitHubTokenSecretKey)
+		}
+		if (cfg.Platform.Agents || cfg.Backstage.Enabled) && !gitHubAppWired(cfg) {
+			warn("%s records no githubToken.source and no skills GitHub App: skill discovery and resolution call GitHub unauthenticated, on the 60 requests an hour this machine's address shares, and agents-test skips refreshSkills; %s (`agentlab configure --github-token-source <ref>` records the token)", config.File, gitHubCredentialHint)
 		}
 		return nil
 	}

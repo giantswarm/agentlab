@@ -139,8 +139,10 @@ and `platform` hand it to `beekeeper secret copy --to-secret`, which writes the
 token in its own process; agentlab never reads the value, and a placement that
 fails fails the run. agentlab never reads `$GITHUB_TOKEN` either: a token
 exported in its environment reaches no consumer. Without a source `discover`
-and `platform` name the Secret the lab lacks, `agentlab-github-token` (key
-`GITHUB_TOKEN`) in `agent-platform`.
+names the Secret the lab lacks, `agentlab-github-token` (key `GITHUB_TOKEN`)
+in `agent-platform`, and `up` and `platform` warn on stderr, naming
+`githubToken.source`, unless the skills GitHub App is recorded; `agents-test`
+then reports its `refreshSkills` step as a SKIP with the same reason.
 
 `agentlab up`/`platform` place **or update** the Secret `agentlab-github-token` (key `GITHUB_TOKEN`) in
 `agent-platform` — the portal takes it through `extraEnvVarsSecrets` and the
