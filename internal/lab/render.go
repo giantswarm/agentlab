@@ -213,8 +213,8 @@ type tmplData struct {
 	// recorded (githubtoken.go), so the values name the Secret the lab
 	// places it in — the portal's
 	// extraEnvVarsSecrets and the overlay's integrations.github,
-	// agent-manager's skills.github.tokenSecret, the migrate Job's
-	// githubToken. Only ever the Secret's name, never the token.
+	// agent-manager's skills.github.tokenSecret. Only ever the Secret's
+	// name, never the token.
 	GitHubToken bool
 	// GitHubApp mirrors gitHubAppWired(cfg): githubApp is recorded
 	// (githubapp.go), so agent-manager's skills.github.app names the Secret

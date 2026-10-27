@@ -988,12 +988,6 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 		if err := waitDefaultModelConfigResolved(); err != nil {
 			return err
 		}
-		// The migrate Job's copy of the GitHub token (githubtoken.go) — the
-		// chart created the kagent namespace by now; a no-op when the
-		// pre-install pass already found the namespace, or without the token.
-		if err := ensureGitHubTokenSecret(ctx, cfg, kagentNamespace); err != nil {
-			return err
-		}
 		// The extra ModelConfigs from platform.extraModels (self-hosted
 		// endpoints, OpenRouter, Gemini, ...) — after the install for the same
 		// reason as the Secret above: the chart owns the kagent namespace and

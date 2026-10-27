@@ -20,13 +20,13 @@ import (
 // or the session that runs it.
 const GitHubTokenEnv = "GITHUB_TOKEN" // #nosec G101 -- env var NAME, not a credential
 
-// gitHubTokenSecret is the Secret the consumers read — one key, named after
-// the env var so Backstage's envFrom yields $GITHUB_TOKEN as it is:
-//   - agent-platform/: the portal (backstage.backstage.extraEnvVarsSecrets,
-//     read by the overlay's integrations.github[].token: ${GITHUB_TOKEN})
-//     and agent-manager (agent-manager.skills.github.tokenSecret);
-//   - kagent/: the connectivity chart's agent-manager migrate Job
-//     (agentManager.migration.githubToken).
+// gitHubTokenSecret is the Secret the consumers read, in agent-platform/:
+// one key, named after the env var so Backstage's envFrom yields
+// $GITHUB_TOKEN as it is: the portal (backstage.backstage.extraEnvVarsSecrets,
+// read by the overlay's integrations.github[].token: ${GITHUB_TOKEN}) and
+// agent-manager (agent-manager.skills.github.tokenSecret). The connectivity
+// chart's agent-manager migrate run reads no GitHub token, so the kagent
+// namespace holds no copy.
 //
 // The values (agent-platform-values.yaml.tmpl, backstage-catalog.yaml.tmpl)
 // name the Secret only when a token is configured at render time, so a
@@ -42,18 +42,15 @@ const (
 func gitHubTokenSet(cfg *config.Config) bool { return cfg.GitHubToken.Source != "" }
 
 // gitHubTokenWired is the render's answer: a token is set and the chart
-// line takes the keys (the 4.x agent-manager chart's skills.github.tokenSecret
-// and the connectivity chart's agentManager.migration.githubToken; the 3.x
-// line the rehearsal seeds has neither, and its portal has no discovery to
-// authenticate).
+// line takes the key (the 4.x agent-manager chart's skills.github.tokenSecret;
+// the 3.x line the rehearsal seeds has none, and its portal has no discovery
+// to authenticate).
 func gitHubTokenWired(cfg *config.Config) bool { return gitHubTokenSet(cfg) && !cfg.LegacyChart() }
 
 // ensureGitHubTokenSecrets is the deploy-time half, run before the install:
-// agent-platform/ always (the portal's envFrom and agent-manager's env
-// reference the Secret without `optional`, so it must exist before the pods
-// do), kagent/ when that namespace already exists — a re-run, or the
-// rehearsal's upgrade of a seeded lab; a first install gets it after the
-// chart created the namespace (platform.go, next to kagent-anthropic).
+// the portal's envFrom and agent-manager's env reference the Secret without
+// `optional`, so it must exist before the pods do. A kagent/ copy an earlier
+// agentlab placed is removed: nothing in that namespace reads it.
 //
 // Without a token nothing is written: the values rendered from the same
 // configuration reference no Secret, so the consumers call GitHub
@@ -62,6 +59,9 @@ func gitHubTokenWired(cfg *config.Config) bool { return gitHubTokenSet(cfg) && !
 // credential. A lab whose portal or agents would call GitHub that way is
 // warned, the setting named.
 func ensureGitHubTokenSecrets(ctx context.Context, cfg *config.Config) error {
+	if err := removeKagentGitHubTokenSecret(ctx); err != nil {
+		return err
+	}
 	if !gitHubTokenSet(cfg) {
 		exists, err := objectExists(ctx, gvrSecrets, platformNamespace, gitHubTokenSecret)
 		if err == nil && exists {
@@ -72,35 +72,27 @@ func ensureGitHubTokenSecrets(ctx context.Context, cfg *config.Config) error {
 		}
 		return nil
 	}
-	if err := ensureGitHubTokenSecret(ctx, cfg, platformNamespace); err != nil {
-		return err
+	source := cfg.GitHubToken.Source
+	answer, err := runSecretTool(secretCopyArgs(source, secretTarget(cfg, platformNamespace, gitHubTokenSecret, gitHubTokenSecretKey))...)
+	if err != nil {
+		return fmt.Errorf("secret %s/%s key %s from githubToken.source %s: %w\n  the portal and agent-manager reference it; when %s answers, re-run `agentlab platform`",
+			platformNamespace, gitHubTokenSecret, gitHubTokenSecretKey, source, err, secretTool)
 	}
-	if !cfg.Platform.Agents {
-		return nil
-	}
-	exists, err := objectExists(ctx, gvrNamespaces, "", kagentNamespace)
+	note("secret %s/%s key %s placed from %s by %s (%s); agentlab never read the value — skill discovery and resolution call GitHub authenticated", platformNamespace, gitHubTokenSecret, gitHubTokenSecretKey, source, secretTool, strings.TrimSpace(answer))
+	return nil
+}
+
+// removeKagentGitHubTokenSecret deletes kagent/gitHubTokenSecret when an
+// earlier agentlab placed it there; a lab without it changes nothing.
+func removeKagentGitHubTokenSecret(ctx context.Context) error {
+	exists, err := objectExists(ctx, gvrSecrets, kagentNamespace, gitHubTokenSecret)
 	if err != nil || !exists {
 		return err
 	}
-	return ensureGitHubTokenSecret(ctx, cfg, kagentNamespace)
-}
-
-// ensureGitHubTokenSecret places ns/gitHubTokenSecret on every run, so a
-// rotated token reaches the lab with the next `up` or `platform`; a no-op
-// without a source. The secret tooling places it and its failure fails the
-// run — the values already name the Secret, so a lab whose configuration
-// says where the token is never deploys without it.
-func ensureGitHubTokenSecret(_ context.Context, cfg *config.Config, ns string) error {
-	source := cfg.GitHubToken.Source
-	if source == "" {
-		return nil
+	if err := deleteObject(ctx, gvrSecrets, kagentNamespace, gitHubTokenSecret, 0); err != nil {
+		return err
 	}
-	answer, err := runSecretTool(secretCopyArgs(source, secretTarget(cfg, ns, gitHubTokenSecret, gitHubTokenSecretKey))...)
-	if err != nil {
-		return fmt.Errorf("secret %s/%s key %s from githubToken.source %s: %w\n  the portal and agent-manager reference it; when %s answers, re-run `agentlab platform`",
-			ns, gitHubTokenSecret, gitHubTokenSecretKey, source, err, secretTool)
-	}
-	note("secret %s/%s key %s placed from %s by %s (%s); agentlab never read the value — skill discovery and resolution call GitHub authenticated", ns, gitHubTokenSecret, gitHubTokenSecretKey, source, secretTool, strings.TrimSpace(answer))
+	note("secret %s/%s removed: nothing in %s reads a GitHub token", kagentNamespace, gitHubTokenSecret, kagentNamespace)
 	return nil
 }
 
