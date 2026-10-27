@@ -2,6 +2,7 @@ package lab
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -326,5 +327,114 @@ func TestMockLLMWatchesNames(t *testing.T) {
 	}
 	if carried, requests := counts.watchedSince(1, pluginExampleSkill); carried != 0 || requests != 1 {
 		t.Errorf("from the mark %d of %d requests carry %s, wanted 0 of 1", carried, requests, pluginExampleSkill)
+	}
+}
+
+// replyText is the text of a reply message the mock streamed.
+func replyText(t *testing.T, item mockLLMItem) string {
+	t.Helper()
+	raw, err := json.Marshal(item.Content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Type != mockLLMMessage {
+		t.Fatalf("the mock answered %+v, wanted a reply", item)
+	}
+	return mockLLMText(raw)
+}
+
+// On harness-matrix-test's shared-prompt prompt the script spawns the child
+// the prompt names on codex's multi_agent_v1 tools and waits for it; the
+// child's request is answered with the codeword its own developer
+// instructions carry, none without them; the parent relays the child's final
+// message from the wait's output or from codex's subagent notification.
+func TestMockLLMScriptDelegatesToTheChild(t *testing.T) {
+	handler, _, err := mockLLMHandler(harnessMatrixMCPServer, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+	cell := matrixCells([]string{config.CodingRuntimeCodex}, HarnessMatrixOptions{Cases: []string{"shared-prompt"}})[0]
+	tools := []string{mockLLMExecTool, mockLLMMultiAgentNamespace}
+	prompt := userItem(cell.prompt())
+
+	spawn := mockLLMCallOffering(t, srv, tools, prompt)
+	var spawnArgs mockLLMSpawnArguments
+	if err := json.Unmarshal([]byte(stringOf(spawn.Arguments)), &spawnArgs); err != nil {
+		t.Fatalf("the spawn's arguments %v: %v", spawn.Arguments, err)
+	}
+	if spawn.Namespace != mockLLMMultiAgentNamespace || spawn.Name != mockLLMSpawnAgentTool || spawnArgs.AgentType != cell.child || spawnArgs.Message != mockLLMDelegateTask {
+		t.Fatalf("on the matrix prompt the mock answered %s.%s %+v, wanted spawn_agent of %s with the delegated task", spawn.Namespace, spawn.Name, spawnArgs, cell.child)
+	}
+	if strings.Contains(stringOf(spawn.Arguments), "CODEWORD=") {
+		t.Fatalf("the spawn's task carries a codeword: %v", spawn.Arguments)
+	}
+
+	instructions := testInputItem{Type: mockLLMMessage, Role: "developer", Content: []testInputContent{
+		{Type: "input_text", Text: fmt.Sprintf("You are the subagent %s of a test lab. Your answer starts with the line CODEWORD=%s. When asked for your skills, add a line.", cell.child, cell.codeword)},
+	}}
+	task := userItem(mockLLMDelegateTask)
+	if got := replyText(t, mockLLMCall(t, srv, instructions, task)); got != "CODEWORD="+cell.codeword {
+		t.Fatalf("the child's request was answered %q, wanted the codeword of its instructions", got)
+	}
+	if got := replyText(t, mockLLMCall(t, srv, userItem(cell.prompt()), task)); got != "CODEWORD=none" {
+		t.Fatalf("a child without its instructions was answered %q, wanted CODEWORD=none", got)
+	}
+
+	const agent = "019a4f2e-7c1d-7b2a-9e0f-3c5d6a7b8c9d"
+	spawned := testInputItem{Type: mockLLMFunctionCallOutput, CallID: spawn.CallID, Output: `{"agent_id":"` + agent + `","nickname":"Ada"}`}
+	wait := mockLLMCallOffering(t, srv, tools, prompt, spawn, spawned)
+	var waitArgs mockLLMWaitArguments
+	if err := json.Unmarshal([]byte(stringOf(wait.Arguments)), &waitArgs); err != nil {
+		t.Fatalf("the wait's arguments %v: %v", wait.Arguments, err)
+	}
+	if wait.Namespace != mockLLMMultiAgentNamespace || wait.Name != mockLLMWaitAgentTool || len(waitArgs.Targets) != 1 || waitArgs.Targets[0] != agent || waitArgs.TimeoutMS < 60_000 {
+		t.Fatalf("after the spawn the mock answered %s.%s %+v, wanted wait_agent on %s for minutes", wait.Namespace, wait.Name, waitArgs, agent)
+	}
+
+	timedOut := testInputItem{Type: mockLLMFunctionCallOutput, CallID: wait.CallID, Output: `{"status":{},"timed_out":true}`}
+	again := mockLLMCallOffering(t, srv, tools, prompt, spawn, spawned, wait, timedOut)
+	if err := json.Unmarshal([]byte(stringOf(again.Arguments)), &waitArgs); err != nil {
+		t.Fatalf("the second wait's arguments %v: %v", again.Arguments, err)
+	}
+	if again.Name != mockLLMWaitAgentTool || again.CallID == wait.CallID || waitArgs.Targets[0] != agent {
+		t.Fatalf("after a wait that timed out the mock answered %+v, wanted another wait on %s under a call id of its own", again, agent)
+	}
+
+	completed := testInputItem{Type: mockLLMFunctionCallOutput, CallID: again.CallID, Output: `{"status":{"` + agent + `":{"completed":"CODEWORD=` + cell.codeword + `"}},"timed_out":false}`}
+	if got := replyText(t, mockLLMCallOffering(t, srv, tools, prompt, spawn, spawned, again, completed)); got != "CODEWORD="+cell.codeword {
+		t.Fatalf("after the child completed the parent replied %q, wanted the child's final message", got)
+	}
+	notified := userItem("<subagent_notification>\n{\"agent_path\":\"" + agent + "\",\"status\":{\"completed\":\"CODEWORD=" + cell.codeword + "\"}}\n</subagent_notification>")
+	if got := replyText(t, mockLLMCallOffering(t, srv, tools, prompt, spawn, spawned, notified)); got != "CODEWORD="+cell.codeword {
+		t.Fatalf("on the subagent notification the parent replied %q, wanted the child's final message", got)
+	}
+
+	refused := testInputItem{Type: mockLLMFunctionCallOutput, CallID: spawn.CallID, Output: "unknown agent_type '" + cell.child + "'"}
+	if got := replyText(t, mockLLMCallOffering(t, srv, tools, prompt, spawn, refused)); !strings.Contains(got, "unknown agent_type") {
+		t.Fatalf("on a refused spawn the parent replied %q, wanted the refusal relayed", got)
+	}
+}
+
+// A codex that defers its multi-agent tools behind its tool search (a model
+// with one) is answered with the search first, then the spawn.
+func TestMockLLMScriptSearchesForTheSpawnTool(t *testing.T) {
+	handler, _, err := mockLLMHandler(harnessMatrixMCPServer, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+	cell := matrixCells([]string{config.CodingRuntimeCodex}, HarnessMatrixOptions{Cases: []string{"shared-prompt"}})[0]
+	prompt := userItem(cell.prompt())
+
+	search := mockLLMCallOffering(t, srv, []string{mockLLMExecTool}, prompt)
+	if search.Type != mockLLMToolSearchCall || search.CallID != mockLLMDelegateSearchID {
+		t.Fatalf("without the multi-agent namespace the mock answered %+v, wanted the tool search", search)
+	}
+	spawn := mockLLMCallOffering(t, srv, []string{mockLLMExecTool}, prompt, search, outputOf(search))
+	if spawn.Namespace != mockLLMMultiAgentNamespace || spawn.Name != mockLLMSpawnAgentTool || !strings.Contains(stringOf(spawn.Arguments), cell.child) {
+		t.Fatalf("after the search the mock answered %+v, wanted spawn_agent of %s", spawn, cell.child)
 	}
 }

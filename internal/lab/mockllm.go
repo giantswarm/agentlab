@@ -39,7 +39,8 @@ import (
 // itself is the code word the resumed turn recalls. A shell call goes to the
 // shell tool the request offers: codex's `shell_command`, or its unified
 // `exec_command`, whose command keeps running past its yield and is waited
-// for with an empty `write_stdin` until it exits.
+// for with an empty `write_stdin` until it exits. The script also answers
+// harness-matrix-test's delegation (mockLLMDelegation).
 
 const (
 	// mockLLMCommand is the hidden command the container runs.
@@ -237,10 +238,7 @@ func mockLLMConfig(mcpServer, devctlArguments string) ([]mockLLMScriptEntry, err
 					CallID: callID, Namespace: namespace, Name: turn.tool, Arguments: turn.arguments,
 				}))
 		}
-		reply := mockLLMEntry(turn.name+"_reply", callID, mockLLMItem{
-			ID: "msg_agentlab_" + turn.name, Type: mockLLMMessage, Status: mockLLMItemDone, Role: "assistant",
-			Content: []mockLLMContent{{Type: mockLLMOutputText, Text: turn.reply, Annotations: []any{}}},
-		})
+		reply := mockLLMEntry(turn.name+"_reply", callID, mockLLMMessageOf(turn.name, turn.reply))
 		reply.echo = turn.echo
 		entries = append(entries, reply)
 	}
@@ -261,13 +259,26 @@ func mockLLMEntry(name, match string, output mockLLMItem) mockLLMScriptEntry {
 	}
 }
 
-// mockLLMMatch is the script's answer to a request offering tools: a wait
-// for an exec_command still running, else the first entry whose match the
-// last input item (as JSON; the input itself when it is a string)
-// contains, its shell call on the shell tool offered; false for none.
-func mockLLMMatch(script []mockLLMScriptEntry, last string, tools []string) (mockLLMResponse, bool) {
+// mockLLMMessageOf is the assistant message of the script's reply text.
+func mockLLMMessageOf(name, text string) mockLLMItem {
+	return mockLLMItem{
+		ID: "msg_agentlab_" + name, Type: mockLLMMessage, Status: mockLLMItemDone, Role: "assistant",
+		Content: []mockLLMContent{{Type: mockLLMOutputText, Text: text, Annotations: []any{}}},
+	}
+}
+
+// mockLLMMatch is the script's answer to a request offering tools, whose
+// message items' texts by role are texts: a wait for an exec_command still
+// running, else a step of the matrix's delegation, else the first entry
+// whose match the last input item (as JSON; the input itself when it is a
+// string) contains, its shell call on the shell tool offered; false for
+// none.
+func mockLLMMatch(script []mockLLMScriptEntry, last string, texts map[string]string, tools []string) (mockLLMResponse, bool) {
 	if wait, ok := mockLLMExecWait(last); ok {
 		return wait, true
+	}
+	if step, ok := mockLLMDelegation(last, texts, tools); ok {
+		return step, true
 	}
 	for _, entry := range script {
 		if strings.Contains(last, entry.match) {
@@ -336,6 +347,219 @@ func mockLLMExecWait(last string) (mockLLMResponse, bool) {
 		ID: "fc_" + callID, Type: mockLLMFunctionCall, Status: mockLLMItemDone,
 		CallID: callID, Name: mockLLMWriteStdinTool, Arguments: string(arguments),
 	}).response, true
+}
+
+// The matrix's delegation on codex's multi-agent tools (codex 0.164.0's
+// default multi_agent_v1, a namespace codex defers behind its tool search on
+// a model that has one): the parent's prompt, which names a Shared child, is
+// answered with spawn_agent of that child's role and mockLLMDelegateTask,
+// then wait_agent on the agent it spawned. The child's own request, whose
+// last input item is that task, is answered with the codeword its developer
+// instructions (the child's system prompt) carry, or none. The parent's
+// reply is the child's final message from the wait's output or from codex's
+// subagent notification. The script holds no codeword: one reaches the
+// parent's reply only through the child's request.
+const (
+	mockLLMMultiAgentNamespace = "multi_agent_v1"
+	mockLLMSpawnAgentTool      = "spawn_agent"
+	mockLLMWaitAgentTool       = "wait_agent"
+	mockLLMToolSearchOutput    = "tool_search_output"
+	mockLLMDelegateTask        = "The test lab's harness matrix asks you for your codeword."
+	mockLLMDelegateCallID      = "call_agentlab_delegate"
+	mockLLMDelegateWaitCallID  = mockLLMDelegateCallID + "_wait"
+	mockLLMDelegateSearchID    = "search_agentlab_delegate"
+	mockLLMSubagentNotified    = "<subagent_notification>"
+	mockLLMSubagentNotifiedEnd = "</subagent_notification>"
+)
+
+var (
+	mockLLMDelegateTo = regexp.MustCompile(regexp.QuoteMeta(matrixDelegatePrompt) + `"([^"]+)"`)
+	mockLLMCodeword   = regexp.MustCompile(`CODEWORD=([A-Za-z0-9_-]+)`)
+)
+
+type (
+	mockLLMSpawnArguments struct {
+		AgentType string `json:"agent_type"`
+		Message   string `json:"message"`
+	}
+	mockLLMWaitArguments struct {
+		Targets   []string `json:"targets"`
+		TimeoutMS int      `json:"timeout_ms"`
+	}
+	// mockLLMInputItem is what the script reads of an input item; a
+	// message's content and a call output's output are each a string or a
+	// list of content items.
+	mockLLMInputItem struct {
+		Type    string          `json:"type"`
+		Role    string          `json:"role"`
+		CallID  string          `json:"call_id"`
+		Content json.RawMessage `json:"content"`
+		Output  json.RawMessage `json:"output"`
+	}
+)
+
+// mockLLMText is the text of a content or output: the string, or its
+// content items' texts joined by newlines.
+func mockLLMText(raw json.RawMessage) string {
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		return text
+	}
+	var parts []struct {
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(raw, &parts) != nil {
+		return ""
+	}
+	texts := make([]string, 0, len(parts))
+	for _, part := range parts {
+		texts = append(texts, part.Text)
+	}
+	return strings.Join(texts, "\n")
+}
+
+// mockLLMDelegation is the delegation's step answering the last input item,
+// in a request whose message texts by role are texts and which offers
+// tools; false for an item outside the delegation.
+func mockLLMDelegation(last string, texts map[string]string, tools []string) (mockLLMResponse, bool) {
+	var item mockLLMInputItem
+	if json.Unmarshal([]byte(last), &item) != nil {
+		return mockLLMResponse{}, false
+	}
+	switch item.Type {
+	case mockLLMMessage:
+		text := mockLLMText(item.Content)
+		switch {
+		case strings.Contains(text, mockLLMDelegateTask):
+			codeword := "none"
+			if found := mockLLMCodeword.FindStringSubmatch(texts["developer"]); found != nil {
+				codeword = found[1]
+			}
+			return mockLLMReply("delegate_child", "CODEWORD="+codeword), true
+		case strings.Contains(text, mockLLMSubagentNotified):
+			if message, ok := mockLLMNotifiedMessage(text); ok {
+				return mockLLMReply("delegate", message), true
+			}
+			return mockLLMReply("delegate", text), true
+		}
+		child := mockLLMDelegateTo.FindStringSubmatch(text)
+		if child == nil {
+			return mockLLMResponse{}, false
+		}
+		if !slices.Contains(tools, mockLLMMultiAgentNamespace) {
+			return mockLLMEntry("delegate_search", "", mockLLMItem{
+				ID: "ts_agentlab_delegate", Type: mockLLMToolSearchCall, Status: mockLLMItemDone,
+				CallID: mockLLMDelegateSearchID, Execution: "client",
+				Arguments: mockLLMSearchArguments{Query: mockLLMSpawnAgentTool + " " + mockLLMWaitAgentTool + " subagent", Limit: 10},
+			}).response, true
+		}
+		return mockLLMSpawn(child[1]), true
+	case mockLLMToolSearchOutput:
+		child := mockLLMDelegateTo.FindStringSubmatch(texts["user"])
+		if item.CallID != mockLLMDelegateSearchID || child == nil {
+			return mockLLMResponse{}, false
+		}
+		return mockLLMSpawn(child[1]), true
+	case mockLLMFunctionCallOutput:
+		output := mockLLMText(item.Output)
+		switch {
+		case item.CallID == mockLLMDelegateCallID:
+			var spawned struct {
+				AgentID string `json:"agent_id"`
+			}
+			if json.Unmarshal([]byte(output), &spawned) != nil || spawned.AgentID == "" {
+				return mockLLMReply("delegate", output), true
+			}
+			return mockLLMWait(1, spawned.AgentID), true
+		case strings.HasPrefix(item.CallID, mockLLMDelegateWaitCallID):
+			var waited struct {
+				Status   map[string]json.RawMessage `json:"status"`
+				TimedOut bool                       `json:"timed_out"`
+			}
+			if json.Unmarshal([]byte(output), &waited) != nil {
+				return mockLLMReply("delegate", output), true
+			}
+			for _, status := range waited.Status {
+				if message, ok := mockLLMCompleted(status); ok {
+					return mockLLMReply("delegate", message), true
+				}
+			}
+			if waited.TimedOut {
+				if waits, agent, ok := mockLLMWaitOf(item.CallID); ok {
+					return mockLLMWait(waits+1, agent), true
+				}
+			}
+			return mockLLMReply("delegate", output), true
+		}
+	}
+	return mockLLMResponse{}, false
+}
+
+// mockLLMReply is the script's final reply text.
+func mockLLMReply(name, text string) mockLLMResponse {
+	return mockLLMEntry(name+"_reply", "", mockLLMMessageOf(name, text)).response
+}
+
+// mockLLMSpawn is spawn_agent of role with the delegated task, a fresh
+// context (no fork of the parent's history).
+func mockLLMSpawn(role string) mockLLMResponse {
+	arguments, _ := json.Marshal(mockLLMSpawnArguments{AgentType: role, Message: mockLLMDelegateTask})
+	return mockLLMEntry("delegate_spawn", "", mockLLMItem{
+		ID: "fc_agentlab_delegate", Type: mockLLMFunctionCall, Status: mockLLMItemDone,
+		CallID: mockLLMDelegateCallID, Namespace: mockLLMMultiAgentNamespace, Name: mockLLMSpawnAgentTool, Arguments: string(arguments),
+	}).response
+}
+
+// mockLLMWait is the wait-th wait_agent on agent, up to the longest a probe
+// runs; its call id carries both, so the output of a wait that timed out
+// names the agent to wait on again.
+func mockLLMWait(wait int, agent string) mockLLMResponse {
+	arguments, _ := json.Marshal(mockLLMWaitArguments{Targets: []string{agent}, TimeoutMS: codingProbeTimeoutMS})
+	callID := fmt.Sprintf("%s_%d_%s", mockLLMDelegateWaitCallID, wait, agent)
+	return mockLLMEntry("delegate_wait", "", mockLLMItem{
+		ID: "fc_" + callID, Type: mockLLMFunctionCall, Status: mockLLMItemDone,
+		CallID: callID, Namespace: mockLLMMultiAgentNamespace, Name: mockLLMWaitAgentTool, Arguments: string(arguments),
+	}).response
+}
+
+// mockLLMWaitOf is the wait count and agent of a mockLLMWait call id.
+func mockLLMWaitOf(callID string) (int, string, bool) {
+	rest, ok := strings.CutPrefix(callID, mockLLMDelegateWaitCallID+"_")
+	if !ok {
+		return 0, "", false
+	}
+	count, agent, ok := strings.Cut(rest, "_")
+	wait, err := strconv.Atoi(count)
+	if !ok || err != nil || agent == "" {
+		return 0, "", false
+	}
+	return wait, agent, true
+}
+
+// mockLLMCompleted is the final message of a completed agent status as
+// codex writes it, {"completed": message}; false for another status.
+func mockLLMCompleted(status json.RawMessage) (string, bool) {
+	var final struct {
+		Completed *string `json:"completed"`
+	}
+	if json.Unmarshal(status, &final) != nil || final.Completed == nil {
+		return "", false
+	}
+	return *final.Completed, true
+}
+
+// mockLLMNotifiedMessage is the completed child's final message in codex's
+// subagent notification, {"agent_path", "status"} between its markers.
+func mockLLMNotifiedMessage(text string) (string, bool) {
+	_, body, _ := strings.Cut(text, mockLLMSubagentNotified)
+	body, _, _ = strings.Cut(body, mockLLMSubagentNotifiedEnd)
+	var notified struct {
+		Status json.RawMessage `json:"status"`
+	}
+	if json.Unmarshal([]byte(strings.TrimSpace(body)), &notified) != nil {
+		return "", false
+	}
+	return mockLLMCompleted(notified.Status)
 }
 
 // mockLLMEvent is one server-sent event of the Responses API's stream: its
@@ -472,10 +696,11 @@ const mockLLMLogItem = 400
 
 // mockLLMRequest is what the mock reads of a Responses API request: its
 // last input item as JSON (the input itself when it is a string), the one
-// the script matches, whether it asks for a stream, and its log line: the
-// tools it offers the model (a namespace's tools after its name) and that
+// the script matches, whether it asks for a stream, the tools it offers, the
+// texts of its message items by role (each role's joined by newlines), and
+// its log line: the tools (a namespace's tools after its name) and that
 // item.
-func mockLLMRequest(body []byte) (last string, stream bool, tools []string, line string) {
+func mockLLMRequest(body []byte) (last string, stream bool, tools []string, texts map[string]string, line string) {
 	type tool struct {
 		Type  string `json:"type"`
 		Name  string `json:"name"`
@@ -489,7 +714,7 @@ func mockLLMRequest(body []byte) (last string, stream bool, tools []string, line
 		Tools  []tool          `json:"tools"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
-		return "", false, nil, "unreadable: " + err.Error()
+		return "", false, nil, nil, "unreadable: " + err.Error()
 	}
 	names := make([]string, 0, len(req.Tools))
 	for _, t := range req.Tools {
@@ -509,7 +734,15 @@ func mockLLMRequest(body []byte) (last string, stream bool, tools []string, line
 	case json.Unmarshal(req.Input, &text) == nil:
 		last = text
 	}
-	return last, req.Stream, tools, fmt.Sprintf("tools [%s] last %s", excerpt(strings.Join(names, ", "), mockLLMLogItem), excerpt(last, mockLLMLogItem))
+	texts = map[string]string{}
+	for _, raw := range items {
+		var item mockLLMInputItem
+		if json.Unmarshal(raw, &item) != nil || item.Type != mockLLMMessage {
+			continue
+		}
+		texts[item.Role] = strings.TrimPrefix(texts[item.Role]+"\n"+mockLLMText(item.Content), "\n")
+	}
+	return last, req.Stream, tools, texts, fmt.Sprintf("tools [%s] last %s", excerpt(strings.Join(names, ", "), mockLLMLogItem), excerpt(last, mockLLMLogItem))
 }
 
 // ServeMockLLM serves the script for the MCP tools on mcpServer on listen
@@ -557,8 +790,8 @@ func mockLLMHandler(mcpServer, devctlArguments string, watch []string) (handler 
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		last, stream, tools, line := mockLLMRequest(body)
-		response, matched := mockLLMMatch(script, last, tools)
+		last, stream, tools, texts, line := mockLLMRequest(body)
+		response, matched := mockLLMMatch(script, last, texts, tools)
 		status := http.StatusOK
 		switch {
 		case !matched:

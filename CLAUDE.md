@@ -245,6 +245,7 @@ agentlab chatgpt-test    # platform.chatgptSubscription: codex on a person's own
 agentlab skills-test     # kagent API v2: an AgentTemplate with a git-pinned skill boots (the golden boot) and answers from the skill
 agentlab substrate-step-test --to <release>  # a suspended conversation and its /data file survive the step to a newer Substrate; a new one starts from a golden in the layout it writes (taken again on a layout change, kept otherwise)
 agentlab kagent-step-test --to <kagent> | --chart <agent-platform>  # a suspended conversation and a file on its durable volume survive: it resumes, takes a turn reading both back, suspends and deletes across a kagent step (a kagent pin, a platform candidate — chart-only included — or both)
+agentlab harness-matrix-test  # what each Harness does with a Shared subagent (prompt only, with a skill, with an MCP tool, nested) and, on claude, a Claude-format package's subagents and commands: per cell the controller's refusal or one turn whose child answers a codeword only its own prompt holds; observations in state/harness-matrix.txt, no verdict (codex's shared-prompt on the mockllm's delegation script unless --codex-model-config)
 agentlab substrate-tunnel-test  # a gRPC call through atenet-router to an HTTP/1.1-only actor fails at once, not with its client's timeout (--substrate <release> pins one for the run)
 agentlab down            # delete the cluster (certs/ kept, trust stores untouched)
 agentlab trust           # install the lab CA into the system + NSS trust stores (sudo)
