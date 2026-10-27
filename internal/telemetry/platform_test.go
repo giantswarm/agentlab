@@ -212,6 +212,7 @@ func TestPlatformRidesTheCommandsClient(t *testing.T) {
 	enable(t, srv)
 
 	Command(lab(t, "up"))
+	EnterLab("")
 	first := sender
 	Platform(context.Background(), config.Default(), config.DefaultChartVersion)
 	if sender != first {
