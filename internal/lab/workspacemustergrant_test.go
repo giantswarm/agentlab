@@ -143,9 +143,7 @@ func TestWorkspaceGrantValues(t *testing.T) {
 	grant := workspaceGrantOf(workspaceProviderValues{Name: config.WorkspaceProviderGitHub, Kind: providerKindGitHub, AppID: testGrantAppID, ClientID: testGrantClientID, Secret: config.WorkspaceGitHubSecretName})
 	values, raw, _, _ := renderWorkspaceTemplates(t, cfg, func(d *tmplData) { d.WorkspaceGrant = grant })
 	wm, _ := workspaceManagerBlock(t, values)
-	muster, _ := wm["muster"].(map[string]any)
-	server, _ := muster["mcpServer"].(map[string]any)
-	auth, _ := server["auth"].(map[string]any)
+	auth := musterServerAuth(wm)
 	as, _ := auth["authorizationServer"].(map[string]any)
 	if auth["provider"] != config.WorkspaceProviderGitHub || as["issuer"] != grant.Issuer || as["expectedIssuer"] != githubOAuthIssuer || as["scopes"] != "" ||
 		as["authorizationEndpoint"] != grant.AuthorizationEndpoint || as["tokenEndpoint"] != grant.TokenEndpoint || as["grantScope"] != "subject" {
@@ -160,8 +158,8 @@ func TestWorkspaceGrantValues(t *testing.T) {
 
 	values, _, _, _ = renderWorkspaceTemplates(t, cfg, func(d *tmplData) { d.WorkspaceGrant = nil })
 	wm, _ = workspaceManagerBlock(t, values)
-	if _, ok := wm["muster"]; ok {
-		t.Errorf("an unpinned manager's values carry a pin: %v", wm["muster"])
+	if auth := musterServerAuth(wm); auth["provider"] != nil || auth["authorizationServer"] != nil {
+		t.Errorf("an unpinned manager's values carry a pin: %v", auth)
 	}
 	if _, ok := wm["tokenExchange"]; !ok {
 		t.Error("an unpinned manager's values lost the token exchange")
@@ -259,8 +257,8 @@ func TestWorkspaceProviderApps(t *testing.T) {
 		d.WorkspaceGrant, d.WorkspaceProviderApps = nil, []string{config.WorkspaceProviderGitHub, config.WorkspaceProviderGitLab}
 	})
 	wm, _ := workspaceManagerBlock(t, values)
-	if _, ok := wm["muster"]; ok {
-		t.Errorf("apps: the values carry a pin: %v", wm["muster"])
+	if auth := musterServerAuth(wm); auth["provider"] != nil || auth["authorizationServer"] != nil {
+		t.Errorf("apps: the values carry a pin: %v", auth)
 	}
 	if _, ok := wm["tokenExchange"]; ok {
 		t.Errorf("apps: the values carry a token exchange:\n%s", raw)
