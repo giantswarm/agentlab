@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Stage 2a of the migration rehearsal (agentlab#143): the seeded 3.x lab
-# upgraded in place to a 4.x meta chart, the migrate Job's expand run asserted.
+# upgraded in place to a 4.x meta chart, the migrate run's expand phase asserted.
 #
 # Usage:  cd <lab dir> && upgrade.sh <evidence-dir> <target-version>
 #
@@ -16,7 +16,7 @@
 #                   the earlier ones: before | config | upgrade | assert-platform
 #                   (alias: assert) | migrate-run1 | gitops-pr | record; preflight
 #                   always runs, the skipped steps' summary fields read -
-#   REPORT_RUN1     a saved copy of the first expand report when the migrate Job
+#   REPORT_RUN1     a saved copy of the first expand report when the migrate run
 #                   re-ran since (the report ConfigMap holds only the latest run):
 #                   the rewrite is asserted from the copy, the live report must
 #                   say unchanged for the rewritten releases
@@ -37,7 +37,6 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OVERLAY="$HERE/values-4x-migration.yaml"
 GITOPS_MANIFEST="$HERE/seed-gitops.yaml"
 GITOPS_1X_MANIFEST="$HERE/seed-gitops-1x.yaml"
-MIGRATE_SELECTOR='app.kubernetes.io/component=agent-manager-migrate'
 GITOPS_NS=flux-giantswarm
 START_STEP="${START_STEP:-before}"
 REPORT_RUN1="${REPORT_RUN1:-}"
@@ -187,7 +186,7 @@ step_config() {
   timeout 300 helm template agent-platform "$SCRATCH/chart/agent-platform" -n agent-platform \
     -f state/agent-platform-values.yaml -f "$OVERLAY" --kube-version 1.33.0 >| /dev/null
   log "helm template of $TARGET with the rendered values: OK"
-  # The rendered values carry the 4.x keys, and the overlay the migrate Job's tenant namespaces.
+  # The rendered values carry the 4.x keys, and the overlay the migrate run's tenant namespaces.
   local merged k
   merged=$("$YQ" ea 'select(fileIndex == 0) * select(fileIndex == 1)' state/agent-platform-values.yaml "$OVERLAY")
   for k in .substrate .postgres .kagent.harness; do
@@ -250,9 +249,9 @@ step_upgrade() {
   status "LAB UPGRADING in place $BEFORE_VERSION → $TARGET (agentlab platform, lock held)"
   rm -f "$EVIDENCE/TRAP"
   local t0 pid rc=0 trap_seen='' waited=0
-  # The connectivity release's migrate Job resolves every seeded skill
+  # The connectivity release's migrate run resolves every seeded skill
   # through GitHub as part of this upgrade.
-  github_window "the upgrade's migrate Job"
+  github_window "the upgrade's migrate run"
   t0=$(now)
   timeout 1500 "$AGENTLAB" platform --trust=false --open=false >"$EVIDENCE/platform.log" 2>&1 &
   pid=$!
@@ -374,15 +373,16 @@ assert_has() { [[ "$1" == *"$2"* ]] || die "$3 lacks '$2': $1"; log "$3 has $2";
 step_migrate_run1() {
   step migrate-run1
   local d="$EVIDENCE/run1"; /usr/bin/mkdir -p "$d"
-  if ! kubectl -n kagent get job -l "$MIGRATE_SELECTOR" --no-headers 2>/dev/null | /usr/bin/grep -q .; then
+  local runs; runs=$(migrate_runs 2>/dev/null || true)
+  if [ -z "$runs" ]; then
     kubectl -n agent-platform get helmrelease agent-platform-connectivity -o yaml | /usr/bin/grep -A3 migration >| "$d/connectivity-migration-values.txt" || true
-    found_issue "agent-platform-connectivity $TARGET rendered no migrate Job in kagent (selector $MIGRATE_SELECTOR); connectivity values: $(tr '\n' ' ' <"$d/connectivity-migration-values.txt" | head -c 300); evidence $d"
+    found_issue "agent-platform-connectivity $TARGET started no migrate run in kagent (selector $MIGRATE_SELECTOR, start hook excluded; CronJob $MIGRATE_CRONJOB: $(kubectl -n kagent get cronjob "$MIGRATE_CRONJOB" -o name 2>/dev/null || echo absent)); connectivity values: $(tr '\n' ' ' <"$d/connectivity-migration-values.txt" | head -c 300); evidence $d"
   fi
   kubectl -n kagent get job -l "$MIGRATE_SELECTOR" \
-    -o custom-columns='N:.metadata.name,CREATED:.metadata.creationTimestamp,COMPLETE:.status.conditions[?(@.type=="Complete")].status,START:.status.startTime,END:.status.completionTime,IMAGE:.spec.template.spec.containers[0].image,CHART:.metadata.labels.helm\.sh/chart' \
+    -o custom-columns='N:.metadata.name,CREATED:.metadata.creationTimestamp,COMPLETE:.status.conditions[?(@.type=="Complete")].status,START:.status.startTime,END:.status.completionTime,IMAGE:.spec.template.spec.containers[0].image,CHART:.metadata.labels.helm\.sh/chart,OWNER:.metadata.ownerReferences[0].kind,HOOK:.metadata.annotations.helm\.sh/hook' \
     | tee "$d/jobs.txt" >&2
-  local job; job=$(kubectl -n kagent get job -l "$MIGRATE_SELECTOR" --sort-by=.metadata.creationTimestamp -o name | tail -n1)
-  log "newest migrate Job: $job ($(kubectl -n kagent get job -l "$MIGRATE_SELECTOR" --no-headers | wc -l) rendered so far)"
+  local job; job=$(tail -n1 <<<"$runs")
+  log "newest migrate run: $job ($(wc -l <<<"$runs") started so far)"
   # shellcheck disable=SC2016  # the body runs in bash -c with its own positionals
   if ! timeout 600 bash -c '
       until [ "$(kubectl -n kagent get "$1" -o jsonpath="{.status.conditions[?(@.type==\"Complete\")].status}" 2>/dev/null)" = True ]; do
@@ -390,12 +390,12 @@ step_migrate_run1() {
         sleep 5
       done' _ "$job"; then
     kubectl -n kagent get "$job" -o yaml >| "$d/job.yaml"
-    kubectl -n kagent logs -l "$MIGRATE_SELECTOR" --tail=-1 --all-containers >| "$d/job.log" 2>&1 || true
-    found_issue "migrate Job $job did not Complete (Failed or >600 s): $(kubectl -n kagent get "$job" -o jsonpath='{.status.conditions}' | head -c 400); log tail: $(tail -n 5 "$d/job.log" | tr '\n' ' ' | head -c 600); evidence $d"
+    kubectl -n kagent logs -l "batch.kubernetes.io/job-name=${job#job/}" --tail=-1 --all-containers --prefix >| "$d/job.log" 2>&1 || true
+    found_issue "migrate run $job did not Complete (Failed or >600 s): $(kubectl -n kagent get "$job" -o jsonpath='{.status.conditions}' | head -c 400); log tail: $(tail -n 5 "$d/job.log" | tr '\n' ' ' | head -c 600); evidence $d"
   fi
   kubectl -n kagent get "$job" -o yaml >| "$d/job.yaml"
   kubectl -n kagent get "$job" -o wide | tee "$d/job.txt" >&2
-  kubectl -n kagent logs -l "$MIGRATE_SELECTOR" --tail=-1 >| "$d/job.log" 2>&1 || true
+  kubectl -n kagent logs -l "batch.kubernetes.io/job-name=${job#job/}" --tail=-1 --all-containers --prefix >| "$d/job.log" 2>&1 || true
   local st ct
   st=$(kubectl -n kagent get "$job" -o jsonpath='{.status.startTime}'); ct=$(kubectl -n kagent get "$job" -o jsonpath='{.status.completionTime}')
   save_t job1 "$(( $(date -d "$ct" +%s) - $(date -d "$st" +%s) )) ($st → $ct)"
@@ -406,7 +406,7 @@ step_migrate_run1() {
 
   local LIVE_REPORT_JSON="$REPORT_JSON"
   if [ -n "$REPORT_RUN1" ]; then
-    # The Job re-ran since the first expand run: the live report describes the
+    # The migrate run re-ran since the first expand run: the live report describes the
     # re-run (nothing left to rewrite), the rewrite is in the saved copy.
     [ -f "$REPORT_RUN1" ] || die "REPORT_RUN1=$REPORT_RUN1 does not exist"
     cp "$REPORT_RUN1" "$d/report-run1.yaml"
@@ -499,7 +499,7 @@ step_gitops_pr() {
     (select(.kind == "HelmRelease") | .spec.values.agent) |= del(.runtime) |
     (select(.kind == "HelmRelease") | .spec.values.muster) |= (del(.serverRef) | .tools = .toolNames | del(.toolNames))
   ' "$GITOPS_MANIFEST" >| "$GITOPS_1X_MANIFEST"
-  sed -i '1,6{s|^# Fleet shape 3: a GitOps-owned agent\.|# Fleet shape 3 after the migrate Job'"'"'s expand run: the tenant'"'"'s pull request\n# applies the report'"'"'s diff to the GitOps-owned agent — agent chart 1.x, no\n# agent.runtime, muster.tools instead of toolNames/serverRef, no drift ignores.|}' "$GITOPS_1X_MANIFEST"
+  sed -i '1,6{s|^# Fleet shape 3: a GitOps-owned agent\.|# Fleet shape 3 after the migrate run'"'"'s expand phase: the tenant'"'"'s pull request\n# applies the report'"'"'s diff to the GitOps-owned agent — agent chart 1.x, no\n# agent.runtime, muster.tools instead of toolNames/serverRef, no drift ignores.|}' "$GITOPS_1X_MANIFEST"
   diff "$GITOPS_MANIFEST" "$GITOPS_1X_MANIFEST" >| "$d/seed-gitops-1x.vs-seed.diff" || true
   # Line by line against the report's diff, both ways.
   local mine theirs missing extra
@@ -512,7 +512,7 @@ step_gitops_pr() {
   log "seed-gitops-1x.yaml matches the report's diff line by line (plus the OCIRepository move)"
   if ! git -C "$HERE" diff --quiet -- "$GITOPS_1X_MANIFEST" || [ -n "$(git -C "$HERE" ls-files --others --exclude-standard -- "$GITOPS_1X_MANIFEST")" ]; then
     git -C "$HERE" add "$GITOPS_1X_MANIFEST"
-    git -C "$HERE" commit -q -m "feat(migration-rehearsal): the GitOps agent after the migrate Job's diff" -- "$GITOPS_1X_MANIFEST"
+    git -C "$HERE" commit -q -m "feat(migration-rehearsal): the GitOps agent after the migrate run's diff" -- "$GITOPS_1X_MANIFEST"
     timeout 120 git -C "$HERE" push -q
     log "committed and pushed $(git -C "$HERE" rev-parse --short HEAD)"
   fi
@@ -533,7 +533,7 @@ step_record() {
     echo "| render + helm template pre-flight | $(load_t config) |"
     echo "| agentlab platform (in place) | $(load_t platform) |"
     echo "| agentlab platform (re-run) | $(load_t platform-rerun) |"
-    echo "| migrate Job run 1 (start → completion) | $(load_t job1) |"
+    echo "| migrate run 1 (start → completion) | $(load_t job1) |"
     echo "| GitOps diff apply (flux-giantswarm/sre-agent) | $(load_t apply) |"
     echo
     echo "kagent chart: $KAGENT_CHART; substrate: $SUBSTRATE_CHART; agent-manager: $(hr_chart_version agent-platform agent-manager); backstage: $(hr_chart_version agent-platform backstage)"

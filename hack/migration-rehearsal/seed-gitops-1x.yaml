@@ -5,9 +5,9 @@
 # plumbing that stands in for the tenant's real RBAC under the Flux
 # multi-tenancy lockdown.
 #
-# This is the operator's pull request after the migrate Job's expand run: the
+# This is the operator's pull request after the migrate run's expand phase: the
 # OCIRepository range moved to the 1.x agent chart and the values rewritten
-# exactly as the Job's report said (agent.runtime dropped, muster.serverRef
+# exactly as the run's report said (agent.runtime dropped, muster.serverRef
 # dropped, muster.toolNames renamed to muster.tools, the two driftDetection
 # ignore paths of the retired Agent kind dropped). seed-gitops.yaml is the
 # 0.x shape the rehearsal seeds.
