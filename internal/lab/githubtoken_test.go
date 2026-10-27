@@ -2,6 +2,8 @@ package lab
 
 import (
 	"context"
+	"io"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -175,8 +177,13 @@ func TestEnsureGitHubTokenSecrets(t *testing.T) {
 		return ok
 	}
 
-	if err := ensureGitHubTokenSecrets(ctx, cfg); err != nil {
+	var err error
+	warned := stderrOf(t, func() { err = ensureGitHubTokenSecrets(ctx, cfg) })
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !strings.Contains(warned, "WARNING") || !strings.Contains(warned, "githubToken.source") || !strings.Contains(warned, "--github-token-source") {
+		t.Errorf("without githubToken.source: stderr %q, want a warning naming the setting and its configure flag", warned)
 	}
 	if exists() || len(*calls) != 0 {
 		t.Fatalf("without githubToken.source: Secret written=%v, secret tooling calls %q; want neither", exists(), *calls)
@@ -191,6 +198,41 @@ func TestEnsureGitHubTokenSecrets(t *testing.T) {
 	if !exists() {
 		t.Errorf("a run without githubToken.source removed %s/%s", platformNamespace, gitHubTokenSecret)
 	}
+}
+
+// A lab whose portal and agents are both off calls GitHub for nothing, so
+// a missing githubToken.source is no warning.
+func TestEnsureGitHubTokenSecretsQuietWithoutConsumers(t *testing.T) {
+	newFakeLab(t)
+	cfg := gitHubTokenTestConfig()
+	cfg.Platform.Agents, cfg.Backstage.Enabled = false, false
+	fakeSecretTool(t, func() error { return nil })
+	var err error
+	if warned := stderrOf(t, func() { err = ensureGitHubTokenSecrets(t.Context(), cfg) }); warned != "" {
+		t.Errorf("stderr %q, want nothing", warned)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// stderrOf is what fn prints on stderr.
+func stderrOf(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stderr := os.Stderr
+	os.Stderr = w
+	defer func() { os.Stderr = stderr }()
+	fn()
+	_ = w.Close()
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
 }
 
 // TestDeploymentSetsEnv: E4/E5 run only when agent-manager's Deployment
