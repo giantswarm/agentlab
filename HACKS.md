@@ -332,7 +332,9 @@ the issuer URL — `https://localhost:<dexPort>/dex`, the one URL the browser, t
 apiserver and every pod must share (H-issuer, above). muster and Backstage reach
 it through hostNetwork (U1); these cannot: all listen on :8080 and would collide
 on the single kind node. **Fix:** a `dex-localhost` sidecar (socat, from its gsoci mirror) that
-listens on the pod's own loopback :<dexPort> (IPv6 wildcard, dual-stack) and
+listens on the pod's own loopback :<dexPort> (IPv6 wildcard, dual-stack; the
+IPv4 wildcard in a pod without an IPv6 stack, on a host that boots with
+`ipv6.disable=1`, where the IPv6 socket cannot be created) and
 forwards to the Dex ClusterIP Service, so `localhost` resolves inside the pod
 exactly as on the host; Dex's certificate carries `localhost`, TLS verification
 against the lab CA holds. Since 2026-09-08 a Kustomize strategic-merge patch in
@@ -802,6 +804,30 @@ step E5 tries the update again while it answers `Internal`, for up to 30 s
 the step. Unblocks when kagent's Update maps a conflict to `Aborted` or
 retries it on a fresh read (giantswarm/kagent-upstream,
 `go/core/internal/service/kubecrud`): the retry then goes.
+
+### U38. `postRenderers` patch: agentgateway binds IPv4 — BLOCKED UPSTREAM
+agentgateway binds its readiness (15021) and stats (15020) servers and its
+listeners on the IPv6 wildcard unless IPv6 is switched off
+(giantswarm/agentgateway-upstream v2.1.2, the 2.1.2 image's `git_revision`
+39023841: `crates/agentgateway/src/config.rs:52-68` — `IPV6_ENABLED` or
+`config.enableIpv6`, default true, picks `bind_wildcard`;
+`config.rs:363-369` the readiness default; `READINESS_ADDR`/`readinessAddr`
+would move only that one server). On a host that boots with
+`ipv6.disable=1` no pod has an IPv6 stack, so the edge's data plane (and
+Substrate's atenet router and egress, agentgateway 2.2.1+) crash-loop on
+`readiness server starts — Address family not supported by protocol (os
+error 97)`. agentgateway does check for a disabled IPv6, but only lo's
+`/proc/sys/net/ipv6/conf/lo/disable_ipv6` (`lib.rs:981-991`), only for the
+localhost addresses, and treats the file being absent — exactly the
+`ipv6.disable=1` case — as IPv6 on. **Fix:** patch 9 of `postrenderers.go`:
+`rawConfig.config.enableIpv6: false` on every AgentgatewayParameters the
+component charts render (the edge's, the models Gateway's) and
+`IPV6_ENABLED=false` on every container that runs the data-plane image,
+selected off the renders (`agentgatewayIPv4Targets`). On every host: the
+kind cluster is IPv4 single-stack, so nothing reaches the data plane over
+IPv6 anyway. Unblocks when agentgateway falls back to the IPv4 wildcard on a
+host without IPv6 (an absent `/proc/net/if_inet6`, or `EAFNOSUPPORT` from
+the IPv6 socket) — then the patch goes.
 
 ## Accepted lab trade-offs (not hacks to fix)
 

@@ -37,7 +37,7 @@ func TestMusterPodNetwork(t *testing.T) {
 			if got := cfg.MusterReplicas(); got != tc.replicas {
 				t.Errorf("MusterReplicas() = %d, want %d", got, tc.replicas)
 			}
-			rendered, err := componentPostRenderers(cfg, nil, nil)
+			rendered, err := componentPostRenderers(cfg, nil, nil, nil)
 			if err != nil {
 				t.Fatal(err)
 			}

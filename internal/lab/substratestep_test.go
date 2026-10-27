@@ -366,7 +366,7 @@ func TestSubstrateAPIDevImage(t *testing.T) {
 	if got := names[config.DevImageSubstrateAPI]; got != "gsoci.azurecr.io/giantswarm/substrate/ateapi" {
 		t.Errorf("resolved %q, want the chart's ateapi image", got)
 	}
-	postRenderers, err := componentPostRenderers(cfg, names, nil)
+	postRenderers, err := componentPostRenderers(cfg, names, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
