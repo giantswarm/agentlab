@@ -655,7 +655,7 @@ func TestWaitReadinessStalledRetry(t *testing.T) {
 		started := time.Now()
 		read := func() (agentReadiness, error) {
 			if time.Since(started) < 3*time.Minute {
-				return agentReadiness{reason: "pending"}, nil
+				return agentReadiness{reason: readyReasonPending}, nil
 			}
 			return agentReadiness{agent: retryingAgent(1)}, nil
 		}
@@ -671,7 +671,7 @@ func TestWaitReadinessStalledRetry(t *testing.T) {
 
 func TestWaitReadinessTimeoutWithoutCrash(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		r, err := waitReadiness(func() (agentReadiness, error) { return agentReadiness{reason: "pending"}, nil }, time.Minute)
+		r, err := waitReadiness(func() (agentReadiness, error) { return agentReadiness{reason: readyReasonPending}, nil }, time.Minute)
 		if err != nil || r.ready || r.elapsed < time.Minute || r.elapsed > time.Minute+pollInterval {
 			t.Errorf("waitReadiness = %+v, %v; want a timeout after 1m", r, err)
 		}
