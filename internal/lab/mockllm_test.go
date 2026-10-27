@@ -103,13 +103,16 @@ type testInputItem struct {
 	Output  string             `json:"output,omitempty"`
 }
 
+// testInputText is a Responses API input content part's type.
+const testInputText = "input_text"
+
 type testInputContent struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
 }
 
 func userItem(text string) testInputItem {
-	return testInputItem{Type: mockLLMMessage, Role: "user", Content: []testInputContent{{Type: "input_text", Text: text}}}
+	return testInputItem{Type: mockLLMMessage, Role: "user", Content: []testInputContent{{Type: testInputText, Text: text}}}
 }
 
 // outputOf is the runtime's input item returning a call's output.
@@ -309,7 +312,7 @@ func TestMockLLMWatchesNames(t *testing.T) {
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 	codex := codingRuntimes[config.CodingRuntimeCodex]
-	skills := testInputItem{Type: mockLLMMessage, Role: "developer", Content: []testInputContent{{Type: "input_text", Text: "## Skills\n- " + pluginExampleSkill + ": migrate a plugin"}}}
+	skills := testInputItem{Type: mockLLMMessage, Role: "developer", Content: []testInputContent{{Type: testInputText, Text: "## Skills\n- " + pluginExampleSkill + ": migrate a plugin"}}}
 	mockLLMCall(t, srv, skills, userItem(codingSandboxPrompt(codex)))
 	mockLLMCall(t, srv, userItem(codingCodeWordPrompt(codex)))
 
@@ -355,7 +358,7 @@ func TestMockLLMScriptDelegatesToTheChild(t *testing.T) {
 	}
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
-	cell := matrixCells([]string{config.CodingRuntimeCodex}, HarnessMatrixOptions{Cases: []string{"shared-prompt"}})[0]
+	cell := matrixCells([]string{config.CodingRuntimeCodex}, HarnessMatrixOptions{Cases: []string{caseSharedPrompt}})[0]
 	tools := []string{mockLLMExecTool, mockLLMMultiAgentNamespace}
 	prompt := userItem(cell.prompt())
 
@@ -372,7 +375,7 @@ func TestMockLLMScriptDelegatesToTheChild(t *testing.T) {
 	}
 
 	instructions := testInputItem{Type: mockLLMMessage, Role: "developer", Content: []testInputContent{
-		{Type: "input_text", Text: fmt.Sprintf("You are the subagent %s of a test lab. Your answer starts with the line CODEWORD=%s. When asked for your skills, add a line.", cell.child, cell.codeword)},
+		{Type: testInputText, Text: fmt.Sprintf("You are the subagent %s of a test lab. Your answer starts with the line CODEWORD=%s. When asked for your skills, add a line.", cell.child, cell.codeword)},
 	}}
 	task := userItem(mockLLMDelegateTask)
 	if got := replyText(t, mockLLMCall(t, srv, instructions, task)); got != "CODEWORD="+cell.codeword {
@@ -426,7 +429,7 @@ func TestMockLLMScriptSearchesForTheSpawnTool(t *testing.T) {
 	}
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
-	cell := matrixCells([]string{config.CodingRuntimeCodex}, HarnessMatrixOptions{Cases: []string{"shared-prompt"}})[0]
+	cell := matrixCells([]string{config.CodingRuntimeCodex}, HarnessMatrixOptions{Cases: []string{caseSharedPrompt}})[0]
 	prompt := userItem(cell.prompt())
 
 	search := mockLLMCallOffering(t, srv, []string{mockLLMExecTool}, prompt)

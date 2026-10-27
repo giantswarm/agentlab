@@ -431,7 +431,7 @@ func mockLLMDelegation(last string, texts map[string]string, tools []string) (mo
 		text := mockLLMText(item.Content)
 		switch {
 		case strings.Contains(text, mockLLMDelegateTask):
-			codeword := "none"
+			codeword := matrixNone
 			if found := mockLLMCodeword.FindStringSubmatch(texts["developer"]); found != nil {
 				codeword = found[1]
 			}

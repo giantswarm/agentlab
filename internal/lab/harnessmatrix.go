@@ -40,6 +40,21 @@ const (
 	// matrixDelegatePrompt opens a Shared case's prompt, the child's name
 	// quoted after it; the mockllm's script reads the name there.
 	matrixDelegatePrompt = "Delegate to your subagent "
+	// matrixNone is a reply field's value when there is nothing to name.
+	matrixNone = "none"
+	// claudeAgentTool and claudeTaskTool are the names Claude Code's
+	// subagent tool has gone by.
+	claudeAgentTool = "Agent"
+	claudeTaskTool  = "Task"
+)
+
+// The matrix's case keys.
+const (
+	caseSharedPrompt = "shared-prompt"
+	caseSharedSkill  = "shared-skill"
+	caseSharedMCP    = "shared-mcp"
+	caseSharedNested = "shared-nested"
+	casePluginParts  = "plugin-parts"
 )
 
 // HarnessMatrixOptions are `agentlab harness-matrix-test`'s.
@@ -71,11 +86,11 @@ type matrixCase struct {
 
 // matrixCases are the rows, in order.
 var matrixCases = []matrixCase{
-	{key: "shared-prompt", title: "Shared child, prompt and model", mockTurn: true},
-	{key: "shared-skill", title: "Shared child with a skill"},
-	{key: "shared-mcp", title: "Shared child with an MCP tool"},
-	{key: "shared-nested", title: "Shared child binding a Shared child"},
-	{key: "plugin-parts", title: "Claude-format package: subagents and commands", claudeOnly: true},
+	{key: caseSharedPrompt, title: "Shared child, prompt and model", mockTurn: true},
+	{key: caseSharedSkill, title: "Shared child with a skill"},
+	{key: caseSharedMCP, title: "Shared child with an MCP tool"},
+	{key: caseSharedNested, title: "Shared child binding a Shared child"},
+	{key: casePluginParts, title: "Claude-format package: subagents and commands", claudeOnly: true},
 }
 
 // matrixCell is one case on one Harness, and what was seen.
@@ -307,8 +322,8 @@ func replyFields(reply string) map[string]string {
 func (m *matrixCell) judge(reply string, tools []string) (string, string) {
 	fields := replyFields(reply)
 	toolList := "tools run: " + cmpJoin(tools)
-	if m.c.key == "plugin-parts" {
-		invoked := slices.ContainsFunc(tools, func(n string) bool { return n == "Agent" || n == "Task" })
+	if m.c.key == casePluginParts {
+		invoked := slices.ContainsFunc(tools, func(n string) bool { return n == claudeAgentTool || n == claudeTaskTool })
 		outcome := "SUBAGENT NOT INVOKED"
 		if invoked {
 			outcome = "SUBAGENT INVOKED"
@@ -317,9 +332,9 @@ func (m *matrixCell) judge(reply string, tools []string) (string, string) {
 	}
 	evidence := fmt.Sprintf("CODEWORD=%s", fields["CODEWORD"])
 	switch m.c.key {
-	case "shared-skill":
+	case caseSharedSkill:
 		evidence += "; SKILLS=" + fields["SKILLS"]
-	case "shared-mcp":
+	case caseSharedMCP:
 		evidence += "; TOOL=" + fields["TOOL"]
 	}
 	evidence += "; " + toolList
@@ -334,14 +349,14 @@ func (m *matrixCell) judge(reply string, tools []string) (string, string) {
 
 func cmpJoin(s []string) string {
 	if len(s) == 0 {
-		return "none"
+		return matrixNone
 	}
 	return strings.Join(s, ",")
 }
 
 // prompt is the cell's one turn.
 func (m *matrixCell) prompt() string {
-	if m.c.key == "plugin-parts" {
+	if m.c.key == casePluginParts {
 		return fmt.Sprintf("Answer in exactly three lines:\n"+
 			"COMMANDS=<the slash commands and skills of the feature-dev plugin you can invoke (names starting feature-dev:), comma-separated, or none>\n"+
 			"SUBAGENTS=<the subagent types available to you besides the built-in ones, comma-separated, or none>\n"+
@@ -349,9 +364,9 @@ func (m *matrixCell) prompt() string {
 	}
 	extra, lines := "", ""
 	switch m.c.key {
-	case "shared-skill":
+	case caseSharedSkill:
 		extra, lines = " and the names of the skills it has", "\nSKILLS=<the skill names it answered>"
-	case "shared-mcp":
+	case caseSharedMCP:
 		extra, lines = " and to call one of its MCP tools that only lists something", "\nTOOL=<the name of the tool it called, or none>"
 	}
 	return fmt.Sprintf(matrixDelegatePrompt+"%q: ask it for its codeword%s. Then answer in exactly these lines:\nCODEWORD=<what it answered>%s\n"+
@@ -364,16 +379,16 @@ func (m *matrixCell) manifests() string {
 	var docs []string
 	var parentTools, parentPlugins string
 	switch m.c.key {
-	case "plugin-parts":
+	case casePluginParts:
 		parentPlugins = fmt.Sprintf("  plugins:\n  - source:\n      git:\n        url: %s\n        commit: %s\n      path: %s\n", claudePluginURL, claudePluginCommit, featureDevPath)
 	default:
 		var childTools, childSkills string
 		switch m.c.key {
-		case "shared-skill":
+		case caseSharedSkill:
 			childSkills = fmt.Sprintf("  skills:\n  - name: %s\n    source:\n      git:\n        url: %s\n        commit: %s\n      path: skills/%s\n", pluginExampleSkill, pluginExampleURL, pluginExampleCommit, pluginExampleSkill)
-		case "shared-mcp":
+		case caseSharedMCP:
 			childTools = fmt.Sprintf("  tools:\n  - mcp:\n      server:\n        kind: RemoteMCPServer\n        name: %s\n", harnessMatrixMCPServer)
-		case "shared-nested":
+		case caseSharedNested:
 			childTools = subAgentTools(m.grandchild)
 			docs = append(docs, matrixTemplate(m.grandchild, m.modelConfig, "You are a nested subagent of a test lab. Answer: grandchild.", "", ""))
 		}
