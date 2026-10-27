@@ -220,7 +220,7 @@ check above.
 | [TLS](docs/tls.md) | The lab CA, `trust` and `untrust`, Node and browsers, bringing your own certificate |
 | [The agent platform](docs/platform.md) | muster + mcp-kubernetes: the request path, per-server sign-in, the infrastructure families, toolsets, deviations from a real management cluster, the dev channel (a branch's dev builds), Agent Substrate and the platform Postgres from the chart, Substrate worker nodes (`substrateNodes`) for node-loss proofs |
 | [Agents](docs/agents.md) | The kagent runtime, the default ModelConfig and the API key Secret |
-| [The migration rehearsal](docs/migration-rehearsal.md) | A 3.x lab with the four fleet shapes upgraded in place to the 4.x line: the command sequence, the timings, what the migrate Job rewrote, refused and deleted, what an installation's cut-over does differently |
+| [The migration rehearsal](docs/migration-rehearsal.md) | A 3.x lab with the four fleet shapes upgraded in place to the 4.x line: the command sequence, the timings, what the migrate run rewrote, refused and deleted, what an installation's cut-over does differently |
 | [Models](docs/models.md) | Extra model configs, model servers on the host, managed models through model-manager, model serving on llm-d in the lab |
 | [vm-manager](docs/vm-manager.md) | The platform's VM provisioner as a pod of the node: the KVM devices, the image directory, the dev image, the golden PCR recipe, the proof |
 | [klaus-gateway](docs/klaus-gateway.md) | Swarmgeist as the meta chart's component: the values, the two lab Secrets, the OBO link store in a Secret across a pod loss, the dev image, what a lab without a Slack workspace cannot prove |

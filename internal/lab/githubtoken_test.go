@@ -167,7 +167,7 @@ func TestMigrateRunTakesNoGitHubToken(t *testing.T) {
 }
 
 // TestGitHubTokenLegacyChartTakesNoKeys: the 3.x line the rehearsal seeds
-// has neither agent-manager's tokenSecret nor the migrate Job, so a seed run
+// has neither agent-manager's tokenSecret nor the migrate run, so a seed run
 // with the source recorded renders none of the keys.
 func TestGitHubTokenLegacyChartTakesNoKeys(t *testing.T) {
 	cfg := gitHubTokenTestConfig()
