@@ -183,8 +183,9 @@ components:
     enabled: true
 {{- $connectivityPatches := index .PostRenderers "agent-platform-connectivity" }}
 {{- if or .ConnectivityChart $connectivityPatches }}
-  # The wiring chart, which renders the public routes; its one patch drops the
-  # portal's HSTS header at the edge (postrenderers.go, patch 8).
+  # The wiring chart, which renders the public routes; its patches drop the
+  # portal's HSTS header at the edge and bind agentgateway on IPv4
+  # (postrenderers.go, patches 8 and 9).
   agent-platform-connectivity:
 {{- with .ConnectivityChart }}
     # The wiring chart of the checkout (platform.chartPath; connectivity.go).

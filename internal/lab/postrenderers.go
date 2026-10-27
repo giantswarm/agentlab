@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"iter"
 	"maps"
+	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -106,6 +107,26 @@ import (
 //     filter, JSON 6902: the route's rules are a list without merge keys).
 //     Lab only.
 //
+//  9. IPv4 binds for every agentgateway the component charts run: the
+//     edge's and the models Gateway's data planes, which the agentgateway
+//     controller generates from the connectivity chart's
+//     AgentgatewayParameters (rawConfig `config.enableIpv6: false`, merged
+//     into the generated config file), and the data-plane containers the
+//     component charts run themselves — Substrate's atenet router and egress
+//     (IPV6_ENABLED=false on the container). agentgateway binds its
+//     readiness, stats and listener wildcards on [::] unless told otherwise
+//     (crates/agentgateway/src/config.rs at the agentgateway-upstream tag
+//     v2.1.2: the switch is IPV6_ENABLED or config.enableIpv6, default
+//     true), and on a host that boots with ipv6.disable=1 that socket cannot
+//     be created: "readiness server starts — Address family not supported by
+//     protocol (os error 97)" and a crash loop. Set on every host, not only
+//     on those: the kind cluster is IPv4 single-stack (kind's default
+//     ipFamily, kind-config.yaml.tmpl sets none), so Services, probes and the
+//     edge NodePort reach the data plane over IPv4 whatever the host has, and
+//     the setting's other effect — upstream names resolved to IPv4 only — is
+//     what a pod without an IPv6 route can use anyway. Which objects get it
+//     is a rule over the renders (agentgatewayIPv4Targets). Lab only.
+//
 // The values-side shape is Flux's: `postRenderers: [{kustomize: {patches:
 // [{target, patch}], images: [{name, newName, newTag}]}}]`.
 
@@ -164,12 +185,32 @@ const dexServiceHost = "dex.dex.svc.cluster.local"
 
 // The target selector keys and kinds of the patches below.
 const (
-	kindKey        = "kind"
-	kindDeployment = "Deployment"
-	kindService    = "Service"
-	kindConfigMap  = "ConfigMap"
-	kindHTTPRoute  = "HTTPRoute"
+	kindKey                    = "kind"
+	kindDeployment             = "Deployment"
+	kindService                = "Service"
+	kindConfigMap              = "ConfigMap"
+	kindHTTPRoute              = "HTTPRoute"
+	kindAgentgatewayParameters = "AgentgatewayParameters"
 )
+
+// agentgatewayImage is the last path segment of the agentgateway data-plane
+// image (gsoci.azurecr.io/giantswarm/agentgateway-upstream/agentgateway);
+// the controller's is `controller`.
+const agentgatewayImage = "agentgateway"
+
+// agentgatewayIPv6Var is agentgateway's IPv6 switch as an environment
+// variable (patch 9), agentgatewayIPv6Off the value patch 9 sets.
+const (
+	agentgatewayIPv6Var = "IPV6_ENABLED"
+	agentgatewayIPv6Off = "false"
+)
+
+// agentgatewayTarget is one object patch 9 selected: an
+// AgentgatewayParameters, or a container of a Deployment that runs the
+// agentgateway image.
+type agentgatewayTarget struct {
+	kind, name, container string
+}
 
 // kustomizePatch is one Flux postRenderers kustomize patch: a strategic merge
 // (or JSON 6902) patch and the object it targets.
@@ -295,9 +336,15 @@ spec:
 // sidecar — an init container that restarts always, with a startup probe on
 // its listen port — so the kubelet starts the server's own container only once
 // the forwarder listens (a server dialing the issuer at start would otherwise
-// be refused and restart once). An IPv6 wildcard listener is dual-stack on
-// Linux (bindv6only=0), so both [::1] — which Go dials first for localhost —
-// and 127.0.0.1 answer. Its securityContext meets PodSecurity `restricted`
+// be refused and restart once). Where the pod has an IPv6 stack, an IPv6
+// wildcard listener is dual-stack on Linux (bindv6only=0), so both [::1] —
+// which Go dials first for localhost — and 127.0.0.1 answer. On a host that
+// boots with ipv6.disable=1 no pod has one: the IPv6 socket cannot be created
+// at all (EAFNOSUPPORT) and the sidecar would crash-loop, so the listener is
+// IPv4 there — localhost then resolves to 127.0.0.1 alone. The pod's own
+// /proc/net/if_inet6 is what tells the two apart (the kernel creates it with
+// the IPv6 stack); the image's alpine shell picks the listener
+// (dexLocalhostListen). Its securityContext meets PodSecurity `restricted`
 // (no privilege escalation, every capability dropped, the runtime's seccomp
 // profile): socat listens on an unprivileged port and needs none of them, and
 // the user it runs as is the pod's, which the component chart sets.
@@ -315,9 +362,9 @@ spec:
         - name: %s
           image: %s
           restartPolicy: Always
+          command: [/bin/sh, -c]
           args:
-            - TCP6-LISTEN:%d,fork,reuseaddr
-            - TCP:%s
+            - %q
           startupProbe:
             tcpSocket:
               port: %d
@@ -334,8 +381,70 @@ spec:
             requests:
               cpu: 5m
               memory: 16Mi
-`, deployment, dexLocalhostContainer, dexLocalhostImage, dexPort, dexServiceAddr, dexPort)),
+`, deployment, dexLocalhostContainer, dexLocalhostImage, dexLocalhostListen(dexPort), dexPort)),
 	}
+}
+
+// dexLocalhostListen is the sidecar's shell line: socat on the IPv6 wildcard
+// (dual-stack) where the pod has an IPv6 stack, else on the IPv4 one, both
+// forwarding to the Dex Service.
+func dexLocalhostListen(dexPort int) string {
+	forward := fmt.Sprintf("fork,reuseaddr TCP:%s", dexServiceAddr)
+	return fmt.Sprintf("if [ -e /proc/net/if_inet6 ]; then exec socat TCP6-LISTEN:%[1]d,%[2]s; fi; exec socat TCP4-LISTEN:%[1]d,%[2]s", dexPort, forward)
+}
+
+// agentgatewayIPv4Patch is patch 9 for one target. An AgentgatewayParameters
+// is a custom resource, so kustomize merges the patch as a JSON merge patch:
+// rawConfig is a map and merges key by key with whatever the chart sets
+// there. A Deployment's container env merges by name.
+func agentgatewayIPv4Patch(t agentgatewayTarget) kustomizePatch {
+	target := map[string]string{kindKey: t.kind, nameKey: t.name}
+	if t.kind == kindAgentgatewayParameters {
+		return kustomizePatch{Target: target, Patch: literalYAML(fmt.Sprintf(`apiVersion: agentgateway.dev/v1alpha1
+kind: %s
+metadata:
+  name: %s
+spec:
+  rawConfig:
+    config:
+      enableIpv6: false
+`, t.kind, t.name))}
+	}
+	return kustomizePatch{Target: target, Patch: literalYAML(fmt.Sprintf(`apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: %s
+spec:
+  template:
+    spec:
+      containers:
+        - name: %s
+          env:
+            - name: %s
+              value: %q
+`, t.name, t.container, agentgatewayIPv6Var, agentgatewayIPv6Off))}
+}
+
+// agentgatewayIPv4Targets is the rule that picks patch 9's targets off the
+// component renders (keyed by release name, platformImages): every
+// AgentgatewayParameters, and every container of a Deployment that runs the
+// agentgateway data-plane image. Keyed by component, each list in render
+// order; a component without a target is absent.
+func agentgatewayIPv4Targets(renders map[string]string) map[string][]agentgatewayTarget {
+	targets := map[string][]agentgatewayTarget{}
+	for component, rendered := range renders {
+		for _, o := range renderedObjects(rendered, kindAgentgatewayParameters) {
+			targets[component] = append(targets[component], agentgatewayTarget{kind: kindAgentgatewayParameters, name: o.Metadata.Name})
+		}
+		for _, d := range renderedDeployments(rendered) {
+			for _, c := range d.Spec.Template.Spec.Containers {
+				if path.Base(imageName(c.Image)) == agentgatewayImage {
+					targets[component] = append(targets[component], agentgatewayTarget{kind: kindDeployment, name: d.Metadata.Name, container: c.Name})
+				}
+			}
+		}
+	}
+	return targets
 }
 
 // kagentUINodePortPatch is patch 3. A Service's ports list merges by BOTH
@@ -658,7 +767,9 @@ func (w renderedWorkload) told() iter.Seq2[string, string] {
 // (dexLocalhostTargets) — nil in a render without the component charts
 // (`agentlab render`, the values the roster is rendered from), which patches
 // no sidecar: `agentlab platform` renders the values once more with them.
-func componentPostRenderers(cfg *config.Config, imageNames map[string]string, sidecars map[string][]dexLocalhostTarget) (map[string]string, error) {
+// gateways is patch 9's targets per component (agentgatewayIPv4Targets),
+// nil in the same renders.
+func componentPostRenderers(cfg *config.Config, imageNames map[string]string, sidecars map[string][]dexLocalhostTarget, gateways map[string][]agentgatewayTarget) (map[string]string, error) {
 	patches := map[string][]kustomizePatch{
 		componentKagent: {kagentUINodePortPatch()},
 	}
@@ -677,6 +788,11 @@ func componentPostRenderers(cfg *config.Config, imageNames map[string]string, si
 	for _, component := range slices.Sorted(maps.Keys(sidecars)) {
 		for _, target := range sidecars[component] {
 			patches[component] = append(patches[component], dexLocalhostPatch(target.deployment, cfg.DexPort))
+		}
+	}
+	for _, component := range slices.Sorted(maps.Keys(gateways)) {
+		for _, target := range gateways[component] {
+			patches[component] = append(patches[component], agentgatewayIPv4Patch(target))
 		}
 	}
 	images := map[string][]kustomizeImage{}
