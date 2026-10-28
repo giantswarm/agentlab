@@ -216,7 +216,7 @@ Discovering this machine:
   KVM               /dev/kvm and /dev/vhost-vsock present — platform.vmManager on, images from /home/you/projects/giantswarm/vm-manager/images/build
   Anthropic key     $ANTHROPIC_API_KEY is set — the agents' default ModelConfig and Backstage's AI chat get the real key at deploy time
   GitHub token      githubToken.source op://lab/github-token/credential — beekeeper places it into the Secret agent-platform/agentlab-github-token at every up and platform: the portal's skill discovery and agent-manager's skill resolution call GitHub authenticated (5000 requests an hour); agentlab never reads the value
-  Telemetry         enabled — anonymous usage data (commands, agentlab version, OS, the portal's page views) goes to TelemetryDeck; the form, or `agentlab configure --telemetry=false`, disables it (docs/telemetry.md)
+  Telemetry         enabled — anonymous usage data goes to TelemetryDeck; the form, or `agentlab configure --telemetry=false`, disables it (docs/telemetry.md)
 
 Applied to the configuration:
   platform.modelManager.backends: [ollama] -> [ollama, lemonade, lmstudio]

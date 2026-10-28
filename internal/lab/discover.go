@@ -477,7 +477,7 @@ func telemetryLine(cfg *config.Config) string {
 	case !cfg.Telemetry:
 		return "disabled for this lab (telemetry: false); the form, or `agentlab configure --telemetry`, enables it again"
 	default:
-		return "enabled — anonymous usage data (commands, agentlab version, OS, the portal's page views) goes to TelemetryDeck; the form, or `agentlab configure --telemetry=false`, disables it (docs/telemetry.md)"
+		return "enabled — anonymous usage data goes to TelemetryDeck; the form, or `agentlab configure --telemetry=false`, disables it (docs/telemetry.md)"
 	}
 }
 
