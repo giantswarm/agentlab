@@ -17,7 +17,7 @@ require (
 	github.com/giantswarm/pagekit v0.3.2
 	github.com/giantswarm/selfupdate-cosign v0.3.16
 	github.com/giantswarm/telemetrydeck-go v0.3.12
-	github.com/giantswarm/vm-manager v0.25.12
+	github.com/giantswarm/vm-manager v0.25.14
 	github.com/google/go-github/v93 v93.0.0
 	github.com/google/uuid v1.6.0
 	github.com/smallstep/truststore v0.13.0
