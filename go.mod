@@ -17,7 +17,7 @@ require (
 	github.com/giantswarm/pagekit v0.3.2
 	github.com/giantswarm/selfupdate-cosign v0.3.17
 	github.com/giantswarm/telemetrydeck-go v0.3.12
-	github.com/giantswarm/vm-manager v0.25.14
+	github.com/giantswarm/vm-manager v0.25.16
 	github.com/google/go-github/v93 v93.0.0
 	github.com/google/uuid v1.6.0
 	github.com/smallstep/truststore v0.13.0
@@ -210,7 +210,7 @@ require (
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/mod v0.41.0 // indirect
-	golang.org/x/net v0.61.0 // indirect
+	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/oauth2 v0.37.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
