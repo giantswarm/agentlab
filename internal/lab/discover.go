@@ -464,20 +464,20 @@ func (d *Discovery) Report(cfg *config.Config) string {
 	default:
 		line("GitHub token", "no githubToken.source, so no Secret %s/%s (key %s) — skill discovery and resolution share this machine's unauthenticated GitHub window (60 requests an hour) until the source is recorded (`agentlab configure --github-token-source <ref>`) and `agentlab platform` re-runs", platformNamespace, gitHubTokenSecret, gitHubTokenSecretKey)
 	}
-	line("Telemetry", "%s", telemetryLine(cfg))
+	line("Telemetry", "%s", TelemetryLine(cfg))
 	return b.String()
 }
 
-// telemetryLine words the Telemetry entry of the report: whether the lab
-// sends anonymous usage data, and how to change that.
-func telemetryLine(cfg *config.Config) string {
+// TelemetryLine says whether the lab sends anonymous usage data, and how to
+// change that: the report's Telemetry entry and configure's summary.
+func TelemetryLine(cfg *config.Config) string {
 	switch env := telemetry.EnvOptOut(); {
 	case env != "":
 		return fmt.Sprintf("disabled — $%s is set, so no lab on this machine sends usage data", env)
-	case !cfg.Telemetry:
+	case !cfg.TelemetryOn():
 		return "disabled for this lab (telemetry: false); the form, or `agentlab configure --telemetry`, enables it again"
 	default:
-		return "enabled — anonymous usage data goes to TelemetryDeck; the form, or `agentlab configure --telemetry=false`, disables it (docs/telemetry.md)"
+		return "enabled — anonymous usage data (commands, platform installs, the portal's use, one random ID per lab) goes to TelemetryDeck; the form, or `agentlab configure --telemetry=false`, disables it (docs/telemetry.md)"
 	}
 }
 

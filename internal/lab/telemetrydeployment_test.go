@@ -83,36 +83,47 @@ func TestTelemetryDeploymentIsNotRecordedWhenOptedOut(t *testing.T) {
 func TestTelemetryDeploymentIsNotRecordedForALabWithUsageDataOff(t *testing.T) {
 	telemetryOn(t)
 	cfg := config.Default()
-	cfg.Telemetry = false
+	cfg.SetTelemetry(false)
 
 	StartTelemetryDeployment(cfg)
 	if _, ok := TelemetryDeployment(); ok {
 		t.Error("a deployment was written for a lab with usage data off")
 	}
-	if telemetry.Enabled() {
-		t.Error("usage data still on after up started a lab that turns it off")
+}
+
+// TestAMissingClustersDeploymentEndsWithUsageDataOff: an `up` with usage
+// data off still drops the deployment of a cluster that went missing, so
+// turning usage data on again starts a new one instead of reusing it.
+func TestAMissingClustersDeploymentEndsWithUsageDataOff(t *testing.T) {
+	cluster := telemetryOn(t)
+	first := startDeployment(t)
+	off := config.Default()
+	off.SetTelemetry(false)
+
+	StartTelemetryDeployment(off) // the cluster went missing without a `down`
+	if _, ok := TelemetryDeployment(); ok {
+		t.Fatal("the missing cluster's deployment outlived an up with usage data off")
+	}
+	*cluster = true
+	if again := startDeployment(t); again.ID == first.ID {
+		t.Errorf("turning usage data on again reused the missing cluster's deployment %s", first.ID)
 	}
 }
 
-// TestEnterTelemetryLabReadsTheLabsSetting: entering a lab whose
-// agentlab.yaml turns usage data off turns it off for the command; a lab
-// without one leaves it on.
-func TestEnterTelemetryLabReadsTheLabsSetting(t *testing.T) {
+// TestEnterTelemetryLabFollowsTheConfiguration: the command's usage data
+// follows the lab's configuration as it was read or saved.
+func TestEnterTelemetryLabFollowsTheConfiguration(t *testing.T) {
 	telemetryOn(t)
-
-	EnterTelemetryLab()
-	if !telemetry.Enabled() {
-		t.Fatal("usage data off in a directory without agentlab.yaml")
-	}
-
 	cfg := config.Default()
-	cfg.Telemetry = false
-	if err := cfg.Save(); err != nil {
-		t.Fatal(err)
+
+	EnterTelemetryLab(cfg)
+	if !telemetry.Enabled() {
+		t.Fatal("usage data off in a lab that leaves it on")
 	}
-	EnterTelemetryLab()
+	cfg.SetTelemetry(false)
+	EnterTelemetryLab(cfg)
 	if telemetry.Enabled() {
-		t.Error("usage data on in a lab whose agentlab.yaml says telemetry: false")
+		t.Error("usage data on in a lab whose configuration says telemetry: false")
 	}
 }
 
@@ -160,9 +171,9 @@ func TestBackstageOverlayTelemetry(t *testing.T) {
 	}
 	withDeployment(d)
 
-	cfg.Telemetry = false
+	cfg.SetTelemetry(false)
 	telemetryOff("with the lab's usage data off")
-	cfg.Telemetry = true
+	cfg.SetTelemetry(true)
 
 	t.Setenv(telemetry.OptOutEnv, "1")
 	telemetryOff("opted out")

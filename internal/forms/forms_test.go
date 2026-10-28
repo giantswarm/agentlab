@@ -57,8 +57,8 @@ func TestRunTUIDrive(t *testing.T) {
 	if !cfg.Backstage.Enabled {
 		t.Errorf("backstage not enabled by multiselect")
 	}
-	if !cfg.Telemetry {
-		t.Errorf("telemetry turned off (the confirm should keep the default on)")
+	if cfg.Telemetry != nil {
+		t.Errorf("telemetry = %v, want unset: on, saved without a key", *cfg.Telemetry)
 	}
 	if len(cfg.Users) != 3 {
 		t.Errorf("users changed: %d", len(cfg.Users))
@@ -139,7 +139,7 @@ func TestRunTUIDriveTelemetryOff(t *testing.T) {
 	if err := Run(cfg, false, Hints{}); err != nil {
 		t.Fatalf("form run: %v", d.failure(err))
 	}
-	if cfg.Telemetry {
+	if cfg.TelemetryOn() {
 		t.Error("telemetry still on after the form turned it off")
 	}
 	if !cfg.Platform.Enabled || !cfg.Backstage.Enabled {

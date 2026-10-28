@@ -1589,9 +1589,25 @@ type Config struct {
 
 	// Telemetry is whether the lab sends anonymous usage data to
 	// TelemetryDeck: the commands run against it and its portal's
-	// (docs/telemetry.md). On by default; the environment's opt-outs turn it
-	// off for every lab whatever this says.
-	Telemetry bool `yaml:"telemetry"`
+	// (docs/telemetry.md). Unset is on (TelemetryOn), and SetTelemetry leaves
+	// it unset for on, so only a lab that turned it off carries a key older
+	// releases refuse. The environment's opt-outs turn it off for every lab
+	// whatever this says.
+	Telemetry *bool `yaml:"telemetry,omitempty"`
+}
+
+// TelemetryOn says whether the lab sends usage data, as far as its own
+// setting goes.
+func (c *Config) TelemetryOn() bool {
+	return c.Telemetry == nil || *c.Telemetry
+}
+
+// SetTelemetry records the lab's usage-data setting: on as no key at all.
+func (c *Config) SetTelemetry(on bool) {
+	c.Telemetry = nil
+	if !on {
+		c.Telemetry = new(false)
+	}
 }
 
 // Default returns the canonical lab setup: the agent platform enabled (it is
@@ -1634,7 +1650,6 @@ func Default() *Config {
 			Port:    7007,
 			Portal:  PortalAgentPlatform,
 		},
-		Telemetry: true,
 	}
 }
 

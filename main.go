@@ -312,7 +312,7 @@ func loadReadOnly() (*config.Config, error) {
 	}
 	cfg, note, err := config.LoadReadOnly()
 	if errors.Is(err, os.ErrNotExist) {
-		return loadOrCreateConfig()
+		cfg, err = loadOrCreateConfig()
 	}
 	if err != nil {
 		return nil, err
@@ -321,6 +321,7 @@ func loadReadOnly() (*config.Config, error) {
 		fmt.Fprintf(os.Stderr, "Note: %s\n", note)
 	}
 	lab.SetPlatform(cfg)
+	lab.EnterTelemetryLab(cfg)
 	return cfg, nil
 }
 
@@ -377,6 +378,7 @@ func loadLab(mode labs.Mode) (*config.Config, error) {
 	// mappings) so checks never flake on external DNS, and trust the lab's
 	// CA bundle; see lab.SetPlatform.
 	lab.SetPlatform(cfg)
+	lab.EnterTelemetryLab(cfg)
 	return cfg, nil
 }
 
@@ -393,12 +395,13 @@ var labFlag string
 // (`configure`, `up`), labs.Here for `render`, which writes the files of the
 // agentlab.yaml here and no other lab's. A lab entered from elsewhere is named
 // on stderr, so the output never leaves the person guessing which lab it came
-// from.
+// from. The command's usage signal waits for the lab's configuration
+// (lab.EnterTelemetryLab).
 func enterLab(mode labs.Mode) error {
 	if err := enterLabDir(mode); err != nil {
 		return err
 	}
-	lab.EnterTelemetryLab()
+	telemetry.AwaitLab()
 	return nil
 }
 
@@ -584,16 +587,13 @@ func loadOrCreateConfig() (*config.Config, error) {
 	if useDefaults {
 		err = cfg.Validate()
 	} else {
-		err = forms.Run(cfg, accessibleMode(), forms.Hints{ModelServers: disc.ModelServersHint()})
+		err = forms.Run(cfg, accessibleMode(), formHints(disc))
 	}
 	if err != nil {
 		return nil, err
 	}
 	if err := saveLab(cfg); err != nil {
 		return nil, err
-	}
-	if !cfg.Telemetry {
-		telemetry.Decide(false)
 	}
 	if useDefaults {
 		printSaved(cfg, disc)
@@ -603,6 +603,12 @@ func loadOrCreateConfig() (*config.Config, error) {
 	}
 	fmt.Printf("Saved %s.\n\n", config.File)
 	return cfg, nil
+}
+
+// formHints is what the form shows next to its questions from the discovery
+// and the environment.
+func formHints(disc *lab.Discovery) forms.Hints {
+	return forms.Hints{ModelServers: disc.ModelServersHint(), TelemetryOptOut: telemetry.EnvOptOut()}
 }
 
 // discoverInto probes this machine (lab.Discover), prints what it found, and
@@ -1051,9 +1057,6 @@ func configureCmd() *cobra.Command {
 		Use:   "configure",
 		Short: "Discover this machine, then ask for the lab configuration (or keep it with --defaults) and save agentlab.yaml",
 		Args:  cobra.NoArgs,
-		// Its usage signal follows the setting it saves, not the one the lab
-		// had.
-		Annotations: map[string]string{telemetry.ConfiguresLab: ""},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// The form needs a terminal; refused here, before anything is
 			// discovered, instead of dying in the TUI.
@@ -1100,7 +1103,7 @@ func configureCmd() *cobra.Command {
 				cfg.Platform.Observability = observability
 			}
 			if cmd.Flags().Changed("telemetry") {
-				cfg.Telemetry = usageData
+				cfg.SetTelemetry(usageData)
 			}
 			if cmd.Flags().Changed("backstage") {
 				cfg.Backstage.Enabled = backstage
@@ -1323,7 +1326,7 @@ func configureCmd() *cobra.Command {
 					return err
 				}
 			} else {
-				if err := forms.Run(cfg, accessible || accessibleMode(), forms.Hints{ModelServers: disc.ModelServersHint()}); err != nil {
+				if err := forms.Run(cfg, accessible || accessibleMode(), formHints(disc)); err != nil {
 					return err
 				}
 			}
@@ -1336,7 +1339,9 @@ func configureCmd() *cobra.Command {
 			if err := saveLab(cfg); err != nil {
 				return err
 			}
-			telemetry.Decide(cfg.Telemetry)
+			// Its usage signal follows the setting it saved, not the one
+			// the lab had; a run that saves nothing sends nothing.
+			lab.EnterTelemetryLab(cfg)
 			printSaved(cfg, disc)
 			fmt.Println("\nNext: agentlab up")
 			return nil
@@ -1431,14 +1436,7 @@ func printSaved(cfg *config.Config, disc *lab.Discovery) {
 	} else {
 		fmt.Println("  backstage  false")
 	}
-	switch env := telemetry.EnvOptOut(); {
-	case env != "":
-		fmt.Printf("  telemetry  disabled ($%s is set)\n", env)
-	case cfg.Telemetry:
-		fmt.Println("  telemetry  enabled (anonymous usage data to TelemetryDeck)")
-	default:
-		fmt.Println("  telemetry  disabled")
-	}
+	fmt.Printf("  telemetry  %s\n", lab.TelemetryLine(cfg))
 	switch {
 	case cfg.AIKey.Source != "":
 		fmt.Printf("  ai model   %s (key placed from %s through beekeeper at deploy time)\n", cfg.AIModel, cfg.AIKey.Source)

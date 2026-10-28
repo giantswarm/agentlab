@@ -51,9 +51,9 @@ func lab(t *testing.T, path ...string) *cobra.Command {
 	t.Helper()
 	root := &cobra.Command{Use: "agentlab"}
 	up := &cobra.Command{Use: "up", Run: func(*cobra.Command, []string) {}}
-	configure := &cobra.Command{Use: "configure", Run: func(*cobra.Command, []string) {}}
+	status := &cobra.Command{Use: "status", Run: func(*cobra.Command, []string) {}}
 	postRender := &cobra.Command{Use: "post-render", Hidden: true, Run: func(*cobra.Command, []string) {}}
-	root.AddCommand(up, configure, postRender)
+	root.AddCommand(up, status, postRender)
 	root.InitDefaultCompletionCmd()
 	root.InitDefaultHelpCmd()
 	cmd, _, err := root.Find(path)
@@ -213,10 +213,10 @@ func enable(t *testing.T, srv *httptest.Server) {
 	t.Setenv(doNotTrackEnv, "")
 	t.Setenv(TestModeEnv, "1")
 	endpoint = srv.URL
-	sender, pending, held, deploymentID, labOff = nil, nil, false, "", false
+	sender, pending, held, awaitLab, deploymentID, labOff = nil, nil, false, false, "", false
 	t.Cleanup(func() {
 		endpoint = ""
-		sender, pending, held, deploymentID, labOff = nil, nil, false, "", false
+		sender, pending, held, awaitLab, deploymentID, labOff = nil, nil, false, false, "", false
 	})
 }
 
@@ -606,41 +606,55 @@ func TestALabWithUsageDataOffSendsNothing(t *testing.T) {
 	}
 }
 
-// TestConfigureWaitsForTheSavedSetting: the command that saves the lab's
-// configuration (ConfiguresLab) sends nothing on entering its lab; its signal
-// leaves when the saved setting is on and is dropped when it is off, whatever
-// the lab said before.
-func TestConfigureWaitsForTheSavedSetting(t *testing.T) {
+// TestALabCommandWaitsForItsConfiguration: a command that runs against a
+// lab (AwaitLab) sends nothing until it has read the lab's configuration —
+// a first run's form may turn usage data off — and then follows it.
+func TestALabCommandWaitsForItsConfiguration(t *testing.T) {
 	for _, on := range []bool{true, false} {
-		t.Run(fmt.Sprintf("saved %v", on), func(t *testing.T) {
+		t.Run(fmt.Sprintf("usage data %v", on), func(t *testing.T) {
 			got := capture(t)
-			configure := lab(t, "configure")
-			configure.Annotations = map[string]string{ConfiguresLab: ""}
 
-			Command(configure)
-			EnterLab("", !on)
+			Command(lab(t, "status"))
+			AwaitLab()
 			select {
 			case signals := <-got:
-				t.Fatalf("configure's signal left on entering its lab: %v", signals)
+				t.Fatalf("the signal left before the lab's configuration was read: %v", signals)
 			case <-time.After(100 * time.Millisecond):
 			}
 
-			Decide(on)
+			EnterLab("", on)
 			Flush(context.Background())
 			select {
 			case signals := <-got:
 				if !on {
-					t.Fatalf("configure sent %v with usage data saved off", signals)
+					t.Fatalf("sent %v in a lab with usage data off", signals)
 				}
 				if len(signals) != 1 || signals[0]["type"] != signalType {
 					t.Fatalf("got %v, want the one command signal", signals)
 				}
 			case <-time.After(300 * time.Millisecond):
 				if on {
-					t.Fatal("configure sent nothing with usage data saved on")
+					t.Fatal("sent nothing in a lab with usage data on")
 				}
 			}
 		})
+	}
+}
+
+// TestALabCommandFailingBeforeItsConfigurationSendsNothing: a command that
+// fails between entering its lab and reading its configuration (an aborted
+// form, a configure that saves nothing) sends nothing at Flush: the lab's
+// setting is unknown.
+func TestALabCommandFailingBeforeItsConfigurationSendsNothing(t *testing.T) {
+	got := capture(t)
+
+	Command(lab(t, "status"))
+	AwaitLab()
+	Flush(context.Background())
+	select {
+	case signals := <-got:
+		t.Fatalf("sent %v without the lab's setting", signals)
+	case <-time.After(300 * time.Millisecond):
 	}
 }
 

@@ -58,10 +58,13 @@ Nothing from `state/`, `certs/`, the cluster, the users, the models or the
 model servers is ever sent, and from `agentlab.yaml` only what the platform
 signal below lists; the one exception is the random deployment ID below, which
 exists only to be sent. Help output (`-h`, `--help`) and shell completion do
-not count. A command that runs against a lab sends its signal as it enters the
-lab, so that the signal can name the lab's deployment, and the signals go out
-in the background while the command runs; a command that runs against no lab
-(or one that fails before entering its lab) sends its signal as it finishes. A command that finishes before its signals
+not count. A command that runs against a lab sends its signal once it has read
+the lab's `agentlab.yaml`, so that the signal follows the lab's setting
+([below](#opting-out)) and can name the lab's deployment, and the signals go
+out in the background while the command runs; one that fails before that (a
+first run's form left unanswered, a `configure` that saves nothing) sends
+nothing. A command that runs against no lab sends its signal as it finishes.
+A command that finishes before its signals
 have left the machine (`agentlab version`, say) waits for them at most half a
 second, then exits regardless. When the
 endpoint is out of reach (no connection within 300ms of the signal setting
@@ -177,6 +180,9 @@ the lab's `agentlab.yaml` records `telemetry: false`: no command that runs
 against the lab sends a signal, the `configure` that turns it off included,
 and the lab's portal gets an empty app ID on the next `up`. Commands that run
 against no lab (`agentlab list`, `version`, `self-update`) still send theirs.
+Only a lab with usage data off carries the key; an agentlab release from
+before it refuses that lab's `agentlab.yaml`, as it refuses every key it does
+not know.
 
 To opt out of every signal on the machine, every lab and portal included, set
 `AGENTLAB_TELEMETRY_OPTOUT` to any value, or the cross-tool

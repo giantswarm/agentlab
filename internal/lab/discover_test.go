@@ -539,8 +539,8 @@ func TestReportTelemetryLine(t *testing.T) {
 		want  string
 	}{
 		{"default", func() {}, "Telemetry         enabled — anonymous usage data"},
-		{"turned off for the lab", func() { cfg.Telemetry = false }, "Telemetry         disabled for this lab (telemetry: false)"},
-		{"environment", func() { t.Setenv("DO_NOT_TRACK", "1") }, "Telemetry         disabled — $DO_NOT_TRACK is set"},
+		{"turned off for the lab", func() { cfg.SetTelemetry(false) }, "Telemetry         disabled for this lab (telemetry: false)"},
+		{"environment", func() { cfg.SetTelemetry(true); t.Setenv("DO_NOT_TRACK", "1") }, "Telemetry         disabled — $DO_NOT_TRACK is set"},
 	} {
 		tc.setup()
 		if out := (&Discovery{}).Report(cfg); !strings.Contains(out, tc.want) {

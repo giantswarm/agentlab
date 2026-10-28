@@ -4,14 +4,14 @@
 // machine identifier that lets Giant Swarm count users without knowing who
 // they are. And one per platform install (Platform): the meta chart line the
 // lab installs and its feature switches, as versions and booleans. Once a
-// command has entered a lab (EnterLab), every signal names the lab's
-// deployment, a random ID the lab's Backstage sends with its own signals.
+// command has read its lab's configuration (EnterLab), every signal names the
+// lab's deployment, a random ID the lab's Backstage sends with its own signals.
 // Nothing else about the lab — its users, clusters, paths, arguments or flags
 // — leaves the machine. See docs/telemetry.md.
 //
 // Setting AGENTLAB_TELEMETRY_OPTOUT (any value) or the console convention
 // DO_NOT_TRACK=1 disables both, and a lab's `telemetry: false` does for the
-// commands that run against it (EnterLab). Reporting never fails a command and never
+// commands that run against it (AwaitLab, EnterLab). Reporting never fails a command and never
 // speaks on its output: the signals travel while the command works, a command
 // that finishes first waits for them at most half a second (Flush) before the
 // process exits, and not at all once the endpoint has proven out of reach.
@@ -117,19 +117,16 @@ var (
 // deployment (`up`): its signal waits for StartDeployment, past EnterLab.
 const StartsDeployment = "agentlab.giantswarm.io/telemetry-starts-deployment"
 
-// ConfiguresLab is the annotation of the command that saves the lab's
-// configuration (`configure`): its signal waits for Decide, past EnterLab, so
-// usage data turned off in that run sends nothing.
-const ConfiguresLab = "agentlab.giantswarm.io/telemetry-configures-lab"
-
 // pending is the command signal Command recorded and EnterLab,
-// StartDeployment, Decide or Flush sends; held keeps it past EnterLab for a
-// command annotated StartsDeployment or ConfiguresLab. deploymentID is the
-// deployment named last, on every signal after it. labOff is the entered
-// lab's usage data turned off: nothing is sent from then on.
+// StartDeployment or Flush sends; held keeps it past EnterLab for a command
+// annotated StartsDeployment. awaitLab is a command that runs against a lab
+// whose configuration it has not read yet: nothing is sent until it has.
+// deploymentID is the deployment named last, on every signal after it.
+// labOff is the lab's usage data turned off: nothing is sent from then on.
 var (
 	pending      func()
 	held         bool
+	awaitLab     bool
 	deploymentID string
 	labOff       bool
 )
@@ -186,8 +183,9 @@ func EnvOptOut() string {
 }
 
 // Command records one execution of a user-facing command ("agentlab up").
-// The signal leaves once the command has entered its lab (EnterLab), so that
-// it names the lab's deployment — for `up`, once it has started one
+// The signal leaves once the command has read its lab's configuration
+// (EnterLab), so that it follows the lab's setting and names the lab's
+// deployment — for `up`, once it has started one
 // (StartDeployment) — or at Flush for a command that runs against no lab; its
 // HTTP request runs on its own goroutine, and a failure to
 // deliver is swallowed — telemetry must never get in the user's way. Same
@@ -208,9 +206,7 @@ func Command(cmd *cobra.Command) {
 		return
 	}
 	ctx := cmd.Context()
-	_, starts := cmd.Annotations[StartsDeployment]
-	_, configures := cmd.Annotations[ConfiguresLab]
-	held = starts || configures
+	_, held = cmd.Annotations[StartsDeployment]
 	pending = func() {
 		send(ctx, signalType, map[string]interface{}{
 			"appVersion": project.Version(),
@@ -219,14 +215,20 @@ func Command(cmd *cobra.Command) {
 	}
 }
 
-// EnterLab names the deployment of the lab the command runs against: every
-// signal from here on carries it as deploymentID, and the command's own
-// signal (Command) leaves now — unless the command is held (StartsDeployment,
-// ConfiguresLab). An empty ID, a lab without a recorded deployment, sends the
-// command signal without one. on is the lab's own setting: off, nothing is
-// sent from here on.
+// AwaitLab is a command that runs against a lab: its signal waits for the
+// lab's configuration (EnterLab), and one that fails before reading it sends
+// nothing, the lab's setting being unknown.
+func AwaitLab() {
+	awaitLab = true
+}
+
+// EnterLab is the lab's configuration read, as saved: on is its setting, off
+// sending nothing from here on, and id names its deployment, carried by every
+// signal from here on as deploymentID. The command's own signal (Command)
+// leaves now, unless the command is held (StartsDeployment). An empty ID, a
+// lab without a recorded deployment, sends the command signal without one.
 func EnterLab(id string, on bool) {
-	deploymentID, labOff = id, !on
+	deploymentID, labOff, awaitLab = id, !on, false
 	if !held {
 		sendPending()
 	}
@@ -239,19 +241,12 @@ func StartDeployment(id string) {
 	sendPending()
 }
 
-// Decide is the lab's setting as the command saved it (ConfiguresLab): on,
-// its signal leaves now; off, it is dropped, and so is every later one.
-func Decide(on bool) {
-	labOff, held = !on, false
-	sendPending()
-}
-
 // sendPending sends the command signal Command recorded, once, unless the
-// lab's usage data is off.
+// lab's usage data is off or not known yet (AwaitLab).
 func sendPending() {
 	p := pending
 	pending = nil
-	if p != nil && !labOff {
+	if p != nil && !labOff && !awaitLab {
 		p()
 	}
 }
@@ -273,7 +268,7 @@ func send(ctx context.Context, signalType string, payload map[string]interface{}
 }
 
 // Flush sends the command signal if it has not left yet — a command that
-// runs against no lab, or one that failed before entering its lab — and lets
+// runs against no lab, or `up` failing before it started its deployment — and lets
 // the signals sent so far (Command, Platform) finish their trip before the
 // process exits, waiting at most flushTimeout (and no longer than
 // ctx allows): a sub-second command such as `agentlab version` would
