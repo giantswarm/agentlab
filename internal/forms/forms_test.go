@@ -21,6 +21,7 @@ func TestRunTUIDrive(t *testing.T) {
 		// extra models confirm
 		"\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r",
 		"\r", "\r", // backstage group: port, portal mode
+		"\r", // telemetry: keep it on
 	)
 	testHook = d.attach
 	defer func() { testHook = nil }()
@@ -56,6 +57,9 @@ func TestRunTUIDrive(t *testing.T) {
 	if !cfg.Backstage.Enabled {
 		t.Errorf("backstage not enabled by multiselect")
 	}
+	if !cfg.Telemetry {
+		t.Errorf("telemetry turned off (the confirm should keep the default on)")
+	}
 	if len(cfg.Users) != 3 {
 		t.Errorf("users changed: %d", len(cfg.Users))
 	}
@@ -71,6 +75,7 @@ func TestRunTUIDrivePortalClassic(t *testing.T) {
 		"\r", "\r", "\r", "\r", "\r",
 		"\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r",
 		"\r", "j", "\r", // backstage group: port, portal mode one down
+		"\r", // telemetry: keep it on
 	)
 	testHook = d.attach
 	defer func() { testHook = nil }()
@@ -98,6 +103,7 @@ func TestRunTUIDriveEdit(t *testing.T) {
 		// components: deselect the preselected platform, arrow down,
 		// deselect the preselected backstage -> none
 		" ", "\x1b[B", " ", "\r",
+		"\r", // telemetry: keep it on
 	)
 	testHook = d.attach
 	defer func() { testHook = nil }()
@@ -114,6 +120,30 @@ func TestRunTUIDriveEdit(t *testing.T) {
 	}
 	if cfg.Platform.Enabled || cfg.Backstage.Enabled {
 		t.Errorf("components unexpectedly enabled")
+	}
+}
+
+// TestRunTUIDriveTelemetryOff turns usage data off on the last page and
+// keeps everything else.
+func TestRunTUIDriveTelemetryOff(t *testing.T) {
+	d := newDriver(
+		"\r", "\r", "\r", "\r", "\r",
+		"\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r", "\r",
+		"\r", "\r",
+		"\x1b[C", "\r", // telemetry: over to "Turn off"
+	)
+	testHook = d.attach
+	defer func() { testHook = nil }()
+
+	cfg := config.Default()
+	if err := Run(cfg, false, Hints{}); err != nil {
+		t.Fatalf("form run: %v", d.failure(err))
+	}
+	if cfg.Telemetry {
+		t.Error("telemetry still on after the form turned it off")
+	}
+	if !cfg.Platform.Enabled || !cfg.Backstage.Enabled {
+		t.Error("the components changed")
 	}
 }
 

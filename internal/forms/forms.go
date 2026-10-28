@@ -81,6 +81,7 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 	if backstagePortal == "" {
 		backstagePortal = config.PortalAgentPlatform
 	}
+	usageData := cfg.Telemetry
 
 	userSummary := func() string {
 		lines := make([]string, 0, len(cfg.Users))
@@ -231,6 +232,15 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 				Value(&backstagePortal),
 		).Title("Backstage").
 			WithHideFunc(func() bool { return !slices.Contains(components, "backstage") }),
+
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title("Send anonymous usage data (telemetry)?").
+				Description("While this is on, agentlab sends anonymous usage data to TelemetryDeck: which command\nran, the agentlab version, OS and architecture, under a hashed machine identifier; the lab's\nportal sends its page views and actions. Never arguments, names, prompts, tokens or anything\nfrom the cluster. It shows Giant Swarm which parts of the lab get used. docs/telemetry.md\nlists every field; $AGENTLAB_TELEMETRY_OPTOUT or DO_NOT_TRACK=1 turns it off for every lab.").
+				Affirmative("Send").
+				Negative("Turn off").
+				Value(&usageData),
+		).Title("Telemetry"),
 	).WithAccessible(accessible)
 
 	if err := form.Run(); err != nil {
@@ -260,6 +270,7 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 	cfg.GitHubToken.Source = gitHubTokenSource
 	cfg.Backstage.Port = mustAtoi(backstagePort)
 	cfg.Backstage.Portal = backstagePortal
+	cfg.Telemetry = usageData
 
 	if customizeUsers {
 		if err := editUsers(cfg, accessible); err != nil {

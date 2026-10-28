@@ -10,7 +10,8 @@
 // — leaves the machine. See docs/telemetry.md.
 //
 // Setting AGENTLAB_TELEMETRY_OPTOUT (any value) or the console convention
-// DO_NOT_TRACK=1 disables both. Reporting never fails a command and never
+// DO_NOT_TRACK=1 disables both, and a lab's `telemetry: false` does for the
+// commands that run against it (EnterLab). Reporting never fails a command and never
 // speaks on its output: the signals travel while the command works, a command
 // that finishes first waits for them at most half a second (Flush) before the
 // process exits, and not at all once the endpoint has proven out of reach.
@@ -116,14 +117,21 @@ var (
 // deployment (`up`): its signal waits for StartDeployment, past EnterLab.
 const StartsDeployment = "agentlab.giantswarm.io/telemetry-starts-deployment"
 
+// ConfiguresLab is the annotation of the command that saves the lab's
+// configuration (`configure`): its signal waits for Decide, past EnterLab, so
+// usage data turned off in that run sends nothing.
+const ConfiguresLab = "agentlab.giantswarm.io/telemetry-configures-lab"
+
 // pending is the command signal Command recorded and EnterLab,
-// StartDeployment or Flush sends; awaitStart holds it past EnterLab for a
-// command that starts a deployment. deploymentID is the deployment named
-// last, on every signal after it.
+// StartDeployment, Decide or Flush sends; held keeps it past EnterLab for a
+// command annotated StartsDeployment or ConfiguresLab. deploymentID is the
+// deployment named last, on every signal after it. labOff is the entered
+// lab's usage data turned off: nothing is sent from then on.
 var (
 	pending      func()
-	awaitStart   bool
+	held         bool
 	deploymentID string
+	labOff       bool
 )
 
 // reach records whether any signal's request got a connection to the ingest
@@ -162,13 +170,19 @@ func (r *reach) reached() bool {
 
 // Enabled reports whether this process sends usage signals.
 func Enabled() bool {
-	if appID == "" || os.Getenv(OptOutEnv) != "" {
-		return false
+	return appID != "" && EnvOptOut() == "" && !labOff
+}
+
+// EnvOptOut names the environment variable that turns usage data off for
+// every lab, "" when none does.
+func EnvOptOut() string {
+	if os.Getenv(OptOutEnv) != "" {
+		return OptOutEnv
 	}
 	if v := strings.TrimSpace(os.Getenv(doNotTrackEnv)); v != "" && v != "0" && !strings.EqualFold(v, "false") {
-		return false
+		return doNotTrackEnv
 	}
-	return true
+	return ""
 }
 
 // Command records one execution of a user-facing command ("agentlab up").
@@ -194,7 +208,9 @@ func Command(cmd *cobra.Command) {
 		return
 	}
 	ctx := cmd.Context()
-	_, awaitStart = cmd.Annotations[StartsDeployment]
+	_, starts := cmd.Annotations[StartsDeployment]
+	_, configures := cmd.Annotations[ConfiguresLab]
+	held = starts || configures
 	pending = func() {
 		send(ctx, signalType, map[string]interface{}{
 			"appVersion": project.Version(),
@@ -205,12 +221,13 @@ func Command(cmd *cobra.Command) {
 
 // EnterLab names the deployment of the lab the command runs against: every
 // signal from here on carries it as deploymentID, and the command's own
-// signal (Command) leaves now — unless the command starts a deployment
-// (StartsDeployment). An empty ID, a lab without a recorded deployment, sends
-// the command signal without one.
-func EnterLab(id string) {
-	deploymentID = id
-	if !awaitStart {
+// signal (Command) leaves now — unless the command is held (StartsDeployment,
+// ConfiguresLab). An empty ID, a lab without a recorded deployment, sends the
+// command signal without one. on is the lab's own setting: off, nothing is
+// sent from here on.
+func EnterLab(id string, on bool) {
+	deploymentID, labOff = id, !on
+	if !held {
 		sendPending()
 	}
 }
@@ -218,14 +235,23 @@ func EnterLab(id string) {
 // StartDeployment is EnterLab for the command that starts the lab's
 // deployment: its signal leaves now, naming id.
 func StartDeployment(id string) {
-	deploymentID, awaitStart = id, false
+	deploymentID, held = id, false
 	sendPending()
 }
 
-// sendPending sends the command signal Command recorded, once.
+// Decide is the lab's setting as the command saved it (ConfiguresLab): on,
+// its signal leaves now; off, it is dropped, and so is every later one.
+func Decide(on bool) {
+	labOff, held = !on, false
+	sendPending()
+}
+
+// sendPending sends the command signal Command recorded, once, unless the
+// lab's usage data is off.
 func sendPending() {
-	if p := pending; p != nil {
-		pending = nil
+	p := pending
+	pending = nil
+	if p != nil && !labOff {
 		p()
 	}
 }

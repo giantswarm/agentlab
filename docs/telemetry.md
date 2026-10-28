@@ -150,7 +150,7 @@ lab; sent next to the hashes, it would let a guessed GitHub login (with
 salt, so the same person counts as a new portal user on every new cluster.
 
 The lab writes the portal's `app.telemetrydeck` into its app-config overlay
-on every `up` and `platform`. With usage data off (below), or before
+on every `up` and `platform`. With usage data off ([below](#opting-out)), or before
 the first `up`, it writes an empty app ID, and the portal sends nothing (its
 browser console and its backend log say usage data is disabled); the decision
 is taken when the overlay is rendered, so an opt-out set later takes effect
@@ -164,8 +164,23 @@ mode.
 Data is stored at [TelemetryDeck](https://telemetrydeck.com/) on servers in
 the EU; see their [privacy FAQ](https://telemetrydeck.com/docs/guides/privacy-faq/).
 
-**Opting out** (of every signal, the lab portal's included): set `AGENTLAB_TELEMETRY_OPTOUT` to any
-value, or the cross-tool [`DO_NOT_TRACK=1`](https://consoledonottrack.com/):
+## Opting out
+
+`agentlab configure` says on its `Telemetry` line whether usage data is on,
+and the form asks as its last question. Turned off there, or with
+
+```bash
+agentlab configure --telemetry=false
+```
+
+the lab's `agentlab.yaml` records `telemetry: false`: no command that runs
+against the lab sends a signal, the `configure` that turns it off included,
+and the lab's portal gets an empty app ID on the next `up`. Commands that run
+against no lab (`agentlab list`, `version`, `self-update`) still send theirs.
+
+To opt out of every signal on the machine, every lab and portal included, set
+`AGENTLAB_TELEMETRY_OPTOUT` to any value, or the cross-tool
+[`DO_NOT_TRACK=1`](https://consoledonottrack.com/):
 
 ```bash
 export AGENTLAB_TELEMETRY_OPTOUT=1

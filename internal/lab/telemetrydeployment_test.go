@@ -16,10 +16,14 @@ func telemetryOn(t *testing.T) (cluster *bool) {
 	t.Setenv("DO_NOT_TRACK", "")
 	t.Setenv(telemetry.TestModeEnv, "")
 	t.Chdir(t.TempDir())
+	telemetry.EnterLab("", true)
 	exists := false
 	prev := labClusterExists
 	labClusterExists = func(string) bool { return exists }
-	t.Cleanup(func() { labClusterExists = prev })
+	t.Cleanup(func() {
+		labClusterExists = prev
+		telemetry.EnterLab("", true)
+	})
 	return &exists
 }
 
@@ -76,6 +80,42 @@ func TestTelemetryDeploymentIsNotRecordedWhenOptedOut(t *testing.T) {
 	}
 }
 
+func TestTelemetryDeploymentIsNotRecordedForALabWithUsageDataOff(t *testing.T) {
+	telemetryOn(t)
+	cfg := config.Default()
+	cfg.Telemetry = false
+
+	StartTelemetryDeployment(cfg)
+	if _, ok := TelemetryDeployment(); ok {
+		t.Error("a deployment was written for a lab with usage data off")
+	}
+	if telemetry.Enabled() {
+		t.Error("usage data still on after up started a lab that turns it off")
+	}
+}
+
+// TestEnterTelemetryLabReadsTheLabsSetting: entering a lab whose
+// agentlab.yaml turns usage data off turns it off for the command; a lab
+// without one leaves it on.
+func TestEnterTelemetryLabReadsTheLabsSetting(t *testing.T) {
+	telemetryOn(t)
+
+	EnterTelemetryLab()
+	if !telemetry.Enabled() {
+		t.Fatal("usage data off in a directory without agentlab.yaml")
+	}
+
+	cfg := config.Default()
+	cfg.Telemetry = false
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	EnterTelemetryLab()
+	if telemetry.Enabled() {
+		t.Error("usage data on in a lab whose agentlab.yaml says telemetry: false")
+	}
+}
+
 // TestBackstageOverlayTelemetry: the lab's portal reports into agentlab's
 // app under the lab's deployment and salt, and sends nothing before the
 // first `up` or with usage data off: an empty app ID, which every portal
@@ -119,6 +159,10 @@ func TestBackstageOverlayTelemetry(t *testing.T) {
 		t.Errorf("app.telemetrydeck.salt = %#v, want the string \"123e45\"", got)
 	}
 	withDeployment(d)
+
+	cfg.Telemetry = false
+	telemetryOff("with the lab's usage data off")
+	cfg.Telemetry = true
 
 	t.Setenv(telemetry.OptOutEnv, "1")
 	telemetryOff("opted out")

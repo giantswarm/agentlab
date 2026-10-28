@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -50,8 +51,9 @@ func lab(t *testing.T, path ...string) *cobra.Command {
 	t.Helper()
 	root := &cobra.Command{Use: "agentlab"}
 	up := &cobra.Command{Use: "up", Run: func(*cobra.Command, []string) {}}
+	configure := &cobra.Command{Use: "configure", Run: func(*cobra.Command, []string) {}}
 	postRender := &cobra.Command{Use: "post-render", Hidden: true, Run: func(*cobra.Command, []string) {}}
-	root.AddCommand(up, postRender)
+	root.AddCommand(up, configure, postRender)
 	root.InitDefaultCompletionCmd()
 	root.InitDefaultHelpCmd()
 	cmd, _, err := root.Find(path)
@@ -191,7 +193,7 @@ func TestCommandSendsNothingWhenOptedOutOrUnconfigured(t *testing.T) {
 
 	withAppID(t, "")
 	Command(lab(t, "up"))
-	EnterLab("3f0c9a4e-5d1b-4b8e-9c2a-7e6f1d0b8a55")
+	EnterLab("3f0c9a4e-5d1b-4b8e-9c2a-7e6f1d0b8a55", true)
 	Flush(context.Background())
 
 	select {
@@ -211,10 +213,10 @@ func enable(t *testing.T, srv *httptest.Server) {
 	t.Setenv(doNotTrackEnv, "")
 	t.Setenv(TestModeEnv, "1")
 	endpoint = srv.URL
-	sender, pending, awaitStart, deploymentID = nil, nil, false, ""
+	sender, pending, held, deploymentID, labOff = nil, nil, false, "", false
 	t.Cleanup(func() {
 		endpoint = ""
-		sender, pending, awaitStart, deploymentID = nil, nil, false, ""
+		sender, pending, held, deploymentID, labOff = nil, nil, false, "", false
 	})
 }
 
@@ -441,7 +443,7 @@ func TestAnUnreachableEndpointCostsNoWaitAndNoOutput(t *testing.T) {
 	var waited time.Duration
 	out := stderr(t, func() {
 		Command(lab(t, "up"))
-		EnterLab("")               // the signal leaves as the command enters its lab
+		EnterLab("", true)         // the signal leaves as the command enters its lab
 		time.Sleep(connectTimeout) // the command's own work
 		start := time.Now()
 		Flush(context.Background())
@@ -504,7 +506,7 @@ func TestEnterLabSendsTheCommandSignalWithTheDeployment(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 
-	EnterLab(id)
+	EnterLab(id, true)
 	signals := received(t, got)
 	if len(signals) != 1 || signals[0]["type"] != signalType {
 		t.Fatalf("got %v, want the one command signal", signals)
@@ -553,7 +555,7 @@ func TestUpWaitsForTheDeploymentItStarts(t *testing.T) {
 	up.Annotations = map[string]string{StartsDeployment: ""}
 
 	Command(up)
-	EnterLab(old)
+	EnterLab(old, true)
 	select {
 	case signals := <-got:
 		t.Fatalf("up's signal left on entering its lab: %v", signals)
@@ -576,10 +578,84 @@ func TestALabWithoutADeploymentSendsOnEntering(t *testing.T) {
 	got := capture(t)
 
 	Command(lab(t, "up"))
-	EnterLab("")
+	EnterLab("", true)
 	signals := received(t, got)
 	payload, _ := signals[0]["payload"].(map[string]any)
 	if _, ok := payload["deploymentID"]; ok {
 		t.Errorf("payload.deploymentID %v for a lab without one", payload["deploymentID"])
+	}
+}
+
+// TestALabWithUsageDataOffSendsNothing: entering a lab whose agentlab.yaml
+// turns usage data off drops the command signal and every later one, the
+// platform signal included, and Enabled says so.
+func TestALabWithUsageDataOffSendsNothing(t *testing.T) {
+	got := capture(t)
+
+	Command(lab(t, "up"))
+	EnterLab("3f0c9a4e-5d1b-4b8e-9c2a-7e6f1d0b8a55", false)
+	if Enabled() {
+		t.Error("Enabled() true in a lab with usage data off")
+	}
+	Platform(context.Background(), config.Default(), config.DefaultChartVersion)
+	Flush(context.Background())
+	select {
+	case signals := <-got:
+		t.Fatalf("a lab with usage data off sent %v", signals)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// TestConfigureWaitsForTheSavedSetting: the command that saves the lab's
+// configuration (ConfiguresLab) sends nothing on entering its lab; its signal
+// leaves when the saved setting is on and is dropped when it is off, whatever
+// the lab said before.
+func TestConfigureWaitsForTheSavedSetting(t *testing.T) {
+	for _, on := range []bool{true, false} {
+		t.Run(fmt.Sprintf("saved %v", on), func(t *testing.T) {
+			got := capture(t)
+			configure := lab(t, "configure")
+			configure.Annotations = map[string]string{ConfiguresLab: ""}
+
+			Command(configure)
+			EnterLab("", !on)
+			select {
+			case signals := <-got:
+				t.Fatalf("configure's signal left on entering its lab: %v", signals)
+			case <-time.After(100 * time.Millisecond):
+			}
+
+			Decide(on)
+			Flush(context.Background())
+			select {
+			case signals := <-got:
+				if !on {
+					t.Fatalf("configure sent %v with usage data saved off", signals)
+				}
+				if len(signals) != 1 || signals[0]["type"] != signalType {
+					t.Fatalf("got %v, want the one command signal", signals)
+				}
+			case <-time.After(300 * time.Millisecond):
+				if on {
+					t.Fatal("configure sent nothing with usage data saved on")
+				}
+			}
+		})
+	}
+}
+
+func TestEnvOptOutNamesTheVariable(t *testing.T) {
+	for _, tc := range []struct{ optOut, doNotTrack, want string }{
+		{"", "", ""},
+		{"1", "", OptOutEnv},
+		{"", "1", doNotTrackEnv},
+		{"", "0", ""},
+		{"", "false", ""},
+	} {
+		t.Setenv(OptOutEnv, tc.optOut)
+		t.Setenv(doNotTrackEnv, tc.doNotTrack)
+		if got := EnvOptOut(); got != tc.want {
+			t.Errorf("OPTOUT=%q DO_NOT_TRACK=%q: EnvOptOut() = %q, want %q", tc.optOut, tc.doNotTrack, got, tc.want)
+		}
 	}
 }

@@ -592,6 +592,9 @@ func loadOrCreateConfig() (*config.Config, error) {
 	if err := saveLab(cfg); err != nil {
 		return nil, err
 	}
+	if !cfg.Telemetry {
+		telemetry.Decide(false)
+	}
 	if useDefaults {
 		printSaved(cfg, disc)
 		fmt.Println("  (`agentlab configure` changes any of it)")
@@ -1043,11 +1046,14 @@ func configureCmd() *cobra.Command {
 	var vmManagerImageDir, aiKeySource, gitHubTokenSource, portal string
 	var gitHubAppID, gitHubAppInstallationID, gitHubAppPrivateKeySource, gitHubAppClientID, gitHubAppClientSecretSource string
 	var chartVersion, chartPath, chartBranch, clusterName, mcpPrometheusChartVersion string
-	var upgradeSeed, adoptChart, released, codexHostModel bool
+	var upgradeSeed, adoptChart, released, codexHostModel, usageData bool
 	cmd := &cobra.Command{
 		Use:   "configure",
 		Short: "Discover this machine, then ask for the lab configuration (or keep it with --defaults) and save agentlab.yaml",
 		Args:  cobra.NoArgs,
+		// Its usage signal follows the setting it saves, not the one the lab
+		// had.
+		Annotations: map[string]string{telemetry.ConfiguresLab: ""},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// The form needs a terminal; refused here, before anything is
 			// discovered, instead of dying in the TUI.
@@ -1092,6 +1098,9 @@ func configureCmd() *cobra.Command {
 			}
 			if cmd.Flags().Changed("observability") {
 				cfg.Platform.Observability = observability
+			}
+			if cmd.Flags().Changed("telemetry") {
+				cfg.Telemetry = usageData
 			}
 			if cmd.Flags().Changed("backstage") {
 				cfg.Backstage.Enabled = backstage
@@ -1327,6 +1336,7 @@ func configureCmd() *cobra.Command {
 			if err := saveLab(cfg); err != nil {
 				return err
 			}
+			telemetry.Decide(cfg.Telemetry)
 			printSaved(cfg, disc)
 			fmt.Println("\nNext: agentlab up")
 			return nil
@@ -1338,6 +1348,7 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&agents, "agents", false, "enable/disable the agents runtime (kagent, part of the platform install)")
 	cmd.Flags().BoolVar(&observability, "observability", false, "enable/disable the observability stack (Prometheus + mcp-prometheus)")
 	cmd.Flags().BoolVar(&backstage, "backstage", false, "enable/disable Backstage (implies the platform)")
+	cmd.Flags().BoolVar(&usageData, "telemetry", false, "enable/disable the anonymous usage data this lab and its portal send to TelemetryDeck (docs/telemetry.md)")
 	cmd.Flags().BoolVar(&installationsPage, "installations-page", false, "enable the portal's Installations page (page:gs/installations and its nav item, off in the agent-platform chart) for the portal's installations e2e specs, run with AGENTLAB_INSTALLATIONS_PAGE=1; the next agentlab platform rolls Backstage onto it; --installations-page=false turns it off again")
 	cmd.Flags().StringVar(&portal, "portal", "", fmt.Sprintf("the Backstage portal `mode` (%s): %s serves the Agent Platform shell (app.portals.agentPlatform), %s the classic Platform Portal alone; the next agentlab platform rolls Backstage onto it", strings.Join(config.PortalModes, ", "), config.PortalAgentPlatform, config.PortalClassic))
 	cmd.Flags().BoolVar(&modelManager, "model-manager", false, "pin managed models on/off (needs agents); without it a first configure follows the host model servers the discovery finds and a later one keeps the recorded choice")
@@ -1419,6 +1430,14 @@ func printSaved(cfg *config.Config, disc *lab.Discovery) {
 		fmt.Printf("  backstage  true (portal %s%s)\n", cfg.Backstage.Portal, page)
 	} else {
 		fmt.Println("  backstage  false")
+	}
+	switch env := telemetry.EnvOptOut(); {
+	case env != "":
+		fmt.Printf("  telemetry  disabled ($%s is set)\n", env)
+	case cfg.Telemetry:
+		fmt.Println("  telemetry  enabled (anonymous usage data to TelemetryDeck)")
+	default:
+		fmt.Println("  telemetry  disabled")
 	}
 	switch {
 	case cfg.AIKey.Source != "":

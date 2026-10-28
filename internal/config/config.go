@@ -1586,6 +1586,12 @@ type Config struct {
 	Users     []User    `yaml:"users"`
 	Platform  Platform  `yaml:"platform"`
 	Backstage Backstage `yaml:"backstage"`
+
+	// Telemetry is whether the lab sends anonymous usage data to
+	// TelemetryDeck: the commands run against it and its portal's
+	// (docs/telemetry.md). On by default; the environment's opt-outs turn it
+	// off for every lab whatever this says.
+	Telemetry bool `yaml:"telemetry"`
 }
 
 // Default returns the canonical lab setup: the agent platform enabled (it is
@@ -1628,6 +1634,7 @@ func Default() *Config {
 			Port:    7007,
 			Portal:  PortalAgentPlatform,
 		},
+		Telemetry: true,
 	}
 }
 

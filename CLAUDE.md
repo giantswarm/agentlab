@@ -320,7 +320,11 @@ The lab's own e2e checks are the `*-test` subcommands, not `go test`.
   stays the same across shells — and an empty app ID with usage data off
   (never `null`, for which a Backstage before giantswarm/backstage#3294 sends
   test signals). Opt-outs:
-  `AGENTLAB_TELEMETRY_OPTOUT`, `DO_NOT_TRACK=1`. When iterating on the lab,
+  `AGENTLAB_TELEMETRY_OPTOUT`, `DO_NOT_TRACK=1` for every lab, and the lab's
+  `telemetry: false` (the form's last question, `configure --telemetry`) for
+  the commands that enter it: `EnterLab` reads it, and `configure` (annotated
+  `telemetry.ConfiguresLab`) holds its signal for `telemetry.Decide` with the
+  setting it saved. When iterating on the lab,
   `AGENTLAB_TELEMETRY_TESTMODE=1` keeps the runs out of the production
   numbers; `AGENTLAB_TELEMETRY_DEBUG=1` alone logs delivery problems — a
   command's output never carries telemetry, and `Flush` stops waiting once no

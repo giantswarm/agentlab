@@ -33,10 +33,12 @@ func TelemetryDeployment() (telemetry.Deployment, bool) {
 }
 
 // EnterTelemetryLab hands the command's usage signal the deployment of the
-// lab it has entered (telemetry.EnterLab), none for a lab without one.
+// lab it has entered (telemetry.EnterLab), none for a lab without one, and
+// the lab's own usage-data setting: on where no agentlab.yaml says otherwise.
 func EnterTelemetryLab() {
 	d, _ := TelemetryDeployment()
-	telemetry.EnterLab(d.ID)
+	cfg, err := config.Peek(".")
+	telemetry.EnterLab(d.ID, err != nil || cfg.Telemetry)
 }
 
 // StartTelemetryDeployment is `up`'s: the recorded deployment while its
@@ -44,9 +46,14 @@ func EnterTelemetryLab() {
 // created (or the lab records none) — so a cluster deleted past `down` (kind
 // delete, a reset docker) does not hand its deployment to the next. `up`'s
 // usage signal leaves with it (telemetry.StartDeployment). Nothing is recorded
-// with usage data off, and a record that cannot be written only costs the
-// correlation, said under AGENTLAB_TELEMETRY_DEBUG.
+// with usage data off — in the environment or in cfg, which a first `up`
+// asks for after entering the lab — and a record that cannot be written only
+// costs the correlation, said under AGENTLAB_TELEMETRY_DEBUG.
 func StartTelemetryDeployment(cfg *config.Config) {
+	if !cfg.Telemetry {
+		telemetry.Decide(false)
+		return
+	}
 	if !telemetry.Enabled() {
 		return
 	}
@@ -108,13 +115,13 @@ type backstageTelemetry struct {
 }
 
 // BackstageTelemetry is the overlay's app.telemetrydeck, nil — an empty app
-// ID, telemetry off in the portal — when usage data is off or the lab records
-// no deployment (a render before the first `up`). A method, so only the
+// ID, telemetry off in the portal — when usage data is off (in the
+// environment or the lab's agentlab.yaml) or the lab records no deployment (a render before the first `up`). A method, so only the
 // templates that use it read the record. Test mode is the deployment's, not
 // the environment's: the overlay changes only with the deployment or an
 // opt-out, never with the shell a command runs in.
 func (d *tmplData) BackstageTelemetry() *backstageTelemetry {
-	if !telemetry.Enabled() {
+	if !d.Telemetry || !telemetry.Enabled() {
 		return nil
 	}
 	dep, ok := TelemetryDeployment()
