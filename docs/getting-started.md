@@ -216,6 +216,7 @@ Discovering this machine:
   KVM               /dev/kvm and /dev/vhost-vsock present — platform.vmManager on, images from /home/you/projects/giantswarm/vm-manager/images/build
   Anthropic key     $ANTHROPIC_API_KEY is set — the agents' default ModelConfig and Backstage's AI chat get the real key at deploy time
   GitHub token      githubToken.source op://lab/github-token/credential — beekeeper places it into the Secret agent-platform/agentlab-github-token at every up and platform: the portal's skill discovery and agent-manager's skill resolution call GitHub authenticated (5000 requests an hour); agentlab never reads the value
+  Telemetry         enabled — anonymous usage data (commands, platform installs, the portal's use, one random ID per lab) goes to TelemetryDeck; the form, or `agentlab configure --telemetry=false`, disables it (docs/telemetry.md)
 
 Applied to the configuration:
   platform.modelManager.backends: [ollama] -> [ollama, lemonade, lmstudio]
@@ -300,6 +301,11 @@ Applied to the configuration:
   resolution otherwise share this machine's unauthenticated GitHub window (60
   requests an hour); without either, the line names the Secret the lab lacks.
   The lab never takes `$GITHUB_TOKEN` (only `self-update` reads it). See [Agents](agents.md#the-github-token).
+- **Telemetry**: whether the lab sends anonymous usage data to TelemetryDeck
+  (`telemetry` in `agentlab.yaml`, on by default), or that
+  `AGENTLAB_TELEMETRY_OPTOUT` or `DO_NOT_TRACK` turns it off for every lab.
+  The form's last question, or `--telemetry=false`, turns it off for the lab.
+  See [Usage data](telemetry.md).
 
 Pins override the discovery for that run: `--model-manager[=false]` decides
 the flag regardless of what answers (off keeps the chart's default-on

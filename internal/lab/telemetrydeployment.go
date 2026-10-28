@@ -32,25 +32,32 @@ func TelemetryDeployment() (telemetry.Deployment, bool) {
 	return d, true
 }
 
-// EnterTelemetryLab hands the command's usage signal the deployment of the
-// lab it has entered (telemetry.EnterLab), none for a lab without one.
-func EnterTelemetryLab() {
+// EnterTelemetryLab hands the command's usage signal the lab's usage-data
+// setting, as cfg was read or saved, and its deployment, none for a lab
+// without one (telemetry.EnterLab).
+func EnterTelemetryLab(cfg *config.Config) {
 	d, _ := TelemetryDeployment()
-	telemetry.EnterLab(d.ID)
+	telemetry.EnterLab(d.ID, cfg.TelemetryOn())
 }
 
 // StartTelemetryDeployment is `up`'s: the recorded deployment while its
 // cluster exists, a new one recorded now when the cluster is about to be
 // created (or the lab records none) — so a cluster deleted past `down` (kind
-// delete, a reset docker) does not hand its deployment to the next. `up`'s
-// usage signal leaves with it (telemetry.StartDeployment). Nothing is recorded
-// with usage data off, and a record that cannot be written only costs the
-// correlation, said under AGENTLAB_TELEMETRY_DEBUG.
+// delete, a reset docker) does not hand its deployment to the next, also not
+// while usage data is off. `up`'s usage signal leaves with it
+// (telemetry.StartDeployment). Nothing is recorded with usage data off, in
+// the environment or in cfg, and a record that cannot be written only costs
+// the correlation, said under AGENTLAB_TELEMETRY_DEBUG.
 func StartTelemetryDeployment(cfg *config.Config) {
-	if !telemetry.Enabled() {
+	d, ok := TelemetryDeployment()
+	if ok && !labClusterExists(cfg.ClusterName) {
+		endTelemetryDeployment()
+		ok = false
+	}
+	if !cfg.TelemetryOn() || !telemetry.Enabled() {
 		return
 	}
-	if d, ok := TelemetryDeployment(); ok && labClusterExists(cfg.ClusterName) {
+	if ok {
 		telemetry.StartDeployment(d.ID)
 		return
 	}
@@ -108,13 +115,13 @@ type backstageTelemetry struct {
 }
 
 // BackstageTelemetry is the overlay's app.telemetrydeck, nil — an empty app
-// ID, telemetry off in the portal — when usage data is off or the lab records
-// no deployment (a render before the first `up`). A method, so only the
+// ID, telemetry off in the portal — when usage data is off (in the
+// environment or the lab's agentlab.yaml) or the lab records no deployment (a render before the first `up`). A method, so only the
 // templates that use it read the record. Test mode is the deployment's, not
 // the environment's: the overlay changes only with the deployment or an
 // opt-out, never with the shell a command runs in.
 func (d *tmplData) BackstageTelemetry() *backstageTelemetry {
-	if !telemetry.Enabled() {
+	if !d.TelemetryOn() || !telemetry.Enabled() {
 		return nil
 	}
 	dep, ok := TelemetryDeployment()

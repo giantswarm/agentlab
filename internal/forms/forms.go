@@ -45,6 +45,9 @@ type Hints struct {
 	// ModelServers names the host model servers found (versions and ports),
 	// or says that none answers — shown under the managed-models confirm.
 	ModelServers string
+	// TelemetryOptOut names the environment variable that turns usage data
+	// off for every lab, "" when none does — said on the Telemetry page.
+	TelemetryOptOut string
 }
 
 // Run walks the user through the lab configuration and mutates cfg in place.
@@ -80,6 +83,11 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 	backstagePortal := cfg.Backstage.Portal
 	if backstagePortal == "" {
 		backstagePortal = config.PortalAgentPlatform
+	}
+	usageData := cfg.TelemetryOn()
+	usageDataNote := "docs/telemetry.md lists every field; $AGENTLAB_TELEMETRY_OPTOUT or DO_NOT_TRACK=1 turns it off\nfor every lab."
+	if hints.TelemetryOptOut != "" {
+		usageDataNote = fmt.Sprintf("docs/telemetry.md lists every field. $%s is set: while it is, no lab on this machine\nsends usage data, whatever this lab's answer.", hints.TelemetryOptOut)
 	}
 
 	userSummary := func() string {
@@ -231,6 +239,15 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 				Value(&backstagePortal),
 		).Title("Backstage").
 			WithHideFunc(func() bool { return !slices.Contains(components, "backstage") }),
+
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title("Send anonymous usage data (telemetry)?").
+				Description("While this is on, agentlab sends anonymous usage data to TelemetryDeck: which command\nran, the agentlab version, OS and architecture, under a hashed machine identifier; on each\nplatform install, the chart version and which components are on; the lab's portal sends\nits page views and actions. Every signal carries the lab's deployment ID, a random ID that\nties them together. Never arguments, names, prompts, tokens or anything from the cluster.\nIt shows Giant Swarm which parts of the lab get used. "+usageDataNote).
+				Affirmative("Send").
+				Negative("Turn off").
+				Value(&usageData),
+		).Title("Telemetry"),
 	).WithAccessible(accessible)
 
 	if err := form.Run(); err != nil {
@@ -260,6 +277,7 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 	cfg.GitHubToken.Source = gitHubTokenSource
 	cfg.Backstage.Port = mustAtoi(backstagePort)
 	cfg.Backstage.Portal = backstagePortal
+	cfg.SetTelemetry(usageData)
 
 	if customizeUsers {
 		if err := editUsers(cfg, accessible); err != nil {

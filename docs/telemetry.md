@@ -58,10 +58,13 @@ Nothing from `state/`, `certs/`, the cluster, the users, the models or the
 model servers is ever sent, and from `agentlab.yaml` only what the platform
 signal below lists; the one exception is the random deployment ID below, which
 exists only to be sent. Help output (`-h`, `--help`) and shell completion do
-not count. A command that runs against a lab sends its signal as it enters the
-lab, so that the signal can name the lab's deployment, and the signals go out
-in the background while the command runs; a command that runs against no lab
-(or one that fails before entering its lab) sends its signal as it finishes. A command that finishes before its signals
+not count. A command that runs against a lab sends its signal once it has read
+the lab's `agentlab.yaml`, so that the signal follows the lab's setting
+([below](#opting-out)) and can name the lab's deployment, and the signals go
+out in the background while the command runs; one that fails before that (a
+first run's form left unanswered, a `configure` that saves nothing) sends
+nothing. A command that runs against no lab sends its signal as it finishes.
+A command that finishes before its signals
 have left the machine (`agentlab version`, say) waits for them at most half a
 second, then exits regardless. When the
 endpoint is out of reach (no connection within 300ms of the signal setting
@@ -150,7 +153,7 @@ lab; sent next to the hashes, it would let a guessed GitHub login (with
 salt, so the same person counts as a new portal user on every new cluster.
 
 The lab writes the portal's `app.telemetrydeck` into its app-config overlay
-on every `up` and `platform`. With usage data off (below), or before
+on every `up` and `platform`. With usage data off ([below](#opting-out)), or before
 the first `up`, it writes an empty app ID, and the portal sends nothing (its
 browser console and its backend log say usage data is disabled); the decision
 is taken when the overlay is rendered, so an opt-out set later takes effect
@@ -164,8 +167,26 @@ mode.
 Data is stored at [TelemetryDeck](https://telemetrydeck.com/) on servers in
 the EU; see their [privacy FAQ](https://telemetrydeck.com/docs/guides/privacy-faq/).
 
-**Opting out** (of every signal, the lab portal's included): set `AGENTLAB_TELEMETRY_OPTOUT` to any
-value, or the cross-tool [`DO_NOT_TRACK=1`](https://consoledonottrack.com/):
+## Opting out
+
+`agentlab configure` says on its `Telemetry` line whether usage data is on,
+and the form asks as its last question. Turned off there, or with
+
+```bash
+agentlab configure --telemetry=false
+```
+
+the lab's `agentlab.yaml` records `telemetry: false`: no command that runs
+against the lab sends a signal, the `configure` that turns it off included,
+and the lab's portal gets an empty app ID on the next `up`. Commands that run
+against no lab (`agentlab list`, `version`, `self-update`) still send theirs.
+Only a lab with usage data off carries the key; an agentlab release from
+before it refuses that lab's `agentlab.yaml`, as it refuses every key it does
+not know.
+
+To opt out of every signal on the machine, every lab and portal included, set
+`AGENTLAB_TELEMETRY_OPTOUT` to any value, or the cross-tool
+[`DO_NOT_TRACK=1`](https://consoledonottrack.com/):
 
 ```bash
 export AGENTLAB_TELEMETRY_OPTOUT=1

@@ -16,10 +16,14 @@ func telemetryOn(t *testing.T) (cluster *bool) {
 	t.Setenv("DO_NOT_TRACK", "")
 	t.Setenv(telemetry.TestModeEnv, "")
 	t.Chdir(t.TempDir())
+	telemetry.EnterLab("", true)
 	exists := false
 	prev := labClusterExists
 	labClusterExists = func(string) bool { return exists }
-	t.Cleanup(func() { labClusterExists = prev })
+	t.Cleanup(func() {
+		labClusterExists = prev
+		telemetry.EnterLab("", true)
+	})
 	return &exists
 }
 
@@ -76,6 +80,53 @@ func TestTelemetryDeploymentIsNotRecordedWhenOptedOut(t *testing.T) {
 	}
 }
 
+func TestTelemetryDeploymentIsNotRecordedForALabWithUsageDataOff(t *testing.T) {
+	telemetryOn(t)
+	cfg := config.Default()
+	cfg.SetTelemetry(false)
+
+	StartTelemetryDeployment(cfg)
+	if _, ok := TelemetryDeployment(); ok {
+		t.Error("a deployment was written for a lab with usage data off")
+	}
+}
+
+// TestAMissingClustersDeploymentEndsWithUsageDataOff: an `up` with usage
+// data off still drops the deployment of a cluster that went missing, so
+// turning usage data on again starts a new one instead of reusing it.
+func TestAMissingClustersDeploymentEndsWithUsageDataOff(t *testing.T) {
+	cluster := telemetryOn(t)
+	first := startDeployment(t)
+	off := config.Default()
+	off.SetTelemetry(false)
+
+	StartTelemetryDeployment(off) // the cluster went missing without a `down`
+	if _, ok := TelemetryDeployment(); ok {
+		t.Fatal("the missing cluster's deployment outlived an up with usage data off")
+	}
+	*cluster = true
+	if again := startDeployment(t); again.ID == first.ID {
+		t.Errorf("turning usage data on again reused the missing cluster's deployment %s", first.ID)
+	}
+}
+
+// TestEnterTelemetryLabFollowsTheConfiguration: the command's usage data
+// follows the lab's configuration as it was read or saved.
+func TestEnterTelemetryLabFollowsTheConfiguration(t *testing.T) {
+	telemetryOn(t)
+	cfg := config.Default()
+
+	EnterTelemetryLab(cfg)
+	if !telemetry.Enabled() {
+		t.Fatal("usage data off in a lab that leaves it on")
+	}
+	cfg.SetTelemetry(false)
+	EnterTelemetryLab(cfg)
+	if telemetry.Enabled() {
+		t.Error("usage data on in a lab whose configuration says telemetry: false")
+	}
+}
+
 // TestBackstageOverlayTelemetry: the lab's portal reports into agentlab's
 // app under the lab's deployment and salt, and sends nothing before the
 // first `up` or with usage data off: an empty app ID, which every portal
@@ -119,6 +170,10 @@ func TestBackstageOverlayTelemetry(t *testing.T) {
 		t.Errorf("app.telemetrydeck.salt = %#v, want the string \"123e45\"", got)
 	}
 	withDeployment(d)
+
+	cfg.SetTelemetry(false)
+	telemetryOff("with the lab's usage data off")
+	cfg.SetTelemetry(true)
 
 	t.Setenv(telemetry.OptOutEnv, "1")
 	telemetryOff("opted out")

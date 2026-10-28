@@ -153,3 +153,28 @@ func TestSaveAddsAbsentKeysOnly(t *testing.T) {
 		t.Fatalf("a second write changed the file:\n%s\nto:\n%s", after, again)
 	}
 }
+
+// Usage data on saves no telemetry key, so a release from before the key,
+// which refuses keys it does not know, still writes the lab; off saves
+// telemetry: false, and on again removes it.
+func TestSaveWritesTelemetryOnlyWhenOff(t *testing.T) {
+	t.Chdir(t.TempDir())
+	cfg := Default()
+	cfg.Platform.ChartVersion = loadTestChart
+	for _, on := range []bool{true, false, true} {
+		cfg.SetTelemetry(on)
+		if err := cfg.Save(); err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Contains(readFile(t), "telemetry:"); got == on {
+			t.Fatalf("on=%v: telemetry key present=%v in:\n%s", on, got, readFile(t))
+		}
+		got, err := Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.TelemetryOn() != on {
+			t.Fatalf("on=%v: read back %v", on, got.TelemetryOn())
+		}
+	}
+}

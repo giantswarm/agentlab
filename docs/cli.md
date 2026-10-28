@@ -213,6 +213,7 @@ The flags pin a value regardless of the discovery, with or without
 | `--agents[=false]` | Enable or disable the agents runtime (kagent, part of the platform install). |
 | `--observability[=false]` | Enable or disable the observability stack (Prometheus + mcp-prometheus). |
 | `--backstage[=false]` | Enable or disable Backstage (implies the platform). |
+| `--telemetry[=false]` | Enable or disable the anonymous usage data the lab and its portal send to TelemetryDeck (`telemetry`, on by default); the form asks the same as its last question. See [Usage data](telemetry.md#opting-out). |
 | `--portal <mode>` | The Backstage portal mode (`backstage.portal`): `agent-platform` (the default) serves the Agent Platform shell, `classic` the classic Platform Portal alone. The next `agentlab platform` rolls Backstage onto it. See [Portal mode](backstage.md#portal-mode). |
 | `--installations-page` | The portal's Installations page (`backstage.installationsPage`): `page:gs/installations` and its nav item join the lab's enabled extensions, for the portal's installations e2e specs (`AGENTLAB_INSTALLATIONS_PAGE=1`). The next `agentlab platform` rolls Backstage onto it; `--installations-page=false` turns it off. See [The portal's browser suite](backstage.md#the-portals-browser-suite). |
 | `--chart-version <x.y.z>` | The agent-platform chart release to install, an exact version (default: the release this agentlab was verified with, `config.DefaultChartVersion`). |

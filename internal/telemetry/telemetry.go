@@ -4,13 +4,14 @@
 // machine identifier that lets Giant Swarm count users without knowing who
 // they are. And one per platform install (Platform): the meta chart line the
 // lab installs and its feature switches, as versions and booleans. Once a
-// command has entered a lab (EnterLab), every signal names the lab's
-// deployment, a random ID the lab's Backstage sends with its own signals.
+// command has read its lab's configuration (EnterLab), every signal names the
+// lab's deployment, a random ID the lab's Backstage sends with its own signals.
 // Nothing else about the lab — its users, clusters, paths, arguments or flags
 // — leaves the machine. See docs/telemetry.md.
 //
 // Setting AGENTLAB_TELEMETRY_OPTOUT (any value) or the console convention
-// DO_NOT_TRACK=1 disables both. Reporting never fails a command and never
+// DO_NOT_TRACK=1 disables both, and a lab's `telemetry: false` does for the
+// commands that run against it (AwaitLab, EnterLab). Reporting never fails a command and never
 // speaks on its output: the signals travel while the command works, a command
 // that finishes first waits for them at most half a second (Flush) before the
 // process exits, and not at all once the endpoint has proven out of reach.
@@ -117,13 +118,17 @@ var (
 const StartsDeployment = "agentlab.giantswarm.io/telemetry-starts-deployment"
 
 // pending is the command signal Command recorded and EnterLab,
-// StartDeployment or Flush sends; awaitStart holds it past EnterLab for a
-// command that starts a deployment. deploymentID is the deployment named
-// last, on every signal after it.
+// StartDeployment or Flush sends; held keeps it past EnterLab for a command
+// annotated StartsDeployment. awaitLab is a command that runs against a lab
+// whose configuration it has not read yet: nothing is sent until it has.
+// deploymentID is the deployment named last, on every signal after it.
+// labOff is the lab's usage data turned off: nothing is sent from then on.
 var (
 	pending      func()
-	awaitStart   bool
+	held         bool
+	awaitLab     bool
 	deploymentID string
+	labOff       bool
 )
 
 // reach records whether any signal's request got a connection to the ingest
@@ -162,18 +167,25 @@ func (r *reach) reached() bool {
 
 // Enabled reports whether this process sends usage signals.
 func Enabled() bool {
-	if appID == "" || os.Getenv(OptOutEnv) != "" {
-		return false
+	return appID != "" && EnvOptOut() == "" && !labOff
+}
+
+// EnvOptOut names the environment variable that turns usage data off for
+// every lab, "" when none does.
+func EnvOptOut() string {
+	if os.Getenv(OptOutEnv) != "" {
+		return OptOutEnv
 	}
 	if v := strings.TrimSpace(os.Getenv(doNotTrackEnv)); v != "" && v != "0" && !strings.EqualFold(v, "false") {
-		return false
+		return doNotTrackEnv
 	}
-	return true
+	return ""
 }
 
 // Command records one execution of a user-facing command ("agentlab up").
-// The signal leaves once the command has entered its lab (EnterLab), so that
-// it names the lab's deployment — for `up`, once it has started one
+// The signal leaves once the command has read its lab's configuration
+// (EnterLab), so that it follows the lab's setting and names the lab's
+// deployment — for `up`, once it has started one
 // (StartDeployment) — or at Flush for a command that runs against no lab; its
 // HTTP request runs on its own goroutine, and a failure to
 // deliver is swallowed — telemetry must never get in the user's way. Same
@@ -194,7 +206,7 @@ func Command(cmd *cobra.Command) {
 		return
 	}
 	ctx := cmd.Context()
-	_, awaitStart = cmd.Annotations[StartsDeployment]
+	_, held = cmd.Annotations[StartsDeployment]
 	pending = func() {
 		send(ctx, signalType, map[string]interface{}{
 			"appVersion": project.Version(),
@@ -203,14 +215,21 @@ func Command(cmd *cobra.Command) {
 	}
 }
 
-// EnterLab names the deployment of the lab the command runs against: every
-// signal from here on carries it as deploymentID, and the command's own
-// signal (Command) leaves now — unless the command starts a deployment
-// (StartsDeployment). An empty ID, a lab without a recorded deployment, sends
-// the command signal without one.
-func EnterLab(id string) {
-	deploymentID = id
-	if !awaitStart {
+// AwaitLab is a command that runs against a lab: its signal waits for the
+// lab's configuration (EnterLab), and one that fails before reading it sends
+// nothing, the lab's setting being unknown.
+func AwaitLab() {
+	awaitLab = true
+}
+
+// EnterLab is the lab's configuration read, as saved: on is its setting, off
+// sending nothing from here on, and id names its deployment, carried by every
+// signal from here on as deploymentID. The command's own signal (Command)
+// leaves now, unless the command is held (StartsDeployment). An empty ID, a
+// lab without a recorded deployment, sends the command signal without one.
+func EnterLab(id string, on bool) {
+	deploymentID, labOff, awaitLab = id, !on, false
+	if !held {
 		sendPending()
 	}
 }
@@ -218,14 +237,16 @@ func EnterLab(id string) {
 // StartDeployment is EnterLab for the command that starts the lab's
 // deployment: its signal leaves now, naming id.
 func StartDeployment(id string) {
-	deploymentID, awaitStart = id, false
+	deploymentID, held = id, false
 	sendPending()
 }
 
-// sendPending sends the command signal Command recorded, once.
+// sendPending sends the command signal Command recorded, once, unless the
+// lab's usage data is off or not known yet (AwaitLab).
 func sendPending() {
-	if p := pending; p != nil {
-		pending = nil
+	p := pending
+	pending = nil
+	if p != nil && !labOff && !awaitLab {
 		p()
 	}
 }
@@ -247,7 +268,7 @@ func send(ctx context.Context, signalType string, payload map[string]interface{}
 }
 
 // Flush sends the command signal if it has not left yet — a command that
-// runs against no lab, or one that failed before entering its lab — and lets
+// runs against no lab, or `up` failing before it started its deployment — and lets
 // the signals sent so far (Command, Platform) finish their trip before the
 // process exits, waiting at most flushTimeout (and no longer than
 // ctx allows): a sub-second command such as `agentlab version` would

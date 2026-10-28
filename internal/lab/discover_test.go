@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/giantswarm/agentlab/internal/config"
+	"github.com/giantswarm/agentlab/internal/telemetry"
 )
 
 // Fixture vocabulary, hoisted so the linter's constant check stays quiet.
@@ -522,5 +523,28 @@ func TestDiscoveryOwnPortsIncludeTheRegistry(t *testing.T) {
 				t.Fatalf("OwnPorts() changed ClusterPorts to %v", tc.disc.ClusterPorts)
 			}
 		})
+	}
+}
+
+// The report says whether the lab sends usage data and how to change that:
+// enabled by default, disabled by the lab's agentlab.yaml or, for every lab,
+// by the environment.
+func TestReportTelemetryLine(t *testing.T) {
+	t.Setenv(telemetry.OptOutEnv, "")
+	t.Setenv("DO_NOT_TRACK", "")
+	cfg := config.Default()
+	for _, tc := range []struct {
+		name  string
+		setup func()
+		want  string
+	}{
+		{"default", func() {}, "Telemetry         enabled — anonymous usage data"},
+		{"turned off for the lab", func() { cfg.SetTelemetry(false) }, "Telemetry         disabled for this lab (telemetry: false)"},
+		{"environment", func() { cfg.SetTelemetry(true); t.Setenv("DO_NOT_TRACK", "1") }, "Telemetry         disabled — $DO_NOT_TRACK is set"},
+	} {
+		tc.setup()
+		if out := (&Discovery{}).Report(cfg); !strings.Contains(out, tc.want) {
+			t.Errorf("%s: report lacks %q:\n%s", tc.name, tc.want, out)
+		}
 	}
 }
