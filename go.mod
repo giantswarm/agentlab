@@ -15,7 +15,7 @@ require (
 	github.com/giantswarm/go-selfupdate v1.7.1
 	github.com/giantswarm/klaus-gateway v1.21.0
 	github.com/giantswarm/pagekit v0.3.2
-	github.com/giantswarm/selfupdate-cosign v0.3.17
+	github.com/giantswarm/selfupdate-cosign v0.3.18
 	github.com/giantswarm/telemetrydeck-go v0.3.12
 	github.com/giantswarm/vm-manager v0.25.16
 	github.com/google/go-github/v93 v93.0.0
@@ -96,7 +96,6 @@ require (
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/fluxcd/cli-utils v1.2.1 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.1 // indirect
-	github.com/go-chi/chi/v5 v5.5.0 // indirect
 	github.com/go-errors/errors v1.5.1 // indirect
 	github.com/go-fed/httpsig v1.1.0 // indirect
 	github.com/go-gorp/gorp/v3 v3.1.0 // indirect
@@ -192,7 +191,6 @@ require (
 	github.com/tetratelabs/wabin v0.0.0-20230304001439-f6f874872834 // indirect
 	github.com/tetratelabs/wazero v1.12.0 // indirect
 	github.com/theupdateframework/go-tuf/v2 v2.4.2 // indirect
-	github.com/tink-crypto/tink-go/v2 v2.9.0 // indirect
 	github.com/transparency-dev/formats v0.1.1 // indirect
 	github.com/transparency-dev/merkle v0.0.2 // indirect
 	github.com/ulikunitz/xz v0.5.17 // indirect
