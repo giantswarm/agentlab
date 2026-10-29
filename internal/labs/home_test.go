@@ -304,3 +304,48 @@ func TestSettleWithOneFolderForConfigurationAndState(t *testing.T) {
 		t.Errorf("the self-link is still at %s: %v", at, err)
 	}
 }
+
+// Remove takes the lab's Home, its configuration folder and its registry
+// entry; a lab registered outside its Home is refused and stays.
+func TestRemove(t *testing.T) {
+	t.Run("a lab in its Home", func(t *testing.T) {
+		setup(t)
+		dir := t.TempDir()
+		writeConfig(t, dir, "gone")
+		home, err := Settle("gone", dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := Register("gone", home); err != nil {
+			t.Fatal(err)
+		}
+		cfgFile, _ := ConfigFile("gone")
+
+		if err := Remove("gone"); err != nil {
+			t.Fatalf("Remove: %v", err)
+		}
+		for _, p := range []string{home, filepath.Dir(cfgFile)} {
+			if exists(p) {
+				t.Errorf("%s is still there", p)
+			}
+		}
+		reg, err := read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := reg.Labs["gone"]; ok {
+			t.Errorf("the registry still names gone: %v", reg.Labs)
+		}
+	})
+	t.Run("a lab outside its Home", func(t *testing.T) {
+		setup(t)
+		dir := newLab(t, "elsewhere")
+
+		if err := Remove("elsewhere"); err == nil {
+			t.Fatal("Remove of a lab outside its Home succeeded")
+		}
+		if !isLab(dir) {
+			t.Errorf("the lab in %s was touched", dir)
+		}
+	})
+}

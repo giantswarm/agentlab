@@ -6,7 +6,8 @@ package lab
 // shells out to the platform's own tooling (update-ca-certificates /
 // update-ca-trust on Linux, the security tool on macOS, certutil on
 // Windows) and wraps the privileged steps in sudo itself. Trust changes are
-// explicit by design: `up` and `down` never touch a trust store.
+// explicit by design: `up` and `down` never touch a trust store, and
+// `down --purge` only removes the lab's own CA.
 
 import (
 	"crypto/x509"
@@ -62,8 +63,20 @@ func Trust(cfg *config.Config) error {
 // Untrust removes the lab CA — and any predecessor a re-mint stashed —
 // from the system store and the NSS profiles. certs/ stays on disk, so a
 // later `agentlab trust` reinstalls the same CA. (`agentlab down` never
-// touches the trust stores; this is the only removal path.)
+// touches the trust stores; `down --purge` removes the CA with the lab.)
 func Untrust(cfg *config.Config) error {
+	if err := untrustLab(); err != nil {
+		return err
+	}
+	if readCertFile(caCertPath) != nil {
+		fmt.Println("certs/ kept on disk; `agentlab trust` re-installs the same CA.")
+	}
+	return nil
+}
+
+// untrustLab removes the lab CA and any predecessor a re-mint stashed from
+// the trust stores.
+func untrustLab() error {
 	if err := sweepReplacedCAs(); err != nil {
 		return err
 	}
@@ -72,11 +85,7 @@ func Untrust(cfg *config.Config) error {
 		fmt.Printf("No lab CA at %s — nothing to untrust.\n", caCertPath)
 		return nil
 	}
-	if err := untrustCert(caCertPath, cert); err != nil {
-		return err
-	}
-	fmt.Println("certs/ kept on disk; `agentlab trust` re-installs the same CA.")
-	return nil
+	return untrustCert(caCertPath, cert)
 }
 
 // SystemTrusted reports whether the lab CA on disk is in the system trust
