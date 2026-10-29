@@ -149,7 +149,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		inGroup(groupTesting, beekeeperSubscriptionsTestCmd()),
 		inGroup(groupTesting, backstageTestCmd()),
 
-		inGroup(groupCleanup, labCmd("down", "Destroy the kind cluster", lab.Down)),
+		inGroup(groupCleanup, downCmd()),
 		inGroup(groupCleanup, readOnlyLabCmd("untrust", "Remove the lab CA from the system and browser trust stores", lab.Untrust)),
 		inGroup(groupCleanup, labCmd("platform-down", "Remove the agent platform (leaves Dex and the cluster alone)", lab.PlatformDown)),
 
@@ -323,6 +323,20 @@ func loadReadOnly() (*config.Config, error) {
 	lab.SetPlatform(cfg)
 	lab.EnterTelemetryLab(cfg)
 	return cfg, nil
+}
+
+// downCmd is `agentlab down`: the kind cluster, or with --purge the whole
+// lab.
+func downCmd() *cobra.Command {
+	var purge bool
+	cmd := labCmd("down", "Destroy the kind cluster (--purge: the whole lab, its CA included)", func(cfg *config.Config) error {
+		if purge {
+			return lab.Purge(cfg)
+		}
+		return lab.Down(cfg)
+	})
+	cmd.Flags().BoolVar(&purge, "purge", false, "also remove the lab CA from the trust stores, then the lab's directory, configuration and registry entry")
+	return cmd
 }
 
 // readOnlyLabCmd is labCmd for a command that never writes agentlab.yaml

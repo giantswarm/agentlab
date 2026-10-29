@@ -8,12 +8,61 @@ import (
 	"time"
 
 	"github.com/giantswarm/agentlab/internal/config"
+	"github.com/giantswarm/agentlab/internal/labs"
 )
 
 // Down destroys the kind cluster. Certs are kept: the CA is only worth
 // regenerating deliberately (agentlab certs --force), and keeping it means an
 // immediate `agentlab up` reuses the same trust chain.
 func Down(cfg *config.Config) error {
+	if err := destroyCluster(cfg); err != nil {
+		return err
+	}
+	fmt.Println("Lab destroyed. certs/ kept (agentlab certs --force to regenerate).")
+	fmt.Println("`agentlab down --purge` removes the lab for good: its CA from the trust stores, certs/, state/ and its configuration.")
+	return nil
+}
+
+// Purge removes the lab for good: the kind cluster as Down does, then the
+// lab CA from the trust stores, then the lab's directory, its configuration
+// and its registry entry, so `agentlab list` no longer shows it. The CA goes
+// before its directory, the one place that names it. A lab outside its Home
+// is refused before anything changes, and a failed removal from a trust
+// store stops before anything is deleted.
+func Purge(cfg *config.Config) error {
+	home, err := labs.Home(cfg.ClusterName)
+	if err != nil {
+		return err
+	}
+	if !sameDir(".", home) {
+		cwd, _ := os.Getwd()
+		return fmt.Errorf("lab %s lives in %s, outside agentlab's folders, and that directory may hold more than the lab; run `agentlab down` and delete what you no longer need there by hand", cfg.ClusterName, cwd)
+	}
+	if err := destroyCluster(cfg); err != nil {
+		return err
+	}
+	if err := untrustLab(); err != nil {
+		return fmt.Errorf("%w; the lab's files are kept, run `agentlab down --purge` again once that works", err)
+	}
+	if err := labs.Remove(cfg.ClusterName); err != nil {
+		return err
+	}
+	fmt.Printf("Lab %s removed: its cluster, its CA from the trust stores, %s and its configuration.\n", cfg.ClusterName, home)
+	return nil
+}
+
+// sameDir reports whether a and b are one directory.
+func sameDir(a, b string) bool {
+	fa, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	fb, err := os.Stat(b)
+	return err == nil && os.SameFile(fa, fb)
+}
+
+// destroyCluster deletes the kind cluster and the files that described it.
+func destroyCluster(cfg *config.Config) error {
 	// The workspace volumes (teardown.go) released while the NFS server still
 	// runs: the cluster's deletion stops the server, and a node still holding
 	// a mount of it then cannot be stopped. Best effort on a cluster whose
@@ -55,7 +104,6 @@ func Down(cfg *config.Config) error {
 	removeDevRegistry(cfg)
 	// The next `up` is a new deployment for usage data (docs/telemetry.md).
 	endTelemetryDeployment()
-	fmt.Println("Lab destroyed. certs/ kept (agentlab certs --force to regenerate).")
 	return nil
 }
 

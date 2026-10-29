@@ -327,4 +327,5 @@ export KUBECONFIG=$PWD/kubeconfig.oidc
 kubectl auth whoami
 ```
 
-Tear down with `agentlab down`.
+Tear down with `agentlab down`. It keeps the lab and its CA for the next
+`up`. `agentlab down --purge` removes the lab for good, its CA included.

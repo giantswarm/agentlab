@@ -248,6 +248,7 @@ agentlab kagent-step-test --to <kagent> | --chart <agent-platform>  # a suspende
 agentlab harness-matrix-test  # what each Harness does with a Shared subagent (prompt only, with a skill, with an MCP tool, nested) and, on claude, a Claude-format package's subagents and commands: per cell the controller's refusal or one turn whose child answers a codeword only its own prompt holds; observations in state/harness-matrix.txt, no verdict (codex's shared-prompt on the mockllm's delegation script unless --codex-model-config)
 agentlab substrate-tunnel-test  # a gRPC call through atenet-router to an HTTP/1.1-only actor fails at once, not with its client's timeout (--substrate <release> pins one for the run)
 agentlab down            # delete the cluster (certs/ kept, trust stores untouched)
+agentlab down --purge    # the whole lab for good: cluster, its CA from the trust stores, its folders and registration
 agentlab trust           # install the lab CA into the system + NSS trust stores (sudo)
 agentlab untrust         # remove exactly the lab CA from those stores
 agentlab reload          # re-render + re-apply Dex after editing agentlab.yaml
