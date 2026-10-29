@@ -2,8 +2,7 @@
 
 # agentlab
 
-**The Giant Swarm agent platform on your laptop: one binary, one throwaway
-kind cluster, every chain proven end to end.**
+**The Giant Swarm agent platform on your laptop.**
 
 [![Release](https://img.shields.io/github/v/release/giantswarm/agentlab?label=release)](https://github.com/giantswarm/agentlab/releases)
 [![CI](https://dl.circleci.com/status-badge/img/gh/giantswarm/agentlab/tree/main.svg?style=shield)](https://dl.circleci.com/status-badge/redirect/gh/giantswarm/agentlab/tree/main)
@@ -14,237 +13,164 @@ kind cluster, every chain proven end to end.**
 
 ---
 
-**agentlab** runs the [Giant Swarm agent
-platform](https://github.com/giantswarm/agent-platform) —
-[muster](https://github.com/giantswarm/muster) as the MCP gateway, the
-Kubernetes MCP server, the [kagent](https://github.com/kagent-dev/kagent)
-agents runtime and Giant Swarm's
-[Backstage](https://github.com/giantswarm/backstage) portal — on a
-[kind](https://kind.sigs.k8s.io/) cluster on your machine, so the whole
-platform can be tested and demoed without a management cluster.
+agentlab runs the [Giant Swarm agent
+platform](https://github.com/giantswarm/agent-platform) on a
+[kind](https://kind.sigs.k8s.io/) cluster on your machine. Use it to try a
+change to the platform or to demo it, without a management cluster.
 
-Two kinds of client meet at one gateway. MCP clients such as Claude Code talk
-to muster directly; people use **Backstage, the human frontend to the whole
-platform** — servers, workflows, tools, agents, models — with their own token.
-The agents Backstage creates run on kagent and are MCP clients of muster too,
-calling tools as the person who invoked them.
-
-The platform needs an identity provider, so the lab bundles its own
-[Dex](https://dexidp.io/): users that exist nowhere but this cluster, RBAC
-driven by the `groups` claim, and the apiserver, muster and Backstage all
-trusting the same issuer.
+One command, `agentlab up`, creates the cluster and installs the platform.
+It also brings its own login server ([Dex](https://dexidp.io/)) with test
+users, so you can sign in right away. `agentlab down` deletes it all again.
 
 <div align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/img/architecture-dark.svg">
-    <img alt="agentlab architecture: Claude Code and Backstage, the two interfaces on the left, reach the platform through the agentgateway TLS edge into muster. muster fans out to mcp-kubernetes (the kube-apiserver), mcp-prometheus (Prometheus), model-manager (Ollama, Lemonade and LM Studio on the host) and agent-manager. The kagent runtime holds the Agent CRs, run as ADK pods, and the ModelConfigs for Anthropic, Ollama, Lemonade, LM Studio and OpenAI-compatible endpoints; agent-manager creates the Agent CRs, model-manager wires the ModelConfigs, the agents call tools back through muster with the caller's token and toolset, and Backstage chats with them over A2A. The bundled Dex at https://localhost:32000/dex is the one issuer the browser, muster, Backstage and the apiserver trust" src="docs/img/architecture-light.svg" width="900">
+    <img alt="Architecture of the lab. Claude Code and the Backstage portal reach the cluster through the agentgateway TLS edge. muster is the one place that checks logins, which come from Dex. It routes MCP tool calls to mcp-kubernetes, mcp-prometheus, model-manager and agent-manager. Agents run on kagent and Agent Substrate and call their tools through muster as the signed-in person. vm-manager, workspaces, model serving with llm-d and the klaus-gateway Slack bridge are optional switches." src="docs/img/architecture-light.svg" width="900">
   </picture>
 </div>
 
-## What's in the box
+You and your tools reach the platform in two ways. MCP clients such as
+Claude Code connect to [muster](https://github.com/giantswarm/muster), the
+MCP gateway. People use the [Backstage](https://github.com/giantswarm/backstage)
+portal. Either way, muster checks your login and calls the MCP servers behind
+it as you. Agents run on [kagent](https://github.com/kagent-dev/kagent) and
+call their tools through muster the same way.
 
-- **One Go binary.** `agentlab configure` asks every option through an
-  interactive form and writes `agentlab.yaml`; every manifest renders from
-  embedded templates. No YAML to hand-edit, no scripts to source.
-- **The agent platform.** The agent-platform chart every Giant Swarm
-  management cluster runs, installed in its lab shape: muster behind an
-  agentgateway TLS edge, the single OAuth enforcement point in front of an
-  unauthenticated in-cluster `mcp-kubernetes`. Per-server sign-in, declared
-  toolsets and a fake multi-cluster fleet are all exercised.
-- **Backstage, the human frontend.** Giant Swarm's Backstage is how a person
-  works the whole platform: browse and sign in to MCP servers, run workflows,
-  explore tools, create agents and chat with them, manage models. Every call
-  carries the signed-in user's own token, so the portal shows exactly what
-  the platform grants that person.
-- **Agents.** kagent runs the agents Backstage or agent-manager creates. They
-  are MCP clients of muster like Claude Code is, forwarding the caller's token
-  and bounded further by declared toolsets, so they see the same catalogue
-  under the same rules.
-- **Models.** An Anthropic default; extra model configs for OpenAI-compatible,
-  Gemini and Ollama endpoints; managed models through model-manager fronting
-  the model servers on the host — an Ollama, a Lemonade Server, an LM Studio;
-  and, with `platform.serving`, the platform's own serving on llm-d — the
-  KServe llmisvc controller, the well-known runtime configs, the models
-  Gateway with its JWT policy, one CPU preset served on the node.
-- **Workspaces.** With `platform.workspaces`, the read-write-many storage a
-  workspace's volume is claimed from: an in-cluster NFS server and the NFS
-  CSI driver, its controller behind an mTLS proxy only Agent Substrate's API
-  server may reach, and the StorageClass `agentlab-workspaces`;
-  `agentlab workspaces-test` proves sub-path mounts per Session, read-only
-  mirrors and git on the volume, and a claude Session admitted on it with a
-  workspace grant the workspace-manager's key set verifies. With
-  `platform.workspaces.csiCompanion` the connectivity chart's CSI companion
-  mounts the volumes for Substrate instead, the lab's path for proving a
-  companion change. The workspace-manager's provider instances are a GitHub
-  App of the lab's own and a GitLab; a person grants the App in a browser.
-- **VMs.** vm-manager, the platform's VM provisioner, as a pod of the KVM
-  node (the chart's `components.vm-manager`) registered with muster as
-  `x_vm-manager_*`: VMs with an instance metadata service, a vTPM and
-  attestation, created by the person or an agent who asked.
-- **Swarmgeist.** klaus-gateway, the fleet's Slack bridge, on the host
-  against the lab's public gRPC edge and — with `platform.klausGateway` —
-  as the meta chart's in-cluster component with its OBO link store in a
-  Secret, proven across a pod loss. No Slack workspace, so no real
-  sign-in: the store is proven through the gateway's own package.
-- **Observability.** A minimal Prometheus plus mcp-prometheus, so PromQL
-  questions about the lab go through MCP too.
-- **Identity you can reason about.** Three throwaway users, a fixed group
-  vocabulary, one issuer URL valid from the host, the node and every
-  hostNetwork pod, and a lab CA you trust explicitly.
-- **The fleet's admission.** Kyverno with the `flux-multi-tenancy` policy
-  every Giant Swarm management cluster enforces, verbatim and in Enforce, and
-  an org namespace with the fleet's tenant ServiceAccount — a release that an
-  installation would refuse is refused here, with the same message.
-- **Proofs, not hope.** Headless `*-test` commands drive every chain — Dex
-  login, muster, MCP tools, agents, toolsets, models, RBAC, Backstage — and
-  fail loudly.
+`agentlab up` installs the same agent-platform chart that every Giant Swarm
+management cluster runs. It adds the two things a management cluster gets
+from elsewhere: a login server and the fleet's admission policy.
+
+## Features
+
+- The whole platform from one command. `agentlab up` creates a kind cluster
+  and installs the agent platform. There is no YAML to edit. See
+  [Getting started](docs/getting-started.md).
+- Set up for your machine. agentlab finds free ports and the model servers
+  running on your machine, and checks that Docker has enough CPU and memory.
+- Logins that work out of the box. A built-in Dex has an admin, a developer
+  and a viewer, each with their own Kubernetes rights. See
+  [Identity](docs/identity.md).
+- Trusted HTTPS. The lab has its own certificate authority, and
+  `agentlab trust` adds it to your system in one step. See [TLS](docs/tls.md).
+- The shape of a management cluster. The lab runs the same agent-platform
+  chart and enforces the same admission policy as the fleet. See
+  [The agent platform](docs/platform.md).
+- Room for work in progress. Install an unreleased chart, a branch's dev
+  build or your own build of a component. See
+  [Installing an unreleased chart](docs/platform.md#installing-an-unreleased-chart).
+- Proofs you can run. Each `agentlab *-test` command checks one path end to
+  end, without a browser, and says why it failed. See the
+  [command reference](docs/cli.md).
+- Several labs side by side, each with its own ports and domain. See
+  [Which lab](docs/cli.md#which-lab).
+- Signed releases. `agentlab self-update` installs a new release only after
+  its signature checks out. See
+  [Keeping agentlab current](docs/cli.md#keeping-agentlab-current).
+
+## Components
+
+List of components coming with the stack:
+
+| Component | What it does | Installed |
+|---|---|---|
+| [muster](https://github.com/giantswarm/muster) | MCP gateway. Checks every login and calls the MCP servers as the user | Always |
+| [agentgateway](https://github.com/agentgateway/agentgateway) | TLS edge for every URL under `*.127.0.0.1.nip.io` | Always |
+| [mcp-kubernetes](https://github.com/giantswarm/mcp-kubernetes) | MCP server for the lab's own cluster | Always |
+| [kagent](https://github.com/kagent-dev/kagent) and [Agent Substrate](https://github.com/giantswarm/substrate) | Run the agents, each in a sandboxed pod | By default |
+| [agent-manager](https://github.com/giantswarm/agent-manager) | Creates and changes agents for the portal and MCP clients | By default |
+| [Backstage](https://github.com/giantswarm/backstage) | The portal for people | By default |
+| [Prometheus](https://github.com/prometheus/prometheus) and [mcp-prometheus](https://github.com/giantswarm/mcp-prometheus) | The lab's metrics, queried through MCP | By default |
+| [Dex](https://github.com/dexidp/dex) | Login server with three test users | Always |
+| [Kyverno](https://github.com/kyverno/kyverno) | The fleet's `flux-multi-tenancy` policy, in Enforce | Always |
+| [model-manager](https://github.com/giantswarm/model-manager) | Pulls and wires models on Ollama, Lemonade or LM Studio on your machine | When one is found |
+| [llm-d](https://github.com/llm-d/llm-d) | Serves a model inside the cluster | `platform.serving` |
+| [NFS CSI driver](https://github.com/kubernetes-csi/csi-driver-nfs) | Shared storage for agent workspaces | `platform.workspaces` |
+| [vm-manager](https://github.com/giantswarm/vm-manager) | KVM virtual machines with attestation | `platform.vmManager` |
+| [klaus-gateway](https://github.com/giantswarm/klaus-gateway) (Swarmgeist) | Slack bridge for agents | `platform.klausGateway` |
 
 ## Getting started
 
-Requirements: `docker` (or Podman >= 4's docker-compatible CLI) — nothing
-else; `go` >= 1.26 only to build from source. kind, Helm and the Kubernetes
-client are built into the binary: the cluster runs the Kubernetes of the
-embedded kind release's default node image, the platform installs through
-Helm 4's SDK, and every call to the apiserver goes through client-go. Give
-docker at least 4 CPUs and 6 GiB for the full lab; `agentlab up` checks before
-it touches anything (see [Docker resources](docs/getting-started.md#docker-resources)).
+You need Docker, or Podman 4 or newer, with at least 4 CPUs and 6 GiB of
+memory. Kind, Helm and the Kubernetes client are built into the binary.
+
+First, install agentlab:
 
 ```bash
-GOBIN=~/.local/bin go install github.com/giantswarm/agentlab@latest   # or a release binary in ~/.local/bin; `agentlab self-update` keeps it there
-
-export ANTHROPIC_API_KEY=sk-ant-...   # optional: powers the agents and Backstage's AI chat
-agentlab up                           # one question (the detected defaults, or customize), then certs, kind cluster, Dex, RBAC, the platform — verified
-agentlab open portal                  # the portal in your browser (the URL is printed too)
-agentlab platform-test                # headless proof: Dex -> muster -> mcp-kubernetes -> apiserver
-agentlab polex-test                   # the chart's Kyverno PolicyExceptions dry-run against the lab's Kyverno (the fleet's)
+GOBIN=~/.local/bin go install github.com/giantswarm/agentlab@latest
 ```
 
-Headless (CI, a coding agent), write the lab first with `agentlab configure
---defaults`: nothing asks without a terminal. A new lab is named `agentlab`,
-or `agentlab-<n>` when another lab on this machine holds that name;
-`--cluster-name <name>` names it. On a terminal, `up` ends by asking whether to trust the lab CA (one sudo
-prompt, so browsers get a green lock) and whether to open the portal — `open
-portal` is the command for later, `open agents` opens the kagent UI and `open
-prometheus` the lab Prometheus.
-`agentlab list` shows the labs on this machine, `agentlab status` the chart a
-lab runs (a dev chart named as such) against the one `agentlab.yaml` installs,
-with the drift when they differ, its platform releases and whether
-Backstage's app-config drifted from the render, and
-`agentlab pods` a lab's pods, from any directory (`--lab <name>` picks one
-of several).
+You can also download a [release](https://github.com/giantswarm/agentlab/releases)
+binary into `~/.local/bin`. [Verify it](docs/verify-release.md) before you
+run it. `agentlab self-update` keeps it current and checks every new binary
+the same way.
 
-Then point Claude Code at the platform:
+Then start the lab:
 
 ```bash
-agentlab trust                # if you said no above: one sudo prompt, `agentlab untrust` reverts it
-export NODE_USE_SYSTEM_CA=1   # Node >= 22.15; older Node: NODE_EXTRA_CA_CERTS=~/.local/state/agentlab/labs/<lab>/certs/ca.crt
+export ANTHROPIC_API_KEY=sk-ant-...   # optional, for the agents and the portal's AI chat
+agentlab up
+```
+
+You don't need to run `agentlab configure` first. On the first run, `up`
+checks your machine, asks whether to use the defaults it detected, creates
+the cluster and installs the platform. At the end it offers to trust the
+lab's certificate (one sudo prompt) and to open the portal. Sign in at
+<https://backstage.127.0.0.1.nip.io> as `admin@lab.local`, `dev@lab.local` or
+`viewer@lab.local`, password `password`. To change the lab later, run
+`agentlab configure`.
+
+Finally, connect Claude Code:
+
+```bash
+export NODE_USE_SYSTEM_CA=1   # Node 22.15 or newer
 claude mcp add --transport http muster https://muster.127.0.0.1.nip.io/mcp
-# in Claude Code:  /mcp  ->  authenticate  ->  Dex login page  ->  done
 ```
 
-The portal (<https://backstage.127.0.0.1.nip.io>) signs in the default users
-`admin@lab.local`, `dev@lab.local` and `viewer@lab.local`, password
-`password`. `agentlab down` deletes the cluster.
+In Claude Code, run `/mcp` and sign in on the Dex page. Note that this needs
+the lab's certificate to be trusted. If you said no during `up`, run
+`agentlab trust`.
 
-The full walkthrough, including what `configure` discovers about your
-machine, is in [Getting started](docs/getting-started.md).
+To check that everything works, run `agentlab platform-test`. To delete the
+lab, run `agentlab down`.
 
-## Verify a downloaded release
-
-Every release asset `agentlab-<os>-<arch>` (`.exe` on Windows) ships next to its
-Sigstore bundle `agentlab-<os>-<arch>.bundle`. No checksums file is published: a
-checksum adds no trust beyond GitHub's own asset digest, while the bundle ties the
-binary to a CircleCI build of this repository, the same check `agentlab
-self-update` runs before it installs anything. Release candidates are signed by
-the same identity, so the steps below verify them too.
-
-Download the binary and its bundle into one empty directory, then run
-[cosign](https://docs.sigstore.dev/cosign/system_config/installation/) (v2 or
-newer) from outside it. Never run the binary before it verified:
-
-```bash
-mkdir dl && gh release download v0.96.0 --repo giantswarm/agentlab \
-  -D dl -p 'agentlab-linux-amd64' -p 'agentlab-linux-amd64.bundle'
-
-cosign verify-blob \
-  --bundle dl/agentlab-linux-amd64.bundle \
-  --certificate-oidc-issuer https://oidc.circleci.com \
-  --certificate-identity-regexp '^https://circleci\.com/api/v2/projects/[a-f0-9-]+/pipeline-definitions/[a-f0-9-]+$' \
-  dl/agentlab-linux-amd64
-```
-
-A verified binary prints:
-
-```text
-Verified OK
-```
-
-The builds are signed by CircleCI, not by a GitHub workflow: the certificate's
-identity is a CircleCI pipeline definition and its issuer is
-`https://oidc.circleci.com`. Its GitHub workflow repository extension is empty, so
-`--certificate-github-workflow-repository` fails on these builds, and no cosign
-flag pins the source repository. Check it from the bundle: the certificate's
-source repository URI extension (OID `1.3.6.1.4.1.57264.1.12`) must be
-`github.com/giantswarm/agentlab`.
-
-```bash
-jq -r .verificationMaterial.certificate.rawBytes dl/agentlab-linux-amd64.bundle \
-  | base64 -d | openssl x509 -inform der -noout -text \
-  | grep -A1 '1.3.6.1.4.1.57264.1.12'
-```
-
-```text
-            1.3.6.1.4.1.57264.1.12:
-                ..github.com/giantswarm/agentlab
-```
-
-A verification that fails exits non-zero and prints `Error:` with the reason; the
-binary is not to be used. Pinning another identity (here a GitHub one) fails like
-this, and the message names the identity the bundle carries:
-
-```text
-Error: failed to verify certificate identity: no matching CertificateIdentity found, last error: expected SAN value to match regex "^https://github\.com/giantswarm/", got "https://circleci.com/api/v2/projects/7bdef2bf-7d98-4aca-bf0c-5d3b72cc306b/pipeline-definitions/48087dfd-3bbc-5498-9a9a-f7f1bb77c43d"
-```
-
-A binary that does not match its bundle, or a bundle of another repository's
-build, fails the same way, either at the identity or with a signature error; a
-bundle whose source repository is not `github.com/giantswarm/agentlab` fails the
-check above.
+[Getting started](docs/getting-started.md) has the full walkthrough,
+including what `up` detects on your machine, how to connect with an older
+Node and how to [run without a terminal](docs/getting-started.md#without-a-terminal).
 
 ## Documentation
 
 | Page | What it covers |
 |---|---|
-| [Getting started](docs/getting-started.md) | Requirements, docker CPU and memory, install, what `configure` discovers, the first `up`, connecting Claude Code |
-| [Command reference](docs/cli.md) | Every `agentlab` command and flag, the environment variables, keeping the binary current |
-| [TLS](docs/tls.md) | The lab CA, `trust` and `untrust`, Node and browsers, bringing your own certificate |
-| [The agent platform](docs/platform.md) | muster + mcp-kubernetes: the request path, per-server sign-in, the infrastructure families, toolsets, deviations from a real management cluster, the dev channel (a branch's dev builds), Agent Substrate and the platform Postgres from the chart, Substrate worker nodes (`substrateNodes`) for node-loss proofs |
-| [Agents](docs/agents.md) | The kagent runtime, the default ModelConfig and the API key Secret |
-| [The migration rehearsal](docs/migration-rehearsal.md) | A 3.x lab with the four fleet shapes upgraded in place to the 4.x line: the command sequence, the timings, what the migrate run rewrote, refused and deleted, what an installation's cut-over does differently |
-| [Models](docs/models.md) | Extra model configs, model servers on the host, managed models through model-manager, model serving on llm-d in the lab |
-| [vm-manager](docs/vm-manager.md) | The platform's VM provisioner as a pod of the node: the KVM devices, the image directory, the dev image, the golden PCR recipe, the proof |
-| [klaus-gateway](docs/klaus-gateway.md) | Swarmgeist as the meta chart's component: the values, the two lab Secrets, the OBO link store in a Secret across a pod loss, the dev image, what a lab without a Slack workspace cannot prove |
-| [Observability](docs/observability.md) | Prometheus + mcp-prometheus, and Backstage's metrics views |
-| [Backstage](docs/backstage.md) | The human frontend: the muster plugin, agents and models in the portal, the agent create flow |
-| [Identity](docs/identity.md) | Users and groups, the shared issuer, the Dex version, wiring another app, `trustedPeers` |
-| [Workspaces](docs/workspaces.md) | The workspace storage switch (the NFS server, the NFS CSI driver behind its mTLS proxy, the read-write-many class, the proof) and the workspace-manager's provider instances, a GitHub App of the lab's own and a GitLab |
-| [GitHub sign-in](docs/github-signin.md) | GitHub as a second way into the lab: the App and its callback, the client secret placed as a Secret, what a GitHub user is in the lab |
-| [Troubleshooting](docs/troubleshooting.md) | The gotchas that cost time |
-| [Usage data](docs/telemetry.md) | The anonymous usage signals — one per command, one per platform install naming the chart line, the lab portal's under the same deployment ID — and how to opt out |
-| [Development](docs/development.md) | Repository layout, building and testing, the hack journal |
+| [Getting started](docs/getting-started.md) | Requirements, installing, the first `up`, connecting Claude Code |
+| [Command reference](docs/cli.md) | Every command, flag and environment variable |
+| [Troubleshooting](docs/troubleshooting.md) | Known problems and their fixes |
+| [Verifying a release](docs/verify-release.md) | Checking a downloaded binary with cosign |
+| [The agent platform](docs/platform.md) | The request path, toolsets, unreleased charts and dev builds |
+| [Agents](docs/agents.md) | kagent, the default model and its API key |
+| [Models](docs/models.md) | Model endpoints, models on your machine, serving with llm-d |
+| [Backstage](docs/backstage.md) | The portal, its agents and models pages |
+| [Identity](docs/identity.md) | Users, groups and the Dex login server |
+| [GitHub sign-in](docs/github-signin.md) | Signing in to the lab with GitHub |
+| [TLS](docs/tls.md) | The lab's certificate authority and how to trust it |
+| [Observability](docs/observability.md) | Prometheus and mcp-prometheus |
+| [Workspaces](docs/workspaces.md) | Shared storage for agent workspaces |
+| [vm-manager](docs/vm-manager.md) | KVM virtual machines for agents |
+| [klaus-gateway](docs/klaus-gateway.md) | The Swarmgeist Slack bridge |
+| [The migration rehearsal](docs/migration-rehearsal.md) | Upgrading a 3.x lab in place to the 4.x line |
+| [Usage data](docs/telemetry.md) | What agentlab reports and how to opt out |
+| [Development](docs/development.md) | Building, testing and the repository layout |
 
 ## Development
 
 ```bash
-make build     # CGO_ENABLED=0 go build -o agentlab .: static, as the lab's containers need it
-make test      # go test ./...
-make lint      # golangci-lint as CI's pre-commit runs it: its pinned version, linters and config
+CGO_ENABLED=0 go build -o agentlab .   # the lab's containers need a static binary
+make test
+make lint
 ```
 
-The lab's end-to-end checks are its own `*-test` subcommands, not `go test`.
-Every hack and workaround, with its status, is recorded in
-[HACKS.md](HACKS.md); [CLAUDE.md](CLAUDE.md) briefs coding agents on the
-repository. The layout is in [Development](docs/development.md).
+The lab's end-to-end checks are its `agentlab *-test` commands, not
+`go test`. [HACKS.md](HACKS.md) records every workaround and its status.
+[Development](docs/development.md) has the rest.
 
 ## License
 

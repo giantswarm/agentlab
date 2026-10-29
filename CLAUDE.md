@@ -26,7 +26,8 @@ with Dex doing the logins.
 - The edge serves a lab-CA certificate. Either the CA is in the system trust
   store (one-time `agentlab trust`; then launch Claude Code with
   `NODE_USE_SYSTEM_CA=1`, Node >= 22.15) or launch with
-  `NODE_EXTRA_CA_CERTS=~/.local/state/agentlab/labs/<lab>/certs/ca.crt` — without one of the two the
+  `NODE_EXTRA_CA_CERTS=~/.local/state/agentlab/labs/<lab>/certs/ca.crt` (on
+  macOS under `~/Library/Application Support/agentlab/labs/<lab>/`) — without one of the two the
   connection fails on TLS. (Fallback for a shell without either: the direct,
   edge-bypassing `http://localhost:8090/mcp`.) Never install trust silently:
   `agentlab trust` is the user's explicit, sudo-gated step.

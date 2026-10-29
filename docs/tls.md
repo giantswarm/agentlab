@@ -44,7 +44,8 @@ The CA you are trusting is deliberately narrow:
 
 Skipping the trust step keeps the old behavior: browser warnings once per
 hostname, and `export NODE_EXTRA_CA_CERTS=~/.local/state/agentlab/labs/<lab>/certs/ca.crt` for Node
-clients. The headless `*-test` commands trust `certs/ca.crt` directly and
+clients (on macOS
+`"$HOME/Library/Application Support/agentlab/labs/<lab>/certs/ca.crt"`). The headless `*-test` commands trust `certs/ca.crt` directly and
 never need any of this.
 
 ## No HSTS, one domain per lab

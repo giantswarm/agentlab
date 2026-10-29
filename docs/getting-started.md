@@ -141,7 +141,8 @@ CGO_ENABLED=0 go build -o ~/.local/bin/agentlab .
 Keep it current with `agentlab self-update`, which installs into
 `~/.local/bin` and moves a release installed elsewhere there. Labs live in
 the freedesktop folders — configuration in `~/.config/agentlab`, state (the
-lab CA, kubeconfigs) in `~/.local/state/agentlab` — so `agentlab` runs from any
+lab CA, kubeconfigs) in `~/.local/state/agentlab`, both in
+`~/Library/Application Support/agentlab` on macOS — so `agentlab` runs from any
 directory (see [Where things live](cli.md#where-things-live)). Every command also starts with a
 one-line hint on stderr while a newer release is out — a hint, never a gate:
 an outdated agentlab keeps working (see [Keeping agentlab current](cli.md#keeping-agentlab-current)).
@@ -181,14 +182,26 @@ that):
 
 ```bash
 agentlab trust             # if you said no above: green locks everywhere (one sudo prompt)
-export NODE_USE_SYSTEM_CA=1  # Node >= 22.15 (older Node: export NODE_EXTRA_CA_CERTS=~/.local/state/agentlab/labs/<lab>/certs/ca.crt)
+export NODE_USE_SYSTEM_CA=1  # Node >= 22.15
 claude mcp add --transport http muster https://muster.127.0.0.1.nip.io/mcp
 # in Claude Code:  /mcp  ->  authenticate  ->  Dex login page  ->  done
+```
+
+If your Node is older than 22.15, point it at the lab CA instead of
+`NODE_USE_SYSTEM_CA`:
+
+```bash
+# Linux
+export NODE_EXTRA_CA_CERTS=~/.local/state/agentlab/labs/<lab>/certs/ca.crt
+# macOS
+export NODE_EXTRA_CA_CERTS="$HOME/Library/Application Support/agentlab/labs/<lab>/certs/ca.crt"
 ```
 
 The trust step is optional — see [TLS: one lab CA, trusted
 explicitly](tls.md) for what it does, how to
 revert it (`agentlab untrust`), and the untrusted fallback.
+
+## Without a terminal
 
 Off a terminal (CI, a coding agent, a script) nothing is asked, and a
 missing `agentlab.yaml` is refused: write it first with `agentlab configure
