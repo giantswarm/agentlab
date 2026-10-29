@@ -28,7 +28,9 @@ var (
 // ($XDG_STATE_HOME/agentlab/labs/<name>): its certs/ (the lab CA), state/
 // (kubeconfigs, rendered manifests, the kind node's mounted files) and the
 // rest of what the lab writes. Every command runs in it, so the lab's
-// relative paths hold. Its agentlab.yaml is a link to ConfigFile.
+// relative paths hold. Its agentlab.yaml is a link to ConfigFile — or, on
+// macOS and Windows, where the state folder is the configuration folder,
+// ConfigFile itself.
 func Home(name string) (string, error) {
 	if err := validName(name); err != nil {
 		return "", err
@@ -94,7 +96,9 @@ func (e *CrossDeviceError) Error() string {
 // lab there. A move across file systems is refused before anything moves
 // (*CrossDeviceError); a failure halfway moves back what had moved. An
 // agentlab.yaml that is a file of its own in Home moves to ConfigFile, a
-// link in its place (adoptConfig).
+// link in its place (adoptConfig) — unless it is ConfigFile, as on macOS,
+// where Home is ConfigFile's folder: then it is the lab's configuration and
+// stays a file (#1106).
 func Settle(name, dir string) (string, error) {
 	home, err := Home(name)
 	if err != nil {
@@ -127,10 +131,50 @@ func Settle(name, dir string) (string, error) {
 			return "", err
 		}
 	}
-	if err := adoptConfig(filepath.Join(home, config.File), cfgFile); err != nil {
+	at := filepath.Join(home, config.File)
+	if samePath(at, cfgFile) {
+		// On macOS and Windows the state folder is the configuration
+		// folder (xdg.StateHome), so the Home's agentlab.yaml is the
+		// configuration file itself: already in place, nothing to adopt
+		// or link. Only a link to itself, which releases before this
+		// guard left there, goes: it holds nothing, and every read of
+		// the lab fails on it.
+		return home, dropSelfLink(at)
+	}
+	if err := adoptConfig(at, cfgFile); err != nil {
 		return "", err
 	}
-	return home, link(cfgFile, filepath.Join(home, config.File))
+	return home, link(cfgFile, at)
+}
+
+// samePath reports whether a and b name one entry: the same cleaned path, or
+// the same name in one directory reached by two paths (a folder variable
+// pointing through a link). The entries themselves need not exist.
+func samePath(a, b string) bool {
+	if filepath.Clean(a) == filepath.Clean(b) {
+		return true
+	}
+	if filepath.Base(a) != filepath.Base(b) {
+		return false
+	}
+	da, errA := os.Stat(filepath.Dir(a))
+	db, errB := os.Stat(filepath.Dir(b))
+	return errA == nil && errB == nil && os.SameFile(da, db)
+}
+
+// dropSelfLink removes at when it is a symbolic link to itself.
+func dropSelfLink(at string) error {
+	dest, err := os.Readlink(at)
+	if err != nil {
+		return nil
+	}
+	if !filepath.IsAbs(dest) {
+		dest = filepath.Join(filepath.Dir(at), dest)
+	}
+	if !samePath(dest, at) {
+		return nil
+	}
+	return os.Remove(at)
 }
 
 // ConfigConflictError is Settle's refusal to choose between two different
@@ -154,6 +198,11 @@ func (e *ConfigConflictError) Error() string {
 // refused (*ConfigConflictError) and nothing changes: neither is the lab's
 // configuration for certain.
 func adoptConfig(at, cfgFile string) error {
+	if samePath(at, cfgFile) {
+		// One file, not a copy of it: comparing it with itself would
+		// remove the lab's configuration.
+		return nil
+	}
 	if fi, err := os.Lstat(at); err != nil || !fi.Mode().IsRegular() {
 		return nil
 	}
@@ -229,8 +278,12 @@ func move(dir, home, cfgFile string, configLink bool) error {
 	return nil
 }
 
-// link makes at a symbolic link to target, unless it is one already.
+// link makes at a symbolic link to target, unless it is one already. It
+// never links a path onto itself.
 func link(target, at string) error {
+	if samePath(target, at) {
+		return fmt.Errorf("refusing to link %s to itself", at)
+	}
 	if dest, err := os.Readlink(at); err == nil && dest == target {
 		return nil
 	}

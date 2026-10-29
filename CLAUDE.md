@@ -284,7 +284,9 @@ The lab's own e2e checks are the `*-test` subcommands, not `go test`.
   registered lab, a picker on a terminal) and `Settle`: a lab lives in
   `$XDG_STATE_HOME/agentlab/labs/<name>` (its directory: `certs/`, `state/`)
   with its `agentlab.yaml` in `$XDG_CONFIG_HOME/agentlab/labs/<name>/`, linked
-  from the directory. A lab elsewhere moves there by renames on the first
+  from the directory. On macOS (no `$XDG_STATE_HOME`) both are one folder and
+  the directory holds the file itself: `Settle` never adopts or links a path
+  onto itself (#1106); its tests cover that with one folder for both. A lab elsewhere moves there by renames on the first
   command that enters it, leaving links at the old paths — the kind node
   mounts `certs/` and `state/node` by absolute path, and an older release run
   there still finds the lab. An `agentlab.yaml` file of its own in the lab
