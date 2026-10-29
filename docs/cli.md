@@ -69,7 +69,8 @@ named `agentlab` — or the first free `agentlab-<n>` when another lab holds
 that name — unless `configure --cluster-name <name>` names it. A
 `clusterName` another lab holds is refused, naming both directories — the two
 would collide on the kind cluster and its ports. `down` keeps the
-registration (the lab still exists); a lab whose directory or
+registration (the lab still exists), and `down --purge` removes it with the
+lab; a lab whose directory or
 `agentlab.yaml` is gone is neither offered nor listed, and back once its
 `agentlab.yaml` is (the next registration drops the entries still gone).
 `agentlab list` also shows every kind cluster no registered lab names, marked
@@ -179,7 +180,7 @@ one helper — see [Agents](agents.md).
 
 | Command | What it does |
 |---|---|
-| `down` | Destroy the kind cluster. `certs/` is kept and the trust stores are untouched. |
+| `down` | Destroy the kind cluster. `certs/` is kept and the trust stores are untouched. With `--purge`, remove the lab for good: the cluster, then its CA from the trust stores (sudo may prompt), then its directory, its configuration and its registration, so `list` no longer shows it. A lab outside agentlab's folders is refused before anything changes. |
 | `untrust` | Remove exactly the lab CA from the system and browser trust stores. |
 | `platform-down` | Remove the agent platform in the chart's ordered teardown, leaving Dex and the cluster alone. The workspace storage goes with it (its namespace, classes, CSIDriver and CRDs), and the driver's mounts and volume bytes are cleaned off the node; `down` cleans the node the same way before the cluster is deleted. |
 

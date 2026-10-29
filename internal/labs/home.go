@@ -145,6 +145,36 @@ func Settle(name, dir string) (string, error) {
 	return home, link(cfgFile, at)
 }
 
+// Remove deletes the lab of that name for good: its Home with certs/ and
+// state/, its configuration folder and its registry entry. A lab registered
+// to a directory other than its Home (one Settle left where it was) is
+// refused and nothing changes: that directory may hold more than the lab.
+func Remove(name string) error {
+	home, err := Home(name)
+	if err != nil {
+		return err
+	}
+	cfgFile, err := ConfigFile(name)
+	if err != nil {
+		return err
+	}
+	reg, err := read()
+	if err != nil {
+		return err
+	}
+	if dir, ok := reg.Labs[name]; ok && dir != home {
+		return fmt.Errorf("lab %s lives in %s, outside agentlab's folders, and that directory may hold more than the lab; delete what you no longer need there by hand", name, dir)
+	}
+	if err := os.RemoveAll(home); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(filepath.Dir(cfgFile)); err != nil {
+		return err
+	}
+	delete(reg.Labs, name)
+	return write(reg)
+}
+
 // ConfigConflictError is Settle's refusal to choose between two different
 // agentlab.yaml files of one lab: a file of its own in the lab's Home and
 // the one in the configuration folder. Both stay as they are.
