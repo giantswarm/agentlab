@@ -127,10 +127,22 @@ func Settle(name, dir string) (string, error) {
 			return "", err
 		}
 	}
-	if err := adoptConfig(filepath.Join(home, config.File), cfgFile); err != nil {
+	at := filepath.Join(home, config.File)
+	if at == cfgFile {
+		// On macOS the state folder is the configuration folder, so the
+		// Home's agentlab.yaml is the configuration file itself: adopting
+		// it would delete it and the link would point at itself, which
+		// releases from v0.120.0 did. Such a link goes; configure writes
+		// the file again.
+		if dest, err := os.Readlink(at); err == nil && dest == at {
+			return home, os.Remove(at)
+		}
+		return home, nil
+	}
+	if err := adoptConfig(at, cfgFile); err != nil {
 		return "", err
 	}
-	return home, link(cfgFile, filepath.Join(home, config.File))
+	return home, link(cfgFile, at)
 }
 
 // ConfigConflictError is Settle's refusal to choose between two different
