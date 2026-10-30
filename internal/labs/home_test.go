@@ -264,3 +264,43 @@ func TestSettleAdoptsTheAgentlabYAMLOfAHome(t *testing.T) {
 		})
 	}
 }
+
+// On macOS the configuration and state folders are one folder, so a lab's
+// Home holds its configuration file itself: a lab moves there with its
+// agentlab.yaml intact, a second Settle keeps it, and a link to itself that
+// an earlier release left in its place goes.
+func TestSettleWithOneFolderForConfigurationAndState(t *testing.T) {
+	setup(t)
+	shared := t.TempDir()
+	configHome = func() (string, error) { return shared, nil }
+	stateHome = func() (string, error) { return shared, nil }
+	dir := t.TempDir()
+	writeConfig(t, dir, "mac")
+
+	home, err := Settle("mac", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if cfg, err := config.Peek(home); err != nil || cfg.ClusterName != "mac" {
+			t.Fatalf("Peek(Home) = %v, %v", cfg, err)
+		}
+		if _, err := Settle("mac", home); err != nil {
+			t.Fatalf("a second Settle: %v", err)
+		}
+	}
+
+	at := filepath.Join(home, config.File)
+	if err := os.Remove(at); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(at, at); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Settle("mac", home); err != nil {
+		t.Fatalf("Settle over the self-link: %v", err)
+	}
+	if _, err := os.Lstat(at); !os.IsNotExist(err) {
+		t.Errorf("the self-link is still at %s: %v", at, err)
+	}
+}
