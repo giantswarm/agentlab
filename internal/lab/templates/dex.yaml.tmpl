@@ -133,6 +133,12 @@ stringData:
         redirectURIs:
           - {{ .MusterBaseURL }}/oauth/callback
           - {{ .BackstageBaseURL }}/api/auth/oidc-agent-platform/handler/frame
+          {{- with .BackstageLocalDevURL }}
+          # A Backstage run with hot reload from a checkout on this machine
+          # (`agentlab portal dev`, backstage.localDevPort;
+          # docs/dev-environment.md "Hot reload: `agentlab portal dev`").
+          - {{ . }}/api/auth/oidc-agent-platform/handler/frame
+          {{- end }}
           # muster's OAuth *proxy* callback (its client role): the sign-in
           # fixture pins Dex as its authorization server with this very
           # client (oauth-fixture.yaml.tmpl), so a per-server sign-in can
