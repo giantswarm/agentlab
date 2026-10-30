@@ -1178,7 +1178,14 @@ klausGateway:
 {{- if .Backstage.Enabled }}
 backstage:
   # The connectivity chart's wiring keys (dropped from the values the
-  # backstage chart receives). The chart default requests the
+  # backstage chart receives).
+  # The portal's public hostname (config.PortalHostname — the same constant
+  # BackstageBaseURL builds from, so this spelling, the Dex redirect URI and
+  # the overlay's baseUrl can never diverge). The chart default would be
+  # backstage.<domain>; this key drives the portal HTTPRoute's hostname and
+  # the chart app-config's baseUrl/CORS in one place.
+  hostname: {{ .PortalHostname }}
+  # The chart default requests the
   # dex-k8s-authenticator cross-client audience (Giant Swarm apiservers trust
   # that client id). This lab's apiserver trusts client id `kubernetes`, so
   # that audience is added on top for the Kubernetes plugin's token minting;

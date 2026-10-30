@@ -228,6 +228,12 @@ whole lab. Neither can be raised from inside the node.
   `agentlab.yaml` that way (its `certs/` and `state/` are intact): configure it
   again the same way, under the same name.
 
+- **After updating: the portal moved to `portal.<domain>`** — this release
+  serves the portal at `https://portal.<domain>` instead of
+  `https://backstage.<domain>`. An existing lab keeps the old route and Dex
+  redirect URI until its manifests are re-rendered — `agentlab list` and
+  `open portal` already name the new URL — so move it over once:
+  `agentlab platform && agentlab reload`. A fresh `agentlab up` needs nothing.
 - **`agentlab.yaml names a field this agentlab release does not know`** — the
   file was written by a newer release (a switch this release lacks, such as
   `platform.serving`). Every run writes the file back, so a release that did not

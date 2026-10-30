@@ -10,7 +10,7 @@ which is the whole reason to run a portal in this lab at all.
 
 ```bash
 agentlab up            # the whole stack, Backstage included
-open https://backstage.127.0.0.1.nip.io
+open https://portal.127.0.0.1.nip.io
 ```
 
 The image is published **anonymously** to `gsoci.azurecr.io/giantswarm/backstage`

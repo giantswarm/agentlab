@@ -142,7 +142,7 @@ claude mcp add --transport http muster https://muster.127.0.0.1.nip.io/mcp
 # in Claude Code:  /mcp  ->  authenticate  ->  Dex login page  ->  done
 ```
 
-The portal (<https://backstage.127.0.0.1.nip.io>) signs in the default users
+The portal (<https://portal.127.0.0.1.nip.io>) signs in the default users
 `admin@lab.local`, `dev@lab.local` and `viewer@lab.local`, password
 `password`. `agentlab down` deletes the cluster.
 

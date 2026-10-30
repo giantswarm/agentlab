@@ -236,7 +236,7 @@ Applied to the configuration:
   back to 8443). A port another registered lab's `agentlab.yaml` records
   counts as occupied too, running or stopped, so two labs on one machine can
   always be up together. When the edge leaves 443, every public URL in these docs
-  gains that port suffix (`https://backstage.127.0.0.1.nip.io:8443`); the
+  gains that port suffix (`https://portal.127.0.0.1.nip.io:8443`); the
   lab's edge Service serves that port in-cluster as well, so the ported URLs
   resolve from pods too and every proof still passes. Once the cluster exists
   its mappings are fixed at node creation, so the ports it publishes never
@@ -252,8 +252,8 @@ Applied to the configuration:
   registered lab records moves: lab *n* takes its own loopback address and
   the domain that resolves to it, `127.0.0.<n>` and `lab<n>.127.0.0.<n>.nip.io`,
   with the edge on 443 there. The first lab serves
-  `https://backstage.127.0.0.1.nip.io`, a second one
-  `https://backstage.lab2.127.0.0.2.nip.io` — no port in any URL — its
+  `https://portal.127.0.0.1.nip.io`, a second one
+  `https://portal.lab2.127.0.0.2.nip.io` — no port in any URL — its
   muster, GitHub App and OAuth callback URLs with it. Each lab is its own site
   in the browser: cookies, a trusted CA and its sign-ins never cross over.
   Linux routes all of 127.0.0.0/8 to loopback; where only 127.0.0.1 binds
