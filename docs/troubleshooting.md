@@ -211,6 +211,23 @@ whole lab. Neither can be raised from inside the node.
 
 ## agentlab.yaml and the release running it
 
+- **`open agentlab.yaml: too many levels of symbolic links`** (macOS) — a
+  release from v0.120.0 up to the fix of
+  [#1106](https://github.com/giantswarm/agentlab/issues/1106) made the lab's
+  `agentlab.yaml` in `~/Library/Application Support/agentlab/labs/<lab>/` a
+  link to itself: on macOS the lab's directory and its configuration folder are
+  the same folder. The link holds nothing. Update agentlab, then run
+  `agentlab configure --cluster-name <lab>` from a directory without an
+  `agentlab.yaml`: it removes the link and writes the configuration again under
+  that name. Or remove the link yourself
+  (`rm "$HOME/Library/Application Support/agentlab/labs/<lab>/agentlab.yaml"`)
+  and configure the lab again. A command run in the lab's directory, or in the
+  old directory of a lab moved there, stops at the link before it can remove
+  it, and `--lab <lab>` does not find the lab while the link is there. A lab
+  from before the freedesktop folders that a broken release moved lost its
+  `agentlab.yaml` that way (its `certs/` and `state/` are intact): configure it
+  again the same way, under the same name.
+
 - **`agentlab.yaml names a field this agentlab release does not know`** — the
   file was written by a newer release (a switch this release lacks, such as
   `platform.serving`). Every run writes the file back, so a release that did not

@@ -284,17 +284,19 @@ The lab's own e2e checks are the `*-test` subcommands, not `go test`.
   registered lab, a picker on a terminal) and `Settle`: a lab lives in
   `$XDG_STATE_HOME/agentlab/labs/<name>` (its directory: `certs/`, `state/`)
   with its `agentlab.yaml` in `$XDG_CONFIG_HOME/agentlab/labs/<name>/`, linked
-  from the directory. A lab elsewhere moves there by renames on the first
-  command that enters it, leaving links at the old paths — the kind node
-  mounts `certs/` and `state/node` by absolute path, and an older release run
-  there still finds the lab. An `agentlab.yaml` file of its own in the lab
-  directory moves to the configuration folder, the link in its place; one
-  differing from the configuration folder's is refused, both kept
-  (`adoptConfig`). The command then changes into the lab
-  directory, so the lab's cwd-relative paths hold. The read-only commands
-  (`trust`, `status`, `open`, `pods`, `logs`, `list`) read an `agentlab.yaml`
-  a newer release wrote (`config.LoadReadOnly`, `Peek`); every writer keeps
-  the strict refusal.
+  from the directory. On macOS (no `$XDG_STATE_HOME`) both are one folder and
+  the directory holds the file itself: `Settle` never adopts, moves or links
+  a path onto itself (#1106); its tests cover that with one folder for both.
+  A lab elsewhere moves there by renames on the first command that enters
+  it, leaving links at the old paths — the kind node mounts `certs/` and
+  `state/node` by absolute path, and an older release run there still finds
+  the lab. An `agentlab.yaml` file of its own in the lab directory moves to
+  the configuration folder, the link in its place; one differing from the
+  configuration folder's is refused, both kept (`adoptConfig`). The command
+  then changes into the lab directory, so the lab's cwd-relative paths hold.
+  The read-only commands (`trust`, `status`, `open`, `pods`, `logs`, `list`)
+  read an `agentlab.yaml` a newer release wrote (`config.LoadReadOnly`,
+  `Peek`); every writer keeps the strict refusal.
 - `internal/telemetry` — anonymous usage signals to TelemetryDeck
   (giantswarm/telemetrydeck-go). One per user-facing command, kubectl-gs's
   signal shape: `GiantSwarm.command` with the command path and the version

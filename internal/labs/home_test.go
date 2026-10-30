@@ -264,3 +264,258 @@ func TestSettleAdoptsTheAgentlabYAMLOfAHome(t *testing.T) {
 		})
 	}
 }
+
+// sharedFolders points the configuration and the state folder at one
+// directory, as on macOS (xdg.StateHome falls back to xdg.ConfigHome): a
+// lab's Home is then its ConfigFile's folder.
+func sharedFolders(t *testing.T) (cwd string) {
+	t.Helper()
+	cwd = setup(t)
+	dir := t.TempDir()
+	configHome = func() (string, error) { return dir, nil }
+	stateHome = func() (string, error) { return dir, nil }
+	return cwd
+}
+
+// wantConfigFile fails unless the lab's ConfigFile is a regular file
+// holding content.
+func wantConfigFile(t *testing.T, name, content string) {
+	t.Helper()
+	cfgFile, _ := ConfigFile(name)
+	fi, err := os.Lstat(cfgFile)
+	if err != nil || !fi.Mode().IsRegular() {
+		dest, _ := os.Readlink(cfgFile)
+		t.Fatalf("%s is no regular file (%v, links to %q)", cfgFile, err, dest)
+	}
+	if b, err := os.ReadFile(filepath.Clean(cfgFile)); err != nil || string(b) != content {
+		t.Errorf("%s = %q, %v; want %q", cfgFile, b, err, content)
+	}
+}
+
+// With the configuration and the state in one folder (macOS), a lab's
+// agentlab.yaml is never linked onto itself nor removed as a copy of
+// itself: a new lab, an old-layout lab moved in, a lab settled again, a
+// rename, a self-link an earlier release left behind, absolute or relative,
+// and a link of the person's own to another file, which stays (#1106).
+func TestSettleWithOneFolderForConfigurationAndState(t *testing.T) {
+	t.Run("a new lab", func(t *testing.T) {
+		cwd := sharedFolders(t)
+		home, err := Settle("fresh", cwd)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Lstat(filepath.Join(home, config.File)); !os.IsNotExist(err) {
+			t.Fatalf("a new lab's Home holds an agentlab.yaml before it is saved: %v", err)
+		}
+		writeConfig(t, home, "fresh")
+		wantConfigFile(t, "fresh", "clusterName: fresh\n")
+		if again, err := Settle("fresh", home); err != nil || again != home {
+			t.Errorf("a second Settle = %s, %v", again, err)
+		}
+		wantConfigFile(t, "fresh", "clusterName: fresh\n")
+	})
+
+	t.Run("an old-layout lab moved in", func(t *testing.T) {
+		sharedFolders(t)
+		dir := t.TempDir()
+		writeConfig(t, dir, "old")
+		if err := os.MkdirAll(filepath.Join(dir, "certs"), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "certs", "ca.crt"), []byte("ca"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		home, err := Settle("old", dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantConfigFile(t, "old", "clusterName: old\n")
+		cfgFile, _ := ConfigFile("old")
+		if dest, err := os.Readlink(filepath.Join(dir, config.File)); err != nil || dest != cfgFile {
+			t.Errorf("the old directory's agentlab.yaml links to %q (%v), want %s", dest, err, cfgFile)
+		}
+		if cfg, err := config.Peek(dir); err != nil || cfg.ClusterName != "old" {
+			t.Errorf("Peek(old directory) = %v, %v", cfg, err)
+		}
+		if b, err := os.ReadFile(filepath.Clean(filepath.Join(home, "certs", "ca.crt"))); err != nil || string(b) != "ca" {
+			t.Errorf("certs/ca.crt in the Home = %q, %v", b, err)
+		}
+		if again, err := Settle("old", home); err != nil || again != home {
+			t.Errorf("a second Settle = %s, %v", again, err)
+		}
+		wantConfigFile(t, "old", "clusterName: old\n")
+	})
+
+	t.Run("a lab in its Home, settled twice", func(t *testing.T) {
+		sharedFolders(t)
+		home, _ := Home("lab")
+		if err := os.MkdirAll(home, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		writeConfig(t, home, "lab")
+		for range 2 {
+			if got, err := Settle("lab", home); err != nil || got != home {
+				t.Fatalf("Settle = %s, %v; want %s", got, err, home)
+			}
+			wantConfigFile(t, "lab", "clusterName: lab\n")
+		}
+	})
+
+	t.Run("a self-link from an earlier release", func(t *testing.T) {
+		sharedFolders(t)
+		home, _ := Home("broken")
+		cfgFile, _ := ConfigFile("broken")
+		if err := os.MkdirAll(home, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(cfgFile, cfgFile); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Settle("broken", home); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Lstat(cfgFile); !os.IsNotExist(err) {
+			t.Fatalf("the self-link at %s is still there: %v", cfgFile, err)
+		}
+		writeConfig(t, home, "broken")
+		wantConfigFile(t, "broken", "clusterName: broken\n")
+	})
+
+	t.Run("a relative self-link from an earlier release", func(t *testing.T) {
+		sharedFolders(t)
+		home, _ := Home("relative")
+		cfgFile, _ := ConfigFile("relative")
+		if err := os.MkdirAll(home, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(config.File, cfgFile); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Settle("relative", home); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Lstat(cfgFile); !os.IsNotExist(err) {
+			t.Fatalf("the self-link at %s is still there: %v", cfgFile, err)
+		}
+	})
+
+	t.Run("a link to another file stays", func(t *testing.T) {
+		sharedFolders(t)
+		home, _ := Home("own")
+		cfgFile, _ := ConfigFile("own")
+		if err := os.MkdirAll(home, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		other := filepath.Join(t.TempDir(), "own.yaml")
+		if err := os.WriteFile(other, []byte("clusterName: own\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(other, cfgFile); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := Settle("own", home); err != nil || got != home {
+			t.Fatalf("Settle = %s, %v; want %s", got, err, home)
+		}
+		if dest, err := os.Readlink(cfgFile); err != nil || dest != other {
+			t.Errorf("%s links to %q (%v), want %s", cfgFile, dest, err, other)
+		}
+		if cfg, err := config.Peek(home); err != nil || cfg.ClusterName != "own" {
+			t.Errorf("Peek(Home) = %v, %v", cfg, err)
+		}
+	})
+
+	t.Run("a rename", func(t *testing.T) {
+		cwd := sharedFolders(t)
+		oldHome, err := Settle("before", cwd)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeConfig(t, oldHome, "after")
+		if err := os.MkdirAll(filepath.Join(oldHome, "certs"), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := Register("before", oldHome); err != nil {
+			t.Fatal(err)
+		}
+		home, err := Settle("after", oldHome)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantConfigFile(t, "after", "clusterName: after\n")
+		if isLab(oldHome) {
+			t.Errorf("the old Home %s still holds an agentlab.yaml", oldHome)
+		}
+		if fi, err := os.Stat(filepath.Join(home, "certs")); err != nil || !fi.IsDir() {
+			t.Errorf("certs/ did not move to %s: %v", home, err)
+		}
+	})
+
+	t.Run("the state moved out by $XDG_STATE_HOME", func(t *testing.T) {
+		sharedFolders(t)
+		home, _ := Home("lab")
+		if err := os.MkdirAll(filepath.Join(home, "certs"), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		writeConfig(t, home, "lab")
+		if err := os.WriteFile(filepath.Join(home, "certs", "ca.crt"), []byte("ca"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		state := t.TempDir()
+		stateHome = func() (string, error) { return state, nil }
+		newHome, err := Settle("lab", home)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if newHome == home {
+			t.Fatalf("Settle = %s, want the lab in %s", newHome, state)
+		}
+		wantConfigFile(t, "lab", "clusterName: lab\n")
+		cfgFile, _ := ConfigFile("lab")
+		if dest, err := os.Readlink(filepath.Join(newHome, config.File)); err != nil || dest != cfgFile {
+			t.Errorf("the new Home's agentlab.yaml links to %q (%v), want %s", dest, err, cfgFile)
+		}
+		if b, err := os.ReadFile(filepath.Clean(filepath.Join(newHome, "certs", "ca.crt"))); err != nil || string(b) != "ca" {
+			t.Errorf("certs/ca.crt in the new Home = %q, %v", b, err)
+		}
+		if dest, err := os.Readlink(filepath.Join(home, "certs")); err != nil || dest != filepath.Join(newHome, "certs") {
+			t.Errorf("the old certs/ links to %q (%v), want the new Home's", dest, err)
+		}
+	})
+}
+
+// With the state folder reached through a link to the configuration folder
+// (a folder variable naming a link), a lab's Home and its ConfigFile's folder
+// are one directory under two paths: a new lab's agentlab.yaml is never
+// linked onto itself, and the self-link an earlier release made there goes.
+func TestSettleWithOneFolderReachedByTwoPaths(t *testing.T) {
+	setup(t)
+	dir := t.TempDir()
+	via := filepath.Join(t.TempDir(), "via")
+	if err := os.Symlink(dir, via); err != nil {
+		t.Fatal(err)
+	}
+	configHome = func() (string, error) { return dir, nil }
+	stateHome = func() (string, error) { return via, nil }
+
+	home, err := Settle("fresh", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeConfig(t, home, "fresh")
+	wantConfigFile(t, "fresh", "clusterName: fresh\n")
+
+	broken, _ := Home("broken")
+	cfgFile, _ := ConfigFile("broken")
+	if err := os.MkdirAll(broken, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(cfgFile, filepath.Join(broken, config.File)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Settle("broken", broken); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(cfgFile); !os.IsNotExist(err) {
+		t.Fatalf("the self-link at %s is still there: %v", cfgFile, err)
+	}
+}

@@ -20,7 +20,12 @@ machine (each `XDG_*` variable counts when it holds an absolute path):
 | The update check's cache | `~/.cache/agentlab/` (`$XDG_CACHE_HOME`) |
 
 On macOS the configuration and the state are under `~/Library/Application
-Support/agentlab/`, the cache under `~/Library/Caches/agentlab/`.
+Support/agentlab/`, the cache under `~/Library/Caches/agentlab/`. A lab's
+directory is then its configuration's folder too, and its `agentlab.yaml` is
+the file itself, not a link. `$XDG_STATE_HOME`, when set to an absolute path,
+moves the state out of it: an existing lab's `certs/` and `state/` move to the
+new folder on its next command, links left in their place, and its
+`agentlab.yaml` stays where it is, linked from the new directory.
 
 A lab is its name: it keeps its directory, and with it its CA, across `down`
 and `up`. A lab from before these folders — a checkout, a directory of its
