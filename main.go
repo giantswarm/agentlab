@@ -119,6 +119,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		inGroup(groupEveryday, logsCmd()),
 		inGroup(groupEveryday, loginCmd()),
 		inGroup(groupEveryday, turnCmd()),
+		inGroup(groupEveryday, portalCmd()),
 
 		inGroup(groupTesting, labCmd("test", "Assert RBAC for every configured user (token from Dex, kubectl auth can-i)", lab.Test)),
 		inGroup(groupTesting, platformTestCmd()),
@@ -2314,6 +2315,84 @@ step fails or is not wanted, or to repeat only the chat steps.`,
 	}
 	cmd.Flags().StringVar(&opts.Agent, "agent", "", "an existing agent as <namespace>/<name> (namespace kagent): skip the create and teardown steps and prove the roster and the chat on it, leaving it in place")
 	return cmd
+}
+
+// portalCmd runs a giantswarm/backstage checkout against the lab: with hot
+// reload (dev) or as the image it ships as (build). Not `backstage`: that
+// name is retired (main_test.go). docs/backstage.md "Your own Backstage in
+// the lab".
+func portalCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "portal",
+		Short: "Run your Backstage checkout against the lab: with hot reload (dev) or as a dev image (build)",
+		Args:  cobra.NoArgs,
+	}
+	cmd.AddCommand(portalDevCmd(), portalBuildCmd())
+	return cmd
+}
+
+func portalDevCmd() *cobra.Command {
+	var checkout string
+	var port int
+	cmd := &cobra.Command{
+		Use:   "dev",
+		Short: "Run the checkout's yarn start against the lab (Dex sign-in, muster, kagent, the apiserver), with hot reload",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := absCheckout(&checkout); err != nil {
+				return err
+			}
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			return lab.BackstageDev(cfg, checkout, port)
+		},
+	}
+	cmd.Flags().StringVar(&checkout, "checkout", "../backstage", "path to the giantswarm/backstage checkout, resolved against the current directory (default: a sibling of it)")
+	cmd.Flags().IntVar(&port, "port", 0, fmt.Sprintf("the local backend's port, recorded as backstage.localDevPort and registered on Dex (default: the recorded one, else %d)", config.DefaultBackstageLocalDevPort))
+	return cmd
+}
+
+func portalBuildCmd() *cobra.Command {
+	var checkout string
+	var noApply bool
+	var trust, open bool
+	cmd := &cobra.Command{
+		Use:   "build",
+		Short: "Build the checkout's image as its CI does, record it as platform.devImages.backstage and roll it into the lab",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := absCheckout(&checkout); err != nil {
+				return err
+			}
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			if err := lab.RequireLabCerts(cfg); err != nil {
+				return err
+			}
+			return lab.BackstageBuild(cfg, checkout, noApply, offersFromFlags(cmd, &trust, &open))
+		},
+	}
+	cmd.Flags().StringVar(&checkout, "checkout", "../backstage", "path to the giantswarm/backstage checkout, resolved against the current directory (default: a sibling of it)")
+	cmd.Flags().BoolVar(&noApply, "no-apply", false, "build and record the image only; `agentlab platform` rolls it in")
+	addOfferFlags(cmd, &trust, &open)
+	return cmd
+}
+
+// absCheckout resolves --checkout — the default included — against the
+// shell's directory, before loadConfig changes into the lab's: a lab settles
+// under $XDG_STATE_HOME (internal/labs), where `../backstage` is nobody's
+// checkout.
+func absCheckout(checkout *string) error {
+	abs, err := filepath.Abs(*checkout)
+	if err != nil {
+		return err
+	}
+	*checkout = abs
+	return nil
 }
 
 func logsCmd() *cobra.Command {

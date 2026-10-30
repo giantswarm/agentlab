@@ -1532,6 +1532,13 @@ type Backstage struct {
 	// the agent-platform chart turns off and the Backstage app ships off: the
 	// portal's installations e2e specs drive it (AGENTLAB_INSTALLATIONS_PAGE=1).
 	InstallationsPage bool `yaml:"installationsPage,omitempty"`
+	// LocalDevPort is the backend port of a Backstage run with hot reload
+	// from a checkout on this machine against the lab (`agentlab portal
+	// dev`), 0 for none. It registers that backend's sign-in callback on
+	// Dex's agent-platform client, so the local portal signs in as the
+	// in-cluster one does. It cannot be Port: kind publishes that one for
+	// the in-cluster pod.
+	LocalDevPort int `yaml:"localDevPort,omitempty"`
 }
 
 // The Backstage portal modes (backstage.portal).
@@ -1546,6 +1553,16 @@ var PortalModes = []string{PortalAgentPlatform, PortalClassic}
 // AgentPlatformPortal reports whether the portal serves the Agent Platform
 // shell (app.portals.agentPlatform).
 func (b Backstage) AgentPlatformPortal() bool { return b.Portal != PortalClassic }
+
+// DefaultBackstageLocalDevPort is the backend port `agentlab portal dev`
+// picks when backstage.localDevPort is unset: next to Backstage's own 7007,
+// which the in-cluster pod holds.
+const DefaultBackstageLocalDevPort = 7017
+
+// BackstageFrontendPort is where the hot-reload run's `yarn start` serves
+// the frontend; backstage.localDevPort cannot take it. The lab's
+// backstageFrontendURL is built from it, so the two stay in agreement.
+const BackstageFrontendPort = 3000
 
 type Config struct {
 	// Kind cluster name; also prefixes RBAC bindings and names the muster
@@ -2512,6 +2529,30 @@ func (c *Config) Validate() error {
 	if c.Backstage.Portal != "" && !slices.Contains(PortalModes, c.Backstage.Portal) {
 		return fmt.Errorf("backstage.portal: %q is no portal mode (%s)", c.Backstage.Portal, strings.Join(PortalModes, ", "))
 	}
+	if c.Backstage.LocalDevPort != 0 {
+		if err := ValidatePort(strconv.Itoa(c.Backstage.LocalDevPort)); err != nil {
+			return fmt.Errorf("backstage.localDevPort: %w", err)
+		}
+		// Refuse the ports the lab (or the hot-reload run itself) already
+		// holds here, where the config is saved — not later at bind, after
+		// agentlab.yaml and Dex were already changed.
+		for _, held := range []struct {
+			port int
+			what string
+		}{
+			{c.Backstage.Port, "backstage.port, which kind publishes for the in-cluster Backstage"},
+			{BackstageFrontendPort, "where the hot-reload frontend itself serves"},
+			{c.DexPort, "dexPort, the Dex issuer's"},
+			{c.APIServerPort, "apiServerPort, the apiserver's"},
+			{c.Platform.MusterPort, "platform.musterPort, muster's host port"},
+			{c.Platform.GatewayPort, "platform.gatewayPort, the edge's"},
+			{c.Platform.AgentsPort, "platform.agentsPort, the kagent UI's"},
+		} {
+			if c.Backstage.LocalDevPort == held.port {
+				return fmt.Errorf("backstage.localDevPort: %d is %s", c.Backstage.LocalDevPort, held.what)
+			}
+		}
+	}
 	return nil
 }
 
@@ -3031,6 +3072,16 @@ func (c *Config) AgentgatewayBaseURL() string { return c.gatewayURL("agentgatewa
 // debugging.
 func (c *Config) BackstageDirectURL() string {
 	return fmt.Sprintf("http://localhost:%d", c.Backstage.Port)
+}
+
+// BackstageLocalDevURL is the backend URL of a Backstage run with hot reload
+// from a checkout on this machine (backstage.localDevPort), "" when none is
+// configured.
+func (c *Config) BackstageLocalDevURL() string {
+	if c.Backstage.LocalDevPort == 0 {
+		return ""
+	}
+	return fmt.Sprintf("http://localhost:%d", c.Backstage.LocalDevPort)
 }
 
 func (c *Config) KagentUIBaseURL() string {
