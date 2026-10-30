@@ -70,8 +70,8 @@ func TestBackstageOverlayBaseURLFollowsGatewayPort(t *testing.T) {
 		port int
 		want string
 	}{
-		{443, "https://backstage.127.0.0.1.nip.io"},
-		{8443, "https://backstage.127.0.0.1.nip.io:8443"},
+		{443, "https://portal.127.0.0.1.nip.io"},
+		{8443, "https://portal.127.0.0.1.nip.io:8443"},
 	} {
 		t.Run(fmt.Sprint(tc.port), func(t *testing.T) {
 			cfg := config.Default()
@@ -97,6 +97,38 @@ func TestBackstageOverlayBaseURLFollowsGatewayPort(t *testing.T) {
 			redirect := "- " + tc.want + "/api/auth/oidc-agent-platform/handler/frame"
 			if !strings.Contains(string(dexRaw), redirect) {
 				t.Errorf("Dex client redirectURI %q not registered:\n%s", redirect, dexRaw)
+			}
+		})
+	}
+}
+
+// TestPlatformValuesPortalHostname pins the rendered values' portal hostname
+// to BackstageBaseURL: backstage.hostname (the connectivity chart's key behind
+// the HTTPRoute hostname and the chart app-config's baseUrl/CORS) must be the
+// very host the Dex redirect URI and the lab's app-config overlay are built
+// from, or logins break out of the box.
+func TestPlatformValuesPortalHostname(t *testing.T) {
+	for _, port := range []int{443, 8443} {
+		t.Run(fmt.Sprint(port), func(t *testing.T) {
+			cfg := config.Default()
+			cfg.Platform.GatewayPort = port
+			raw, err := renderTemplate(cfg, "agent-platform-values.yaml.tmpl", nil)
+			if err != nil {
+				t.Fatalf("render: %v", err)
+			}
+			var values struct {
+				Backstage struct {
+					Hostname string `yaml:"hostname"`
+				} `yaml:"backstage"`
+			}
+			if err := yaml.Unmarshal(raw, &values); err != nil {
+				t.Fatalf("values are not YAML: %v\n%s", err, raw)
+			}
+			if values.Backstage.Hostname != cfg.PortalHostname() {
+				t.Errorf("backstage.hostname = %q, want %q (config.PortalHostname)", values.Backstage.Hostname, cfg.PortalHostname())
+			}
+			if want := "https://" + cfg.PortalHostname(); cfg.BackstageBaseURL() != want && !strings.HasPrefix(cfg.BackstageBaseURL(), want+":") {
+				t.Errorf("BackstageBaseURL() = %q does not serve the hostname %q the chart routes", cfg.BackstageBaseURL(), cfg.PortalHostname())
 			}
 		})
 	}

@@ -440,7 +440,7 @@ type Platform struct {
 	// the agentgateway edge on GatewayPort.
 	MusterPort int `yaml:"musterPort"`
 	// The platform's public domain. Every public hostname derives from it
-	// (muster.<domain>, backstage.<domain>, ...). The default, nip.io's
+	// (muster.<domain>, portal.<domain>, ...). The default, nip.io's
 	// loopback wildcard, resolves to 127.0.0.1 from anywhere without host
 	// configuration; inside pods a CoreDNS rewrite points the same names at
 	// the edge Gateway Service.
@@ -3026,15 +3026,23 @@ func (c *Config) GatewayHostAddress() string {
 	return DefaultGatewayAddress
 }
 
+// hostname composes a platform hostname, <prefix>.<domain>. Every public
+// hostname — gatewayURL's and the bare ones the rendered values carry
+// (PortalHostname) — goes through here, so a URL and the chart's route can
+// never compose the host differently.
+func (c *Config) hostname(prefix string) string {
+	return prefix + "." + c.Platform.Domain
+}
+
 // gatewayURL builds the public URL of a platform hostname: through the
 // agentgateway edge, port-free when the edge sits on 443. The chart's
 // Backstage app-config renders port-free URLs regardless; the lab's overlay
 // restates them from BackstageBaseURL (HACKS.md U15).
 func (c *Config) gatewayURL(prefix string) string {
 	if c.Platform.GatewayPort == 443 {
-		return fmt.Sprintf("https://%s.%s", prefix, c.Platform.Domain)
+		return "https://" + c.hostname(prefix)
 	}
-	return fmt.Sprintf("https://%s.%s:%d", prefix, c.Platform.Domain, c.Platform.GatewayPort)
+	return fmt.Sprintf("https://%s:%d", c.hostname(prefix), c.Platform.GatewayPort)
 }
 
 // GatewayURL is the public URL of the platform hostname <prefix>.<domain>
@@ -3052,8 +3060,24 @@ func (c *Config) MusterDirectURL() string {
 	return fmt.Sprintf("http://localhost:%d", c.Platform.MusterPort)
 }
 
-// BackstageBaseURL is Backstage's public URL through the agentgateway edge.
-func (c *Config) BackstageBaseURL() string { return c.gatewayURL("backstage") }
+// portalHostPrefix is the public hostname prefix the portal is served on
+// (portal.<domain>). BackstageBaseURL and PortalHostname both build from this
+// one constant, so the Dex redirect URI, the app-config overlay and the
+// chart's HTTPRoute can never disagree on the spelling.
+const portalHostPrefix = "portal"
+
+// BackstageBaseURL is the portal's (Backstage's) public URL through the
+// agentgateway edge.
+func (c *Config) BackstageBaseURL() string { return c.gatewayURL(portalHostPrefix) }
+
+// PortalHostname is the bare hostname of BackstageBaseURL: what the rendered
+// platform values pass as the connectivity chart's backstage.hostname
+// (agent-platform-values.yaml.tmpl), which drives the portal HTTPRoute's
+// hostname and the chart app-config's baseUrl/CORS. Same prefix, same
+// composition as BackstageBaseURL (hostname), so the two cannot diverge.
+func (c *Config) PortalHostname() string {
+	return c.hostname(portalHostPrefix)
+}
 
 // ObservabilityBaseURL is the lab Prometheus's public query API through the
 // edge, at the /prometheus prefix Backstage's Mimir integration expects

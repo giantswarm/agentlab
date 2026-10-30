@@ -704,7 +704,7 @@ func applyPorts(cfg *config.Config, disc *lab.Discovery) {
 
 // applyDomain gives the lab a platform domain no other registered lab
 // records while no kind node of this configuration exists, as applyPorts does
-// for the ports: a second lab serves backstage.lab2.127.0.0.2.nip.io on
+// for the ports: a second lab serves portal.lab2.127.0.0.2.nip.io on
 // 127.0.0.2:443, its own site in the browser with no port in its URLs. It
 // runs before applyPorts, which then probes the edge on its new address. An
 // existing cluster keeps its domain (its CA and every rendered URL name it):
