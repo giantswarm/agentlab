@@ -29,8 +29,8 @@ var (
 // (kubeconfigs, rendered manifests, the kind node's mounted files) and the
 // rest of what the lab writes. Every command runs in it, so the lab's
 // relative paths hold. Its agentlab.yaml is a link to ConfigFile — or, on
-// macOS and Windows, where the state folder is the configuration folder,
-// ConfigFile itself.
+// macOS, where the state folder is the configuration folder, ConfigFile
+// itself.
 func Home(name string) (string, error) {
 	if err := validName(name); err != nil {
 		return "", err
@@ -133,8 +133,8 @@ func Settle(name, dir string) (string, error) {
 	}
 	at := filepath.Join(home, config.File)
 	if samePath(at, cfgFile) {
-		// On macOS and Windows the state folder is the configuration
-		// folder (xdg.StateHome), so the Home's agentlab.yaml is the
+		// On macOS the state folder is the configuration folder
+		// (xdg.StateHome), so the Home's agentlab.yaml is the
 		// configuration file itself: already in place, nothing to adopt
 		// or link. Only a link to itself, which releases before this
 		// guard left there, goes: it holds nothing, and every read of
@@ -162,16 +162,26 @@ func samePath(a, b string) bool {
 	return errA == nil && errB == nil && os.SameFile(da, db)
 }
 
-// dropSelfLink removes at when it is a symbolic link to itself.
-func dropSelfLink(at string) error {
+// linksTo reports whether at is a symbolic link whose target, relative to
+// at's folder when not absolute, names target (samePath). Only the link
+// itself is read, not a chain of them.
+func linksTo(at, target string) bool {
 	dest, err := os.Readlink(at)
 	if err != nil {
-		return nil
+		return false
 	}
 	if !filepath.IsAbs(dest) {
 		dest = filepath.Join(filepath.Dir(at), dest)
 	}
-	if !samePath(dest, at) {
+	return samePath(dest, target)
+}
+
+// dropSelfLink removes at when it is a symbolic link to itself, the link
+// releases before #1106 left on macOS. A longer loop (at links to a link
+// back to at) is no link agentlab made; it stays, and reading the lab fails
+// on it naming the path.
+func dropSelfLink(at string) error {
+	if !linksTo(at, at) {
 		return nil
 	}
 	return os.Remove(at)
@@ -197,12 +207,10 @@ func (e *ConfigConflictError) Error() string {
 // byte for byte goes, the link takes its place. One that differs is
 // refused (*ConfigConflictError) and nothing changes: neither is the lab's
 // configuration for certain.
+//
+// at and cfgFile are two paths: Settle returns before adoptConfig when they
+// name one file, which it would compare with itself and remove.
 func adoptConfig(at, cfgFile string) error {
-	if samePath(at, cfgFile) {
-		// One file, not a copy of it: comparing it with itself would
-		// remove the lab's configuration.
-		return nil
-	}
 	if fi, err := os.Lstat(at); err != nil || !fi.Mode().IsRegular() {
 		return nil
 	}
@@ -234,12 +242,15 @@ func newer(a, b string) string {
 }
 
 // move carries the lab files of dir into home and its agentlab.yaml to
-// cfgFile, leaving links behind — for agentlab.yaml only when configLink.
+// cfgFile, leaving links behind — for agentlab.yaml only when configLink. An
+// agentlab.yaml in dir that is cfgFile — dir is the configuration's folder,
+// a macOS lab whose state moves out with $XDG_STATE_HOME — or a link to it
+// is in place already and stays.
 func move(dir, home, cfgFile string, configLink bool) error {
 	type step struct{ from, to string }
 	var steps []step
-	if exists(filepath.Join(dir, config.File)) {
-		steps = append(steps, step{filepath.Join(dir, config.File), cfgFile})
+	if at := filepath.Join(dir, config.File); exists(at) && !samePath(at, cfgFile) && !linksTo(at, cfgFile) {
+		steps = append(steps, step{at, cfgFile})
 	}
 	for _, name := range moved {
 		if exists(filepath.Join(dir, name)) {
@@ -279,7 +290,9 @@ func move(dir, home, cfgFile string, configLink bool) error {
 }
 
 // link makes at a symbolic link to target, unless it is one already. It
-// never links a path onto itself.
+// never links a path onto itself: Settle does not ask it to, but a link to
+// itself breaks every later command of the lab (#1106), so a caller that
+// did would get this error naming the path instead.
 func link(target, at string) error {
 	if samePath(target, at) {
 		return fmt.Errorf("refusing to link %s to itself", at)

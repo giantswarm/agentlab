@@ -486,8 +486,15 @@ func settleLab(name, dir string) (string, error) {
 	}
 	if home != from && config.Exists(filepath.Join(home, config.File)) {
 		cfgFile, _ := labs.ConfigFile(name)
-		fmt.Fprintf(os.Stderr, "Moved lab %s from %s to %s, its %s to %s; links at the old paths keep its cluster and older agentlab releases working\n",
-			name, from, home, config.File, cfgFile)
+		if filepath.Join(from, config.File) == cfgFile {
+			// A macOS lab whose state moves out with $XDG_STATE_HOME:
+			// its directory was the configuration's folder.
+			fmt.Fprintf(os.Stderr, "Moved lab %s from %s to %s, its %s staying at %s; links at the old paths keep its cluster working\n",
+				name, from, home, config.File, cfgFile)
+		} else {
+			fmt.Fprintf(os.Stderr, "Moved lab %s from %s to %s, its %s to %s; links at the old paths keep its cluster and older agentlab releases working\n",
+				name, from, home, config.File, cfgFile)
+		}
 	}
 	if fi, err := os.Lstat(filepath.Join(home, config.File)); loose && err == nil && fi.Mode()&os.ModeSymlink != 0 {
 		cfgFile, _ := labs.ConfigFile(name)
