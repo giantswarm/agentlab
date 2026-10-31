@@ -231,6 +231,7 @@ check above.
 | [GitHub sign-in](docs/github-signin.md) | GitHub as a second way into the lab: the App and its callback, the client secret placed as a Secret, what a GitHub user is in the lab |
 | [Troubleshooting](docs/troubleshooting.md) | The gotchas that cost time |
 | [Usage data](docs/telemetry.md) | The anonymous usage signals — one per command, one per platform install naming the chart line, the lab portal's under the same deployment ID — and how to opt out |
+| [Development environment](docs/dev-environment.md) | Developing a platform component against the lab: hot reload, dev images, unreleased charts |
 | [Development](docs/development.md) | Repository layout, building and testing, the hack journal |
 
 ## Development

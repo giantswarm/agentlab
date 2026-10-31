@@ -252,6 +252,8 @@ agentlab trust           # install the lab CA into the system + NSS trust stores
 agentlab untrust         # remove exactly the lab CA from those stores
 agentlab reload          # re-render + re-apply Dex after editing agentlab.yaml
 agentlab logs <dex|muster|backstage>
+agentlab portal dev       # your giantswarm/backstage checkout (../backstage) with hot reload against the lab: Dex sign-in, muster, kagent
+agentlab portal build     # that checkout's image as CI builds it, recorded as platform.devImages.backstage and rolled in
 agentlab login <email>   # headless password grant; --browser for the real Dex login page
 agentlab render          # write every manifest to state/ without applying
 agentlab self-update     # replace the binary with the latest GitHub release (--check only reports; exit 125 when outdated; --pre follows release candidates)
@@ -382,7 +384,8 @@ The lab's own e2e checks are the `*-test` subcommands, not `go test`.
   (`fluxreleases.go`).
 - `docs/` — the documentation, one page per topic (getting started, the
   command reference, TLS, the platform, agents, models, observability,
-  Backstage, identity, troubleshooting, usage data, development).
+  Backstage, identity, troubleshooting, usage data, development, and the lab
+  as a development environment for platform components).
   `README.md` is the short front door: what the lab is, the quick start and
   the page index — keep it that way and put detail in `docs/`. Code comments
   cite pages by path and section (`docs/models.md "Local backends on the lab

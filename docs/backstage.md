@@ -387,6 +387,15 @@ on it as the admin with every other user as the boundary, and the agent is
 asserted still there at the end. Use it where the create step fails or is not
 wanted (an agent already deployed, a repeated run of the chat steps only).
 
+## Your own Backstage in the lab
+
+A checkout of [giantswarm/backstage](https://github.com/giantswarm/backstage)
+runs against the lab two ways: `agentlab portal dev` with hot reload on this
+machine, signed in through the lab Dex and calling the lab's muster, kagent
+and apiserver; and `agentlab portal build`, which builds the image as CI does
+and rolls it into the cluster in place of the release. Both are covered in
+[agentlab as a development environment](dev-environment.md).
+
 ## Backstage gotchas
 
 - **`app.extensions` replaces, it does not merge.** The image ships a list of
