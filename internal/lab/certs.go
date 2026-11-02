@@ -272,7 +272,7 @@ func leafRemintReason(cert, ca *x509.Certificate, wantDNS []string) string {
 		return "signed by a replaced CA"
 	case time.Until(cert.NotAfter) < leafRenewWindow:
 		return "expiring"
-	case cert.NotAfter.Sub(cert.NotBefore) > (leafValidityDays+1)*24*time.Hour:
+	case cert.NotAfter.Sub(cert.NotBefore) > leafValidityDays*24*time.Hour:
 		return "validity exceeded Apple's 825-day cap"
 	}
 	for _, name := range wantDNS {
@@ -329,11 +329,16 @@ func mintLeaf(caCert *x509.Certificate, caKey *rsa.PrivateKey, cn string, dns []
 	if err != nil {
 		return err
 	}
+	// The validity is a duration from NotBefore, not AddDate on the local
+	// clock: AddDate keeps the wall time across a DST change, and with the
+	// one-hour backdate a leaf minted in October came out at 825 days and
+	// two hours, which Apple rejects as "not standards compliant".
+	notBefore := time.Now().Add(-time.Hour)
 	tmpl := &x509.Certificate{
 		SerialNumber: randomSerial(),
 		Subject:      pkix.Name{CommonName: cn},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().AddDate(0, 0, leafValidityDays),
+		NotBefore:    notBefore,
+		NotAfter:     notBefore.Add(leafValidityDays * 24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		DNSNames:     dns,

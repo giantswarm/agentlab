@@ -1,5 +1,9 @@
 # Development
 
+This page is about developing agentlab itself. To develop a platform
+component — Backstage, muster, kagent, the chart — with the lab as its
+environment, see [agentlab as a development environment](dev-environment.md).
+
 ## Building and testing
 
 ```bash

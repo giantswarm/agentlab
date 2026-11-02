@@ -93,11 +93,12 @@ func TestPurge(t *testing.T) {
 		}
 	})
 	t.Run("refused outside its Home before anything changes", func(t *testing.T) {
-		home, steps := purgeLab(t, "elsewhere")
+		const cluster = "elsewhere"
+		home, steps := purgeLab(t, cluster)
 		t.Chdir(t.TempDir())
 
 		var outside *labs.OutsideHomeError
-		if err := Purge(&config.Config{ClusterName: "elsewhere"}); !errors.As(err, &outside) {
+		if err := Purge(&config.Config{ClusterName: cluster}); !errors.As(err, &outside) {
 			t.Fatalf("Purge = %v, want *labs.OutsideHomeError", err)
 		}
 		if len(*steps) != 0 {
@@ -108,16 +109,17 @@ func TestPurge(t *testing.T) {
 		}
 	})
 	t.Run("a failed trust store removal keeps the lab", func(t *testing.T) {
-		home, _ := purgeLab(t, "kept")
+		const cluster = "kept"
+		home, _ := purgeLab(t, cluster)
 		purgeTrust = func() error { return errors.New("sudo: a password is required") }
 
-		if err := Purge(&config.Config{ClusterName: "kept"}); err == nil {
+		if err := Purge(&config.Config{ClusterName: cluster}); err == nil {
 			t.Fatal("Purge succeeded with the trust stores failing")
 		}
 		if _, err := os.Stat(filepath.Join(home, caCertPath)); err != nil {
 			t.Errorf("the lab's CA is gone: %v", err)
 		}
-		if !registered(t, "kept") {
+		if !registered(t, cluster) {
 			t.Error("the registry no longer names kept")
 		}
 	})
