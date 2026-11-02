@@ -87,8 +87,8 @@ func TestOpenTargetURLsFollowTheConfiguration(t *testing.T) {
 		wantPortal, wantAgent string
 		wantPrometheus        string
 	}{
-		{443, 8081, "https://backstage.127.0.0.1.nip.io", "http://localhost:8081", "https://observability.127.0.0.1.nip.io/prometheus"},
-		{8443, 9090, "https://backstage.127.0.0.1.nip.io:8443", "http://localhost:9090", "https://observability.127.0.0.1.nip.io:8443/prometheus"},
+		{443, 8081, "https://portal.127.0.0.1.nip.io", "http://localhost:8081", "https://observability.127.0.0.1.nip.io/prometheus"},
+		{8443, 9090, "https://portal.127.0.0.1.nip.io:8443", "http://localhost:9090", "https://observability.127.0.0.1.nip.io:8443/prometheus"},
 	} {
 		t.Run(fmt.Sprint(tc.port), func(t *testing.T) {
 			cfg := config.Default()

@@ -250,7 +250,7 @@ issuer:        https://localhost:32000/dex
 client id:     agent-platform
 client secret: agent-platform-lab-secret
 redirect URIs: https://muster.127.0.0.1.nip.io/oauth/callback
-               https://backstage.127.0.0.1.nip.io/api/auth/oidc-agent-platform/handler/frame
+               https://portal.127.0.0.1.nip.io/api/auth/oidc-agent-platform/handler/frame
 ```
 
 The Backstage redirect path carries the **provider name** from the app-config,
