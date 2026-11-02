@@ -149,7 +149,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		inGroup(groupTesting, beekeeperSubscriptionsTestCmd()),
 		inGroup(groupTesting, backstageTestCmd()),
 
-		inGroup(groupCleanup, labCmd("down", "Destroy the kind cluster", lab.Down)),
+		inGroup(groupCleanup, downCmd()),
 		inGroup(groupCleanup, readOnlyLabCmd("untrust", "Remove the lab CA from the system and browser trust stores", lab.Untrust)),
 		inGroup(groupCleanup, labCmd("platform-down", "Remove the agent platform (leaves Dex and the cluster alone)", lab.PlatformDown)),
 
@@ -323,6 +323,106 @@ func loadReadOnly() (*config.Config, error) {
 	lab.SetPlatform(cfg)
 	lab.EnterTelemetryLab(cfg)
 	return cfg, nil
+}
+
+// downCmd is `agentlab down`: the kind cluster, or with --purge the whole
+// lab, asked first on a terminal and refused off one without --yes.
+func downCmd() *cobra.Command {
+	var purge, yes bool
+	cmd := &cobra.Command{
+		Use:   "down",
+		Short: "Destroy the kind cluster (--purge: the whole lab, its CA included)",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !purge {
+				if yes {
+					return errors.New("--yes goes with --purge")
+				}
+				cfg, err := loadConfig()
+				if err != nil {
+					return err
+				}
+				return lab.Down(cfg)
+			}
+			cfg, err := loadToPurge()
+			if err != nil {
+				return err
+			}
+			if ok, err := confirmPurge(cfg.ClusterName, yes); err != nil || !ok {
+				return err
+			}
+			return lab.Purge(cfg)
+		},
+	}
+	cmd.Flags().BoolVar(&purge, "purge", false, "also remove the lab CA from the trust stores, then the lab's directory, configuration and registry entry")
+	cmd.Flags().BoolVar(&yes, "yes", false, "with --purge: remove the lab without asking")
+	return cmd
+}
+
+// loadToPurge is loadReadOnly for `down --purge`: it resolves the lab and
+// enters its Home without settling it there. Settling would move a lab from
+// a checkout only for Purge to delete it, leaving links to nothing in the
+// checkout; such a lab is refused (*labs.OutsideHomeError) instead.
+func loadToPurge() (*config.Config, error) {
+	var pick labs.Picker
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		pick = pickLab
+	}
+	l, err := labs.Resolve(labFlag, labs.Enter, pick)
+	if err != nil {
+		return nil, err
+	}
+	name, dir := l.Name, l.Dir
+	if dir == "" {
+		here, err := config.Peek(".")
+		if err != nil {
+			return nil, fmt.Errorf("no lab to purge here: %w", err)
+		}
+		name, dir = here.ClusterName, "."
+	}
+	if err := labs.Removable(name, dir); err != nil {
+		return nil, err
+	}
+	home, err := labs.Home(name)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.Chdir(home); err != nil {
+		return nil, fmt.Errorf("entering lab %s: %w", name, err)
+	}
+	fmt.Fprintf(os.Stderr, "Lab %s (%s)\n", name, home)
+	telemetry.AwaitLab()
+	cfg, note, err := config.LoadReadOnly()
+	if err != nil {
+		return nil, err
+	}
+	if note != "" {
+		fmt.Fprintf(os.Stderr, "Note: %s\n", note)
+	}
+	lab.SetPlatform(cfg)
+	lab.EnterTelemetryLab(cfg)
+	return cfg, nil
+}
+
+// confirmPurge asks before `down --purge` removes the lab; off a terminal
+// only --yes answers.
+func confirmPurge(name string, yes bool) (bool, error) {
+	if yes {
+		return true, nil
+	}
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return false, fmt.Errorf("`down --purge` removes lab %s and its CA for good; pass --yes to do that off a terminal", name)
+	}
+	ok, err := forms.Confirm(fmt.Sprintf("Remove lab %s for good?", name),
+		"Its cluster, its CA from the trust stores, its certs/, state/ and agentlab.yaml. There is no undo.",
+		"Remove", "Keep", false)
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		fmt.Printf("Lab %s kept.\n", name)
+	}
+	return ok, nil
 }
 
 // readOnlyLabCmd is labCmd for a command that never writes agentlab.yaml
