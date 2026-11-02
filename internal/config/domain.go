@@ -32,7 +32,7 @@ type DomainChange struct {
 }
 
 func (ch DomainChange) String() string {
-	s := fmt.Sprintf("platform.domain: %s is the lab %s's, using %s instead (every public hostname moves with it: backstage.%s, muster.%s, …)",
+	s := fmt.Sprintf("platform.domain: %s is the lab %s's, using %s instead (every public hostname moves with it: portal.%s, muster.%s, …)",
 		ch.From, ch.Lab, ch.To, ch.To, ch.To)
 	if ch.Address != "" {
 		s += fmt.Sprintf("\n  platform.gatewayAddress: %s (the edge serves %s:%d, so the URLs carry no port)", ch.Address, ch.Address, DefaultGatewayPort)

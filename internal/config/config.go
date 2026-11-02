@@ -3070,11 +3070,8 @@ const portalHostPrefix = "portal"
 // agentgateway edge.
 func (c *Config) BackstageBaseURL() string { return c.gatewayURL(portalHostPrefix) }
 
-// PortalHostname is the bare hostname of BackstageBaseURL: what the rendered
-// platform values pass as the connectivity chart's backstage.hostname
-// (agent-platform-values.yaml.tmpl), which drives the portal HTTPRoute's
-// hostname and the chart app-config's baseUrl/CORS. Same prefix, same
-// composition as BackstageBaseURL (hostname), so the two cannot diverge.
+// PortalHostname is the bare hostname of BackstageBaseURL: the connectivity
+// chart's backstage.hostname in the rendered platform values.
 func (c *Config) PortalHostname() string {
 	return c.hostname(portalHostPrefix)
 }

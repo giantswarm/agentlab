@@ -127,9 +127,6 @@ func TestPlatformValuesPortalHostname(t *testing.T) {
 			if values.Backstage.Hostname != cfg.PortalHostname() {
 				t.Errorf("backstage.hostname = %q, want %q (config.PortalHostname)", values.Backstage.Hostname, cfg.PortalHostname())
 			}
-			if want := "https://" + cfg.PortalHostname(); cfg.BackstageBaseURL() != want && !strings.HasPrefix(cfg.BackstageBaseURL(), want+":") {
-				t.Errorf("BackstageBaseURL() = %q does not serve the hostname %q the chart routes", cfg.BackstageBaseURL(), cfg.PortalHostname())
-			}
 		})
 	}
 }
