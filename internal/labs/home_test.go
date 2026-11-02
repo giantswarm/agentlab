@@ -304,3 +304,47 @@ func TestSettleWithOneFolderForConfigurationAndState(t *testing.T) {
 		t.Errorf("the self-link is still at %s: %v", at, err)
 	}
 }
+
+// A state folder that is the configuration folder through a link is one
+// folder too: Settle keeps the lab's agentlab.yaml and removes a link to
+// itself an earlier release left in its place.
+func TestSettleWithTheStateFolderLinkedToTheConfigurationFolder(t *testing.T) {
+	setup(t)
+	shared := t.TempDir()
+	linked := filepath.Join(t.TempDir(), "state")
+	if err := os.Symlink(shared, linked); err != nil {
+		t.Fatal(err)
+	}
+	configHome = func() (string, error) { return shared, nil }
+	stateHome = func() (string, error) { return linked, nil }
+	dir := t.TempDir()
+	writeConfig(t, dir, "linked")
+
+	home, err := Settle("linked", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Settle("linked", home); err != nil {
+		t.Fatalf("a second Settle: %v", err)
+	}
+	cfgFile, err := ConfigFile("linked")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg, err := config.Peek(filepath.Dir(cfgFile)); err != nil || cfg.ClusterName != "linked" {
+		t.Fatalf("Peek(configuration folder) = %v, %v", cfg, err)
+	}
+
+	if err := os.Remove(cfgFile); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(cfgFile, cfgFile); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Settle("linked", home); err != nil {
+		t.Fatalf("Settle over the self-link: %v", err)
+	}
+	if exists(cfgFile) {
+		t.Errorf("the self-link is still at %s", cfgFile)
+	}
+}

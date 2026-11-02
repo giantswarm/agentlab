@@ -128,13 +128,14 @@ func Settle(name, dir string) (string, error) {
 		}
 	}
 	at := filepath.Join(home, config.File)
-	if at == cfgFile {
-		// On macOS the state folder is the configuration folder, so the
-		// Home's agentlab.yaml is the configuration file itself: adopting
-		// it would delete it and the link would point at itself, which
+	if sameDir(home, filepath.Dir(cfgFile)) {
+		// On macOS the state folder is the configuration folder (and on
+		// any OS the two can be one directory by a link), so the Home's
+		// agentlab.yaml is the configuration file itself: adopting it
+		// would delete it and the link would point at itself, which
 		// releases from v0.120.0 did. Such a link goes; configure writes
 		// the file again.
-		if dest, err := os.Readlink(at); err == nil && dest == at {
+		if dest, err := os.Readlink(at); err == nil && (dest == at || dest == cfgFile) {
 			return home, os.Remove(at)
 		}
 		return home, nil
@@ -250,6 +251,16 @@ func link(target, at string) error {
 		return fmt.Errorf("%s is in the way of the link to %s; move it aside", at, target)
 	}
 	return os.Symlink(target, at)
+}
+
+// sameDir reports whether a and b are one directory, by whatever path.
+func sameDir(a, b string) bool {
+	fa, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	fb, err := os.Stat(b)
+	return err == nil && os.SameFile(fa, fb)
 }
 
 // exists reports whether something, a dangling link included, is at path.
