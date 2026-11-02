@@ -187,10 +187,45 @@ func dropSelfLink(at string) error {
 	return os.Remove(at)
 }
 
+// OutsideHomeError is the refusal to remove a lab that lives in a directory
+// other than its Home (one Settle left where it was): that directory may
+// hold more than the lab. Nothing was changed.
+type OutsideHomeError struct {
+	Name, Dir string
+}
+
+func (e *OutsideHomeError) Error() string {
+	return fmt.Sprintf("lab %s lives in %s, outside agentlab's folders, and that directory may hold more than the lab; run `agentlab down` and delete what you no longer need there by hand", e.Name, e.Dir)
+}
+
+// Removable refuses (*OutsideHomeError) to remove the lab of that name when
+// dir, where it is entered, or the directory the registry names for it is
+// not its Home.
+func Removable(name, dir string) error {
+	home, err := Home(name)
+	if err != nil {
+		return err
+	}
+	reg, err := read()
+	if err != nil {
+		return err
+	}
+	if d, ok := reg.Labs[name]; ok && d != home && !sameDir(d, home) {
+		return &OutsideHomeError{Name: name, Dir: d}
+	}
+	if !sameDir(dir, home) {
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			return err
+		}
+		return &OutsideHomeError{Name: name, Dir: abs}
+	}
+	return nil
+}
+
 // Remove deletes the lab of that name for good: its Home with certs/ and
-// state/, its configuration folder and its registry entry. A lab registered
-// to a directory other than its Home (one Settle left where it was) is
-// refused and nothing changes: that directory may hold more than the lab.
+// state/, its configuration folder and its registry entry. A lab Removable
+// refuses stays as it is.
 func Remove(name string) error {
 	home, err := Home(name)
 	if err != nil {
@@ -200,17 +235,17 @@ func Remove(name string) error {
 	if err != nil {
 		return err
 	}
-	reg, err := read()
-	if err != nil {
+	if err := Removable(name, home); err != nil {
 		return err
-	}
-	if dir, ok := reg.Labs[name]; ok && dir != home {
-		return fmt.Errorf("lab %s lives in %s, outside agentlab's folders, and that directory may hold more than the lab; delete what you no longer need there by hand", name, dir)
 	}
 	if err := os.RemoveAll(home); err != nil {
 		return err
 	}
 	if err := os.RemoveAll(filepath.Dir(cfgFile)); err != nil {
+		return err
+	}
+	reg, err := read()
+	if err != nil {
 		return err
 	}
 	delete(reg.Labs, name)
@@ -334,6 +369,16 @@ func link(target, at string) error {
 		return fmt.Errorf("%s is in the way of the link to %s; move it aside", at, target)
 	}
 	return os.Symlink(target, at)
+}
+
+// sameDir reports whether a and b are one directory, by whatever path.
+func sameDir(a, b string) bool {
+	fa, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	fb, err := os.Stat(b)
+	return err == nil && os.SameFile(fa, fb)
 }
 
 // exists reports whether something, a dangling link included, is at path.

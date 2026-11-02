@@ -23,25 +23,32 @@ func Down(cfg *config.Config) error {
 	return nil
 }
 
+// Seams the tests replace: deleting the cluster needs a container runtime
+// and the trust stores need sudo.
+var (
+	purgeCluster = destroyCluster
+	purgeTrust   = untrustLab
+)
+
 // Purge removes the lab for good: the kind cluster as Down does, then the
 // lab CA from the trust stores, then the lab's directory, its configuration
-// and its registry entry, so `agentlab list` no longer shows it. The CA goes
-// before its directory, the one place that names it. A lab outside its Home
-// is refused before anything changes, and a failed removal from a trust
-// store stops before anything is deleted.
+// and its registry entry, so `agentlab list` no longer shows it. It runs in
+// the lab's Home. The CA goes before its directory, the one place that
+// names it. A lab outside its Home is refused before anything changes
+// (*labs.OutsideHomeError), and a failed removal from a trust store stops
+// before anything is deleted.
 func Purge(cfg *config.Config) error {
+	if err := labs.Removable(cfg.ClusterName, "."); err != nil {
+		return err
+	}
 	home, err := labs.Home(cfg.ClusterName)
 	if err != nil {
 		return err
 	}
-	if !sameDir(".", home) {
-		cwd, _ := os.Getwd()
-		return fmt.Errorf("lab %s lives in %s, outside agentlab's folders, and that directory may hold more than the lab; run `agentlab down` and delete what you no longer need there by hand", cfg.ClusterName, cwd)
-	}
-	if err := destroyCluster(cfg); err != nil {
+	if err := purgeCluster(cfg); err != nil {
 		return err
 	}
-	if err := untrustLab(); err != nil {
+	if err := purgeTrust(); err != nil {
 		return fmt.Errorf("%w; the lab's files are kept, run `agentlab down --purge` again once that works", err)
 	}
 	if err := labs.Remove(cfg.ClusterName); err != nil {
@@ -49,16 +56,6 @@ func Purge(cfg *config.Config) error {
 	}
 	fmt.Printf("Lab %s removed: its cluster, its CA from the trust stores, %s and its configuration.\n", cfg.ClusterName, home)
 	return nil
-}
-
-// sameDir reports whether a and b are one directory.
-func sameDir(a, b string) bool {
-	fa, err := os.Stat(a)
-	if err != nil {
-		return false
-	}
-	fb, err := os.Stat(b)
-	return err == nil && os.SameFile(fa, fb)
 }
 
 // destroyCluster deletes the kind cluster and the files that described it.

@@ -552,12 +552,35 @@ func TestRemove(t *testing.T) {
 			t.Errorf("the registry still names gone: %v", reg.Labs)
 		}
 	})
+	t.Run("one folder for configuration and state", func(t *testing.T) {
+		setup(t)
+		shared := t.TempDir()
+		configHome = func() (string, error) { return shared, nil }
+		stateHome = func() (string, error) { return shared, nil }
+		dir := t.TempDir()
+		writeConfig(t, dir, "mac")
+		home, err := Settle("mac", dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := Register("mac", home); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := Remove("mac"); err != nil {
+			t.Fatalf("Remove: %v", err)
+		}
+		if exists(home) {
+			t.Errorf("%s is still there", home)
+		}
+	})
 	t.Run("a lab outside its Home", func(t *testing.T) {
 		setup(t)
 		dir := newLab(t, "elsewhere")
 
-		if err := Remove("elsewhere"); err == nil {
-			t.Fatal("Remove of a lab outside its Home succeeded")
+		var outside *OutsideHomeError
+		if err := Remove("elsewhere"); !errors.As(err, &outside) {
+			t.Fatalf("Remove = %v, want *OutsideHomeError", err)
 		}
 		if !isLab(dir) {
 			t.Errorf("the lab in %s was touched", dir)

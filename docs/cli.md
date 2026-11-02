@@ -184,7 +184,7 @@ one helper — see [Agents](agents.md).
 
 | Command | What it does |
 |---|---|
-| `down` | Destroy the kind cluster. `certs/` is kept and the trust stores are untouched. With `--purge`, remove the lab for good: the cluster, then its CA from the trust stores (sudo may prompt), then its directory, its configuration and its registration, so `list` no longer shows it. A lab outside agentlab's folders is refused before anything changes. |
+| `down` | Destroy the kind cluster. `certs/` is kept and the trust stores are untouched. With `--purge`, remove the lab for good: the cluster, then its CA from the trust stores (sudo may prompt), then its directory, its configuration and its registration, so `list` no longer shows it. It asks first on a terminal; off one it needs `--yes`. A lab outside agentlab's folders (a checkout `down` would otherwise move) is refused before anything changes. |
 | `untrust` | Remove exactly the lab CA from the system and browser trust stores. |
 | `platform-down` | Remove the agent platform in the chart's ordered teardown, leaving Dex and the cluster alone. The workspace storage goes with it (its namespace, classes, CSIDriver and CRDs), and the driver's mounts and volume bytes are cleaned off the node; `down` cleans the node the same way before the cluster is deleted. |
 
