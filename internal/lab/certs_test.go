@@ -54,8 +54,8 @@ func TestMintLeafValidityWithinAppleCap(t *testing.T) {
 	if leaf == nil {
 		t.Fatal("minted leaf does not parse")
 	}
-	if got, max := leaf.NotAfter.Sub(leaf.NotBefore), leafValidityDays*24*time.Hour; got > max {
-		t.Errorf("leaf validity %v exceeds Apple's cap %v", got, max)
+	if got, limit := leaf.NotAfter.Sub(leaf.NotBefore), leafValidityDays*24*time.Hour; got > limit {
+		t.Errorf("leaf validity %v exceeds Apple's cap %v", got, limit)
 	}
 	if reason := leafRemintReason(leaf, ca, []string{localhostName}); reason != "" {
 		t.Errorf("fresh leaf flagged for re-mint: %q", reason)

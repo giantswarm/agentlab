@@ -275,10 +275,16 @@ func backstageDevInputs(ctx context.Context, cfg *config.Config) ([]devFile, []s
 	}
 	files = append(files, devFile{name: "app-config.local-dev.yaml", data: overlay, config: true})
 
-	env := []string{
-		"AGENT_PLATFORM_OIDC_CLIENT_SECRET=" + string(secrets.Data[agentPlatformOIDCKey]),
-		"AUTH_SESSION_SECRET=" + string(secrets.Data[backstageSessionSecretKey]),
-		"NODE_EXTRA_CA_CERTS=" + absCAPath(),
+	env := []string{"NODE_EXTRA_CA_CERTS=" + absCAPath()}
+	for name, key := range map[string]string{
+		"AGENT_PLATFORM_OIDC_CLIENT_SECRET": agentPlatformOIDCKey,
+		"AUTH_SESSION_SECRET":               backstageSessionSecretKey,
+	} {
+		value := secrets.Data[key]
+		if len(value) == 0 {
+			return nil, nil, fmt.Errorf("%s/%s has no %s: the local Backstage cannot sign in without it", platformNamespace, platformSecretsName, key)
+		}
+		env = append(env, name+"="+string(value))
 	}
 	return files, env, nil
 }
