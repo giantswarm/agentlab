@@ -877,6 +877,15 @@ type codingTurn struct {
 	meta  map[string]any
 }
 
+// toolNames are the names of the tools the turn called, in order.
+func (t codingTurn) toolNames() []string {
+	names := make([]string, 0, len(t.tools))
+	for _, result := range t.tools {
+		names = append(names, result.name)
+	}
+	return names
+}
+
 // toolOutput is the output of the turn's call of tool, an MCP tool on any
 // server (codex names one <server>.<tool>), "" when it called none.
 func (t codingTurn) toolOutput(tool string) string {
