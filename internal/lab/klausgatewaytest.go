@@ -219,6 +219,9 @@ type KlausGatewayTestOptions struct {
 	// RefusalOnly runs the component's egress refusal notice step alone
 	// (klausgatewaytest_refusal.go): no host gateway, no fixture.
 	RefusalOnly bool
+	// Part runs one part instead of the proof: KlausGatewayPartSignIn
+	// (klausgatewaytest_signin.go).
+	Part string
 }
 
 // KlausGatewayTest is the headless Swarmgeist proof: klaus-gateway against
@@ -235,6 +238,9 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	if user == nil {
 		return fmt.Errorf("no user %q in %s", email, config.File)
 	}
+	if opts.Part != "" && opts.Part != KlausGatewayPartSignIn {
+		return fmt.Errorf("--part %s: the parts are %s", opts.Part, KlausGatewayPartSignIn)
+	}
 	if opts.RefusalOnly && !cfg.KlausGatewayEnabled() {
 		return fmt.Errorf("--refusal-only proves the meta chart's klaus-gateway component, which is off in this lab (platform.klausGateway; `agentlab configure --klaus-gateway` turns it on)")
 	}
@@ -248,6 +254,9 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 		return err
 	}
 	opts.GatewayImage = image
+	if opts.Part == KlausGatewayPartSignIn {
+		return klausGatewaySignInTest(cfg, user, opts)
+	}
 	runDir, cleanRunDir, err := klausGatewayRunDir(opts.RunDir)
 	if err != nil {
 		return err
@@ -1207,7 +1216,7 @@ func gatewayArgs(f gatewayFlags) []string {
 		"--a2a-default-agent=" + cmp.Or(f.defaultAgent, klausGatewayTestAgent),
 		"--obo-enabled=true",
 		"--obo-muster-url=" + f.musterURL,
-		"--obo-callback-base-url=" + fmt.Sprintf("http://127.0.0.1:%d", f.port),
+		"--obo-callback-base-url=" + gatewayCallbackBase(f.port),
 		"--obo-state-key-file=" + data(gatewayStateKey),
 		"--obo-store=bolt",
 		"--obo-store-path=" + data(gatewayLinksFile),
@@ -1496,7 +1505,10 @@ type slackProof struct {
 	driver  *slackDriver
 	fake    slackWorkspace
 	channel string
-	logs    func() (string, error)
+	// agent is the Agent a thread the proof opens picks (default the
+	// fixture, klausGatewayTestAgent).
+	agent string
+	logs  func() (string, error)
 }
 
 // slackTurn is one turn as the thread saw it: the gateway's turn_complete
@@ -1543,9 +1555,10 @@ func (p *slackProof) open(t *slackThread, text string) (*slackTurn, error) {
 	if err != nil {
 		return nil, err
 	}
-	ref, ok := pickerRef(picker, klausGatewayTestAgent)
+	agent := cmp.Or(p.agent, klausGatewayTestAgent)
+	ref, ok := pickerRef(picker, agent)
 	if !ok {
-		return nil, fmt.Errorf("the picker the shortcut opened offers %s, not %s", strings.Join(pickerOptions(picker), ", "), klausGatewayTestAgent)
+		return nil, fmt.Errorf("the picker the shortcut opened offers %s, not %s", strings.Join(pickerOptions(picker), ", "), agent)
 	}
 	t.ts = root
 	if err := p.driver.submitView(t.user, picker, pickerValues(picker, ref, text)); err != nil {
