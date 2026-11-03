@@ -287,6 +287,15 @@ func completeSignIn(challengeURL string, user *config.User) error {
 // on callbackPath: an organization namespace's own callback
 // (tenantstest_muster.go) instead of muster's proxy callback.
 func completeSignInAt(challengeURL string, user *config.User, callbackPath string) error {
+	return completeSignInEnding(challengeURL, user, "the success page of muster's callback "+callbackPath, func(end *url.URL, body []byte) bool {
+		return end.Path == callbackPath && signInCompleted(body)
+	})
+}
+
+// completeSignInEnding is completeSignIn for a chain that ends elsewhere
+// than on muster's success page: done judges the page the last redirect
+// landed on, named by where.
+func completeSignInEnding(challengeURL string, user *config.User, where string, done func(end *url.URL, body []byte) bool) error {
 	transport, err := labTLSTransport()
 	if err != nil {
 		return err
@@ -337,9 +346,9 @@ func completeSignInAt(challengeURL string, user *config.User, callbackPath strin
 		_ = resp.Body.Close()
 	}
 	final := resp.Request.URL.String()
-	if resp.StatusCode != http.StatusOK || resp.Request.URL.Path != callbackPath || !signInCompleted(body) {
-		return fmt.Errorf("the sign-in did not end on the success page of muster's callback %s (ended on %s with %d):\n%.300s",
-			callbackPath, final, resp.StatusCode, excerpt(string(body), 300))
+	if resp.StatusCode != http.StatusOK || !done(resp.Request.URL, body) {
+		return fmt.Errorf("the sign-in did not end on %s (ended on %s with %d):\n%.300s",
+			where, final, resp.StatusCode, excerpt(string(body), 300))
 	}
 	return nil
 }

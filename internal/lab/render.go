@@ -79,7 +79,11 @@ type tmplData struct {
 	// The per-server OAuth sign-in fixture (oauthfixture.go): the MCPServer
 	// name the proofs sign in to and the protected endpoint it points at.
 	OAuthFixtureServer string
-	GitHubMCPServer    string
+	// KlausGatewayLanding is the connector landing of the host-mode
+	// klaus-gateway the proofs start, on muster's post-login redirect
+	// allowlist so a completed sign-in returns there as on an installation.
+	KlausGatewayLanding string
+	GitHubMCPServer     string
 	// GitHubMCPClientSecret is the OAuth client Secret the MCPServer
 	// references, platform.github.secret resolved (githubmcp.go).
 	GitHubMCPClientSecret config.SecretRef
@@ -320,6 +324,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		ModelManagerEndpoints:        endpoints,
 		ExtraModels:                  cfg.Platform.ExtraModels,
 		OAuthFixtureServer:           oauthFixtureServer,
+		KlausGatewayLanding:          klausGatewayLanding(gatewayTestPort(cfg)),
 		GitHubMCPServer:              gitHubMCPServer,
 		GitHubMCPClientSecret:        cfg.Platform.GitHub.ClientSecret(),
 		GitHubSignIn:                 gitHubSignInValuesFor(cfg),
