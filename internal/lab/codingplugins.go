@@ -272,11 +272,11 @@ func (p *codingProof) proveClaudeFormatRefused(spec agentSpec, harness, modelCon
 	return "", nil
 }
 
-// codingPluginSkillsPrompt asks the agent which skills it has; with hook,
-// also what the Claude-format plugin's SessionStart hook added to its
-// context.
+// codingPluginSkillsPrompt asks the agent which skills its runtime lists to
+// it, answered from its context alone; with hook, also what the
+// Claude-format plugin's SessionStart hook added to its context.
 func codingPluginSkillsPrompt(rt codingRuntime, hook bool) string {
-	prompt := "This is this test lab's skills question. List the name of every skill available to you in this session, every one you could invoke, plugin skills included with any plugin prefix such as plugin:skill kept, and reply with exactly one line `" + probeMarker + " skills=<the names, comma-separated, or none>`."
+	prompt := "This is this test lab's skills question. Answer from your context alone: do not call any tool, run any command or read any file. List the name of every skill your runtime lists to you in this session, exactly as it names them, and reply with exactly one line `" + probeMarker + " skills=<the names, comma-separated, or none>`."
 	if !hook {
 		return prompt
 	}
@@ -327,6 +327,9 @@ func (p *codingProof) provePluginSkills(ctx context.Context, session *apiv1alpha
 	listing, err := p.turn(ctx, session, codingPluginSkillsPrompt(p.rt, hook))
 	if err != nil {
 		return nil, err
+	}
+	if called := listing.toolNames(); len(called) > 0 {
+		return nil, fmt.Errorf("on Harness %s the skills listing called tools %v: a listing read from the filesystem does not show what the runtime presents; the reply: %q (%s)", p.rt.name, called, excerpt(listing.reply, 600), p.line)
 	}
 	verdict, err := judgePluginSkills(listing.probe["skills"], want, p.pluginSkillsKnown())
 	if err != nil {
