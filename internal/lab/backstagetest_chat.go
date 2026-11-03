@@ -61,6 +61,7 @@ const (
 const (
 	hitlToolApprovalType   = "tool_approval_request"
 	hitlDecisionApprove    = "approve"
+	hitlDecisionReject     = "reject"
 	musterTokenAcceptedLog = "forwarded_id_token_accepted"
 	// kagentUnsettledAnswer is in kagent's 409 to a session operation while
 	// the runtime's cleanup or lifecycle work is pending.

@@ -436,7 +436,7 @@ func (s *signInSurfaces) portalFirst(t *slackThread) error {
 		return err
 	}
 	if turn.record.Outcome != outcomePromptAnswered {
-		return fmt.Errorf("Slack's late Not now ended as %s, not %s: %s", turn.record.Outcome, outcomePromptAnswered, turnFailure(turn))
+		return fmt.Errorf("the late Not now on Slack ended as %s, not %s: %s", turn.record.Outcome, outcomePromptAnswered, turnFailure(turn))
 	}
 	if _, ok := findMessage(turn.msgs, gatewayAnsweredElsewhere); !ok {
 		return fmt.Errorf("the thread does not say %q: %s", gatewayAnsweredElsewhere, threadLine(turn.msgs))
@@ -541,7 +541,7 @@ func (s *signInSurfaces) portalAnswer(paused *signInPause, askedIn string) (int,
 	body := portalAgentRef{Namespace: kagentNamespace, Name: klausGatewaySignInAgent}.body()
 	body["messageId"] = uuid.NewString()
 	body["taskId"] = string(paused.task.ID)
-	body["decision"] = "reject"
+	body["decision"] = hitlDecisionReject
 	body["text"] = "Not now."
 	body["askedIn"] = askedIn
 	return s.portal.kagentRequest(http.MethodPost, kagentSessionsPath+"/"+paused.session.GetId()+"/answer", body)
