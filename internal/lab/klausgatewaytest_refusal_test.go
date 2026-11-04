@@ -6,18 +6,38 @@ import (
 	"testing"
 )
 
-// refusalNoticeBlocks is a refusal notice as klaus-gateway posts it: the
-// header, the reason with the destination in code, the context; verbatim
-// says how the reason's text object is sent.
+// refusalNoticeBlocks is a refusal notice as klaus-gateway posts it before
+// 4.16.20: the header, the reason with the destination in code, the context;
+// verbatim says how the reason's text object is sent.
 func refusalNoticeBlocks(agent, destination string, verbatim bool) []any {
 	reason := map[string]any{fieldTypeKey: slackMrkdwn, slackKeyText: "`" + destination + "` is not one of the hosts *" + agent + "* may reach.\n1 request in 1 Session."}
 	if verbatim {
 		reason[slackVerbatim] = true
 	}
 	return []any{
-		map[string]any{fieldTypeKey: slackBlockHeader, slackKeyText: map[string]any{fieldTypeKey: slackPlainText, slackKeyText: refusalNoticeTitle + agent}},
+		map[string]any{fieldTypeKey: slackBlockHeader, slackKeyText: map[string]any{fieldTypeKey: slackPlainText, slackKeyText: refusalNoticeTitleEgress + agent}},
 		map[string]any{fieldTypeKey: slackBlockSection, slackKeyText: reason},
 		map[string]any{fieldTypeKey: slackBlockContext, slackKeyElements: []any{map[string]any{fieldTypeKey: slackMrkdwn, slackKeyText: "You get this because you created *" + agent + "*."}}},
+	}
+}
+
+// refusalNoticeBlocksOutgoing is a refusal notice as klaus-gateway posts it
+// from 4.16.20 on: the header names the host, the section the agent, the
+// context's technical details the destination in code.
+func refusalNoticeBlocksOutgoing(agent, destination string, verbatim bool) []any {
+	host, _, _ := strings.Cut(destination, ":")
+	details := map[string]any{fieldTypeKey: slackMrkdwn, slackKeyText: "Technical details: destination `" + destination + " (https)`, origin `https://" + host + "`"}
+	if verbatim {
+		details[slackVerbatim] = true
+	}
+	return []any{
+		map[string]any{fieldTypeKey: slackBlockHeader, slackKeyText: map[string]any{fieldTypeKey: slackPlainText, slackKeyText: refusalNoticeTitleOutgoing + host + " blocked"}},
+		map[string]any{fieldTypeKey: slackBlockSection, slackKeyText: map[string]any{fieldTypeKey: slackMrkdwn, slackVerbatim: true,
+			slackKeyText: agent + " is not allowed to reach this address · 1 attempt in 1 Session\nYou can allow it: add `https://" + host + "` to " + agent + "’s Extra egress origins."}},
+		map[string]any{fieldTypeKey: slackBlockContext, slackKeyElements: []any{
+			details,
+			map[string]any{fieldTypeKey: slackMrkdwn, slackVerbatim: true, slackKeyText: "You get this because you created *" + agent + "*."},
+		}},
 	}
 }
 
@@ -44,7 +64,7 @@ func TestFakeSlackRefusalNotice(t *testing.T) {
 
 	const agent, destination = "agentlab-refusal-x1", "proxy.golang.org:443"
 	posted := callFake(t, f, slackPostMessage, nil, map[string]any{
-		slackKeyChannel: lowest, slackKeyText: refusalNoticeTitle + agent + ": proxy.golang.org", slackKeyBlocks: refusalNoticeBlocks(agent, destination, true),
+		slackKeyChannel: lowest, slackKeyText: refusalNoticeTitleEgress + agent + ": proxy.golang.org", slackKeyBlocks: refusalNoticeBlocks(agent, destination, true),
 	})
 	if posted[slackKeyChannel] != "DTESTC" {
 		t.Fatalf("a post to UTESTC answered channel %v, want its direct message DTESTC", posted[slackKeyChannel])
@@ -61,11 +81,28 @@ func TestFakeSlackRefusalNotice(t *testing.T) {
 	if len(refusalNotices(f.thread("DTESTC", ""), "agentlab-refusal-other")) != 0 {
 		t.Fatal("a notice of another agent must not count")
 	}
+
+	const agentNow = "agentlab-refusal-x2"
+	callFake(t, f, slackPostMessage, nil, map[string]any{
+		slackKeyChannel: lowest, slackKeyText: refusalNoticeTitleOutgoing + "proxy.golang.org blocked (" + agentNow + ")", slackKeyBlocks: refusalNoticeBlocksOutgoing(agentNow, destination, true),
+	})
+	notices = refusalNotices(f.thread(directChannel(lowest), ""), agentNow)
+	if len(notices) != 1 {
+		t.Fatalf("refusal notices of %s in DTESTC = %d, want 1: %s", agentNow, len(notices), threadLine(f.thread("DTESTC", "")))
+	}
+	if err := assertRefusalNotice(notices[0], agentNow, destination); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]int{agent: 1, agentNow: 1, "agentlab-refusal-x": 0, "agentlab-refusal-other": 0} {
+		if got := len(refusalNotices(f.thread("DTESTC", ""), name)); got != want {
+			t.Errorf("refusal notices of %s with both posted = %d, want %d: one agent's name inside another's is no match", name, got, want)
+		}
+	}
 }
 
 // TestAssertRefusalNotice: a destination Slack would link — the mrkdwn not
 // verbatim, or already a link — fails naming it, as does a notice without
-// the destination.
+// the destination; both wordings of the notice pass.
 func TestAssertRefusalNotice(t *testing.T) {
 	const agent, destination = "agentlab-refusal-x1", "proxy.golang.org:443"
 	notice := func(blocks []any) slackMessage {
@@ -74,11 +111,32 @@ func TestAssertRefusalNotice(t *testing.T) {
 	if err := assertRefusalNotice(notice(refusalNoticeBlocks(agent, destination, true)), agent, destination); err != nil {
 		t.Fatalf("the verbatim notice: %v", err)
 	}
+	outgoingWith := func(change func([]any)) []any {
+		blocks := refusalNoticeBlocksOutgoing(agent, destination, true)
+		change(blocks)
+		return blocks
+	}
+	if err := assertRefusalNotice(notice(refusalNoticeBlocksOutgoing(agent, destination, true)), agent, destination); err != nil {
+		t.Fatalf("the verbatim notice of 4.16.20: %v", err)
+	}
 	for name, tc := range map[string]struct {
 		blocks []any
 		want   string
 	}{
-		"not verbatim": {refusalNoticeBlocks(agent, destination, false), "verbatim"},
+		"not verbatim":         {refusalNoticeBlocks(agent, destination, false), slackVerbatim},
+		"details not verbatim": {refusalNoticeBlocksOutgoing(agent, destination, false), slackVerbatim},
+		"section not verbatim": {outgoingWith(func(blocks []any) {
+			blocks[1].(map[string]any)[slackKeyText].(map[string]any)[slackVerbatim] = false
+		}), slackVerbatim},
+		"section linked": {outgoingWith(func(blocks []any) {
+			text := blocks[1].(map[string]any)[slackKeyText].(map[string]any)
+			text[slackKeyText] = text[slackKeyText].(string) + " <https://proxy.golang.org>"
+		}), "link"},
+		"raw TCP details": {outgoingWith(func(blocks []any) {
+			el := blocks[2].(map[string]any)[slackKeyElements].([]any)[0].(map[string]any)
+			el[slackKeyText] = "Technical details: destination `" + destination + " (tcp)`"
+		}), "no context"},
+		"destination in the section only": {append(outgoingWith(func([]any) {})[:2], refusalNoticeBlocks(agent, destination, true)[1]), "no context"},
 		"linked": {[]any{map[string]any{fieldTypeKey: slackBlockSection, slackKeyText: map[string]any{
 			fieldTypeKey: slackMrkdwn, slackVerbatim: true, slackKeyText: "`" + destination + "` <http://" + destination + ">",
 		}}}, "link"},

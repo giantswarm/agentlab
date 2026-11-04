@@ -35,7 +35,8 @@ import (
 //     in, since the gateway resolves the actor through it;
 //   - one direct message to the person — the Slack user the fake answers
 //     users.lookupByEmail with — naming the agent and the refused host and
-//     port as plain text: the section's mrkdwn is sent verbatim, so Slack
+//     port as plain text: the mrkdwn that names it (from klaus-gateway
+//     4.16.20 on, every mrkdwn of the notice) is sent verbatim, so Slack
 //     shows host:port as written and links nothing;
 //   - the agent and the Session removed, a leftover of an aborted run first.
 //
@@ -63,9 +64,15 @@ const (
 	refusalsEnabledEnv  = "KLAUS_GATEWAY_REFUSALS_ENABLED"
 	refusalsIntervalEnv = "KLAUS_GATEWAY_REFUSALS_INTERVAL"
 	refusalsWindowEnv   = "KLAUS_GATEWAY_REFUSALS_WINDOW"
-	// refusalNoticeTitle starts the notice's header (klaus-gateway's
-	// "Egress refused for <agent>").
-	refusalNoticeTitle = "Egress refused for "
+	// refusalNoticeTitleEgress is the notice's header before klaus-gateway
+	// 4.16.20, "Egress refused for <agent>", with the destination in the
+	// section.
+	refusalNoticeTitleEgress = "Egress refused for "
+	// refusalNoticeTitleOutgoing starts the header from klaus-gateway
+	// 4.16.20 on, "Outgoing connection to <host> blocked"; the fallback text
+	// adds " (<agent>)" and the context's technical details carry the
+	// destination as `host:port (scheme)`.
+	refusalNoticeTitleOutgoing = "Outgoing connection to "
 	// refusalPostedRecord is the gateway's record of a posted notice.
 	refusalPostedRecord = "refusal_notice_posted"
 	// slackVerbatim is a mrkdwn text object's flag that keeps Slack from
@@ -408,21 +415,33 @@ func containerEnv(containers []corev1.Container, name string) map[string]string 
 	return env
 }
 
-// refusalNotices are the direct message's refusal notices for the agent.
+// refusalNotices are the direct message's refusal notices for the agent,
+// in either wording.
 func refusalNotices(msgs []slackMessage, agent string) []slackMessage {
 	var out []slackMessage
 	for _, m := range msgs {
-		if m.Method == slackPostMessage && strings.Contains(m.shown(), refusalNoticeTitle+agent) {
+		if m.Method != slackPostMessage {
+			continue
+		}
+		header := noticeHeader(m)
+		if header == refusalNoticeTitleEgress+agent ||
+			(strings.HasPrefix(header, refusalNoticeTitleOutgoing) && strings.HasSuffix(m.Text, " ("+agent+")")) {
 			out = append(out, m)
 		}
 	}
 	return out
 }
 
-// assertRefusalNotice checks the notice names the destination as plain text:
-// a mrkdwn section sent verbatim carrying host:port in code, and nothing in
-// it Slack would show as a link.
+// assertRefusalNotice checks the notice names the destination as plain text,
+// in the shape its header's wording has: before klaus-gateway 4.16.20 a
+// section carrying `host:port`; from then on the context's technical
+// details carrying `host:port (https)`, the scheme of the proof's fetch. The
+// mrkdwn naming it, and from 4.16.20 every mrkdwn of the notice, is sent
+// verbatim with nothing in it Slack would show as a link.
 func assertRefusalNotice(m slackMessage, agent, destination string) error {
+	if strings.HasPrefix(noticeHeader(m), refusalNoticeTitleOutgoing) {
+		return assertOutgoingNotice(m, agent, destination)
+	}
 	for _, block := range m.Blocks {
 		if block[fieldTypeKey] != slackBlockSection {
 			continue
@@ -432,16 +451,68 @@ func assertRefusalNotice(m slackMessage, agent, destination string) error {
 		if !strings.Contains(md, "`"+destination+"`") {
 			continue
 		}
-		if text[fieldTypeKey] != slackMrkdwn || text[slackVerbatim] != true {
-			return fmt.Errorf("the refusal notice of %s names %s in a %v text object with %s=%v, want mrkdwn sent verbatim (Slack would link it): %s",
-				agent, destination, text[fieldTypeKey], slackVerbatim, text[slackVerbatim], excerpt(md, 300))
-		}
-		if strings.Contains(md, "<http") {
-			return fmt.Errorf("the refusal notice of %s carries a link where it names %s: %s", agent, destination, excerpt(md, 300))
-		}
-		return nil
+		return plainMrkdwn(text, agent)
 	}
 	return fmt.Errorf("the refusal notice of %s has no section naming `%s`: %s", agent, destination, excerpt(m.shown(), 300))
+}
+
+// assertOutgoingNotice checks a notice in klaus-gateway 4.16.20's wording.
+func assertOutgoingNotice(m slackMessage, agent, destination string) error {
+	want := "`" + destination + " (https)`"
+	named := false
+	for _, block := range m.Blocks {
+		var texts []map[string]any
+		switch block[fieldTypeKey] {
+		case slackBlockSection:
+			if text, ok := block[slackKeyText].(map[string]any); ok {
+				texts = append(texts, text)
+			}
+		case slackBlockContext:
+			elements, _ := block[slackKeyElements].([]any)
+			for _, e := range elements {
+				if el, ok := e.(map[string]any); ok && (el[fieldTypeKey] == slackMrkdwn || el[fieldTypeKey] == slackPlainText) {
+					texts = append(texts, el)
+				}
+			}
+			for _, text := range texts {
+				md, _ := text[slackKeyText].(string)
+				named = named || strings.Contains(md, want)
+			}
+		}
+		for _, text := range texts {
+			if err := plainMrkdwn(text, agent); err != nil {
+				return err
+			}
+		}
+	}
+	if !named {
+		return fmt.Errorf("the refusal notice of %s names %s in no context: %s", agent, want, excerpt(m.shown(), 300))
+	}
+	return nil
+}
+
+// plainMrkdwn checks a text object is mrkdwn sent verbatim with no link in
+// it, so Slack shows it as written.
+func plainMrkdwn(text map[string]any, agent string) error {
+	md, _ := text[slackKeyText].(string)
+	if text[fieldTypeKey] != slackMrkdwn || text[slackVerbatim] != true {
+		return fmt.Errorf("the refusal notice of %s has a %v text object with %s=%v, want mrkdwn sent verbatim (Slack would link it): %s",
+			agent, text[fieldTypeKey], slackVerbatim, text[slackVerbatim], excerpt(md, 300))
+	}
+	if strings.Contains(md, "<http") {
+		return fmt.Errorf("the refusal notice of %s carries a link: %s", agent, excerpt(md, 300))
+	}
+	return nil
+}
+
+// noticeHeader is the text of the message's header block.
+func noticeHeader(m slackMessage) string {
+	for _, block := range m.Blocks {
+		if block[fieldTypeKey] == slackBlockHeader {
+			return blockText(block)
+		}
+	}
+	return ""
 }
 
 // refusalLogLines are the component's log lines about refusals, for an error.
