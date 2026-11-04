@@ -165,13 +165,14 @@ and, on a lab with the component, continues on it:
     refusing actor through it. Within 3 minutes the fake must hold exactly
     one notice for the agent in the person's direct message — the person is
     the Slack user the fake answers `users.lookupByEmail` with, the lowest
-    id carrying the e-mail — and the text naming `proxy.golang.org:443` (the
-    section, or since giantswarm/giantswarm#38814 the notice's technical
-    details in its context, `proxy.golang.org:443 (https)`) must be mrkdwn
-    sent `verbatim` with no link in it, so Slack shows the destination as
-    written. The notice is found by its header, "Egress refused for <agent>"
-    or, since then, "Outgoing connection to <host> blocked" with the agent
-    named below it. The name is per run because the notice's record
+    id carrying the e-mail. Before klaus-gateway 4.16.20 the notice's header
+    is "Egress refused for <agent>" and the section naming
+    `proxy.golang.org:443` must be mrkdwn sent `verbatim` with no link in
+    it, so Slack shows the destination as written. From 4.16.20 on the
+    header is "Outgoing connection to <host> blocked", the fallback text
+    ends in "(<agent>)", the context's technical details must name
+    `proxy.golang.org:443 (https)`, and every mrkdwn of the notice must be
+    sent `verbatim` with no link in it. The name is per run because the notice's record
     covers an agent and a destination for 24 hours: a rerun's notice for the
     same name would rewrite the last run's message instead of posting. The
     agent and its Session are removed, and an aborted run's
