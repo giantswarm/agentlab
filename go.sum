@@ -229,8 +229,8 @@ github.com/giantswarm/pagekit v0.3.5 h1:NygF5vL+QOad5RsLe/jzASKCajxS0WFJ0wAsucdg
 github.com/giantswarm/pagekit v0.3.5/go.mod h1:bXMRzjARa/TewLywz4naTh8YsGzbfSLUoGlEfM92oPQ=
 github.com/giantswarm/selfupdate-cosign v0.3.21 h1:DhUBnG1z3D4Hi6TyV2HO6tjrvk5k6Rcw9W/Sm5sjBGs=
 github.com/giantswarm/selfupdate-cosign v0.3.21/go.mod h1:W2HxtRkKe62sMZJGYOOCaUM/CewbIiB+LWpxTqrPpco=
-github.com/giantswarm/telemetrydeck-go v0.3.14 h1:iaz38pq4HJdP3uhoPfrERm4SundC7v8NsaL5NOPRhb4=
-github.com/giantswarm/telemetrydeck-go v0.3.14/go.mod h1:BitlH7nTrQmWvVEtnAa8pNM+FjI0+9S7JA9tl1PVvzo=
+github.com/giantswarm/telemetrydeck-go v0.3.15 h1:pwcJegjzc/FgP3n0tVTWJ2HTeRyuuQrFJVJJh2A7Kkk=
+github.com/giantswarm/telemetrydeck-go v0.3.15/go.mod h1:BitlH7nTrQmWvVEtnAa8pNM+FjI0+9S7JA9tl1PVvzo=
 github.com/giantswarm/vm-manager v0.25.26 h1:R7XLJX6ZDu+lp5qwc4n7QLh07ttwl6ChI+9rqKGG1Dk=
 github.com/giantswarm/vm-manager v0.25.26/go.mod h1:FgFqg9tZ2LQpqnmzQOwsZaGkevRZePUnCs0Pmj2w9yE=
 github.com/go-chi/chi/v5 v5.5.0 h1:xdKQ1dJmVJsmgahrXSKhUx8NyVPzpwdlyrrQFpMPJgg=
