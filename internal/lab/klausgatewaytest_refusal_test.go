@@ -21,6 +21,26 @@ func refusalNoticeBlocks(agent, destination string, verbatim bool) []any {
 	}
 }
 
+// refusalNoticeBlocksNow is a refusal notice as klaus-gateway posts it since
+// giantswarm/giantswarm#38814: the header names the host, the section the
+// agent, the context's technical details the destination in code.
+func refusalNoticeBlocksNow(agent, destination string, verbatim bool) []any {
+	host, _, _ := strings.Cut(destination, ":")
+	details := map[string]any{fieldTypeKey: slackMrkdwn, slackKeyText: "Technical details: destination `" + destination + " (https)`, origin `https://" + host + "`"}
+	if verbatim {
+		details[slackVerbatim] = true
+	}
+	return []any{
+		map[string]any{fieldTypeKey: slackBlockHeader, slackKeyText: map[string]any{fieldTypeKey: slackPlainText, slackKeyText: refusalNoticeTitleNow + host + " blocked"}},
+		map[string]any{fieldTypeKey: slackBlockSection, slackKeyText: map[string]any{fieldTypeKey: slackMrkdwn, slackVerbatim: true,
+			slackKeyText: agent + " is not allowed to reach this address · 1 attempt in 1 Session\nYou can allow it: add `https://" + host + "` to " + agent + "’s Extra egress origins."}},
+		map[string]any{fieldTypeKey: slackBlockContext, slackKeyElements: []any{
+			details,
+			map[string]any{fieldTypeKey: slackMrkdwn, slackVerbatim: true, slackKeyText: "You get this because you created *" + agent + "*."},
+		}},
+	}
+}
+
 // TestFakeSlackRefusalNotice: users.lookupByEmail answers the lowest id of
 // the people sharing an address, an unknown address users_not_found; the
 // notice posted to that user lands in their direct message with its blocks
@@ -61,11 +81,23 @@ func TestFakeSlackRefusalNotice(t *testing.T) {
 	if len(refusalNotices(f.thread("DTESTC", ""), "agentlab-refusal-other")) != 0 {
 		t.Fatal("a notice of another agent must not count")
 	}
+
+	const agentNow = "agentlab-refusal-x2"
+	callFake(t, f, slackPostMessage, nil, map[string]any{
+		slackKeyChannel: lowest, slackKeyText: refusalNoticeTitleNow + "proxy.golang.org blocked (" + agentNow + ")", slackKeyBlocks: refusalNoticeBlocksNow(agentNow, destination, true),
+	})
+	notices = refusalNotices(f.thread(directChannel(lowest), ""), agentNow)
+	if len(notices) != 1 {
+		t.Fatalf("refusal notices of %s in DTESTC = %d, want 1: %s", agentNow, len(notices), threadLine(f.thread("DTESTC", "")))
+	}
+	if err := assertRefusalNotice(notices[0], agentNow, destination); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // TestAssertRefusalNotice: a destination Slack would link — the mrkdwn not
 // verbatim, or already a link — fails naming it, as does a notice without
-// the destination.
+// the destination; both wordings of the notice pass.
 func TestAssertRefusalNotice(t *testing.T) {
 	const agent, destination = "agentlab-refusal-x1", "proxy.golang.org:443"
 	notice := func(blocks []any) slackMessage {
@@ -74,11 +106,15 @@ func TestAssertRefusalNotice(t *testing.T) {
 	if err := assertRefusalNotice(notice(refusalNoticeBlocks(agent, destination, true)), agent, destination); err != nil {
 		t.Fatalf("the verbatim notice: %v", err)
 	}
+	if err := assertRefusalNotice(notice(refusalNoticeBlocksNow(agent, destination, true)), agent, destination); err != nil {
+		t.Fatalf("the verbatim notice since giantswarm/giantswarm#38814: %v", err)
+	}
 	for name, tc := range map[string]struct {
 		blocks []any
 		want   string
 	}{
-		"not verbatim": {refusalNoticeBlocks(agent, destination, false), "verbatim"},
+		"not verbatim":     {refusalNoticeBlocks(agent, destination, false), "verbatim"},
+		"details verbatim": {refusalNoticeBlocksNow(agent, destination, false), "verbatim"},
 		"linked": {[]any{map[string]any{fieldTypeKey: slackBlockSection, slackKeyText: map[string]any{
 			fieldTypeKey: slackMrkdwn, slackVerbatim: true, slackKeyText: "`" + destination + "` <http://" + destination + ">",
 		}}}, "link"},

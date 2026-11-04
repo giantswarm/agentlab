@@ -35,8 +35,8 @@ import (
 //     in, since the gateway resolves the actor through it;
 //   - one direct message to the person — the Slack user the fake answers
 //     users.lookupByEmail with — naming the agent and the refused host and
-//     port as plain text: the section's mrkdwn is sent verbatim, so Slack
-//     shows host:port as written and links nothing;
+//     port as plain text: the mrkdwn that names it is sent verbatim, so
+//     Slack shows host:port as written and links nothing;
 //   - the agent and the Session removed, a leftover of an aborted run first.
 //
 // The deleted-Session pass (step 10b) runs the same with a second agent and
@@ -63,9 +63,12 @@ const (
 	refusalsEnabledEnv  = "KLAUS_GATEWAY_REFUSALS_ENABLED"
 	refusalsIntervalEnv = "KLAUS_GATEWAY_REFUSALS_INTERVAL"
 	refusalsWindowEnv   = "KLAUS_GATEWAY_REFUSALS_WINDOW"
-	// refusalNoticeTitle starts the notice's header (klaus-gateway's
-	// "Egress refused for <agent>").
-	refusalNoticeTitle = "Egress refused for "
+	// refusalNoticeTitle starts the notice's header: klaus-gateway's
+	// "Egress refused for <agent>" before giantswarm/giantswarm#38814,
+	// "Outgoing connection to <host> blocked" from then on, the agent
+	// named in the section.
+	refusalNoticeTitle    = "Egress refused for "
+	refusalNoticeTitleNow = "Outgoing connection to "
 	// refusalPostedRecord is the gateway's record of a posted notice.
 	refusalPostedRecord = "refusal_notice_posted"
 	// slackVerbatim is a mrkdwn text object's flag that keeps Slack from
@@ -412,7 +415,12 @@ func containerEnv(containers []corev1.Container, name string) map[string]string 
 func refusalNotices(msgs []slackMessage, agent string) []slackMessage {
 	var out []slackMessage
 	for _, m := range msgs {
-		if m.Method == slackPostMessage && strings.Contains(m.shown(), refusalNoticeTitle+agent) {
+		if m.Method != slackPostMessage {
+			continue
+		}
+		shown := m.shown()
+		if strings.Contains(shown, refusalNoticeTitle+agent) ||
+			(strings.HasPrefix(shown, refusalNoticeTitleNow) && strings.Contains(shown, agent)) {
 			out = append(out, m)
 		}
 	}
@@ -420,16 +428,14 @@ func refusalNotices(msgs []slackMessage, agent string) []slackMessage {
 }
 
 // assertRefusalNotice checks the notice names the destination as plain text:
-// a mrkdwn section sent verbatim carrying host:port in code, and nothing in
-// it Slack would show as a link.
+// a mrkdwn text object sent verbatim carrying host:port in code — a section
+// (before giantswarm/giantswarm#38814) or the technical details' context
+// element (`host:port (scheme)`) — and nothing in it Slack would show as a
+// link.
 func assertRefusalNotice(m slackMessage, agent, destination string) error {
-	for _, block := range m.Blocks {
-		if block[fieldTypeKey] != slackBlockSection {
-			continue
-		}
-		text, _ := block[slackKeyText].(map[string]any)
+	for _, text := range noticeTexts(m) {
 		md, _ := text[slackKeyText].(string)
-		if !strings.Contains(md, "`"+destination+"`") {
+		if !strings.Contains(md, "`"+destination+"`") && !strings.Contains(md, "`"+destination+" (") {
 			continue
 		}
 		if text[fieldTypeKey] != slackMrkdwn || text[slackVerbatim] != true {
@@ -441,7 +447,28 @@ func assertRefusalNotice(m slackMessage, agent, destination string) error {
 		}
 		return nil
 	}
-	return fmt.Errorf("the refusal notice of %s has no section naming `%s`: %s", agent, destination, excerpt(m.shown(), 300))
+	return fmt.Errorf("the refusal notice of %s names `%s` in no section or context: %s", agent, destination, excerpt(m.shown(), 300))
+}
+
+// noticeTexts are the text objects of a message's sections and contexts.
+func noticeTexts(m slackMessage) []map[string]any {
+	var out []map[string]any
+	for _, block := range m.Blocks {
+		switch block[fieldTypeKey] {
+		case slackBlockSection:
+			if text, ok := block[slackKeyText].(map[string]any); ok {
+				out = append(out, text)
+			}
+		case slackBlockContext:
+			elements, _ := block[slackKeyElements].([]any)
+			for _, el := range elements {
+				if text, ok := el.(map[string]any); ok {
+					out = append(out, text)
+				}
+			}
+		}
+	}
+	return out
 }
 
 // refusalLogLines are the component's log lines about refusals, for an error.
