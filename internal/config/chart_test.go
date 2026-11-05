@@ -416,7 +416,7 @@ func TestTenantsModeChart(t *testing.T) {
 // default model floor on, a chart directory included, and the kagent chart's
 // own below it.
 func TestDefaultModelChart(t *testing.T) {
-	for version, want := range map[string]bool{DefaultChartVersion: true, "4.175.0": true, "4.175.0-rc.6": false, "4.174.3": false, "3.23.1": false} {
+	for version, want := range map[string]bool{DefaultChartVersion: true, "4.175.0": true, "4.175.0-rc.14": false, "4.174.3": false, "3.23.1": false} {
 		cfg := Default()
 		cfg.Platform.ChartVersion = version
 		if got := cfg.DefaultModelChart(); got != want {
