@@ -169,6 +169,12 @@ type tmplData struct {
 	// ChatGPTSubscription is a person's own ChatGPT login as a codex model
 	// (chatgptsubscription.go), nil with platform.chatgptSubscription off.
 	ChatGPTSubscription *chatgptSubscriptionValues
+	// DefaultModel is the kagent namespace's marked default model
+	// (defaultmodel.go), nil below the default model floor or without the
+	// agents; AgentManagerRange the agent-manager range the lab renders
+	// beside it, empty for the chart's own.
+	DefaultModel      *defaultModelValues
+	AgentManagerRange string
 	// PostRenderers is the lab's per-component `postRenderers` list as
 	// indented YAML, keyed by agent-platform component name
 	// (postrenderers.go): the hostNetwork, sidecar and nodePort patches plus
@@ -352,6 +358,8 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		OrganizationsEnabled:         cfg.OrganizationsEnabled(),
 		CodingHarnesses:              codingHarnessesFor(cfg, workspaceAdmissionValuesFor(cfg, workspacesChart.Carries), nil),
 		ChatGPTSubscription:          chatgptSubscriptionValuesFor(cfg),
+		DefaultModel:                 defaultModelValuesFor(cfg),
+		AgentManagerRange:            agentManagerRangeFor(cfg),
 		CertsDir:                     certsDir,
 		NodeFilesDir:                 nodeFiles,
 		MusterNodePort:               config.MusterNodePort,

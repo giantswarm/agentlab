@@ -40,10 +40,6 @@ const (
 	agentTemplateAPIVersion = kagentAPIVersion
 	// remoteMCPServerKind is the kind an AgentTemplate's MCP tool binding names.
 	remoteMCPServerKind = "RemoteMCPServer"
-	// defaultModelConfig is the ModelConfig the kagent chart renders from
-	// providers.<default>, referencing the Secret `agentlab up` fills
-	// (anthropic.go): the throwaway agents' default.
-	defaultModelConfig = "default-model-config"
 )
 
 // agentTemplate is the part of a kagent AgentTemplate the proofs read.

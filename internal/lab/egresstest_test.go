@@ -163,7 +163,7 @@ func TestEgressRawTCPByNameOnly(t *testing.T) {
 // TestCreateAgentArgsEgress: the spec's egress is create_agent's egress
 // argument and the chart's agent.egress; none declared composes neither.
 func TestCreateAgentArgsEgress(t *testing.T) {
-	spec := agentSpec{Name: testAgentName, ModelConfig: defaultModelConfig, Egress: []string{DefaultEgressOrigin}}
+	spec := agentSpec{Name: testAgentName, ModelConfig: testModelConfig, Egress: []string{DefaultEgressOrigin}}
 	args, err := createAgentArgs(spec)
 	if err != nil || !reflect.DeepEqual(args[egressKey], spec.Egress) {
 		t.Errorf("create_agent egress: %v, %v", args, err)

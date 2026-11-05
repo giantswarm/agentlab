@@ -800,7 +800,7 @@ the step. Unblocks when kagent's Update maps a conflict to `Aborted` or
 retries it on a fresh read (giantswarm/kagent-upstream,
 `go/core/internal/service/kubecrud`): the retry then goes.
 
-### U39. `organizationstest.go`: the erasure of an Orphaned organization is skipped — BLOCKED UPSTREAM
+### U41. `organizationstest.go`: the erasure of an Orphaned organization is skipped — BLOCKED UPSTREAM
 The management-cluster profile asks that an organization's erasure finish
 while a person's session runs in it. On the lab it cannot: kagent answers
 `NotFound` to the operator for another creator's session, so the erasure
@@ -816,7 +816,7 @@ carries kagent-extensions#27 and the operator takes path-style addressing
 (an `AWS_S3_USE_PATH_STYLE`-like option, as Substrate reads): the check then
 deletes an organization with a running session and waits for its finalizer.
 
-### U40. `agent-platform-values.yaml.tmpl`: the operator's quota counts ServiceAccounts under `count/serviceaccounts` — BLOCKED UPSTREAM
+### U42. `agent-platform-values.yaml.tmpl`: the operator's quota counts ServiceAccounts under `count/serviceaccounts` — BLOCKED UPSTREAM
 agent-platform-operator's default `objectQuota` (v0.1.0-rc.5 through main)
 carries the bare key `serviceaccounts`, which is no standard quota resource,
 so the API server refuses the ResourceQuota
@@ -853,6 +853,21 @@ kind cluster is IPv4 single-stack, so nothing reaches the data plane over
 IPv6 anyway. Unblocks when agentgateway falls back to the IPv4 wildcard on a
 host without IPv6 (an absent `/proc/net/if_inet6`, or `EAFNOSUPPORT` from
 the IPv6 socket) — then the patch goes.
+
+### U39. `agent-platform-values.yaml.tmpl`: the lab renders agent-manager's range beside the marked default model — BLOCKED UPSTREAM
+From agent-platform 4.175.0-rc.7 the lab's default model is a
+`kagent.modelConfigs` entry marked `default: true` (`defaultmodel.go`), and
+the proofs ask agent-manager for it: `list_model_configs` reports the
+namespace's default as `default: true` from agent-manager 2.19.0-rc.2 on.
+That chart's own range is `components.agent-manager.versionRange: ">=2.16.0
+<2.19.0"`, so it installs a 2.18 that reports no default. **Fix:** with the
+marked entry the values set `components.agent-manager.versionRange:
+">=2.19.0-rc.2 <3.0.0-0"` (`agentManagerRangeFor`). The chart gives
+agent-manager `tenants: {enabled: false}` only, which 2.19 takes. Unblocks
+when an agent-platform release moves its range to 2.19 or later (the chart's
+own comment on the range: it moves with the values that turn 2.19's
+`tenants.enabled` on): the lab's `DefaultChartVersion` follows it and the
+range goes.
 
 ## Accepted lab trade-offs (not hacks to fix)
 

@@ -132,7 +132,16 @@ func HarnessMatrixTest(cfg *config.Config, opts HarnessMatrixOptions) error {
 			return fmt.Errorf("no case %q: the cases are %s", key, strings.Join(matrixCaseKeys(), ", "))
 		}
 	}
-	cells := matrixCells(harnesses, opts)
+	user := cfg.AdminUser()
+	token, err := passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret, user.Email, user.Password, musterLoginScopes)
+	if err != nil {
+		return err
+	}
+	defaultModel, err := labDefaultModelConfig(cfg, token)
+	if err != nil {
+		return err
+	}
+	cells := matrixCells(harnesses, opts, defaultModel)
 	if slices.ContainsFunc(cells, func(c *matrixCell) bool { return c.modelConfig == MockLLMModelConfig }) {
 		if err := ensureMockLLMModelConfig(); err != nil {
 			return err
@@ -156,11 +165,6 @@ func HarnessMatrixTest(cfg *config.Config, opts HarnessMatrixOptions) error {
 		}
 	}
 
-	user := cfg.AdminUser()
-	token, err := passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret, user.Email, user.Password, musterLoginScopes)
-	if err != nil {
-		return err
-	}
 	api, err := dialKagentAPI(cfg, token)
 	if err != nil {
 		return err
@@ -195,8 +199,9 @@ func matrixCaseKeys() []string {
 	return keys
 }
 
-// matrixCells are the cells of the cases selected on the Harnesses given.
-func matrixCells(harnesses []string, opts HarnessMatrixOptions) []*matrixCell {
+// matrixCells are the cells of the cases selected on the Harnesses given,
+// each on defaultModel but codex's.
+func matrixCells(harnesses []string, opts HarnessMatrixOptions, defaultModel string) []*matrixCell {
 	var cells []*matrixCell
 	for _, c := range matrixCases {
 		if len(opts.Cases) > 0 && !slices.Contains(opts.Cases, c.key) {
@@ -207,7 +212,7 @@ func matrixCells(harnesses []string, opts HarnessMatrixOptions) []*matrixCell {
 				continue
 			}
 			parent := fmt.Sprintf("%s-%s-%s", harnessMatrixPrefix, h, strings.TrimPrefix(c.key, "shared-"))
-			cell := &matrixCell{c: c, harness: h, modelConfig: defaultModelConfig, parent: parent, child: parent + "-c", grandchild: parent + "-g", codeword: "hm-" + randHex(4)}
+			cell := &matrixCell{c: c, harness: h, modelConfig: defaultModel, parent: parent, child: parent + "-c", grandchild: parent + "-g", codeword: "hm-" + randHex(4)}
 			if h == config.CodingRuntimeCodex {
 				cell.modelConfig = opts.CodexModelConfig
 				if cell.modelConfig == "" {

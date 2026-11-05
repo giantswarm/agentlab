@@ -132,9 +132,13 @@ func proveAgentManagerIdentity(cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
+	modelConfig, err := agentManagerModelConfig(session)
+	if err != nil {
+		return err
+	}
 	session.setHeader(userIDHeader, admin.Email)
 	text, err := session.callServerTool(toolPrefix+"create_agent", map[string]any{
-		nameKey: identityProofAgent, modelConfigKey: defaultModelConfig, toolsetKey: []string{agentsTestToolset},
+		nameKey: identityProofAgent, modelConfigKey: modelConfig, toolsetKey: []string{agentsTestToolset},
 	})
 	switch {
 	case err == nil:

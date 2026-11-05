@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -384,5 +385,45 @@ func TestFeatureChartFloors(t *testing.T) {
 				t.Errorf("%s, %s: want the refusal naming %q and %s, got %v", tc.name, feature.name, tc.refused, feature.off, err)
 			}
 		}
+	}
+}
+
+// The tenants mode (tenants.organizations) is the chart line before the
+// organizations' floor; a chart directory is the current line.
+func TestTenantsModeChart(t *testing.T) {
+	for _, tc := range []struct {
+		name, version, path string
+		tenantsMode         bool
+	}{
+		{name: "default release", version: DefaultChartVersion},
+		{name: "the removal's release", version: "4.175.0-rc.4"},
+		{name: "before the removal", version: "4.175.0-rc.3", tenantsMode: true},
+		{name: "4.174", version: "4.174.3", tenantsMode: true},
+		{name: "chart directory", version: DefaultChartVersion, path: t.TempDir()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Default()
+			cfg.Platform.ChartVersion = tc.version
+			cfg.Platform.ChartPath = tc.path
+			if got := cfg.TenantsModeChart(); got != tc.tenantsMode {
+				t.Errorf("TenantsModeChart() = %v, want %v", got, tc.tenantsMode)
+			}
+		})
+	}
+}
+
+// The agents' default model is a marked kagent.modelConfigs entry from the
+// default model floor on, a chart directory included, and the kagent chart's
+// own below it.
+func TestDefaultModelChart(t *testing.T) {
+	for version, want := range map[string]bool{DefaultChartVersion: true, "4.175.0": true, "4.175.0-rc.6": false, "4.174.3": false, "3.23.1": false} {
+		cfg := Default()
+		cfg.Platform.ChartVersion = version
+		if got := cfg.DefaultModelChart(); got != want {
+			t.Errorf("%s: DefaultModelChart() = %v, want %v", version, got, want)
+		}
+	}
+	if slices.Contains(reservedModelNames, "") || !slices.Contains(reservedModelNames, DefaultModelConfig) || !slices.Contains(reservedModelNames, KagentChartDefaultModelConfig) {
+		t.Errorf("reservedModelNames = %v, want the marked entry and the kagent chart's default", reservedModelNames)
 	}
 }

@@ -227,9 +227,7 @@ func polexTenants(cfg *config.Config) bool {
 // agentPlatformOrganizations (and refuses the tenants mode): whatever
 // platform.organizations says, the switch is judged on the chart.
 func polexOrganizationsChart(cfg *config.Config) bool {
-	c := *cfg
-	c.Platform.Organizations.Enabled = true
-	return c.OrganizationsEnabled()
+	return !cfg.TenantsModeChart()
 }
 
 // polexShape words the values the proof renders, for its lines.

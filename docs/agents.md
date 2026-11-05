@@ -72,10 +72,28 @@ the control boot without the skill).
 
 ## The model
 
-Agents run against a **default `ModelConfig`** that the connectivity chart
-renders from the lab's `aiModel` setting (`agentlab.yaml`, default
-`claude-sonnet-4-6` — the BOM's own default), referencing the Secret
-`kagent/kagent-anthropic` (key `ANTHROPIC_API_KEY`). The API key is a **real
+Agents run against the **kagent namespace's default `ModelConfig`**: the one
+annotated `agent-platform.giantswarm.io/is-default-model-config: "true"`.
+The lab declares it as the `kagent.modelConfigs` entry `anthropic` marked
+`default: true`, on the lab's `aiModel` setting (`agentlab.yaml`, default
+`claude-sonnet-4-6`, the BOM's own default), and sets
+`kagent.defaultModelConfig.enabled: false`, so the kagent chart renders no
+`default-model-config` of its own. On an agent-platform release before
+4.175.0-rc.7 the lab renders `kagent.providers` instead, and the default is
+the kagent chart's `default-model-config`. Either way the ModelConfig
+references the Secret `kagent/kagent-anthropic` (key `ANTHROPIC_API_KEY`),
+and `agentlab platform` waits for the marked model to be Accepted, carry the
+annotation and resolve its Secret.
+
+The proofs never assume the model's name. One that is given no
+`--model-config` asks agent-manager for the namespace's default
+(`list_model_configs`, the entry with `default: true`) as the person it runs
+as. The lab takes agent-manager from 2.19.0-rc.2 on beside the marked entry
+(`components.agent-manager.versionRange`), the first release that reports
+the default (HACKS.md U39). An agent-manager that reports no `default` at
+all (an older line) answers `default-model-config`.
+
+The API key is a **real
 credential**, so unlike the lab's throwaway passwords it never enters
 `agentlab.yaml` or the rendered `state/` files. The Secret exists after every
 `agentlab up` and `agentlab platform`, so the ModelConfig resolves on a fresh
@@ -237,7 +255,7 @@ admission policies, and selects the organization namespaces by the label
 `agent-platform.giantswarm.io/organization` (Substrate's credential provider,
 the workers' admission, kagent's authorizer, muster with
 `mcpServersInAllNamespaces`). It takes effect with the agents runtime on a
-chart from agent-platform 4.175.0-rc.5 on (`config.OrganizationsChartFloor`);
+chart from agent-platform 4.175.0-rc.4 on (`config.OrganizationsChartFloor`), the default chart included;
 below it, `up` says so and leaves the chart's earlier shape alone. The
 tenants mode the chart removed (`platform.tenants`, agent-manager's tenant
 reconciler) is gone from the lab: an `agentlab.yaml` that still names it
@@ -265,7 +283,7 @@ creates an agent's HelmRelease there as a server-side dry run with their own
 Dex token, which RBAC and every admission policy of the namespace (the
 HelmRelease field lock among them) judge; `up` fails if it is refused. The
 summary names the namespace. The lab's values also count the operator's
-ServiceAccount quota under `count/serviceaccounts` (HACKS.md U40).
+ServiceAccount quota under `count/serviceaccounts` (HACKS.md U42).
 
 ## The organizations proof
 
@@ -344,7 +362,7 @@ the namespace's atespace from that namespace only. Then:
   organization's atespace its own namespace only. The erasure of an
   `Orphaned` organization with a running session is skipped: it stalls at the
   Sessions step until the lab's kagent line carries
-  giantswarm/kagent-extensions#27 (HACKS.md U39). Slice 17
+  giantswarm/kagent-extensions#27 (HACKS.md U41). Slice 17
   (giantswarm/agent-platform#1269) adds Substrate's Secret access to the same
   list (`profileChecks`).
 

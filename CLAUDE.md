@@ -78,7 +78,18 @@ with Dex doing the logins.
   agent-manager's `create_agent` over muster as the signed-in person, the
   same tool an MCP session drives, and the platform chart's bundled engine
   reconciles the HelmRelease — nothing watches git, and the lab installs no
-  Flux of its own. Its default
+  Flux of its own. The kagent namespace's default ModelConfig is the one
+  annotated `agent-platform.giantswarm.io/is-default-model-config: "true"`:
+  from agent-platform 4.175.0-rc.7 the lab's `kagent.modelConfigs` entry
+  `anthropic` marked `default: true`, with `kagent.defaultModelConfig.enabled:
+  false` (below that release, the kagent chart's `default-model-config` from
+  `kagent.providers`; defaultmodel.go). Proofs never hard-code a model name:
+  without `--model-config` they take the entry agent-manager's
+  `list_model_configs` reports `default: true` (`agentManagerModelConfig`),
+  which is why the lab renders agent-manager's range from 2.19.0-rc.2 on
+  (HACKS.md U39). `platform.tenants` is retired: 4.175.0-rc.4 removes the
+  tenants mode, and organizations replace it (`platform.organizations`).
+  That default
   ModelConfig and Backstage's ai-chat both use `aiModel` from `agentlab.yaml`
   (Anthropic only); the API key lives only in the Secrets
   `kagent/kagent-anthropic`, the portal's `agent-platform/agentlab-anthropic`
@@ -95,7 +106,7 @@ with Dex doing the logins.
   env-var -> Secret key handling; entries removed from the config are pruned
   on the next run (see docs/models.md "Extra model configs").
 - `platform.organizations` (on by default, from agent-platform
-  4.175.0-rc.5 on) runs Agent Platform organizations: the chart's
+  4.175.0-rc.4 on) runs Agent Platform organizations: the chart's
   agent-platform-operator reconciles each `AgentPlatformOrganization` of a
   parent namespace into `agents-<name>-<random>`. The lab's parent is the
   fixed root namespace `agentlab-organizations`; `up` keeps the default
@@ -103,7 +114,7 @@ with Dex doing the logins.
   admins, `developers` as its editors and its own model (organizations.go).
   `agentlab organizations-test` is the proof (docs/agents.md "The
   organizations proof"); its two organizations stay between runs, since an
-  organization's erasure is skipped on the lab (HACKS.md U39).
+  organization's erasure is skipped on the lab (HACKS.md U41).
 - `agentlab configure` **discovers this machine on every run** (fresh or
   existing `agentlab.yaml`): the tools `up` shells out to, whether this
   configuration's kind node exists and which host ports it publishes (never
@@ -247,7 +258,7 @@ agentlab beekeeper-decisions-test  # beekeeper serve behind muster puts decision
 agentlab beekeeper-central-test --part notes  # beekeeper's central notes through two lab users' CLIs: note add --for the other, listed and answered on the other's machine, the answer printed once by the filer's watch across a restart; a withdrawal only its filer may make; a fold into and a park on a central note, the park settled with the answer once
 agentlab test            # RBAC assertions for every configured user
 agentlab backstage-test  # headless Backstage sign-in for every user, the portal's Agent Platform and Models pages (--agent kagent/<name>: on an existing agent, no create or delete)
-agentlab organizations-test  # platform.organizations: two AgentPlatformOrganizations, alice and bob each an editor of one by group: each creates and runs an agent in their own; every surface (Kubernetes, kagent API, Slack; the Dev Portal skipped until backstage#3363) gives each the same agents; the negative cross-organization tests per surface and boundary (Kubernetes RBAC, kagent API and A2A, muster, the other organization's model, in-cluster 443 through the egress gateway); the profile tests (object-count quota, a PolicyException that does not lift the sandbox policies, the credential provider's grants; the Orphaned erasure skipped, HACKS.md U39)
+agentlab organizations-test  # platform.organizations: two AgentPlatformOrganizations, alice and bob each an editor of one by group: each creates and runs an agent in their own; every surface (Kubernetes, kagent API, Slack; the Dev Portal skipped until backstage#3363) gives each the same agents; the negative cross-organization tests per surface and boundary (Kubernetes RBAC, kagent API and A2A, muster, the other organization's model, in-cluster 443 through the egress gateway); the profile tests (object-count quota, a PolicyException that does not lift the sandbox policies, the credential provider's grants; the Orphaned erasure skipped, HACKS.md U41)
 agentlab coding-test     # platform.coding: the coding Harness from the values, agent-manager's guards, a coding agent's sandbox floor (uid split, forwarder paths, a write tool refused, no credentials, DNS canary, egress), a workspace Session's MCP call audited by muster as the person, nothing in the sandbox running between turns, the instruction fixture, suspend/resume, the turn's usage, a share refused, no muster call of the actor accepted after delete_session
 agentlab coding-test --part devctl  # platform.devctl: a coding agent opens a pull request as the person, waits for its CI (one pr_wait), merges it (pr_merge) and waits for its release (release_wait) through devctl's MCP server; one pr_wait with a progressToken beside it
 agentlab coding-test --part toolchains  # agent-manager's toolchains: start_session with --toolchains (default go) mounts them pinned by digest; a turn finds each tool under /opt/kagent/tools/<name> on its PATH, with go builds a fixture module; the actor template mounts those digests; --other-version go@0.1.0 adds a second Session at that version and a resume of the first (--harness claude|codex)

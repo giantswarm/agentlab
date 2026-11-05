@@ -550,7 +550,7 @@ func TestSessionsRoutes(t *testing.T) {
 
 // rosterTemplate is one AgentTemplate as the Kubernetes proxy lists it.
 func rosterTemplate(name, binds string) map[string]any {
-	spec := map[string]any{"modelConfig": map[string]any{nameKey: defaultModelConfig}}
+	spec := map[string]any{"modelConfig": map[string]any{nameKey: testModelConfig}}
 	if binds != "" {
 		spec["tools"] = []any{map[string]any{"mcp": map[string]any{"server": map[string]any{fieldKind: remoteMCPServerKind, nameKey: binds}}}}
 	}

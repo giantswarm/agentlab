@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -918,9 +919,10 @@ func TestPlatformValuesLegacyChartShape(t *testing.T) {
 	delete(expectedAuth, "jwksURL")
 	delete(expectedAuth, "jwksAllowHTTP")
 	expectedKagent["serviceMonitor"].(map[string]any)["enabled"] = legacy.Platform.Observability
+	withKagentChartDefault(t, expected, legacy.AIModel)
 	dropOverlayChecksum(t, expected)
 	if !reflect.DeepEqual(expected, legacyValues) {
-		t.Errorf("the 3.x values differ from the 4.x values in more than the 4.x keys and the overlay's checksum:\n--- 4.x minus the keys\n%s\n--- 3.x\n%s", mustYAML(t, expected), mustYAML(t, legacyValues))
+		t.Errorf("the 3.x values differ from the 4.x values in more than the 4.x keys, the default model and the overlay's checksum:\n--- 4.x minus the keys\n%s\n--- 3.x\n%s", mustYAML(t, expected), mustYAML(t, legacyValues))
 	}
 
 	// The switch follows the chart, not the channel: a 4.x release, a 5.x
@@ -930,7 +932,7 @@ func TestPlatformValuesLegacyChartShape(t *testing.T) {
 		mutate func(*config.Config)
 		want   string
 	}{
-		"4.x release": {func(c *config.Config) { c.Platform.ChartVersion = "4.93.0" }, currentOut},
+		"4.x release": {func(c *config.Config) { c.Platform.ChartVersion = "4.175.0" }, currentOut},
 		"5.x release": {func(c *config.Config) { c.Platform.ChartVersion = "5.0.0" }, currentOut},
 		"dev build of main": {func(c *config.Config) {
 			c.Platform.ChartVersion, c.Platform.ChartBranch = "4.106.1-rbf28cd64t20261001120000h7f841be", testRefMain
@@ -953,9 +955,10 @@ func TestPlatformValuesLegacyChartShape(t *testing.T) {
 	seedValues, _ := render(seed)
 	seedExpected, _ := render(current)
 	delete(seedExpected["mcp-kubernetes"].(map[string]any), "mcpServer")
+	withKagentChartDefault(t, seedExpected, seed.AIModel)
 	dropOverlayChecksum(t, seedExpected)
 	if !reflect.DeepEqual(seedExpected, seedValues) {
-		t.Errorf("the upgrade seed's values differ from the 4.x values in more than mcp-kubernetes.mcpServer and the overlay's checksum:\n--- 4.x minus the key\n%s\n--- seed\n%s", mustYAML(t, seedExpected), mustYAML(t, seedValues))
+		t.Errorf("the upgrade seed's values differ from the 4.x values in more than mcp-kubernetes.mcpServer, the default model and the overlay's checksum:\n--- 4.x minus the key\n%s\n--- seed\n%s", mustYAML(t, seedExpected), mustYAML(t, seedValues))
 	}
 	// A chart directory renders its roster's line, whatever pin is left
 	// over, plus its connectivity source
@@ -1512,4 +1515,39 @@ func workspaceManagerPatchEnv(t *testing.T, entry any) map[string]string {
 		}
 	}
 	return env
+}
+
+// kagentProviderAnthropic is the kagent.providers key of the lab's provider.
+const kagentProviderAnthropic = "anthropic"
+
+// withKagentChartDefault turns a render from the default model floor on into
+// the one below it: kagent.providers in place of the marked
+// kagent.modelConfigs[] entry and kagent.defaultModelConfig, and the chart's
+// own agent-manager range.
+func withKagentChartDefault(t *testing.T, values map[string]any, model string) {
+	t.Helper()
+	kagent := values["kagent"].(map[string]any)
+	delete(kagent, "defaultModelConfig")
+	entries, _ := kagent["modelConfigs"].([]any)
+	kept := slices.DeleteFunc(slices.Clone(entries), func(e any) bool {
+		return e.(map[string]any)[modelConfigDefaultField] == true
+	})
+	if len(kept) == len(entries) {
+		t.Fatalf("no marked kagent.modelConfigs entry in %v", entries)
+	}
+	if len(kept) == 0 {
+		delete(kagent, "modelConfigs")
+	} else {
+		kagent["modelConfigs"] = kept
+	}
+	kagent["providers"] = map[string]any{
+		providersDefaultKey: kagentProviderAnthropic,
+		kagentProviderAnthropic: map[string]any{
+			modelConfigProviderField: "Anthropic",
+			modelField:               model,
+			"apiKeySecretRef":        anthropicSecret,
+			"apiKeySecretKey":        anthropicSecretKey,
+		},
+	}
+	delete(values["components"].(map[string]any)["agent-manager"].(map[string]any), "versionRange")
 }

@@ -83,7 +83,7 @@ const (
 	// organizationQuotaResource is the counted resource the quota test
 	// fills: ServiceAccounts, the smallest default count (100) of a kind
 	// nothing of the platform's watches, under the key the quota counts
-	// them by (organizationQuotaKey; HACKS.md U40).
+	// them by (organizationQuotaKey; HACKS.md U42).
 	organizationQuotaResource = "serviceaccounts"
 	organizationQuotaKey      = "count/" + organizationQuotaResource
 	// organizationQuotaRefusal is the API server's refusal of a write over

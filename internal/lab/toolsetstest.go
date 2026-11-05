@@ -57,7 +57,8 @@ const presetNoSuch = "preset:agentlab-no-such-preset"
 // ToolsetsTestOptions tunes the proof.
 type ToolsetsTestOptions struct {
 	// ModelConfig is the kagent ModelConfig the throwaway agents run on
-	// (default: default-model-config, the Anthropic one the lab renders).
+	// (default: the kagent namespace's default, as agent-manager's
+	// list_model_configs reports it).
 	ModelConfig string
 	// SkipChat skips the turns that need the model to answer (the runtime
 	// path and the chat-only agent); the objects, muster's resolution and
@@ -114,9 +115,6 @@ func ToolsetsTest(cfg *config.Config, email string, opts ToolsetsTestOptions) er
 	if other == nil {
 		return fmt.Errorf("%s needs a second user for the per-user sign-in proof", config.File)
 	}
-	if opts.ModelConfig == "" {
-		opts.ModelConfig = defaultModelConfig
-	}
 	toolPrefix := agentManagerToolPrefix
 	var verdicts []string
 	pass := func(format string, a ...any) { verdicts = append(verdicts, fmt.Sprintf("PASS: "+format, a...)) }
@@ -133,6 +131,11 @@ func ToolsetsTest(cfg *config.Config, email string, opts ToolsetsTestOptions) er
 	}
 	if err := admin.callServerJSON(toolPrefix+"get_info", nil, &struct{}{}); err != nil {
 		return fmt.Errorf("agent-manager is not reachable through muster (%w); check `kubectl -n %s get mcpservers.muster.giantswarm.io %s`", err, platformNamespace, agentManagerMCPServer)
+	}
+	if opts.ModelConfig == "" {
+		if opts.ModelConfig, err = agentManagerModelConfig(admin); err != nil {
+			return err
+		}
 	}
 
 	// Leftovers of an aborted run first, and everything this run creates on

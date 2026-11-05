@@ -154,7 +154,7 @@ const DefaultAPIServerPort = 6443
 // image is the major.minor components.substrate installs) — a chart that
 // leaves the kagent range open across a Substrate release boots no golden
 // actor (agentlab#187).
-const DefaultChartVersion = "4.174.3"
+const DefaultChartVersion = "4.175.0-rc.7"
 
 // ChartRepository is where the agent-platform chart releases live.
 const ChartRepository = "oci://gsoci.azurecr.io/charts/giantswarm/agent-platform"
@@ -378,6 +378,32 @@ func (c *Config) belowFamiliesFloor() bool {
 // proofs address that server, and platform-test skips the families proof.
 func (c *Config) FamilylessChart() bool {
 	return c.LegacyChart() || c.belowFamiliesFloor()
+}
+
+// defaultModelChartFloor is the first agent-platform release whose
+// kagent.modelConfigs[] entry takes `default: true` (the annotation
+// agent-platform.giantswarm.io/is-default-model-config) and whose
+// kagent.defaultModelConfig.enabled: false keeps the kagent chart from
+// rendering default-model-config (giantswarm/agent-platform#1274).
+var defaultModelChartFloor = semver.MustParse("4.175.0-rc.7")
+
+// DefaultModelChart reports whether the lab declares the agents' default
+// model as a marked kagent.modelConfigs[] entry: a released chart from
+// defaultModelChartFloor on, a chart directory, a branch build. Below it the
+// kagent chart renders default-model-config from kagent.providers.
+func (c *Config) DefaultModelChart() bool {
+	_, below := c.chartBelow(defaultModelChartFloor)
+	return !below
+}
+
+// TenantsModeChart reports whether the lab's meta chart still takes
+// tenants.organizations, the tenants mode (polex-test renders its
+// exceptions there): a released chart before OrganizationsChartFloor, which
+// refuses the key, the 3.x line. A chart directory and a branch build are
+// the current line.
+func (c *Config) TenantsModeChart() bool {
+	_, below := c.chartBelow(OrganizationsChartFloor)
+	return below
 }
 
 // DefaultDevRegistryPort is the host port of the lab registry when
@@ -712,10 +738,10 @@ type Organizations struct {
 }
 
 // OrganizationsChartFloor is the first agent-platform release with
-// agentPlatformOrganizations: the operator component, the organizations'
-// roles and admission policies, and the tenants mode gone
-// (giantswarm/agent-platform#1270, #1272, #1273).
-var OrganizationsChartFloor = semver.MustParse("4.175.0-rc.5")
+// agentPlatformOrganizations deploying agent-platform-operator, and the
+// first that refuses tenants.organizations, the tenants mode
+// (giantswarm/agent-platform#1270, #1272).
+var OrganizationsChartFloor = semver.MustParse("4.175.0-rc.4")
 
 // Workspaces configures the workspace storage in the lab.
 type Workspaces struct {
@@ -2019,10 +2045,20 @@ func ValidateAIModel(s string) error {
 	return nil
 }
 
-// reservedModelNames collide with what the kagent chart / the lab already
-// own: the chart-rendered default ModelConfig, and the name whose Secret
-// (kagent-anthropic) the default ModelConfig references.
-var reservedModelNames = []string{"default-model-config", "anthropic"}
+// reservedModelNames collide with what the lab's agents default to: the
+// marked kagent.modelConfigs[] entry DefaultModelConfig, whose Secret
+// kagent-anthropic is the name an extra model's Secret would take, and
+// default-model-config, the kagent chart's own on a line below the default
+// model floor.
+var reservedModelNames = []string{KagentChartDefaultModelConfig, DefaultModelConfig}
+
+// DefaultModelConfig is the lab's marked kagent.modelConfigs[] entry, the
+// kagent namespace's default model on a DefaultModelChart.
+const DefaultModelConfig = "anthropic"
+
+// KagentChartDefaultModelConfig is the ModelConfig the kagent chart renders
+// from kagent.providers below the default model floor.
+const KagentChartDefaultModelConfig = "default-model-config"
 
 // ValidateModelName is the one home of the extra-model-name rule; the huh
 // form uses it directly as an input validator.

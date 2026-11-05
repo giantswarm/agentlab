@@ -38,11 +38,11 @@ func TestOrganizationsEnabled(t *testing.T) {
 	if !cfg.OrganizationsEnabled() || cfg.OrganizationsInactive() != "" {
 		t.Errorf("default on 4.175.0-rc.9: enabled=%v inactive=%q", cfg.OrganizationsEnabled(), cfg.OrganizationsInactive())
 	}
-	cfg.Platform.ChartVersion = "4.174.3"
+	cfg.Platform.ChartVersion = "4.174.0"
 	if cfg.OrganizationsEnabled() {
-		t.Error("on 4.174.3, before agentPlatformOrganizations: enabled")
+		t.Error("on 4.174.0, before agentPlatformOrganizations: enabled")
 	}
-	if why := cfg.OrganizationsInactive(); !strings.Contains(why, OrganizationsChartFloor.String()) || !strings.Contains(why, "4.174.3") {
+	if why := cfg.OrganizationsInactive(); !strings.Contains(why, OrganizationsChartFloor.String()) || !strings.Contains(why, "4.174.0") {
 		t.Errorf("the reason below the floor: %q", why)
 	}
 	cfg.Platform.ChartVersion = "4.175.0-rc.9"

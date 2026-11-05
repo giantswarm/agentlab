@@ -154,7 +154,7 @@ func TestOrganizationModelManifest(t *testing.T) {
 	}
 	u := unstructured.Unstructured{Object: obj}
 	spec, _, _ := unstructured.NestedStringMap(obj, "spec")
-	if !strings.HasPrefix(spec["apiKeySecret"], "tenant-credential-") || spec["apiKeySecretKey"] != anthropicSecretKey || spec["provider"] != "Anthropic" {
+	if !strings.HasPrefix(spec["apiKeySecret"], "tenant-credential-") || spec["apiKeySecretKey"] != anthropicSecretKey || spec["provider"] != organizationModelProvider {
 		t.Errorf("spec %v", spec)
 	}
 	if strings.Contains(raw, "baseUrl") {
@@ -514,7 +514,7 @@ func TestPlatformValuesOrganizations(t *testing.T) {
 	on := config.Default()
 	on.Platform.ChartVersion = "4.175.0-rc.9"
 	below := config.Default()
-	below.Platform.ChartVersion = "4.174.3"
+	below.Platform.ChartVersion = "4.174.0"
 	off := config.Default()
 	off.Platform.ChartVersion = "4.175.0-rc.9"
 	off.Platform.Organizations.Enabled = false

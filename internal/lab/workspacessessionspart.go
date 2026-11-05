@@ -329,7 +329,7 @@ func (sp *sessionsProof) preconditions(instance string) error {
 		return err
 	}
 	sp.set = &sessionSet{api: sp.api, manager: sp.admin.session}
-	if err := readySessionsAgents(ctx, rig, sp.timeout); err != nil {
+	if err := readySessionsAgents(ctx, sp.admin.session, rig, sp.timeout); err != nil {
 		return err
 	}
 	if res := sideloadImages(cfg, hostPullImages([]string{workspacesTestGitImage})); res.n > 0 {
@@ -355,9 +355,15 @@ func (sp *sessionsProof) preconditions(instance string) error {
 	return nil
 }
 
-// readySessionsAgents applies an Agent on each of sessionsHarnesses, an
-// earlier run's removed first, and waits for each to be Ready.
-func readySessionsAgents(ctx context.Context, rig *workspaceAdmissionValues, timeout time.Duration) error {
+// readySessionsAgents applies an Agent on each of sessionsHarnesses, on the
+// kagent namespace's default model as agent-manager reports it to the
+// session's person, an earlier run's removed first, and waits for each to be
+// Ready.
+func readySessionsAgents(ctx context.Context, s *musterSession, rig *workspaceAdmissionValues, timeout time.Duration) error {
+	modelConfig, err := agentManagerModelConfig(s)
+	if err != nil {
+		return err
+	}
 	harnesses := map[string]string{claudeHarness: rig.ClaudeHarness, kagentHarness: kagentHarness}
 	for _, h := range sessionsHarnesses {
 		harness := harnesses[h.harness]
@@ -369,7 +375,7 @@ func readySessionsAgents(ctx context.Context, rig *workspaceAdmissionValues, tim
 				return err
 			}
 		}
-		if _, err := applyManifests(ctx, []byte(workspacesAgentManifest(h.agent, harness, defaultModelConfig, fmt.Sprintf(workspacesHarnessSystemPrompt, "Bash tool")))); err != nil {
+		if _, err := applyManifests(ctx, []byte(workspacesAgentManifest(h.agent, harness, modelConfig, fmt.Sprintf(workspacesHarnessSystemPrompt, "Bash tool")))); err != nil {
 			return fmt.Errorf("applying the Agent %s: %w", h.agent, err)
 		}
 		boot, err := waitAgentReadyOn(h.agent, harness, timeout)

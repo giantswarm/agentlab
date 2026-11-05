@@ -63,7 +63,8 @@ type KagentStepOptions struct {
 	// controller build of a change not yet in a release).
 	DevImages map[string]string
 	// ModelConfig is the kagent ModelConfig the agent runs on (default:
-	// default-model-config).
+	// the kagent namespace's default, as agent-manager's list_model_configs
+	// reports it).
 	ModelConfig string
 	// ReadyTimeout bounds the agent's golden boot before the step.
 	ReadyTimeout time.Duration
@@ -90,9 +91,6 @@ func KagentStepTest(cfg *config.Config, email string, opts KagentStepOptions) er
 	user := cfg.FindUser(email)
 	if user == nil {
 		return fmt.Errorf("no user %q in %s", email, config.File)
-	}
-	if opts.ModelConfig == "" {
-		opts.ModelConfig = defaultModelConfig
 	}
 	if opts.ReadyTimeout <= 0 {
 		opts.ReadyTimeout = KagentStepReadyTimeout
@@ -198,6 +196,11 @@ func (r *kagentStepRun) prove(user *config.User) error {
 	token, err := passwordGrant(r.cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret, user.Email, user.Password, musterLoginScopes)
 	if err != nil {
 		return err
+	}
+	if r.opts.ModelConfig == "" {
+		if r.opts.ModelConfig, err = labDefaultModelConfig(r.cfg, token); err != nil {
+			return err
+		}
 	}
 	if r.api, err = dialKagentAPI(r.cfg, token); err != nil {
 		return err

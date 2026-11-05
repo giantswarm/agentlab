@@ -84,7 +84,8 @@ type SubstrateStepOptions struct {
 	// the step runs the chart's images.
 	DevImages map[string]string
 	// ModelConfig is the kagent ModelConfig the agent runs on (default:
-	// default-model-config).
+	// the kagent namespace's default, as agent-manager's list_model_configs
+	// reports it).
 	ModelConfig string
 	// ReadyTimeout bounds the golden boot before the step, RetakeTimeout the
 	// goldens' re-take after it on a layout change.
@@ -121,9 +122,6 @@ func SubstrateStepTest(cfg *config.Config, email string, opts SubstrateStepOptio
 	user := cfg.FindUser(email)
 	if user == nil {
 		return fmt.Errorf("no user %q in %s", email, config.File)
-	}
-	if opts.ModelConfig == "" {
-		opts.ModelConfig = defaultModelConfig
 	}
 	if opts.ReadyTimeout <= 0 {
 		opts.ReadyTimeout = SubstrateStepReadyTimeout
@@ -208,6 +206,11 @@ func (r *substrateStepRun) prove(user *config.User) error {
 	token, err := passwordGrant(r.cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret, user.Email, user.Password, musterLoginScopes)
 	if err != nil {
 		return err
+	}
+	if r.opts.ModelConfig == "" {
+		if r.opts.ModelConfig, err = labDefaultModelConfig(r.cfg, token); err != nil {
+			return err
+		}
 	}
 	if r.api, err = dialKagentAPI(r.cfg, token); err != nil {
 		return err
