@@ -208,9 +208,10 @@ func polexAPIVersions(cfg *config.Config) []string {
 }
 
 // polexTenants reports whether the proof renders the tenants: wherever the
-// agents runtime of the 4.x line is on, the tenants' requirement.
+// agents runtime of the 4.x line is on and the chart still takes
+// tenants.organizations, the tenants' requirement.
 func polexTenants(cfg *config.Config) bool {
-	return cfg.Platform.Enabled && cfg.Platform.Agents && !cfg.LegacyChart()
+	return cfg.Platform.Enabled && cfg.Platform.Agents && !cfg.LegacyChart() && cfg.TenantsModeChart()
 }
 
 // polexShape words the values the proof renders, for its lines.

@@ -206,7 +206,8 @@ type KlausGatewayTestOptions struct {
 	// binary).
 	SlackFakeBinary string
 	// ModelConfig is the kagent ModelConfig the fixture runs on (default
-	// default-model-config, the Anthropic one the lab renders).
+	// the kagent namespace's default, as agent-manager's list_model_configs
+	// reports it).
 	ModelConfig string
 	// Harness is the Harness the fixture's Agent references and whose Ready
 	// the golden-boot wait reads (default the platform Harness).
@@ -329,6 +330,11 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 		return klausGatewayRefusalOnly(cfg, token, user, fake, emails)
 	}
 
+	if opts.ModelConfig == "" {
+		if opts.ModelConfig, err = labDefaultModelConfig(cfg, token); err != nil {
+			return err
+		}
+	}
 	step("Applying the fixtures in namespace %s: Agent %s on Harness %s (muster carrier %s with %s, requireApproval on the binding) and Agent %s on a Harness that does not exist (%s)",
 		kagentNamespace, klausGatewayTestAgent, opts.Harness, klausGatewayTestAgent, klausGatewayTestToolset, klausGatewayTestUnadmitted, klausGatewayNoHarness)
 	if _, err := applyManifests(context.Background(), []byte(klausGatewayFixtures(opts.ModelConfig, opts.Harness))); err != nil {
@@ -654,9 +660,6 @@ func (o KlausGatewayTestOptions) withDefaults() KlausGatewayTestOptions {
 	}
 	if o.Harness == "" {
 		o.Harness = kagentHarness
-	}
-	if o.ModelConfig == "" {
-		o.ModelConfig = defaultModelConfig
 	}
 	if o.ReadyTimeout <= 0 {
 		o.ReadyTimeout = klausGatewayReadyTimeout

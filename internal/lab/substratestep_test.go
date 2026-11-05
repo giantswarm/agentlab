@@ -301,7 +301,7 @@ func TestSubstrateStepPrompts(t *testing.T) {
 // as agentlab's on the given ModelConfig, with a skill, and the Agent pairing
 // it with the platform Harness.
 func TestSubstrateStepTemplate(t *testing.T) {
-	manifest := substrateStepTemplate(defaultModelConfig)
+	manifest := substrateStepTemplate(testModelConfig)
 	objs, err := decodeManifests([]byte(manifest))
 	if err != nil {
 		t.Fatal(err)
@@ -314,7 +314,7 @@ func TestSubstrateStepTemplate(t *testing.T) {
 			t.Errorf("%s %s/%s labels %v: want %s/%s labelled as agentlab's", obj.GetKind(), obj.GetNamespace(), obj.GetName(), obj.GetLabels(), kagentNamespace, substrateStepAgent)
 		}
 	}
-	if got, _, _ := unstructured.NestedString(objs[0].Object, "spec", "modelConfig", "name"); got != defaultModelConfig {
+	if got, _, _ := unstructured.NestedString(objs[0].Object, "spec", "modelConfig", "name"); got != testModelConfig {
 		t.Errorf("modelConfig = %q", got)
 	}
 	skills, _, _ := unstructured.NestedSlice(objs[0].Object, "spec", "skills")

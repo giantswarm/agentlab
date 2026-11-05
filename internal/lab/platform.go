@@ -974,8 +974,9 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	if err := ensureDevctl(cfg); err != nil {
 		return err
 	}
-	// The agents' model key. The default ModelConfig (rendered by the kagent
-	// chart from providers.anthropic) references this secret; agent pods
+	// The agents' model key. The default ModelConfig (the marked
+	// kagent.modelConfigs entry, or on an older line the kagent chart's own
+	// from providers.anthropic; defaultmodel.go) references this secret; agent pods
 	// mount it at run time, so it can land after the install — which it must,
 	// since the chart itself creates the kagent namespace. The Secret always
 	// exists after this (anthropic.go: the recorded source, the host
@@ -983,11 +984,11 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	// until it resolves it: an agent's Harness refuses every template on a
 	// reference it cannot resolve.
 	if cfg.Platform.Agents {
-		step("Wiring the agents to Anthropic (ModelConfig %s, model %s)", defaultModelConfig, cfg.AIModel)
+		step("Wiring the agents to Anthropic (ModelConfig %s, model %s)", renderedDefaultModelConfig(cfg), cfg.AIModel)
 		if _, err := ensureAnthropicSecret(cfg); err != nil {
 			return err
 		}
-		if err := waitDefaultModelConfigResolved(); err != nil {
+		if err := waitDefaultModelConfigResolved(cfg); err != nil {
 			return err
 		}
 		// The extra ModelConfigs from platform.extraModels (self-hosted

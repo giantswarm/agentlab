@@ -198,7 +198,8 @@ const (
 // SkillsTestOptions tunes the proof.
 type SkillsTestOptions struct {
 	// ModelConfig is the kagent ModelConfig the throwaway agent runs on
-	// (default: default-model-config, the Anthropic one the lab renders).
+	// (default: the kagent namespace's default, as agent-manager's
+	// list_model_configs reports it).
 	ModelConfig string
 	// ReadyTimeout bounds the golden boot (default SkillsTestReadyTimeout).
 	ReadyTimeout time.Duration
@@ -231,9 +232,6 @@ func SkillsTest(cfg *config.Config, email string, opts SkillsTestOptions) error 
 	if user == nil {
 		return fmt.Errorf("no user %q in %s", email, config.File)
 	}
-	if opts.ModelConfig == "" {
-		opts.ModelConfig = defaultModelConfig
-	}
 	if opts.ReadyTimeout <= 0 {
 		opts.ReadyTimeout = SkillsTestReadyTimeout
 	}
@@ -258,6 +256,11 @@ func SkillsTest(cfg *config.Config, email string, opts SkillsTestOptions) error 
 		user.Email, user.Password, musterLoginScopes)
 	if err != nil {
 		return err
+	}
+	if opts.ModelConfig == "" {
+		if opts.ModelConfig, err = labDefaultModelConfig(cfg, token); err != nil {
+			return err
+		}
 	}
 	api, err := dialKagentAPI(cfg, token)
 	if err != nil {

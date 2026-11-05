@@ -44,8 +44,8 @@ func TestWorkspacesTestOptionsValidate(t *testing.T) {
 
 func TestWorkspacesSessionHarnessFor(t *testing.T) {
 	claude := workspacesSessionHarnessFor("", "")
-	if claude.name != claudeHarness || claude.modelConfig != defaultModelConfig || claude.agent != workspacesHarnessAgent || claude.shellTool != "Bash tool" {
-		t.Errorf("the default Session = %+v, want the claude Agent %s on %s", claude, workspacesHarnessAgent, defaultModelConfig)
+	if claude.name != claudeHarness || claude.modelConfig != "" || claude.agent != workspacesHarnessAgent || claude.shellTool != "Bash tool" {
+		t.Errorf("the default Session = %+v, want the claude Agent %s on the model the proof resolves", claude, workspacesHarnessAgent)
 	}
 	codex := workspacesSessionHarnessFor(config.CodingRuntimeCodex, "chatgpt-login")
 	if codex.name != config.CodingRuntimeCodex || codex.modelConfig != "chatgpt-login" || codex.agent != "agentlab-workspaces-codex" || codex.shellTool != "shell tool" {

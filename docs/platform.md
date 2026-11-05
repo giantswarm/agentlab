@@ -1701,7 +1701,8 @@ person's token and talks to no Dex, so it needs no `dex-localhost` bridge.
 **Fixtures** (in `kagent`, deleted by the same run, leftovers removed first):
 `AgentTemplate agentlab-klaus-gateway-test` in the Generic chart shape — the
 `ui.giantswarm.io/display-name` and `ui.giantswarm.io/icon-url` annotations,
-`default-model-config` (`--model-config`) — with the `Agent` of the same name
+the kagent namespace's default model as agent-manager reports it
+(`--model-config`) — with the `Agent` of the same name
 pairing it with the Harness (`--harness`, the annotations repeated on the
 Agent), and its own muster carrier
 `RemoteMCPServer agentlab-klaus-gateway-test` (muster's in-cluster URL,
@@ -2076,7 +2077,8 @@ components, as the admin, and leaves nothing behind (its agents are named
    outside `preset:read-only` — read-only core tools may appear, no writer
    does (so kagent sends the header and the user's token) — and the
    `preset:none` agent answers a chat turn. The agents run on
-   `default-model-config` (`--model-config` to pick another).
+   the kagent namespace's default model as agent-manager reports it
+   (`--model-config` to pick another).
 5. **The sign-in claim (ground-truth G6)**: before any sign-in,
    `server:lab-oauth-fixture` resolves to nothing for everyone
    (`toolset_unmatched` names the selector), yet points at the sign-in:
@@ -2135,6 +2137,7 @@ data the page reads — see [The muster plugin](backstage.md#the-muster-plugin).
 | `postgres`: one instance, a 2Gi claim, no backups | The fleet's CNPG `Cluster` runs three instances on 20Gi with Barman backups; the lab keeps the shape (the same operand and pgvector images, the same `Database` CRs and derived Secrets) on one kind node. |
 | `kagent.ui.service.type: NodePort`, nodePort 30880 pinned by the kagent `postRenderers` patch | On a real MC the UI sits behind the agentgateway edge; this lab publishes it through the kind port mapping instead (host side `platform.agentsPort`, default 8081). The chart's Service template renders no `nodePort` field, so the fixed node port is a patch (HACKS.md U9). |
 | `components.flux.enabled: true`, `gitops.self.enabled: false` | The lab shape (see [The agent platform](#the-agent-platform-muster--kubernetes-mcp)): a management cluster runs its own Flux and installs the chart through it; the lab has none, so the chart brings the engine — and must not adopt its own release, because the lab installs charts and images that are not released. |
+| `kagent.modelConfigs` entry `anthropic` with `default: true`, `kagent.defaultModelConfig.enabled: false` and `components.agent-manager.versionRange: ">=2.19.0-rc.2 <3.0.0-0"` (from agent-platform 4.175.0-rc.7) | An installation marks its own default model in values or in the portal; the lab declares one on its `aiModel` so agents have a default, and the kagent chart renders no `default-model-config` beside it. The agent-manager range is the lab's until the chart's own admits the first release that reports `default` on `list_model_configs` (HACKS.md U39). Below 4.175.0-rc.7 the lab renders `kagent.providers` and the kagent chart's `default-model-config` is the default ([Agents](agents.md#the-model)) |
 | The chart pinned to an exact release (`platform.chartVersion`) | Component versions are the chart's own ranges, resolved by its Flux at reconcile time (the fleet's dogfooding track). The chart itself never floats in the lab: two runs install the same thing, and a bump is a deliberate edit with a lab run behind it. |
 | The kind config turns on the `ClusterTrustBundle`, `ClusterTrustBundleProjection` and `PodCertificateRequest` gates | Agent Substrate (from the chart) needs them on the apiserver, controller-manager and kubelet; a Giant Swarm cluster sets them through its cluster chart. Fixed at `kind create` — the boot refuses a cluster that predates them. See [Agent Substrate and the platform Postgres](#agent-substrate-and-the-platform-postgres--from-the-chart). |
 | `mcp-prometheus` as a lab-rendered Flux `HelmRelease` | The one release the lab installs outside the chart rides the same engine, as the same tenant identity, so its lab-only sidecar is a `postRenderers` patch like the others and there is exactly one Helm writer (the embedded Helm, for the chart) and one Flux engine on the cluster. |

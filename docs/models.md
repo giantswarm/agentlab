@@ -13,7 +13,9 @@ Beyond the default Anthropic ModelConfig, `platform.extraModels` in
 llama.cpp, LM Studio), OpenRouter, Gemini, a plain GPT model, or an Ollama
 host. Each entry becomes a lab-labeled `ModelConfig` CR in the `kagent`
 namespace, selectable when composing an agent (the kagent UI's model dropdown,
-or `modelConfig` on an `Agent` CR):
+or `modelConfig` on an `Agent` CR). None is the namespace's default: that
+stays the lab's Anthropic entry, so the names `anthropic` and
+`default-model-config` are reserved:
 
 ```yaml
 platform:
@@ -243,7 +245,8 @@ instead of waiting for the load.
 ### Agent proofs without an Anthropic key
 
 `toolsets-test`, `skills-test` and `klaus-gateway-test` run their agents on
-`default-model-config`, the Anthropic ModelConfig. Without
+the kagent namespace's default model, the Anthropic ModelConfig `anthropic`
+the lab marks default ([Agents](agents.md#the-model)). Without
 `$ANTHROPIC_API_KEY`, pass `--model-config <name>` to run them on a model
 on the host. A CPU does it with **`qwen3.5:2b`** (2.7 GB) on Ollama, with
 the model's thinking switched off, on kagent's native `Ollama` provider or

@@ -1486,7 +1486,7 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().StringSliceVar(&githubSignInOrgs, "github-signin-orgs", nil, "GitHub sign-in: admit members of these GitHub organizations only, their teams as groups (`<org>:<team-slug>`); empty admits any GitHub account")
 	cmd.Flags().BoolVar(&workspaces, "workspaces", false, "workspace storage: a read-write-many StorageClass that serves git — an in-cluster NFS server, the NFS CSI driver behind an mTLS proxy only Agent Substrate's API server may reach, and the StorageClass "+lab.WorkspacesStorageClass+"; with --agents=false the storage and the workspace-manager run without Agent Substrate, the shape a later --agents switches on in place; --workspaces=false turns it off")
 	cmd.Flags().BoolVar(&coding, "coding", false, "coding agents: the chart's kagent.harnesses renders the coding Harnesses (claude, Claude Code run headless, unless --coding-harnesses names others), which `agentlab coding-test` proves (needs agents); --coding=false turns it off")
-	cmd.Flags().BoolVar(&tenants, "tenants", false, "the Organizations' namespaces as tenants: the chart's tenants.organizations.enabled turns on agent-manager's tenant reconciler for every namespace labelled giantswarm.io/organization, which `agentlab tenants-test` proves (needs agents); --tenants=false turns it off")
+	cmd.Flags().BoolVar(&tenants, "tenants", false, "the Organizations' namespaces as tenants: the chart's tenants.organizations.enabled turns on agent-manager's tenant reconciler for every namespace labelled giantswarm.io/organization, which `agentlab tenants-test` proves (needs agents and an agent-platform release before 4.175.0-rc.4); --tenants=false turns it off")
 	cmd.Flags().BoolVar(&chatgptSubscription, "chatgpt-subscription", false, "a person's own ChatGPT subscription as a codex model: the chart's kagent.modelConfigs entry "+config.ChatGPTSubscriptionModelConfig+" (chatgptOAuth, no apiKeySecret), from which it derives muster's provider App chatgpt (OpenAI's device-code sign-in) and kagent's provider chatgpt, muster's token encryption on, which `agentlab chatgpt-test` proves (needs the codex coding Harness and --workspaces); --chatgpt-subscription=false turns it off")
 	cmd.Flags().StringVar(&chatgptSubscriptionModel, "chatgpt-subscription-model", "", "the ChatGPT Codex backend's model of --chatgpt-subscription (default "+config.DefaultChatGPTSubscriptionModel+"); \"\" returns to the default")
 	cmd.Flags().StringSliceVar(&codingHarnesses, "coding-harnesses", nil, fmt.Sprintf("the coding Harnesses rendered with --coding, by runtime (%s; each named after its runtime; default claude alone); codex needs a kagent line whose chart takes runtime codex, omp one whose chart takes runtime byo and an image from --coding-images; \"\" returns to claude alone", strings.Join(config.CodingRuntimes, ", ")))
@@ -1990,7 +1990,7 @@ func workspacesTestCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&opts.StorageOnly, "storage-only", false, "prove the storage alone, without the Session admitted on the volume")
 	cmd.Flags().StringVar(&opts.Harness, "harness", "", "the Harness the Session on the volume runs on: claude (default) or a coding Harness the lab renders (platform.coding.harnesses), such as codex")
-	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the Session's Agent runs on (default on claude default-model-config); required with --harness other than claude, such as the lab's ChatGPT-login ModelConfig on codex")
+	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the Session's Agent runs on (default on claude: the kagent namespace's default, as agent-manager reports it); required with --harness other than claude, such as the lab's ChatGPT-login ModelConfig on codex")
 	cmd.Flags().StringVar(&opts.Part, "part", "", "run one part instead of the storage proof: "+strings.Join(lab.WorkspacesParts, ", ")+" (sync: every kind of sync cycle on the --provider instance's proofRepositories, pushing to a scratch branch with your git credentials; sessions: Sessions on both Harnesses started together with a requested sync cycle, each fetching the pushed repository once, isolated, cleaned up; git: git push and gh pr create as the person on GitHub from a workspace Session on both Harnesses, a pause and resume, a Session without a workspace refused; gitlab: the provider instance gitlab end to end, as the admin and [email], default dev@lab.local; each skipped without its instance)")
 	cmd.Flags().StringSliceVar(&opts.Toolchains, "toolchains", nil, "the git part's Sessions start with these toolchains, name[@version] each (agent-manager's toolchains); with github the write turn's gh must be the toolchain's, /opt/kagent/tools/github/bin/gh")
 	cmd.Flags().StringVar(&opts.Provider, "provider", "", "the provider instance the sync and sessions parts run on: github (default) or gitlab; a GitHub App's grant waits for muster's sign-in link opened in a browser signed in to GitHub")
@@ -2101,7 +2101,7 @@ func toolsetsTestCmd() *cobra.Command {
 			return lab.ToolsetsTest(cfg, email, opts)
 		},
 	}
-	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the throwaway agents run on (default: default-model-config, the Anthropic one the lab renders from $ANTHROPIC_API_KEY)")
+	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the throwaway agents run on (default: the kagent namespace's default, as agent-manager reports it)")
 	cmd.Flags().BoolVar(&opts.SkipChat, "skip-chat", false, "skip the turns that need the model to answer (the runtime path, the chat-only agent, the real agent's view of the fixture)")
 	cmd.Flags().BoolVar(&opts.SkipPortal, "skip-portal", false, "kagent API v2 only: skip the portal's apply path (the composed AgentTemplate through the scaffolder template) for a portal that does not speak kagent main yet; the Tools step's endpoints are proven regardless")
 	return cmd
@@ -2126,7 +2126,7 @@ func signInTestCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringSliceVar(&opts.Harnesses, "harness", nil, "the Harnesses to prove, of kagent, claude and codex (default: kagent and every coding Harness of the two the lab renders)")
-	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the ModelConfig of the kagent and claude agents (default: default-model-config); codex runs on the lab's Responses model, else the mockllm")
+	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the ModelConfig of the kagent and claude agents (default: the kagent namespace's default, as agent-manager reports it); codex runs on the lab's Responses model, else the mockllm")
 	cmd.Flags().StringVar(&opts.MockLLMBinary, "mockllm-binary", "", "the static linux agentlab binary the mockllm's container runs (default: this one)")
 	cmd.Flags().DurationVar(&opts.Timeout, "timeout", 5*time.Minute, "how long an agent may take to become Ready")
 	return cmd
@@ -2150,7 +2150,7 @@ func skillsTestCmd() *cobra.Command {
 			return lab.SkillsTest(cfg, email, opts)
 		},
 	}
-	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the throwaway agent runs on (default: default-model-config, the Anthropic one the lab renders from $ANTHROPIC_API_KEY)")
+	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the throwaway agent runs on (default: the kagent namespace's default, as agent-manager reports it)")
 	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", lab.SkillsTestReadyTimeout, "how long the golden boot may take to reach Ready on the Harness before the proof reports the failure")
 	cmd.Flags().StringVar(&opts.Fixture.Repo, "skill-repo", "", "another fixture: the git repository of the skill to boot (an http(s) URL), with --skill-commit, --skill-path, --skill-question and --skill-expect (default: the public fixture, agent-self-awareness of giantswarm/agent-skills)")
 	cmd.Flags().StringVar(&opts.Fixture.Commit, "skill-commit", "", "the full 40- or 64-hex commit id the skill is pinned to")
@@ -2183,7 +2183,7 @@ func substrateStepTestCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&opts.To, "to", "", "the Substrate release to step to, exact (1.8.0, 1.8.1-rc.4); the lab must run an older release before it")
 	cmd.Flags().StringToStringVar(&opts.DevImages, "step-dev-image", nil, "a platform.devImages entry for the step alone, <target>=<image> (repeatable), e.g. "+config.DevImageSubstrateAPI+"=<a local build of a change no release carries yet>")
-	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the agent runs on (default: default-model-config, the Anthropic one the lab renders)")
+	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the agent runs on (default: the kagent namespace's default, as agent-manager reports it)")
 	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", lab.SubstrateStepReadyTimeout, "how long the agent's golden boot before the step may take")
 	cmd.Flags().DurationVar(&opts.RetakeTimeout, "retake-timeout", lab.SubstrateStepRetakeTimeout, "how long the goldens may take to be in the snapshot layout the new release writes (the re-take on a layout change) before the retake and new conversation steps fail")
 	cmd.Flags().BoolVar(&opts.Stay, "stay", false, "leave the lab on the --to release instead of returning it to the chart's Substrate")
@@ -2235,7 +2235,7 @@ func kagentStepTestCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.To, "to", "", "the kagent release to step to, exact (1.14.0, 1.15.1-rc.2), pinned on the kagent and kagent-crds components; the lab must run an older release before it")
 	cmd.Flags().StringVar(&opts.Chart, "chart", "", "the agent-platform release to step to, exact (4.145.1-rc.6): a candidate whose kagent range moves, or a chart-only one that keeps kagent; with --to as well, the kagent pin rides on it")
 	cmd.Flags().StringToStringVar(&opts.DevImages, "step-dev-image", nil, "a platform.devImages entry for the step alone, <target>=<image> (repeatable), e.g. kagent=<a local build of a change no release carries yet>")
-	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the agent runs on (default: default-model-config, the Anthropic one the lab renders)")
+	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the agent runs on (default: the kagent namespace's default, as agent-manager reports it)")
 	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", lab.KagentStepReadyTimeout, "how long the agent's golden boot before the step may take")
 	cmd.Flags().BoolVar(&opts.Stay, "stay", false, "leave the lab on the step instead of returning it to its own configuration")
 	cmd.MarkFlagsOneRequired("to", "chart")
@@ -2287,7 +2287,7 @@ func klausGatewayTestCmd() *cobra.Command {
 	cmd.Flags().IntVar(&opts.Port, "gateway-port", 0, "host port of the gateway's Slack endpoints; the admin endpoints take the next port, the fake Slack Web API the one after when it runs in this process (default: the lab's own, 18090 plus ten per port its apiServerPort sits above 6443, so two labs never share one)")
 	cmd.Flags().StringVar(&opts.Harness, "harness", "", "the Harness the fixture is admitted by and booted on, e.g. a coding Harness (default: the platform Harness kagent)")
 	cmd.Flags().StringVar(&opts.SlackFakeBinary, "slack-fake-binary", "", "the static Linux agentlab the fake Slack Web API container runs on the kind network while platform.klausGateway is on (default: this binary)")
-	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the fixture runs on (default: default-model-config, the Anthropic one the lab renders)")
+	cmd.Flags().StringVar(&opts.ModelConfig, "model-config", "", "the kagent ModelConfig the fixture runs on (default: the kagent namespace's default, as agent-manager reports it)")
 	cmd.Flags().DurationVar(&opts.ReadyTimeout, "ready-timeout", 0, "how long the fixture's golden boot may take to reach Ready on the Harness (default 10m)")
 	cmd.Flags().StringVar(&opts.RunDir, "run-dir", "", "directory for the gateway's stores, keys and log, kept afterwards (default: a temporary directory, removed)")
 	cmd.Flags().StringVar(&opts.Part, "part", "", "run one part instead of the proof: "+lab.KlausGatewayPartSignIn+" (an agent whose toolset is the OAuth fixture pauses at input-required on muster's sign-in link; on Slack Not now, a typed `no` and `stop` decline it without the call, each conversation going on; the portal's answer first makes Slack's late Not now send nothing; Slack first, the agent asking again in the same task, makes the portal's late answer a 409; the sign-in from the prompt's link lands on the gateway, which resumes the task with accept and the call runs once; needs backstage)")

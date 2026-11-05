@@ -106,7 +106,7 @@ type tenantReconciler struct {
 // tenantReconcilerFrom reads the reconciler's settings off agent-manager's
 // arguments, with agent-manager's defaults for a flag not given.
 func tenantReconcilerFrom(args []string) (tenantReconciler, error) {
-	r := tenantReconciler{harness: kagentHarness, modelConfig: defaultModelConfig, modelSecret: anthropicSecret, replicas: 1}
+	r := tenantReconciler{harness: kagentHarness, modelConfig: config.KagentChartDefaultModelConfig, modelSecret: anthropicSecret, replicas: 1}
 	// The chart writes every flag as --name=value; a bare boolean flag is
 	// true. The AGENT_MANAGER_* environment variables are not read: the
 	// chart sets none of the reconciler's.
@@ -526,7 +526,7 @@ func TenantsTest(cfg *config.Config, emails []string, opts TenantsTestOptions) e
 	if err != nil {
 		return err
 	}
-	status, raw, err := api.call(http.MethodPost, "/agents", adminPlatformToken, tenantsTestAgentSpec(kagentNamespace, tenantsTestPlatformAgent, defaultModelConfig))
+	status, raw, err := api.call(http.MethodPost, "/agents", adminPlatformToken, tenantsTestAgentSpec(kagentNamespace, tenantsTestPlatformAgent, rec.modelConfig))
 	if err != nil {
 		return err
 	}
@@ -619,11 +619,11 @@ func TenantsTest(cfg *config.Config, emails []string, opts TenantsTestOptions) e
 	if err != nil {
 		return err
 	}
-	musterOut, err := (&tenantsMuster{cfg: cfg, namespaces: tenantsTestNamespaces, users: users, admin: admin, editor: people[0], api: api}).run()
+	musterOut, err := (&tenantsMuster{cfg: cfg, namespaces: tenantsTestNamespaces, users: users, admin: admin, editor: people[0], api: api, modelConfig: rec.modelConfig}).run()
 	if err != nil {
 		return err
 	}
-	portalOut, err := (&tenantsPortal{cfg: cfg, namespaces: tenantsTestNamespaces, users: users, editor: people[0], admin: admin}).run()
+	portalOut, err := (&tenantsPortal{cfg: cfg, namespaces: tenantsTestNamespaces, users: users, editor: people[0], admin: admin, modelConfig: rec.modelConfig}).run()
 	if err != nil {
 		return err
 	}

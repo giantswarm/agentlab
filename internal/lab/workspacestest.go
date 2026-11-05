@@ -51,8 +51,9 @@ type WorkspacesTestOptions struct {
 	// Harness is the Harness the harness stage's Session runs on: claude
 	// (the default) or another coding Harness the lab renders, such as codex.
 	Harness string
-	// ModelConfig is the kagent ModelConfig the stage's Agent runs on:
-	// default-model-config on claude; required on another Harness, whose
+	// ModelConfig is the kagent ModelConfig the stage's Agent runs on: the
+	// kagent namespace's default on claude, as agent-manager's
+	// list_model_configs reports it; required on another Harness, whose
 	// runtime needs a model of its own (codex: a Responses API one).
 	ModelConfig string
 	// Toolchains are mounted into the git part's Sessions through

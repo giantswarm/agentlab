@@ -41,7 +41,7 @@ func TestSkillsAgentTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	objs, err := decodeManifests([]byte(skillsAgentTemplate(skillsTestAgent, defaultModelConfig, &fixture, kagentAdmission)))
+	objs, err := decodeManifests([]byte(skillsAgentTemplate(skillsTestAgent, testModelConfig, &fixture, kagentAdmission)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +51,7 @@ func TestSkillsAgentTemplate(t *testing.T) {
 	u, agent := objs[0], objs[1]
 	obj := u.Object
 	if u.GetAPIVersion() != agentTemplateAPIVersion || u.GetKind() != kindAgentTemplate || u.GetNamespace() != kagentNamespace || u.GetLabels()[managedByLabel] != managedByAgentlabValue {
-		t.Errorf("template head:\n%s", skillsAgentTemplate(skillsTestAgent, defaultModelConfig, &fixture, kagentAdmission))
+		t.Errorf("template head:\n%s", skillsAgentTemplate(skillsTestAgent, testModelConfig, &fixture, kagentAdmission))
 	}
 	if agent.GetAPIVersion() != kagentAPIVersion || agent.GetKind() != kindAgent || agent.GetName() != skillsTestAgent || agent.GetNamespace() != kagentNamespace || agent.GetLabels()[managedByLabel] != managedByAgentlabValue {
 		t.Errorf("Agent head: %s %s %s/%s %v", agent.GetAPIVersion(), agent.GetKind(), agent.GetNamespace(), agent.GetName(), agent.GetLabels())
@@ -63,7 +63,7 @@ func TestSkillsAgentTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if template.mcpServer() != componentMuster || template.Spec.ModelConfig.Name != defaultModelConfig {
+	if template.mcpServer() != componentMuster || template.Spec.ModelConfig.Name != testModelConfig {
 		t.Errorf("binding %q, model %v", template.mcpServer(), template.Spec.ModelConfig)
 	}
 	skills, _, _ := unstructured.NestedSlice(obj, "spec", "skills")
@@ -82,7 +82,7 @@ func TestSkillsAgentTemplate(t *testing.T) {
 		t.Errorf("the fixture commit is not a full SHA: %q", commit)
 	}
 
-	controls, err := decodeManifests([]byte(skillsAgentTemplate(skillsTestControlAgent, defaultModelConfig, nil, kagentAdmission)))
+	controls, err := decodeManifests([]byte(skillsAgentTemplate(skillsTestControlAgent, testModelConfig, nil, kagentAdmission)))
 	if err != nil || len(controls) != 2 {
 		t.Fatalf("the control: %d objects, %v", len(controls), err)
 	}
@@ -110,7 +110,7 @@ const (
 // Go ADK Harness.
 func TestSkillsAgentTemplateWithoutMuster(t *testing.T) {
 	fixture, _ := SkillsFixture{}.resolve()
-	objs, err := decodeManifests([]byte(skillsAgentTemplate(skillsTestAgent, defaultModelConfig, &fixture, skillsTemplateShape{})))
+	objs, err := decodeManifests([]byte(skillsAgentTemplate(skillsTestAgent, testModelConfig, &fixture, skillsTemplateShape{})))
 	if err != nil || len(objs) != 2 {
 		t.Fatalf("%d objects, %v", len(objs), err)
 	}
@@ -141,7 +141,7 @@ func TestSkillsFixturePrivate(t *testing.T) {
 		t.Errorf("prompt = %q", fixture.prompt())
 	}
 	var obj map[string]any
-	if err := yaml.Unmarshal([]byte(skillsAgentTemplate(skillsTestAgent, defaultModelConfig, &fixture, kagentAdmission)), &obj); err != nil {
+	if err := yaml.Unmarshal([]byte(skillsAgentTemplate(skillsTestAgent, testModelConfig, &fixture, kagentAdmission)), &obj); err != nil {
 		t.Fatal(err)
 	}
 	skills, _, _ := unstructured.NestedSlice(obj, "spec", "skills")
@@ -161,7 +161,7 @@ func TestSkillsFixturePrivate(t *testing.T) {
 
 	public, _ := SkillsFixture{}.resolve()
 	var anonymous map[string]any
-	if err := yaml.Unmarshal([]byte(skillsAgentTemplate(skillsTestAgent, defaultModelConfig, &public, kagentAdmission)), &anonymous); err != nil {
+	if err := yaml.Unmarshal([]byte(skillsAgentTemplate(skillsTestAgent, testModelConfig, &public, kagentAdmission)), &anonymous); err != nil {
 		t.Fatal(err)
 	}
 	publicSkills, _, _ := unstructured.NestedSlice(anonymous, "spec", "skills")

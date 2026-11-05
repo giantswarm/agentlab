@@ -153,7 +153,7 @@ const DefaultAPIServerPort = 6443
 // image is the major.minor components.substrate installs) — a chart that
 // leaves the kagent range open across a Substrate release boots no golden
 // actor (agentlab#187).
-const DefaultChartVersion = "4.174.3"
+const DefaultChartVersion = "4.175.0-rc.7"
 
 // ChartRepository is where the agent-platform chart releases live.
 const ChartRepository = "oci://gsoci.azurecr.io/charts/giantswarm/agent-platform"
@@ -377,6 +377,42 @@ func (c *Config) belowFamiliesFloor() bool {
 // proofs address that server, and platform-test skips the families proof.
 func (c *Config) FamilylessChart() bool {
 	return c.LegacyChart() || c.belowFamiliesFloor()
+}
+
+// defaultModelChartFloor is the first agent-platform release whose
+// kagent.modelConfigs[] entry takes `default: true` (the annotation
+// agent-platform.giantswarm.io/is-default-model-config) and whose
+// kagent.defaultModelConfig.enabled: false keeps the kagent chart from
+// rendering default-model-config (giantswarm/agent-platform#1274).
+var defaultModelChartFloor = semver.MustParse("4.175.0-rc.7")
+
+// DefaultModelChart reports whether the lab declares the agents' default
+// model as a marked kagent.modelConfigs[] entry: a released chart from
+// defaultModelChartFloor on, a chart directory, a branch build. Below it the
+// kagent chart renders default-model-config from kagent.providers.
+func (c *Config) DefaultModelChart() bool {
+	_, below := c.chartBelow(defaultModelChartFloor)
+	return !below
+}
+
+// tenantsRemovedChartFloor is the first agent-platform release that refuses
+// tenants.organizations (giantswarm/agent-platform#1268): an organization is
+// an AgentPlatformOrganization of agentPlatformOrganizations.enabled there.
+var tenantsRemovedChartFloor = semver.MustParse("4.175.0-rc.4")
+
+// TenantsModeChart reports whether the lab's meta chart still takes
+// tenants.organizations: a released chart before tenantsRemovedChartFloor,
+// the 3.x line. A chart directory and a branch build are the current line.
+func (c *Config) TenantsModeChart() bool {
+	_, below := c.chartBelow(tenantsRemovedChartFloor)
+	return below
+}
+
+// tenantsRemovedChart reports whether the lab pins a released chart from
+// tenantsRemovedChartFloor on. A chart directory and a branch build are not
+// checked: the chart's own schema refuses the key where it is gone.
+func (c *Config) tenantsRemovedChart() bool {
+	return c.Platform.ChartPath == "" && c.Platform.ChartBranch == "" && !c.TenantsModeChart()
 }
 
 // DefaultDevRegistryPort is the host port of the lab registry when
@@ -1999,10 +2035,20 @@ func ValidateAIModel(s string) error {
 	return nil
 }
 
-// reservedModelNames collide with what the kagent chart / the lab already
-// own: the chart-rendered default ModelConfig, and the name whose Secret
-// (kagent-anthropic) the default ModelConfig references.
-var reservedModelNames = []string{"default-model-config", "anthropic"}
+// reservedModelNames collide with what the lab's agents default to: the
+// marked kagent.modelConfigs[] entry DefaultModelConfig, whose Secret
+// kagent-anthropic is the name an extra model's Secret would take, and
+// default-model-config, the kagent chart's own on a line below the default
+// model floor.
+var reservedModelNames = []string{KagentChartDefaultModelConfig, DefaultModelConfig}
+
+// DefaultModelConfig is the lab's marked kagent.modelConfigs[] entry, the
+// kagent namespace's default model on a DefaultModelChart.
+const DefaultModelConfig = "anthropic"
+
+// KagentChartDefaultModelConfig is the ModelConfig the kagent chart renders
+// from kagent.providers below the default model floor.
+const KagentChartDefaultModelConfig = "default-model-config"
 
 // ValidateModelName is the one home of the extra-model-name rule; the huh
 // form uses it directly as an input validator.
@@ -2429,6 +2475,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Platform.Tenants.Enabled && c.Platform.Enabled && !c.Platform.Agents {
 		return fmt.Errorf("platform.tenants requires platform.agents (the tenant reconciler is agent-manager's, and a tenant's agents run on kagent)")
+	}
+	if c.Platform.Tenants.Enabled && c.Platform.Enabled && c.tenantsRemovedChart() {
+		return fmt.Errorf("platform.tenants needs an agent-platform release before %s, which refuses tenants.organizations (an organization is an AgentPlatformOrganization there, giantswarm/agentlab#1149); platform.chartVersion is %s: `agentlab configure --tenants=false`, or pin an earlier release", tenantsRemovedChartFloor, c.Platform.ChartVersion)
 	}
 	if c.Platform.Serving.Enabled && c.Platform.Enabled && !c.Platform.Agents {
 		return fmt.Errorf("platform.serving requires platform.agents (model-manager wires a served model into kagent as a ModelConfig)")

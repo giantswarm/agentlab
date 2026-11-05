@@ -552,6 +552,9 @@ type tenantsMuster struct {
 	// agent-manager's REST API (api).
 	editor *config.User
 	api    *agentManagerREST
+	// modelConfig is the tenant reconciler's copy of the platform default,
+	// the model of step M5's agent.
+	modelConfig string
 }
 
 // run is the muster half, steps M1 to M5, and returns its PASS lines.
@@ -753,7 +756,7 @@ func (m *tenantsMuster) agentTurn(userToken, keyA, keyB string) (string, error) 
 	if err != nil {
 		return "", err
 	}
-	spec := tenantsTestAgentSpec(a, tenantsTestMusterAgent, defaultModelConfig)
+	spec := tenantsTestAgentSpec(a, tenantsTestMusterAgent, m.modelConfig)
 	spec[toolsetKey] = []string{presetFull}
 	status, raw, err := m.api.call(http.MethodPost, "/agents", editorToken, spec)
 	if err != nil {

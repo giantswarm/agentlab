@@ -262,7 +262,11 @@ func (gp *gitlabProof) preconditions(email string) error {
 			return err
 		}
 	}
-	if _, err := applyManifests(context.Background(), []byte(workspacesHarnessAgentManifest(rig.ClaudeHarness))); err != nil {
+	modelConfig, err := agentManagerModelConfig(gp.admin.session)
+	if err != nil {
+		return err
+	}
+	if _, err := applyManifests(context.Background(), []byte(workspacesHarnessAgentManifest(rig.ClaudeHarness, modelConfig))); err != nil {
 		return fmt.Errorf("applying the claude Agent: %w", err)
 	}
 	boot, err := waitAgentReadyOn(workspacesHarnessAgent, rig.ClaudeHarness, gp.timeout)

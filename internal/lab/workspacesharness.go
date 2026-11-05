@@ -1,7 +1,6 @@
 package lab
 
 import (
-	"cmp"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -119,10 +118,11 @@ type workspacesSessionHarness struct {
 }
 
 // workspacesSessionHarnessFor is the Session on harness (claude when empty)
-// with modelConfig (default-model-config when empty on claude).
+// with modelConfig; an empty one on claude is the kagent namespace's default,
+// resolved once the proof holds a token (proveWorkspacesHarnessSession).
 func workspacesSessionHarnessFor(harness, modelConfig string) workspacesSessionHarness {
 	if harness == "" || harness == claudeHarness {
-		return workspacesSessionHarness{name: claudeHarness, modelConfig: cmp.Or(modelConfig, defaultModelConfig), agent: workspacesHarnessAgent, shellTool: "Bash tool"}
+		return workspacesSessionHarness{name: claudeHarness, modelConfig: modelConfig, agent: workspacesHarnessAgent, shellTool: "Bash tool"}
 	}
 	return workspacesSessionHarness{name: harness, modelConfig: modelConfig, agent: "agentlab-workspaces-" + harness, shellTool: "shell tool"}
 }
@@ -279,6 +279,17 @@ func proveWorkspacesHarnessSession(cfg *config.Config, harness workspacesSession
 	}
 	volume := workspaceVolume{Driver: pv.Spec.CSI.Driver, Handle: pv.Spec.CSI.VolumeHandle}
 
+	user := cfg.AdminUser()
+	token, err := passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret, user.Email, user.Password, musterLoginScopes)
+	if err != nil {
+		return "", err
+	}
+	if harness.modelConfig == "" {
+		if harness.modelConfig, err = labDefaultModelConfig(cfg, token); err != nil {
+			return "", err
+		}
+	}
+
 	step("A %s Agent %s on ModelConfig %s Ready on the Harness %s", harness.name, harness.agent, harness.modelConfig, harness.name)
 	if agentExists(harness.agent) {
 		if err := removeAgent(harness.agent); err != nil {
@@ -302,11 +313,6 @@ func proveWorkspacesHarnessSession(cfg *config.Config, harness workspacesSession
 	}
 	note("Ready in %s", boot.elapsed.Round(time.Second))
 
-	user := cfg.AdminUser()
-	token, err := passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret, user.Email, user.Password, musterLoginScopes)
-	if err != nil {
-		return "", err
-	}
 	api, err := dialKagentAPI(cfg, token)
 	if err != nil {
 		return "", err
@@ -441,10 +447,10 @@ func workspacesHarnessVolumeSource(volume workspaceVolume) *apiv1alpha1.SessionV
 	}
 }
 
-// workspacesHarnessAgentManifest is the proof's claude AgentTemplate on the
-// default ModelConfig and its Agent on the claude Harness.
-func workspacesHarnessAgentManifest(harness string) string {
-	claude := workspacesSessionHarnessFor(claudeHarness, "")
+// workspacesHarnessAgentManifest is the proof's claude AgentTemplate on
+// modelConfig and its Agent on the claude Harness.
+func workspacesHarnessAgentManifest(harness, modelConfig string) string {
+	claude := workspacesSessionHarnessFor(claudeHarness, modelConfig)
 	return workspacesAgentManifest(claude.agent, harness, claude.modelConfig, fmt.Sprintf(workspacesHarnessSystemPrompt, claude.shellTool))
 }
 

@@ -180,8 +180,8 @@ func TestKagentStepChartOnly(t *testing.T) {
 // bash tool's skill and an Agent of the platform Harness, both labelled
 // agentlab's.
 func TestKagentStepTemplate(t *testing.T) {
-	manifest := kagentStepTemplate(defaultModelConfig)
-	for _, want := range []string{"kind: AgentTemplate", "kind: Agent\n", "name: " + kagentStepAgent, "name: " + defaultModelConfig, "name: " + kagentHarness, managedByLabel, "skills:\n    - name: " + skillsTestSkill, "commit: " + skillsTestCommit} {
+	manifest := kagentStepTemplate(testModelConfig)
+	for _, want := range []string{"kind: AgentTemplate", "kind: Agent\n", "name: " + kagentStepAgent, "name: " + testModelConfig, "name: " + kagentHarness, managedByLabel, "skills:\n    - name: " + skillsTestSkill, "commit: " + skillsTestCommit} {
 		if !strings.Contains(manifest, want) {
 			t.Errorf("the manifest lacks %q:\n%s", want, manifest)
 		}

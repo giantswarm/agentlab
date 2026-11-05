@@ -23,8 +23,8 @@ import (
 // reference the Secret.
 const AnthropicKeyEnv = "ANTHROPIC_API_KEY"
 
-// anthropicSecret is the Secret the chart-rendered default ModelConfig
-// references (agent-platform-values.yaml.tmpl, providers.anthropic), under
+// anthropicSecret is the Secret the agents' default ModelConfig references
+// (agent-platform-values.yaml.tmpl, defaultmodel.go), under
 // the key the ADK runtime reads it from. portalAnthropicSecret is the
 // portal's copy in its own namespace (a Pod reads no Secret of another):
 // backstage.backstage.extraEnvVarsSecrets turns it into the portal's
@@ -43,7 +43,7 @@ type anthropicKeySecret struct {
 }
 
 var (
-	agentsAnthropicKey = anthropicKeySecret{kagentNamespace, anthropicSecret, "the default ModelConfig " + defaultModelConfig}
+	agentsAnthropicKey = anthropicKeySecret{kagentNamespace, anthropicSecret, "the agents' default ModelConfig"}
 	portalAnthropicKey = anthropicKeySecret{platformNamespace, portalAnthropicSecret, "Backstage's AI chat"}
 )
 
@@ -175,7 +175,7 @@ func warnAnthropicPlaceholder(cfg *config.Config, s anthropicKeySecret, target, 
 		warn("  or export %s=... and re-run `agentlab platform`", AnthropicKeyEnv)
 		return
 	}
-	warn("secret %s/%s %s a placeholder key: ModelConfig %s resolves and agents start, but every turn on it fails at Anthropic until the key is placed:", s.ns, s.name, verb, defaultModelConfig)
+	warn("secret %s/%s %s a placeholder key: ModelConfig %s resolves and agents start, but every turn on it fails at Anthropic until the key is placed:", s.ns, s.name, verb, renderedDefaultModelConfig(cfg))
 	warn("  %s secret copy op://<vault>/<item>/<field> --to-secret %s   (agentlab never reads the value)", secretTool, target)
 	warn("  or record the source so every `agentlab up` restores it: agentlab configure --ai-key-source op://<vault>/<item>/<field>, then `agentlab platform`")
 	warn("  or export %s=... and re-run `agentlab platform`", AnthropicKeyEnv)
@@ -235,12 +235,13 @@ var (
 )
 
 // waitDefaultModelConfigResolved is the proof the Secret was for: the
-// chart's default ModelConfig Accepted and, on a line that reports it, its
-// Secret reference resolved — the condition an agent's Harness refuses a
-// template on otherwise. A status without the condition (the 0.x line)
-// passes.
-func waitDefaultModelConfigResolved() error {
-	name := defaultModelConfig
+// agents' default ModelConfig (renderedDefaultModelConfig) Accepted and, on
+// a line that reports it, its Secret reference resolved — the condition an
+// agent's Harness refuses a template on otherwise. A status without the
+// condition (the 0.x line) passes. The marked entry must carry
+// defaultModelAnnotation, or agent-manager reports no default.
+func waitDefaultModelConfigResolved(cfg *config.Config) error {
+	name := renderedDefaultModelConfig(cfg)
 	gvr, err := modelConfigGVR()
 	if err != nil {
 		return err
@@ -255,6 +256,11 @@ func waitDefaultModelConfigResolved() error {
 	if !accepted {
 		return notReached("ModelConfig "+name, "Accepted", status, readErr, hint)
 	}
+	if cfg.DefaultModelChart() {
+		if err := checkDefaultModelAnnotation(name); err != nil {
+			return fmt.Errorf("%w;\n%s", err, hint)
+		}
+	}
 	var message string
 	resolved := waitFor(modelConfigResolvedLooks, modelConfigResolvedPoll, func() bool {
 		status, message, readErr = modelConfigCondition(name, conditionResolvedRefs)
@@ -267,5 +273,18 @@ func waitDefaultModelConfigResolved() error {
 		return fmt.Errorf("ModelConfig %s is Accepted but %s=False after %s: %s;\n%s", name, conditionResolvedRefs, time.Duration(modelConfigResolvedLooks)*modelConfigResolvedPoll, message, hint)
 	}
 	note("ModelConfig %s: Accepted%s", name, resolvedNote(status))
+	return nil
+}
+
+// checkDefaultModelAnnotation reads the ModelConfig and requires
+// defaultModelAnnotation "true" on it.
+func checkDefaultModelAnnotation(name string) error {
+	obj, err := readModelConfig(name)
+	if err != nil {
+		return err
+	}
+	if got := obj.GetAnnotations()[defaultModelAnnotation]; got != defaultModelAnnotationValue {
+		return fmt.Errorf("ModelConfig %s is not annotated %s: \"true\" (got %q): the chart did not render kagent.modelConfigs[].default", name, defaultModelAnnotation, got)
+	}
 	return nil
 }

@@ -566,7 +566,11 @@ func judgeRefusedTurn(t *chatgptTurn) (string, error) {
 // provePlainAgentRefused is the platform Harness agent's request to the
 // backend, refused at its egress policy.
 func (p *chatgptProof) provePlainAgentRefused() error {
-	if err := p.createAgent(chatgptTestPlainAgent, "", defaultModelConfig, nil); err != nil {
+	modelConfig, err := agentManagerModelConfig(p.admin.muster)
+	if err != nil {
+		return err
+	}
+	if err := p.createAgent(chatgptTestPlainAgent, "", modelConfig, nil); err != nil {
 		return err
 	}
 	target := egressProbeTarget{undeclared: chatgptBackendURL}

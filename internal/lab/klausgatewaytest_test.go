@@ -221,7 +221,7 @@ func TestGatewayArgs(t *testing.T) {
 		t.Errorf("gatedTarget = %q", got)
 	}
 	opts := KlausGatewayTestOptions{}.withDefaults()
-	if opts.GatewayImage != "" || opts.Port != 18090 || opts.ModelConfig != defaultModelConfig || opts.ReadyTimeout != klausGatewayReadyTimeout {
+	if opts.GatewayImage != "" || opts.Port != 18090 || opts.ModelConfig != "" || opts.ReadyTimeout != klausGatewayReadyTimeout {
 		t.Errorf("defaults = %+v", opts)
 	}
 }
