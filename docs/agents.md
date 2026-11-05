@@ -79,7 +79,7 @@ The lab declares it as the `kagent.modelConfigs` entry `anthropic` marked
 `claude-sonnet-4-6`, the BOM's own default), and sets
 `kagent.defaultModelConfig.enabled: false`, so the kagent chart renders no
 `default-model-config` of its own. On an agent-platform release before
-4.175.0-rc.7 the lab renders `kagent.providers` instead, and the default is
+4.175.0-rc.15 the lab renders `kagent.providers` instead, and the default is
 the kagent chart's `default-model-config`. Either way the ModelConfig
 references the Secret `kagent/kagent-anthropic` (key `ANTHROPIC_API_KEY`),
 and `agentlab platform` waits for the marked model to be Accepted, carry the
@@ -88,9 +88,8 @@ annotation and resolve its Secret.
 The proofs never assume the model's name. One that is given no
 `--model-config` asks agent-manager for the namespace's default
 (`list_model_configs`, the entry with `default: true`) as the person it runs
-as. The lab takes agent-manager from 2.19.0-rc.2 on beside the marked entry
-(`components.agent-manager.versionRange`), the first release that reports
-the default (HACKS.md U39). An agent-manager that reports no `default` at
+as. agent-manager reports the default from 2.19, the chart's own range from
+4.175.0-rc.15 on. An agent-manager that reports no `default` at
 all (an older line) answers `default-model-config`.
 
 The API key is a **real

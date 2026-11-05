@@ -52,20 +52,6 @@ func renderedDefaultModelConfig(cfg *config.Config) string {
 	return config.KagentChartDefaultModelConfig
 }
 
-// agentManagerDefaultModelRange is the agent-manager range the lab renders
-// beside the marked entry: the first release whose list_model_configs reports
-// `default` and whose create_agent fills an omitted modelConfig from it.
-const agentManagerDefaultModelRange = ">=2.19.0-rc.2 <3.0.0-0"
-
-// agentManagerRangeFor is the agent-manager range the values template
-// renders, empty for the chart's own.
-func agentManagerRangeFor(cfg *config.Config) string {
-	if defaultModelValuesFor(cfg) == nil {
-		return ""
-	}
-	return agentManagerDefaultModelRange
-}
-
 // listedModelConfig is one ModelConfig of list_model_configs' answer.
 // Default is nil from an agent-manager that predates the field.
 type listedModelConfig struct {

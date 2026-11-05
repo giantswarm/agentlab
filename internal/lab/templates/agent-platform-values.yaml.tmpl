@@ -250,12 +250,6 @@ components:
   # the caller), on whenever kagent is — the standalone umbrella's contract.
   agent-manager:
     enabled: true
-{{- with .AgentManagerRange }}
-    # The first agent-manager that reports a namespace's default model
-    # (list_model_configs' `default`) and fills an omitted modelConfig from
-    # it: the chart's own range ends before it (HACKS.md U39).
-    versionRange: "{{ . }}"
-{{- end }}
 {{- with index .PostRenderers "agent-manager" }}
     postRenderers:
 {{ . | indent 6 }}

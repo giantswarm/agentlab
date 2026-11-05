@@ -153,7 +153,7 @@ const DefaultAPIServerPort = 6443
 // image is the major.minor components.substrate installs) — a chart that
 // leaves the kagent range open across a Substrate release boots no golden
 // actor (agentlab#187).
-const DefaultChartVersion = "4.175.0-rc.7"
+const DefaultChartVersion = "4.175.0-rc.16"
 
 // ChartRepository is where the agent-platform chart releases live.
 const ChartRepository = "oci://gsoci.azurecr.io/charts/giantswarm/agent-platform"
@@ -381,10 +381,10 @@ func (c *Config) FamilylessChart() bool {
 
 // defaultModelChartFloor is the first agent-platform release whose
 // kagent.modelConfigs[] entry takes `default: true` (the annotation
-// agent-platform.giantswarm.io/is-default-model-config) and whose
-// kagent.defaultModelConfig.enabled: false keeps the kagent chart from
-// rendering default-model-config (giantswarm/agent-platform#1274).
-var defaultModelChartFloor = semver.MustParse("4.175.0-rc.7")
+// agent-platform.giantswarm.io/is-default-model-config, from 4.175.0-rc.7,
+// giantswarm/agent-platform#1274) and whose own agent-manager range reports
+// that default on list_model_configs (2.19, giantswarm/agent-platform#1288).
+var defaultModelChartFloor = semver.MustParse("4.175.0-rc.15")
 
 // DefaultModelChart reports whether the lab declares the agents' default
 // model as a marked kagent.modelConfigs[] entry: a released chart from

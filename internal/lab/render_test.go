@@ -1519,8 +1519,7 @@ const kagentProviderAnthropic = "anthropic"
 
 // withKagentChartDefault turns a render from the default model floor on into
 // the one below it: kagent.providers in place of the marked
-// kagent.modelConfigs[] entry and kagent.defaultModelConfig, and the chart's
-// own agent-manager range.
+// kagent.modelConfigs[] entry and kagent.defaultModelConfig.
 func withKagentChartDefault(t *testing.T, values map[string]any, model string) {
 	t.Helper()
 	kagent := values["kagent"].(map[string]any)
@@ -1546,5 +1545,4 @@ func withKagentChartDefault(t *testing.T, values map[string]any, model string) {
 			"apiKeySecretKey":        anthropicSecretKey,
 		},
 	}
-	delete(values["components"].(map[string]any)["agent-manager"].(map[string]any), "versionRange")
 }

@@ -80,14 +80,14 @@ with Dex doing the logins.
   reconciles the HelmRelease — nothing watches git, and the lab installs no
   Flux of its own. The kagent namespace's default ModelConfig is the one
   annotated `agent-platform.giantswarm.io/is-default-model-config: "true"`:
-  from agent-platform 4.175.0-rc.7 the lab's `kagent.modelConfigs` entry
+  from agent-platform 4.175.0-rc.15 the lab's `kagent.modelConfigs` entry
   `anthropic` marked `default: true`, with `kagent.defaultModelConfig.enabled:
   false` (below that release, the kagent chart's `default-model-config` from
   `kagent.providers`; defaultmodel.go). Proofs never hard-code a model name:
   without `--model-config` they take the entry agent-manager's
   `list_model_configs` reports `default: true` (`agentManagerModelConfig`),
-  which is why the lab renders agent-manager's range from 2.19.0-rc.2 on
-  (HACKS.md U39). `platform.tenants` is refused on a release from
+  which agent-manager does from 2.19, the chart's own range from that
+  release. `platform.tenants` is refused on a release from
   4.175.0-rc.4, which removes the tenants mode (organizations are
   giantswarm/agentlab#1149). That default
   ModelConfig and Backstage's ai-chat both use `aiModel` from `agentlab.yaml`
