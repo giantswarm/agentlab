@@ -260,10 +260,12 @@ the lab's model, marked default, its key in the tenant credential
 `tenant-credential-anthropic`, placed the way the lab places the Anthropic
 key everywhere (`anthropic.go`: the recorded source, the host environment,
 else the placeholder; agentlab never reads the value). The chart's admission
-policy fills in the LLM listener as its `baseUrl`. Last, a
-SubjectAccessReview asks the API server whether the first developer may
-create an agent's HelmRelease in the organization namespace; `up` fails if
-not. The summary names the namespace.
+policy fills in the LLM listener as its `baseUrl`. Last, the first developer
+creates an agent's HelmRelease there as a server-side dry run with their own
+Dex token, which RBAC and every admission policy of the namespace (the
+HelmRelease field lock among them) judge; `up` fails if it is refused. The
+summary names the namespace. The lab's values also count the operator's
+ServiceAccount quota under `count/serviceaccounts` (HACKS.md U40).
 
 ## The organizations proof
 
@@ -305,7 +307,7 @@ the namespace's atespace from that namespace only. Then:
     are answered; an editor reads no Secret anywhere); their create of an
     agent there answers 403, in their own it is admitted (dry runs); a
     SelfSubjectAccessReview for `list sessions.api.kagent.dev` there is
-    denied;
+    denied (its twin: `list agents.api.kagent.dev` in their own is allowed);
   - kagent API and A2A (kagent's authorizer): `CreateSession` and a first
     A2A message on the other organization's agent are `PermissionDenied`, no
     Session of it is made and no credential read for its atespace; an
@@ -321,15 +323,20 @@ the namespace's atespace from that namespace only. Then:
     `core_service_start` and `core_auth_login` naming the other
     organization's server read word for word as for a server that does not
     exist;
-  - llm listener: the first member's agent naming the other organization's
-    ModelConfig is refused at admission or does not resolve, and no
-    credential of the other organization is read for its atespace;
-  - egress gateway: the first member's agent probes the API server and
+  - models and the llm listener: the first member's agent naming the other
+    organization's ModelConfig is refused at admission or fails on that
+    reference, and no credential of the other organization is read for its
+    atespace, so the other's key never travels through the listener for it;
+    the same agent on their own model is admitted;
+  - egress gateway: the first member's agent (declaring
+    `https://example.com`) probes that origin, the API server and
     Substrate's API on 443 from its actor; judged from the gateway's record,
-    no request is forwarded.
+    the declared origin is forwarded (the twin) and each in-cluster request
+    is refused by the gate for the actor's egress policy, or held before the
+    gateway with the probe's own line showing the failure.
 - **The management-cluster profile.** The operator's ResourceQuota
   `agent-platform-organization-objects` admits ServiceAccounts up to its hard
-  count and refuses the next; with a Kyverno PolicyException in
+  `count/serviceaccounts` and refuses the next; with a Kyverno PolicyException in
   `policy-exceptions` that lifts every rule for `agents-*`, a WorkerPool
   patch and delete, a worker-labelled pod and an exec into a worker are still
   refused by the chart's ValidatingAdmissionPolicies (as the admin,

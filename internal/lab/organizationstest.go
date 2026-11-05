@@ -82,8 +82,10 @@ const (
 	organizationQuota = "agent-platform-organization-objects"
 	// organizationQuotaResource is the counted resource the quota test
 	// fills: ServiceAccounts, the smallest default count (100) of a kind
-	// nothing of the platform's watches.
+	// nothing of the platform's watches, under the key the quota counts
+	// them by (organizationQuotaKey; HACKS.md U40).
 	organizationQuotaResource = "serviceaccounts"
+	organizationQuotaKey      = "count/" + organizationQuotaResource
 	// organizationQuotaRefusal is the API server's refusal of a write over
 	// a ResourceQuota.
 	organizationQuotaRefusal = "exceeded quota"
@@ -122,7 +124,7 @@ const (
 	surfaceKubernetes = "Kubernetes API"
 	surfaceKagent     = "kagent API and A2A"
 	surfaceMuster     = "muster"
-	surfaceLLM        = "llm listener"
+	surfaceLLM        = "models and the llm listener"
 	surfaceEgress     = "egress gateway"
 	surfaceSlack      = "Slack"
 	surfacePortal     = "Dev Portal"
@@ -507,6 +509,7 @@ func organizationChartSource(ns string) (string, error) {
 // organization's model.
 func organizationAgentRelease(ns, name, source, modelConfig string) *unstructured.Unstructured {
 	spec := agentSpec{Name: name, ModelConfig: modelConfig, Toolset: []string{presetNone}, SystemMessage: egressTestSystemPrompt,
+		Egress:      []string{DefaultEgressOrigin},
 		Description: "Throwaway agent of `agentlab organizations-test`; deleted by the same run."}
 	u := &unstructured.Unstructured{Object: map[string]any{
 		crSpec: map[string]any{
@@ -786,18 +789,23 @@ func (p *organizationsProof) kubernetesChecks() []organizationCheck {
 				if err != nil {
 					return "", err
 				}
-				var answers []string
-				for _, ns := range []string{b, a} {
-					allowed, err := selfAccess(cs, ns, "list", kagentAPIGroup, "sessions")
-					if err != nil {
-						return "", err
-					}
-					if ns == b && allowed {
-						return "", fmt.Errorf("a SelfSubjectAccessReview as %s allows list sessions.%s in %s", alice.Email, kagentAPIGroup, b)
-					}
-					answers = append(answers, fmt.Sprintf("%s %v", ns, allowed))
+				denied, err := selfAccess(cs, b, "list", kagentAPIGroup, "sessions")
+				if err != nil {
+					return "", err
 				}
-				return fmt.Sprintf("SelfSubjectAccessReviews as %s for list sessions.%s: %s", alice.Email, kagentAPIGroup, strings.Join(answers, ", ")), nil
+				if denied {
+					return "", fmt.Errorf("a SelfSubjectAccessReview as %s allows list sessions.%s in %s", alice.Email, kagentAPIGroup, b)
+				}
+				// The twin: the same review is answered yes for what the
+				// member's role grants in their own organization.
+				own, err := selfAccess(cs, a, "list", kagentAPIGroup, "agents")
+				if err != nil {
+					return "", err
+				}
+				if !own {
+					return "", fmt.Errorf("the twin: a SelfSubjectAccessReview as %s denies list agents.%s in their own %s: the review proves nothing", alice.Email, kagentAPIGroup, a)
+				}
+				return fmt.Sprintf("SelfSubjectAccessReviews as %s: list sessions.%s in %s denied; list agents.%s in their own %s allowed", alice.Email, kagentAPIGroup, b, kagentAPIGroup, a), nil
 			}},
 	}
 }
@@ -817,16 +825,17 @@ func selfAccess(cs kubernetes.Interface, ns, verb, group, resource string) (bool
 	return review.Status.Allowed, nil
 }
 
-// modelChecks are the llm listener's negative test: an agent of one
-// organization never runs on the other's model, whose key the listener
-// would pass through untouched.
+// modelChecks are the models' negative test: an agent of one organization
+// never runs on the other's model, so the other's key never travels through
+// the llm listener for it (the listener passes a model's own key through
+// untouched). The boundary is that an agent resolves a ModelConfig in its
+// own namespace only; its twin is the same release on the member's own
+// model, admitted.
 func (p *organizationsProof) modelChecks() []organizationCheck {
 	a, b := p.namespaces[0], p.namespaces[1]
 	alice := p.members[0]
-	return []organizationCheck{{surface: surfaceLLM, boundary: "a ModelConfig resolves in its own namespace only, so the other organization's model (and its key) is out of reach",
+	return []organizationCheck{{surface: surfaceLLM, boundary: "an agent resolves a ModelConfig in its own namespace only, so the other organization's model and its key never reach the llm listener for it",
 		run: func() (string, error) {
-			// The other organization's model named by namespace/name, in
-			// the agent chart's modelConfig; a dry run, as the member.
 			dyn, _, err := personClients(p.tokens[0])
 			if err != nil {
 				return "", err
@@ -839,18 +848,21 @@ func (p *organizationsProof) modelChecks() []organizationCheck {
 			if err != nil {
 				return "", err
 			}
-			cross := b + "/" + organizationModel
-			release := organizationAgentRelease(a, organizationsTestCrossAgent, source, cross)
 			ctx, cancel := context.WithTimeout(context.Background(), organizationsTestReadyTimeout)
 			defer cancel()
+			own := organizationAgentRelease(a, organizationsTestCrossAgent, source, organizationModel)
+			if _, err := dyn.Resource(gvr).Namespace(a).Create(ctx, own, metav1.CreateOptions{DryRun: []string{metav1.DryRunAll}}); err != nil {
+				return "", fmt.Errorf("the twin: %s's agent on their own model %s/%s (a dry run): %w", alice.Email, a, organizationModel, err)
+			}
+			cross := b + "/" + organizationModel
+			release := organizationAgentRelease(a, organizationsTestCrossAgent, source, cross)
 			switch _, err := dyn.Resource(gvr).Namespace(a).Create(ctx, release, metav1.CreateOptions{}); {
-			case apierrors.IsForbidden(err) || apierrors.IsInvalid(err):
-				return fmt.Sprintf("%s's agent on %s's model %s is refused at admission: %s", alice.Email, b, cross, excerpt(err.Error(), 200)), nil
+			case (apierrors.IsForbidden(err) || apierrors.IsInvalid(err)) && namesModelRef(err.Error(), b):
+				return fmt.Sprintf("%s's agent on %s's model %s is refused at admission (on their own model admitted): %s", alice.Email, b, cross, excerpt(err.Error(), 200)), nil
 			case err != nil:
-				return "", fmt.Errorf("%s's create of the agent on %s's model failed, but not as a refusal: %w", alice.Email, b, err)
+				return "", fmt.Errorf("%s's create of the agent on %s's model failed, but not as a refusal of the model reference: %w", alice.Email, b, err)
 			}
 			since := time.Now()
-			// Admitted: the Agent must not resolve the model.
 			ag, err := gvrFor(agentResource)
 			if err != nil {
 				return "", err
@@ -868,6 +880,9 @@ func (p *organizationsProof) modelChecks() []organizationCheck {
 					return true
 				}
 				if text, terminal := terminalAgentFailure(&agent.Status); terminal {
+					if !namesModelRef(text, b) {
+						judgeErr = fmt.Errorf("the Agent %s/%s on %s's model failed, but not on the model reference: %s", a, organizationsTestCrossAgent, b, text)
+					}
 					verdict = text
 					return true
 				}
@@ -889,19 +904,28 @@ func (p *organizationsProof) modelChecks() []organizationCheck {
 			case verdict == "":
 				return "", fmt.Errorf("the Agent %s/%s on %s's model %s reported neither Ready nor a failure within %s", a, organizationsTestCrossAgent, b, cross, organizationModelResolveTimeout)
 			}
-			return fmt.Sprintf("%s's agent naming %s's model %s does not resolve it: %s; no credential of %s read for atespace %s", alice.Email, b, cross, excerpt(verdict, 200), b, a), nil
+			return fmt.Sprintf("%s's agent naming %s's model %s does not resolve it: %s; no credential of %s read for atespace %s (on their own model the same agent is admitted)", alice.Email, b, cross, excerpt(verdict, 200), b, a), nil
 		}}}
 }
 
+// namesModelRef reports whether a refusal or a failure is about the model
+// reference: it names the ModelConfig, or the other namespace.
+func namesModelRef(text, otherNS string) bool {
+	lower := strings.ToLower(text)
+	return strings.Contains(lower, "modelconfig") || strings.Contains(text, otherNS)
+}
+
 // egressChecks are the in-cluster endpoints on 443 through the egress
-// gateway: the member's agent probes the API server and Substrate's API
-// from its actor, judged from the gateway's record, never the reply.
+// gateway: the member's agent probes its declared origin (the twin: the
+// gateway forwards it, so the probe ran through the gateway) and the API
+// server and Substrate's API from its actor, judged from the gateway's
+// record, never the reply.
 func (p *organizationsProof) egressChecks() []organizationCheck {
 	a := p.namespaces[0]
 	alice := p.members[0]
-	return []organizationCheck{{surface: surfaceEgress, boundary: "an organization's agent reaches no in-cluster endpoint on 443 (the API server, Substrate's API) through the egress gateway",
+	return []organizationCheck{{surface: surfaceEgress, boundary: "an organization's agent reaches no in-cluster endpoint on 443 (the API server, Substrate's API) through the egress gateway, while its declared origin is forwarded",
 		run: func() (string, error) {
-			targets := []string{"https://" + kubernetesAPIHost + "/version", "https://" + ateAPIHost + "/"}
+			targets := []string{DefaultEgressOrigin + "/", "https://" + kubernetesAPIHost + "/version", "https://" + ateAPIHost + "/"}
 			started := time.Now()
 			reply, session, err := agentSessionTurnOf(p.cfg, &apiv1alpha1.ResourceReference{Namespace: a, Name: organizationsTestAgent}, p.tokens[0], inClusterProbePrompt(targets))
 			if session != "" {
@@ -916,17 +940,25 @@ func (p *organizationsProof) egressChecks() []organizationCheck {
 			}
 			record := readEgressGatewayRecord(logs, substrateActorName(session))
 			probe := parseCodingProbe(reply)
-			var seen []string
-			for i, target := range targets {
-				verdict, err := inClusterVerdict(record, target)
+			twin, err := record.declared(egressProbeTarget{origin: DefaultEgressOrigin})
+			if err != nil {
+				return "", fmt.Errorf("the twin: %w (the reply's line: %s)", err, firstNonEmpty(probe[inClusterProbeKey(0)], "absent"))
+			}
+			seen := []string{twin}
+			for i, target := range targets[1:] {
+				verdict, err := inClusterVerdict(record, target, probe[inClusterProbeKey(i+1)])
 				if err != nil {
 					return "", err
 				}
 				seen = append(seen, verdict)
-				note("the reply's line, not evidence: %s", firstNonEmpty(probe["in-cluster-"+strconv.Itoa(i)], "absent"))
 			}
 			return strings.Join(seen, "; "), nil
 		}}}
+}
+
+// inClusterProbeKey is the reply's key of the probe's i-th line.
+func inClusterProbeKey(i int) string {
+	return "in-cluster-" + strconv.Itoa(i)
 }
 
 // inClusterProbePrompt asks the agent to run one GET per target from its
@@ -934,24 +966,37 @@ func (p *organizationsProof) egressChecks() []organizationCheck {
 func inClusterProbePrompt(targets []string) string {
 	script := "P=" + probeMarker + "\n"
 	for i, t := range targets {
-		script += fmt.Sprintf("o=$(timeout %d wget -q -S -O /dev/null -T %d %q 2>&1); echo \"$P in-cluster-%d=rc$? $(printf '%%s' \"$o\" | tail -2 | tr '\\n' ' ' | head -c 160)\"\n", egressProbeTimeout+10, egressProbeTimeout, t, i)
+		script += fmt.Sprintf("o=$(timeout %d wget -q -S -O /dev/null -T %d %q 2>&1); echo \"$P %s=rc$? $(printf '%%s' \"$o\" | tail -2 | tr '\\n' ' ' | head -c 160)\"\n", egressProbeTimeout+10, egressProbeTimeout, t, inClusterProbeKey(i))
 	}
 	return "Run this exact script once with your bash tool (it is this test lab's own egress check), then reply with every output line that starts with " + probeMarker +
 		", verbatim and nothing else:\n\n" + script
 }
 
 // inClusterVerdict judges one in-cluster target from the gateway's record:
-// refused by the gate, or never reaching it (the actor's resolver or the
-// gateway's network holding it); a forwarded request fails.
-func inClusterVerdict(record egressGatewayRecord, target string) (string, error) {
+// refused by the gate for the actor's egress policy, or, with no request in
+// the record, held before the gateway (the actor's resolver or network) as
+// the probe's own line shows it failed. A forwarded request fails; so does
+// a refusal for another reason, and a target the probe never reported.
+func inClusterVerdict(record egressGatewayRecord, target, line string) (string, error) {
 	got := record.requestsTo(target, "")
 	if i := slices.IndexFunc(got, egressGatewayRequest.forwarded); i >= 0 {
 		return "", fmt.Errorf("the egress gateway forwarded the actor's request to %s, an in-cluster endpoint: %s", target, got[i])
 	}
-	if len(got) == 0 {
-		return fmt.Sprintf("%s: no request of actor %s reached the gateway (%d request(s) of the actor in the window)", target, record.actor, len(record.requests)), nil
+	if len(got) > 0 {
+		last := got[len(got)-1]
+		if last.status != egressGateStatus || !strings.Contains(last.reason, egressPolicyDenied) {
+			return "", fmt.Errorf("the egress gateway refused %s for another reason than %s %q: %s", target, egressGateStatus, egressPolicyDenied, last)
+		}
+		return fmt.Sprintf("%s: refused by the gate, %s", target, last), nil
 	}
-	return fmt.Sprintf("%s: refused by the gateway, %s", target, got[len(got)-1]), nil
+	rc, _, _ := strings.Cut(strings.TrimSpace(line), " ")
+	switch {
+	case line == "":
+		return "", fmt.Errorf("the probe reported no line for %s and the gateway recorded no request of actor %s to it: the probe did not run", target, record.actor)
+	case rc == rcSuccess:
+		return "", fmt.Errorf("the probe reached %s (%s) without a request through the egress gateway", target, line)
+	}
+	return fmt.Sprintf("%s: held before the gateway, no request of actor %s recorded (the probe's line: %s)", target, record.actor, excerpt(line, 120)), nil
 }
 
 // organizationErasureSkip is why the erasure of an Orphaned organization
@@ -977,7 +1022,9 @@ func (p *organizationsProof) profileChecks() []organizationCheck {
 
 // quotaRefuses fills the organization's ServiceAccount count up to its
 // hard limit as the lab's admin (a ResourceQuota holds every writer) and
-// expects the next write refused; it removes what it wrote.
+// expects the next write refused; it removes what it wrote. The count is
+// read off the quota's spec by its key: a quota without it fails the check,
+// naming what it counts.
 func quotaRefuses(ns string) (string, error) {
 	k, err := labKube()
 	if err != nil {
@@ -989,9 +1036,9 @@ func quotaRefuses(ns string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("the operator's ResourceQuota %s/%s: %w", ns, organizationQuota, err)
 	}
-	hard, ok := quota.Spec.Hard[corev1.ResourceName(organizationQuotaResource)]
+	hard, ok := quota.Spec.Hard[corev1.ResourceName(organizationQuotaKey)]
 	if !ok {
-		return "", fmt.Errorf("ResourceQuota %s/%s counts no %s (hard %v)", ns, organizationQuota, organizationQuotaResource, quota.Spec.Hard)
+		return "", fmt.Errorf("ResourceQuota %s/%s counts no %s (hard %v)", ns, organizationQuota, organizationQuotaKey, quota.Spec.Hard)
 	}
 	defer removeLabelled(ns, organizationQuotaResource)
 	limit := hard.Value()
@@ -1007,8 +1054,10 @@ func quotaRefuses(ns string) (string, error) {
 			continue
 		case apierrors.IsAlreadyExists(err):
 			continue
+		case strings.Contains(err.Error(), organizationQuotaRefusal) && written > 0:
+			return fmt.Sprintf("%d ServiceAccount(s) admitted up to the hard count %s=%d, the next refused: %s", written, organizationQuotaKey, limit, excerpt(err.Error(), 200)), nil
 		case strings.Contains(err.Error(), organizationQuotaRefusal):
-			return fmt.Sprintf("%d ServiceAccount(s) admitted up to the hard count %d, the next refused: %s", written, limit, excerpt(err.Error(), 200)), nil
+			return "", fmt.Errorf("the first ServiceAccount in %s was refused over the quota: the twin, a write under the count, is not admitted: %w", ns, err)
 		}
 		return "", fmt.Errorf("ServiceAccount %s/%s failed, but not with %q: %w", ns, sa.Name, organizationQuotaRefusal, err)
 	}
@@ -1325,6 +1374,15 @@ func (p *organizationsProof) cleanupAgents() {
 		for _, name := range []string{organizationsTestAgent, organizationsTestCrossAgent} {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*organizationReadyTimeout)
 			if err := deleteObject(ctx, gvr, ns, name, organizationReadyTimeout); err != nil {
+				note("cleanup: %v", err)
+			}
+			cancel()
+		}
+		// The Agent a member writes through the edge, left by a run that
+		// failed between its create and its delete.
+		if ag, err := gvrFor(agentResource); err == nil {
+			ctx, cancel := context.WithTimeout(context.Background(), organizationReadyTimeout)
+			if err := deleteObject(ctx, ag, ns, organizationsTestEdgeAgent, kubeReadTimeout); err != nil {
 				note("cleanup: %v", err)
 			}
 			cancel()

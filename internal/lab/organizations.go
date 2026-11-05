@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	authorizationv1 "k8s.io/api/authorization/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -289,8 +288,9 @@ func ensureOrganizationModel(cfg *config.Config, ns string) error {
 // ensureDefaultOrganization is `up`'s part: the default organization in
 // the root namespace, Ready; its first admins (platform-admins, written
 // after Ready as the creator writes them), its editors (developers) and
-// its model; then the answer to whether a developer may create an agent
-// there, as the API server gives it.
+// its model; then a developer's create of an agent there, as a server-side
+// dry run with their own token, which RBAC and every admission policy of
+// the namespace (the HelmRelease field lock among them) judge.
 func ensureDefaultOrganization(cfg *config.Config) (string, error) {
 	step("The default organization %s/%s (AgentPlatformOrganization), its admins, editors and model", organizationsRootNamespace, defaultOrganization)
 	ns, err := ensureOrganization(organizationsRootNamespace, defaultOrganization, defaultOrganizationDisplayName)
@@ -311,45 +311,38 @@ func ensureDefaultOrganization(cfg *config.Config) (string, error) {
 		note("no user in %s: nobody but the platform admins creates agents in %s", developersGroup, ns)
 		return ns, nil
 	}
-	allowed, err := mayCreateAgent(ns, editor)
-	if err != nil {
-		return "", err
+	if err := dryRunAgentCreate(cfg, ns, editor); err != nil {
+		return "", fmt.Errorf("the default organization %s is Ready, but %s (group %s) cannot create an agent in %s: %w — check RoleBinding %s/%s and the chart's ClusterRole %s",
+			defaultOrganization, editor.Email, developersGroup, ns, err, ns, organizationEditorsBinding, organizationEditorRole)
 	}
-	if !allowed {
-		return "", fmt.Errorf("the default organization %s is Ready, but the API server does not let %s (group %s) create an agent's HelmRelease in %s: check RoleBinding %s/%s and the chart's ClusterRole %s",
-			defaultOrganization, editor.Email, developersGroup, ns, ns, organizationEditorsBinding, organizationEditorRole)
-	}
-	note("%s Ready in namespace %s; %s may create agents there", defaultOrganization, ns, editor.Email)
+	note("%s Ready in namespace %s; %s may create agents there (a dry run as them)", defaultOrganization, ns, editor.Email)
 	return ns, nil
 }
 
-// mayCreateAgent asks the API server (a SubjectAccessReview as the lab's
-// admin) whether the person, with their groups as the API server reads
-// them, may create an agent's HelmRelease in the namespace.
-func mayCreateAgent(ns string, person *config.User) (bool, error) {
-	k, err := labKube()
+// dryRunAgentCreate creates an agent's HelmRelease in the namespace as the
+// person, with their own Dex token, as a server-side dry run.
+func dryRunAgentCreate(cfg *config.Config, ns string, person *config.User) error {
+	token, err := passwordGrant(cfg, config.KubernetesClientID, config.KubernetesClientSecret, person.Email, person.Password, loginScopes)
 	if err != nil {
-		return false, err
+		return err
 	}
-	groups := make([]string, 0, len(person.Groups))
-	for _, g := range person.Groups {
-		groups = append(groups, apiserverUserPrefix+g)
+	source, err := organizationChartSource(ns)
+	if err != nil {
+		return err
+	}
+	dyn, _, err := personClients(token)
+	if err != nil {
+		return err
+	}
+	gvr, err := gvrFor(fluxHelmReleaseResource)
+	if err != nil {
+		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	defer cancel()
-	review, err := k.clientset.AuthorizationV1().SubjectAccessReviews().Create(ctx, &authorizationv1.SubjectAccessReview{
-		Spec: authorizationv1.SubjectAccessReviewSpec{
-			User:   apiserverUserPrefix + person.Email,
-			Groups: groups,
-			ResourceAttributes: &authorizationv1.ResourceAttributes{
-				Namespace: ns, Verb: "create", Group: "helm.toolkit.fluxcd.io", Resource: "helmreleases",
-			},
-		},
-	}, metav1.CreateOptions{})
-	if err != nil {
-		return false, fmt.Errorf("SubjectAccessReview for %s in %s: %w", person.Email, ns, err)
-	}
-	return review.Status.Allowed, nil
+	release := organizationAgentRelease(ns, organizationsTestCrossAgent, source, organizationModel)
+	_, err = dyn.Resource(gvr).Namespace(ns).Create(ctx, release, metav1.CreateOptions{DryRun: []string{metav1.DryRunAll}})
+	return err
 }
 
 // organizationsHint is up's summary line on the organizations.

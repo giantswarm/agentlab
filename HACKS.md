@@ -816,6 +816,20 @@ carries kagent-extensions#27 and the operator takes path-style addressing
 (an `AWS_S3_USE_PATH_STYLE`-like option, as Substrate reads): the check then
 deletes an organization with a running session and waits for its finalizer.
 
+### U40. `agent-platform-values.yaml.tmpl`: the operator's quota counts ServiceAccounts under `count/serviceaccounts` — BLOCKED UPSTREAM
+agent-platform-operator's default `objectQuota` (v0.1.0-rc.5 through main)
+carries the bare key `serviceaccounts`, which is no standard quota resource,
+so the API server refuses the ResourceQuota
+`agent-platform-organization-objects` (k8s `ValidateResourceQuotaResourceName`).
+The operator writes the quota last and joins its error into `Ready`: no
+organization becomes Ready, and `up` fails at the default organization.
+**Fix:** with `platform.organizations` the lab's values set
+`agent-platform-operator.objectQuota` to `serviceaccounts: null` and
+`count/serviceaccounts: "100"`; `organizations-test`'s quota check reads the
+`count/` key. Unblocks when the operator's default counts
+`count/serviceaccounts` and the chart pins that release: the override then
+goes.
+
 ### U38. `postRenderers` patch: agentgateway binds IPv4 — BLOCKED UPSTREAM
 agentgateway binds its readiness (15021) and stats (15020) servers and its
 listeners on the IPv6 wildcard unless IPv6 is switched off

@@ -1398,7 +1398,7 @@ func agentTurnAs(cfg *config.Config, name, token, prompt string) (string, error)
 }
 
 // agentTurnOf is agentTurnAs for an Agent of any namespace: an organization
-// namespace's agent (tenants-test).
+// namespace's agent (organizations-test).
 func agentTurnOf(cfg *config.Config, agent *apiv1alpha1.ResourceReference, token, prompt string) (string, error) {
 	reply, _, err := agentSessionTurnOf(cfg, agent, token, prompt)
 	return reply, err

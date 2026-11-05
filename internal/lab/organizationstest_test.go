@@ -225,20 +225,50 @@ func TestOutsidePlatform(t *testing.T) {
 	}
 }
 
-// An in-cluster target passes when the gateway refused it or never saw
-// it, and fails when the gateway forwarded it.
+// An in-cluster target passes when the gate refused it for the actor's
+// egress policy, or when no request reached the gateway and the probe's own
+// line shows it failed; it fails when the gateway forwarded it, refused it
+// for another reason, the probe reached it around the gateway, or the probe
+// never reported it.
 func TestInClusterVerdict(t *testing.T) {
 	target := "https://" + kubernetesAPIHost + "/version"
-	refused := egressGatewayRecord{actor: "a", requests: []egressGatewayRequest{{host: kubernetesAPIHost, path: "/version", status: "403", reason: egressPolicyDenied}}}
-	if v, err := inClusterVerdict(refused, target); err != nil || !strings.Contains(v, "refused by the gateway") {
-		t.Errorf("refused: %q, %v", v, err)
+	request := func(status, reason, endpoint string) egressGatewayRecord {
+		return egressGatewayRecord{actor: "a", requests: []egressGatewayRequest{{host: kubernetesAPIHost, path: "/version", status: status, reason: reason, endpoint: endpoint}}}
 	}
-	if v, err := inClusterVerdict(egressGatewayRecord{actor: "a"}, target); err != nil || !strings.Contains(v, "no request") {
-		t.Errorf("never reached: %q, %v", v, err)
+	for name, tc := range map[string]struct {
+		record egressGatewayRecord
+		line   string
+		want   string
+	}{
+		"refused by the gate":        {request(egressGateStatus, egressPolicyDenied, ""), "rc8 403 Forbidden", "refused by the gate"},
+		"held before the gateway":    {egressGatewayRecord{actor: "a"}, "rc4 bad address", "held before the gateway"},
+		"forwarded":                  {request("200", "", "10.96.0.1:443"), rcSuccess, ""},
+		"refused for another reason": {request("503", "upstream connect error", ""), "rc8", ""},
+		"reached around the gateway": {egressGatewayRecord{actor: "a"}, rcSuccess + " ", ""},
+		"the probe never ran":        {egressGatewayRecord{actor: "a"}, "", ""},
+	} {
+		got, err := inClusterVerdict(tc.record, target, tc.line)
+		switch {
+		case tc.want == "" && err == nil:
+			t.Errorf("%s: passed: %q", name, got)
+		case tc.want != "" && (err != nil || !strings.Contains(got, tc.want)):
+			t.Errorf("%s: %q, %v; want %q", name, got, err, tc.want)
+		}
 	}
-	forwarded := egressGatewayRecord{actor: "a", requests: []egressGatewayRequest{{host: kubernetesAPIHost, path: "/version", status: "200", endpoint: "10.96.0.1:443"}}}
-	if _, err := inClusterVerdict(forwarded, target); err == nil {
-		t.Error("a forwarded in-cluster request passed")
+}
+
+// A refusal or a failure counts for the model boundary only when it is
+// about the model reference: an unrelated failure is no proof.
+func TestNamesModelRef(t *testing.T) {
+	for text, want := range map[string]bool{
+		`ModelConfig "` + orgBeta + `/anthropic" not found`:                true,
+		"admission webhook denied: namespace " + orgBeta + " is not yours": true,
+		"Back-off pulling image ghcr.io/kagent/app":                        false,
+		`chart "agent" version "2.x" not found`:                            false,
+	} {
+		if got := namesModelRef(text, orgBeta); got != want {
+			t.Errorf("%q: %v, want %v", text, got, want)
+		}
 	}
 }
 
@@ -507,6 +537,13 @@ func TestPlatformValuesOrganizations(t *testing.T) {
 		}
 		if values["tenants"] != nil {
 			t.Errorf("%s: the retired tenants key renders: %v", name, values["tenants"])
+		}
+		// The operator's quota: the bare serviceaccounts key, which the API
+		// server refuses, dropped (null) and counted under its count/ key.
+		quota, _ := nestedValue(values, "agent-platform-operator", "objectQuota").(map[string]any)
+		bare, dropped := quota[organizationQuotaResource]
+		if got := dropped && bare == nil && quota[organizationQuotaKey] == "100"; got != tc.on {
+			t.Errorf("%s: agent-platform-operator.objectQuota = %v, want %s dropped and %s counted: %v", name, quota, organizationQuotaResource, organizationQuotaKey, tc.on)
 		}
 		if sub, _ := values["substrate"].(map[string]any); sub["credentialProvider"] != nil {
 			t.Errorf("%s: the lab lists credential policies by hand: %v", name, sub["credentialProvider"])
