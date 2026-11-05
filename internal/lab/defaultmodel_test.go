@@ -48,10 +48,9 @@ func TestDefaultModelConfigOf(t *testing.T) {
 	}
 }
 
-// TestDefaultModelValuesFor: the marked entry and the agent-manager range
-// render from the default model floor on, with the agents; below it, on the
-// 3.x line and without the agents neither does, and the default is the kagent
-// chart's.
+// TestDefaultModelValuesFor: the marked entry renders from the default model
+// floor on, with the agents; below it, on the 3.x line and without the agents
+// it does not, and the default is the kagent chart's.
 func TestDefaultModelValuesFor(t *testing.T) {
 	cfg := labConfig(true, true, false, false, false)
 	got := defaultModelValuesFor(cfg)
@@ -59,18 +58,15 @@ func TestDefaultModelValuesFor(t *testing.T) {
 	if got == nil || *got != want {
 		t.Fatalf("defaultModelValuesFor on %s = %+v, want %+v", cfg.Platform.ChartVersion, got, want)
 	}
-	if r := agentManagerRangeFor(cfg); r != agentManagerDefaultModelRange {
-		t.Errorf("agentManagerRangeFor = %q, want %q", r, agentManagerDefaultModelRange)
-	}
 	if name := renderedDefaultModelConfig(cfg); name != config.DefaultModelConfig {
 		t.Errorf("renderedDefaultModelConfig = %q", name)
 	}
 
-	for _, version := range []string{"4.174.3", "4.175.0-rc.6", "3.23.1"} {
+	for _, version := range []string{"4.174.3", "4.175.0-rc.14", "3.23.1"} {
 		below := labConfig(true, true, false, false, false)
 		below.Platform.ChartVersion = version
-		if v := defaultModelValuesFor(below); v != nil || agentManagerRangeFor(below) != "" {
-			t.Errorf("%s: entry %+v, range %q; want neither", version, v, agentManagerRangeFor(below))
+		if v := defaultModelValuesFor(below); v != nil {
+			t.Errorf("%s: entry %+v, want none", version, v)
 		}
 		if name := renderedDefaultModelConfig(below); name != config.KagentChartDefaultModelConfig {
 			t.Errorf("%s: renderedDefaultModelConfig = %q", version, name)
@@ -78,15 +74,15 @@ func TestDefaultModelValuesFor(t *testing.T) {
 	}
 
 	noAgents := labConfig(true, false, false, false, false)
-	if v := defaultModelValuesFor(noAgents); v != nil || agentManagerRangeFor(noAgents) != "" {
-		t.Errorf("without the agents: entry %+v, range %q", v, agentManagerRangeFor(noAgents))
+	if v := defaultModelValuesFor(noAgents); v != nil {
+		t.Errorf("without the agents: entry %+v", v)
 	}
 }
 
 // TestPlatformValuesDefaultModel: from the floor on the values mark the lab's
 // Anthropic entry default, turn the kagent chart's own default off, render no
-// kagent.providers and take agent-manager from the first release that reports
-// the default; a ChatGPT subscription entry joins the same list.
+// kagent.providers and leave agent-manager on the chart's own range; a
+// ChatGPT subscription entry joins the same list.
 func TestPlatformValuesDefaultModel(t *testing.T) {
 	cfg := chatgptLab(t, nil)
 	cfg.Platform.ChartVersion = config.DefaultChartVersion
@@ -111,7 +107,7 @@ func TestPlatformValuesDefaultModel(t *testing.T) {
 		t.Errorf("kagent.modelConfigs[1] = %v, want the unmarked ChatGPT entry", got)
 	}
 	components, _ := values["components"].(map[string]any)
-	if am, _ := components["agent-manager"].(map[string]any); am["versionRange"] != agentManagerDefaultModelRange || am["enabled"] != true {
-		t.Errorf("components.agent-manager = %v, want enabled with versionRange %s", am, agentManagerDefaultModelRange)
+	if am, _ := components["agent-manager"].(map[string]any); am["enabled"] != true || am["versionRange"] != nil {
+		t.Errorf("components.agent-manager = %v, want enabled on the chart's own range", am)
 	}
 }
