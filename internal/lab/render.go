@@ -79,6 +79,8 @@ type tmplData struct {
 	// The per-server OAuth sign-in fixture (oauthfixture.go): the MCPServer
 	// name the proofs sign in to and the protected endpoint it points at.
 	OAuthFixtureServer string
+	// OAuthSubjectFixtureServer is the fixture's subject-scoped twin.
+	OAuthSubjectFixtureServer string
 	// KlausGatewayLanding is the connector landing of the host-mode
 	// klaus-gateway the proofs start, on muster's post-login redirect
 	// allowlist so a completed sign-in returns there as on an installation.
@@ -328,6 +330,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		ModelManagerEndpoints:        endpoints,
 		ExtraModels:                  cfg.Platform.ExtraModels,
 		OAuthFixtureServer:           oauthFixtureServer,
+		OAuthSubjectFixtureServer:    oauthSubjectFixtureServer,
 		KlausGatewayLanding:          klausGatewayLanding(gatewayTestPort(cfg)),
 		GitHubMCPServer:              gitHubMCPServer,
 		GitHubMCPClientSecret:        cfg.Platform.GitHub.ClientSecret(),
