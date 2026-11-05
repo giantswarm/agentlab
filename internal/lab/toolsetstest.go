@@ -36,6 +36,7 @@ const (
 	toolsetsAgentNone         = toolsetsTestPrefix + "-none"
 	toolsetsAgentFull         = toolsetsTestPrefix + "-full"
 	toolsetsAgentOAuth        = toolsetsTestPrefix + "-oauth"
+	toolsetsAgentOAuthSubject = toolsetsTestPrefix + "-oauth-subject"
 	toolsetsAgentUnscoped     = toolsetsTestPrefix + "-unscoped"
 	toolsetsAgentPortal       = toolsetsTestPrefix + "-portal"
 	toolsetsWorkflowQuery     = toolsetsTestPrefix + "-query"
@@ -49,6 +50,11 @@ const (
 	toolsetFixtureSelector    = "server:" + oauthFixtureServer
 	toolsetTestAgentSystemMsg = "You are a test agent of the agentlab toolset proof. Do exactly what the message asks, tersely."
 )
+
+// serverSelector is the toolset selector naming one server.
+func serverSelector(server string) string {
+	return "server:" + server
+}
 
 // presetNoSuch is a preset selector no preset answers to: what muster and the
 // portal must refuse by name.
@@ -81,6 +87,7 @@ var toolsetsAgents = []toolsetsAgent{
 	{toolsetsAgentNone, []string{presetNone}},
 	{toolsetsAgentFull, []string{presetFull}},
 	{toolsetsAgentOAuth, []string{toolsetFixtureSelector}},
+	{toolsetsAgentOAuthSubject, []string{serverSelector(oauthSubjectFixtureServer)}},
 }
 
 // ToolsetsTest is the headless end-to-end proof of declared toolsets against
@@ -186,15 +193,21 @@ func ToolsetsTest(cfg *config.Config, email string, opts ToolsetsTestOptions) er
 		pass("through kagent (a Session and one A2A SendMessage through the edge as %s) %s lists nothing outside %s — read-only core tools may appear, no writer does; the runtime sends the header and the user's token — and %s answers a chat turn under %s", user.Email, toolsetsAgentReadOnly, presetReadOnly, toolsetsAgentNone, presetNone)
 	}
 
-	// 5. The OAuth fixture: the sign-in completed in the portal path is what
-	//    makes the server's tools resolve for the agent under the person's
-	//    forwarded token (ground-truth v3, G6), for that person and client
-	//    only, until the sign-out.
+	// 5. The OAuth fixtures (ground-truth v3, G6): a session-scoped sign-in
+	//    completed in the portal resolves the server's tools for that
+	//    principal's session only, never for the agent's Session; a
+	//    subject-scoped one resolves them for every session of the person,
+	//    their agent's included, until the sign-out.
 	g6, err := proveSignInScopedToolset(cfg, user, other, toolPrefix, admin, opts)
 	if err != nil {
 		return err
 	}
 	verdicts = append(verdicts, g6...)
+	g6Subject, err := proveSubjectSignInReachesAgent(cfg, user, other, opts)
+	if err != nil {
+		return err
+	}
+	verdicts = append(verdicts, g6Subject...)
 
 	// 6. The portal: the Tools step's endpoints and its create path.
 	portal, err := proveToolsetPortal(cfg, user, opts)
@@ -212,7 +225,7 @@ func ToolsetsTest(cfg *config.Config, email string, opts ToolsetsTestOptions) er
 // HelmReleases, and whatever render is left), the workflows, and the fixture
 // sign-in of the run.
 func toolsetsCleanup(s *musterSession, toolPrefix string) {
-	names := []string{toolsetsAgentReadOnly, toolsetsAgentNone, toolsetsAgentFull, toolsetsAgentOAuth, toolsetsAgentUnscoped, toolsetsAgentPortal}
+	names := []string{toolsetsAgentReadOnly, toolsetsAgentNone, toolsetsAgentFull, toolsetsAgentOAuth, toolsetsAgentOAuthSubject, toolsetsAgentUnscoped, toolsetsAgentPortal}
 	removed := false
 	for _, name := range names {
 		if !agentExists(name) {

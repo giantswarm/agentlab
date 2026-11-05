@@ -27,7 +27,7 @@ func TestGitHubMCPTemplate(t *testing.T) {
 		"namespace: " + platformNamespace,
 		"url: https://api.githubcopilot.com/mcp/",
 		"toolPrefix: " + gitHubMCPServer,
-		"type: oauth",
+		renderedOAuthAuth,
 		renderedNoForwardToken,
 		"issuer: https://github.com/login/oauth",
 		"name: " + config.DefaultGitHubSecretName,

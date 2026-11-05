@@ -1885,7 +1885,12 @@ platform client's audience, which the endpoint trusts. Completing the sign-in
 therefore connects muster to itself and surfaces its own tools under
 `x_lab-oauth-fixture_` — harmless, per session, and exactly what the toolset
 proof needs (a toolset naming the server resolves to its tools only for the
-session that signed in). What the self-aggregation costs: right after a muster
+session that signed in). Its twin `lab-oauth-subject-fixture` is the same
+server with `grantScope: subject`, so a sign-in belongs to the person and
+reaches the Sessions their agents run in. muster decides grant scope per
+authorization server identity, so the twin pins its own identity (muster's
+public URL plus `/lab-oauth-subject-fixture`, with `expectedIssuer` naming
+Dex), and the fixture keeps its session scope. What the self-aggregation costs: right after a muster
 restart the CR reads `Failed` (muster dials itself before its listener is up)
 until the reconnect backoff flips it to `Auth Required`, about a minute —
 `agentlab platform` waits for that.
@@ -2038,9 +2043,10 @@ components, as the admin, and leaves nothing behind (its agents are named
 
 1. **agent-manager's contract** through muster: `create_agent` without a
    toolset is refused naming the shipped presets and `preset:none`; the removed
-   `toolNames` argument is refused with the explaining error; four agents are
-   created with `preset:read-only`, `preset:none`, `preset:full` and
-   `server:lab-oauth-fixture` — a HelmRelease of the agent chart each.
+   `toolNames` argument is refused with the explaining error; five agents are
+   created with `preset:read-only`, `preset:none`, `preset:full`,
+   `server:lab-oauth-fixture` and `server:lab-oauth-subject-fixture` — a
+   HelmRelease of the agent chart each.
 2. **What was rendered**: `values.toolset` on each HelmRelease with the
    declared list, the `AgentTemplate` on the platform Harness binding the
    agent's own `RemoteMCPServer` that carries the header with the joined
@@ -2088,16 +2094,26 @@ components, as the admin, and leaves nothing behind (its agents are named
    /api/muster/auth/login` with the portal's own forwarded Dex id_token) yields
    the challenge, which the proof completes as the browser would; an
    agent-shaped session on the **same** id_token then resolves the fixture's
-   tools and calls one; the real agent, driven through kagent with that token,
-   reports them too. muster keys a forwarded bearer's session by its
+   tools and calls one. muster keys a forwarded bearer's session by its
    principal (`ext-<hash>` of iss, sub, azp or aud and the act chain), and the
    grant belongs to that session (`grantScope: session`): the same user under
    a **fresh** id_token of the same client resolves the same tools (a
    refreshed token keeps its session), while a second user and the same user
    through **another client** (`kubernetes`) resolve nothing. After
    `core_auth_logout` on the portal's token, the user's fresh id_token
-   resolves nothing either. The portal forwards one and the same id_token to
-   muster and to kagent, so the agent sees what the person signed in to.
+   resolves nothing either. The real agent, in a Session the person started
+   through agent-manager's `start_session`, reports **none** of the fixture's
+   tools: it calls muster with its actor JWT, as a muster session of its own,
+   and a session-scoped grant never leaves the session that signed in (the
+   agent signs in itself, see `signin-test`). The subject-scoped twin
+   `lab-oauth-subject-fixture` (`grantScope: subject`) proves the other half:
+   after the person's portal Sign in, the same person through the
+   `kubernetes` client resolves its tools, a second user does not, and the
+   agent bound to `server:lab-oauth-subject-fixture` reports them in a
+   Session the person started, and none in the second user's; after
+   `core_auth_logout` on the portal's token, nothing resolves anywhere, a new
+   Session of the agent included. A sign-in a person makes for their agents
+   needs `grantScope: subject` on the server.
 6. **The portal** (skip the create with `--skip-portal`): the Tools step's
    backend calls (`/api/muster/tools/filter` with `include_presets`, a
    `toolset=` resolution, an unmatched selector, an unknown preset relayed as

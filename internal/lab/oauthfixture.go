@@ -58,6 +58,10 @@ const (
 	// oauthFixtureServer is the fixture MCPServer's name — what the proofs
 	// sign in to and what the portal lists.
 	oauthFixtureServer = "lab-oauth-fixture"
+	// oauthSubjectFixtureServer is the fixture's twin with grantScope
+	// subject: a sign-in belongs to the person, so it reaches the Sessions
+	// their agents run in (toolsets-test).
+	oauthSubjectFixtureServer = "lab-oauth-subject-fixture"
 	// oauthFixtureURL is muster's own protected /mcp, in-cluster (the muster
 	// Service, which reaches the host-network pod on the node and the
 	// pod-network replicas of platform.musterPodNetwork alike).
@@ -109,7 +113,12 @@ func ensureOAuthFixture(cfg *config.Config) error {
 	if _, err := applyManifests(context.Background(), rendered); err != nil {
 		return err
 	}
-	return waitMCPServerState(oauthFixtureServer, oauthFixtureHealthyStates...)
+	for _, name := range []string{oauthFixtureServer, oauthSubjectFixtureServer} {
+		if err := waitMCPServerState(name, oauthFixtureHealthyStates...); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // oauthFixtureHealthyStates are the CR states of a reachable fixture: Auth
@@ -376,16 +385,22 @@ func localConnectorLink(page *url.URL, body []byte) string {
 // every pooled connection and returns the CR to Auth Required. Best effort:
 // the lab's state is not the proof's verdict.
 func restartOAuthFixture() {
+	restartFixtureServer(oauthFixtureServer)
+}
+
+// restartFixtureServer is restartOAuthFixture for one fixture MCPServer by
+// name.
+func restartFixtureServer(name string) {
 	stamp := time.Now().UTC().Format(time.RFC3339)
-	if err := requestMCPServerRestart(oauthFixtureServer, stamp); err != nil {
-		note("could not request a restart of %s (%v); it reads Connected until the signed-in session's token expires", oauthFixtureServer, err)
+	if err := requestMCPServerRestart(name, stamp); err != nil {
+		note("could not request a restart of %s (%v); it reads Connected until the signed-in session's token expires", name, err)
 		return
 	}
-	if err := waitMCPServerState(oauthFixtureServer, mcpServerStateAuthRequired); err != nil {
-		note("%s did not return to Auth Required after the restart request: %v", oauthFixtureServer, err)
+	if err := waitMCPServerState(name, mcpServerStateAuthRequired); err != nil {
+		note("%s did not return to Auth Required after the restart request: %v", name, err)
 		return
 	}
-	note("%s back to Auth Required", oauthFixtureServer)
+	note("%s back to Auth Required", name)
 }
 
 // requestMCPServerRestart merge-patches spec.restartRequestedAt on one

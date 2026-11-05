@@ -93,3 +93,45 @@ type: Opaque
 stringData:
   client-id: {{ .AgentPlatformClientID }}
   client-secret: {{ .AgentPlatformClientSecret }}
+---
+# The subject-scoped twin of the fixture above: the same endpoint, Dex
+# endpoints and client, with grantScope subject, so a sign-in belongs to the
+# person and reaches every later session of theirs, the Sessions their agents
+# run in included (`agentlab toolsets-test`). muster decides grant scope per
+# authorization server identity, so the twin pins its own issuer identity:
+# under the fixture's identity it would turn that fixture's grants
+# subject-scoped too. expectedIssuer is the identifier Dex itself would send
+# in an RFC 9207 iss on the callback.
+apiVersion: muster.giantswarm.io/v1alpha1
+kind: MCPServer
+metadata:
+  name: {{ .OAuthSubjectFixtureServer }}
+  namespace: agent-platform
+  labels:
+    app.kubernetes.io/managed-by: agentlab
+    agentlab.giantswarm.io/fixture: oauth-sign-in
+  annotations:
+    agentlab.giantswarm.io/purpose: >-
+      Lab test fixture for a subject-scoped per-server OAuth sign-in: the
+      person's sign-in reaches their agents' Sessions. Proven by `agentlab
+      toolsets-test`. Not a real integration; signing in connects muster to
+      itself (harmless).
+spec:
+  description: >-
+    Lab fixture: an OAuth-protected MCP server whose sign-in belongs to the
+    person (grantScope subject). Not a real integration.
+  type: streamable-http
+  url: {{ .OAuthFixtureURL }}
+  autoStart: true
+  auth:
+    type: oauth
+    forwardToken: false
+    authorizationServer:
+      issuer: {{ .MusterBaseURL }}/{{ .OAuthSubjectFixtureServer }}
+      expectedIssuer: {{ .Issuer }}
+      authorizationEndpoint: {{ .Issuer }}/auth
+      tokenEndpoint: {{ .Issuer }}/token
+      grantScope: subject
+      clientCredentialsSecretRef:
+        name: {{ .OAuthFixtureServer }}-client
+      scopes: openid profile email offline_access
