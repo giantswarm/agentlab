@@ -360,12 +360,20 @@ the namespace's atespace from that namespace only. Then:
   patch and delete, a worker-labelled pod and an exec into a worker are still
   refused by the chart's ValidatingAdmissionPolicies (as the admin,
   cluster-admin); the credential provider's live grants (`/statusz`) give each
-  organization's atespace its own namespace only. The erasure of an
+  organization's atespace its own namespace only. Secret access per
+  component (giantswarm/agent-platform#1269), each read made with the
+  ServiceAccount's own token (TokenRequest, no client certificate) against a
+  dummy workload cluster kubeconfig `org-lab/agentlab-kubeconfig`:
+  ate-controller gets `ate-system/egress-mitm-ca-pool` and is refused
+  everything else; both credential providers get the model key in `kagent`
+  and in an organization namespace and are refused the kubeconfig, the pool
+  and a list; the connectivity install hooks, whose identity exists only
+  during a hook event, get it from the release's own hook manifests for the
+  check (removed afterwards) and read the pool only. A get the authorizer
+  allows may answer NotFound; a refusal must be 403. The erasure of an
   `Orphaned` organization with a running session is skipped: it stalls at the
   Sessions step until the lab's kagent line carries
-  giantswarm/kagent-extensions#27 (HACKS.md U41). Slice 17
-  (giantswarm/agent-platform#1269) adds Substrate's Secret access to the same
-  list (`profileChecks`).
+  giantswarm/kagent-extensions#27 (HACKS.md U41).
 
 The report prints one `PASS` or `SKIP` line per verdict, `[surface]
 boundary — what was seen`; a failure stops the run as `FAIL [surface]
