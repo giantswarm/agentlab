@@ -1043,9 +1043,8 @@ func inClusterVerdict(record egressGatewayRecord, target, line string) (string, 
 // with a running session is skipped on the lab.
 const organizationErasureSkip = "the erasure of an organization that holds a person's session stalls at the Sessions step until the lab's kagent line carries giantswarm/kagent-extensions#27 (kagent-upstream#957 is open); the lab also runs apply mode, with no installation Kustomization that makes an organization Orphaned, and the operator's S3 client addresses the lab's in-cluster store virtual-hosted, which it does not serve"
 
-// profileChecks are the management-cluster profile tests that fit the lab.
-// Slice 17 (giantswarm/agent-platform#1269) adds Substrate's Secret
-// access here: a check per component and the Secret it may not read.
+// profileChecks are the management-cluster profile tests that fit the lab,
+// Secret access per component among them (giantswarm/agent-platform#1269).
 func (p *organizationsProof) profileChecks() []organizationCheck {
 	a := p.namespaces[0]
 	return []organizationCheck{
@@ -1055,6 +1054,10 @@ func (p *organizationsProof) profileChecks() []organizationCheck {
 			run: func() (string, error) { return p.policyExceptionHolds(a) }},
 		{surface: surfaceProfile, boundary: "the Substrate credential provider grants each organization's atespace its own namespace only",
 			run: func() (string, error) { return credentialGrantsHold(p.namespaces[:]) }},
+		{surface: surfaceProfile, boundary: "ate-controller and both Substrate credential providers read Secrets only where granted, never a workload cluster's kubeconfig in " + orgNamespace,
+			run: func() (string, error) { return secretBoundariesHold(a) }},
+		{surface: surfaceProfile, boundary: "the connectivity install hooks read only the Secrets they write",
+			run: func() (string, error) { return hookSecretsHold(a) }},
 		{surface: surfaceProfile, boundary: "the erasure of an Orphaned organization with a running session finishes",
 			skip: organizationErasureSkip},
 	}
