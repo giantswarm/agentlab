@@ -839,9 +839,10 @@ That chart's own range is `components.agent-manager.versionRange: ">=2.16.0
 marked entry the values set `components.agent-manager.versionRange:
 ">=2.19.0-rc.2 <3.0.0-0"` (`agentManagerRangeFor`). The chart gives
 agent-manager `tenants: {enabled: false}` only, which 2.19 takes. Unblocks
-when an agent-platform release moves its range to 2.19 or later
-(giantswarm/agent-platform#1268 names that release): the lab's
-`DefaultChartVersion` follows it and the range goes.
+when an agent-platform release moves its range to 2.19 or later (the chart's
+own comment on the range: it moves with the values that turn 2.19's
+`tenants.enabled` on): the lab's `DefaultChartVersion` follows it and the
+range goes.
 
 ## Accepted lab trade-offs (not hacks to fix)
 

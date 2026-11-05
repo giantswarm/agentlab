@@ -412,11 +412,7 @@ func (c *Config) TenantsModeChart() bool {
 // tenantsRemovedChartFloor on. A chart directory and a branch build are not
 // checked: the chart's own schema refuses the key where it is gone.
 func (c *Config) tenantsRemovedChart() bool {
-	if c.Platform.ChartPath != "" || c.Platform.ChartBranch != "" || c.LegacyChart() {
-		return false
-	}
-	v, err := semver.NewVersion(c.Platform.ChartVersion)
-	return err == nil && !v.LessThan(tenantsRemovedChartFloor)
+	return c.Platform.ChartPath == "" && c.Platform.ChartBranch == "" && !c.TenantsModeChart()
 }
 
 // DefaultDevRegistryPort is the host port of the lab registry when
