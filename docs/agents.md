@@ -461,17 +461,20 @@ generated from kagent's protos (`internal/kagent/gen`, see
 [development.md](development.md)) for the rest. Every call carries
 `authorization: Bearer <id_token>`; every A2A call names the Agent as its
 tenant (`<namespace>/<name>`) and the `Session` that holds the conversation
-through the message's context id (the Session's id; created for the person
-with `CreateSession`, idempotent on `request_id`, and deleted afterwards),
+through the message's context id (the Session's id; started for the person
+through agent-manager's `start_session` over muster, idempotent on
+`requestId`, and deleted afterwards through its `delete_session`),
 and carries the human-in-the-loop extension request (`A2A-Extensions:
 https://kagent.dev/extensions/hitl/v1`), so a tool bound with
 `requireApproval` pauses the task at `input-required` with a decidable
 `tool_approval_request` instead of a plain notice. The answer is consumed
 as a stream (`SendStreamingMessage`: the submitted task, working, the
-artifacts, the terminal status). The Harness re-emits the caller's bearer
-on every MCP call (`KAGENT_PROPAGATE_TOKEN`), so muster sees the person,
-never the platform — agent tool calls through muster need a real Dex token
-on the way in.
+artifacts, the terminal status). `start_session` binds the Session's actor
+to the person in muster, so the runtime's MCP calls carry the actor's JWT
+and muster serves them as the person, never the platform. A Session
+created straight at the controller (`CreateSession`) is not bound: the
+platform Harness forwards no caller token, so its runtime reaches muster
+with no credential.
 
 `agentlab a2a-test` is the proof of that path, with the assertions the
 surfaces rely on: the route and its policy exist and are Accepted; a call
@@ -480,7 +483,7 @@ HTTP/2 POST the gRPC frame gets the trailers-only `grpc-status 16`, a plain
 POST gets 401); a forged `x-user-id` beside a valid token is replaced
 (`GetCurrentUser` names the token's person); `ListAgents` lists the proof's
 Agent Ready on the platform Harness with the display-name and icon-url
-annotations as Swarmgeist reads them; `CreateSession` is idempotent; a turn
+annotations as Swarmgeist reads them; `start_session` is idempotent; a turn
 streams its answer; on the proof's agent — the Generic
 chart with `toolset: [preset:read-only]` and `muster.requireApproval: true`
 (chart ≥ 1.1.0) — a tool call pauses the task, the person's approval

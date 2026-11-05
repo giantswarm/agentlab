@@ -23,8 +23,9 @@ import (
 // way the surfaces drive it — the person's Dex id_token on the kagent
 // controller's gRPC route through the edge. With no template it prints the
 // roster the person sees (ListAgents as that person, or the gRPC status when
-// the controller refuses). With a template and a prompt it creates a Session
-// of the Agent that pairs the template with a Harness — the Agent named after
+// the controller refuses). With a template and a prompt it starts a Session,
+// through agent-manager's start_session as the person, of the Agent that
+// pairs the template with a Harness — the Agent named after
 // the template, or with harness set the one pairing the template with that
 // Harness — streams one turn, prints the answer and the terminal task state,
 // and deletes the session — unless keep is set, which leaves the session for
@@ -48,6 +49,11 @@ func Turn(cfg *config.Config, email, template, harness, prompt, sessionID, decid
 		return err
 	}
 	defer api.close()
+	ms, err := openMusterSession(cfg, token, "agentlab-turn")
+	if err != nil {
+		return err
+	}
+	viaManager := managerDelete(ms)
 	if eventsFile != "" {
 		f, err := os.Create(eventsFile) // #nosec G304 -- a path the lab user names
 		if err != nil {
@@ -88,7 +94,7 @@ func Turn(cfg *config.Config, email, template, harness, prompt, sessionID, decid
 		if err != nil {
 			return err
 		}
-		if session, err = api.createSession(ctx, agent.Name, uuid.NewString()); err != nil {
+		if session, err = startSessionOf(ctx, ms, api, &sessionSet{api: api, manager: ms}, agentRef(agent.Name), uuid.NewString()); err != nil {
 			return err
 		}
 		sessionID = session.GetId()
@@ -120,7 +126,7 @@ func Turn(cfg *config.Config, email, template, harness, prompt, sessionID, decid
 	}
 	t, err := turnAPI.decidedTurn(session, prompt, decide, reason)
 	if err != nil {
-		if rerr := endTurn(api, share, sessionID, created && !keep); rerr != nil {
+		if rerr := endTurn(viaManager, share, sessionID, created && !keep); rerr != nil {
 			note("%v", rerr)
 		}
 		return fmt.Errorf("A2A turn on %s: %w", template, err)
@@ -131,7 +137,7 @@ func Turn(cfg *config.Config, email, template, harness, prompt, sessionID, decid
 			fmt.Printf("status metadata: %s\n", raw)
 		}
 	}
-	if err := endTurn(api, share, sessionID, !keep); err != nil {
+	if err := endTurn(viaManager, share, sessionID, !keep); err != nil {
 		return err
 	}
 	if keep {
@@ -148,8 +154,9 @@ func keptLine(sessionID string) string {
 
 // DeleteSession is `agentlab turn --session <id> --delete`: the lab user
 // deletes a Session kept by an earlier `turn --keep`, as its creator, the way
-// a turn's own cleanup does — DeleteSession, retried while the Session's
-// runtime work settles — which releases its actor and snapshot.
+// a turn's own cleanup does — agent-manager's delete_session, retried
+// while the Session's runtime work settles — which releases its actor and
+// snapshot and muster's binding of the actor.
 func DeleteSession(cfg *config.Config, email, sessionID string) error {
 	user := cfg.FindUser(email)
 	if user == nil {
@@ -165,15 +172,31 @@ func DeleteSession(cfg *config.Config, email, sessionID string) error {
 		return err
 	}
 	defer api.close()
-	return deleteKeptSession(api, user.Email, sessionID)
+	ms, err := openMusterSession(cfg, token, "agentlab-turn")
+	if err != nil {
+		return err
+	}
+	return deleteKeptSession(api, managerDelete(ms), user.Email, sessionID)
+}
+
+// managerDelete deletes a Session through agent-manager's delete_session as
+// the person ms signs in as, which also removes muster's binding of the
+// Session's actor.
+func managerDelete(ms *musterSession) func(ctx context.Context, id string) error {
+	return func(ctx context.Context, id string) error {
+		_, err := deleteThroughManager(ctx, ms, id)
+		return err
+	}
 }
 
 // deleteKeptSession deletes the person's Session and confirms it gone. The
 // controller scopes a Session to its creator and answers NotFound for one of
 // another user, which deleteSession takes for already gone; the Session is
 // therefore read first, so an id the person cannot see — another user's, or
-// none at all — is refused instead of reported deleted.
-func deleteKeptSession(api *kagentAPI, email, sessionID string) error {
+// none at all — is refused instead of reported deleted. remove is the delete:
+// agent-manager's delete_session, which also removes muster's binding of
+// the Session's actor.
+func deleteKeptSession(api *kagentAPI, remove func(ctx context.Context, id string) error, email, sessionID string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), sessionDeleteTimeout)
 	defer cancel()
 	session, err := api.getSession(ctx, sessionID)
@@ -183,11 +206,11 @@ func deleteKeptSession(api *kagentAPI, email, sessionID string) error {
 	if err != nil {
 		return err
 	}
-	if err := api.deleteSession(ctx, sessionID); err != nil {
+	if err := remove(ctx, sessionID); err != nil {
 		return err
 	}
 	if _, err := api.getSession(ctx, sessionID); status.Code(err) != codes.NotFound {
-		return fmt.Errorf("session %s still answers GetSession after DeleteSession: %v", sessionID, err)
+		return fmt.Errorf("session %s still answers GetSession after its delete: %v", sessionID, err)
 	}
 	fmt.Printf("deleted: %s of Agent %s (creator %s, was %s)\n", sessionID, session.GetAgent().GetName(), session.GetCreator(), sessionState(session))
 	return nil
@@ -195,15 +218,16 @@ func deleteKeptSession(api *kagentAPI, email, sessionID string) error {
 
 // endTurn cleans up after a turn in the order the controller needs: the
 // share, when there is one, is revoked while its Session still exists and
-// the shared client closed, then the Session is deleted when remove is set.
-func endTurn(api *kagentAPI, share *sessionShare, sessionID string, remove bool) error {
+// the shared client closed, then the Session is deleted with remove when
+// drop is set.
+func endTurn(remove func(ctx context.Context, id string) error, share *sessionShare, sessionID string, drop bool) error {
 	share.end()
-	if !remove {
+	if !drop {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), sessionDeleteTimeout)
 	defer cancel()
-	if err := api.deleteSession(ctx, sessionID); err != nil {
+	if err := remove(ctx, sessionID); err != nil {
 		return err
 	}
 	fmt.Printf("deleted: %s\n", sessionID)

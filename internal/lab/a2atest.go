@@ -165,7 +165,11 @@ func A2ATest(cfg *config.Config, email string, opts A2ATestOptions) error {
 		return err
 	}
 	defer api.close()
-	sessions := &sessionSet{api: api}
+	ms, err := openMusterSession(cfg, token, "a2a-test")
+	if err != nil {
+		return err
+	}
+	sessions := &sessionSet{api: api, manager: ms}
 	defer sessions.removeAll()
 
 	step("The fixture: agent %s of the Generic chart — toolset [%s], muster.requireApproval — Ready on Harness %s", a2aTestAgent, presetReadOnly, kagentHarness)
@@ -220,23 +224,21 @@ func A2ATest(cfg *config.Config, email string, opts A2ATestOptions) error {
 	}
 	note("%d agents; %s: display name %q, icon %s, Harness %s, selectable", len(agents), listing.Name, listing.DisplayName, listing.IconURL, listing.Harness)
 
-	step("CreateSession as %s, idempotent on request_id", user.Email)
+	step("start_session as %s, idempotent on requestId", user.Email)
 	requestID := uuid.NewString()
 	ctx, cancel = context.WithTimeout(context.Background(), kagentTurnTimeout)
-	session, err := api.createSession(ctx, a2aTestAgent, requestID)
+	session, err := startSessionOf(ctx, ms, api, sessions, agentRef(a2aTestAgent), requestID)
 	if err != nil {
 		cancel()
 		return err
 	}
-	sessions.add(session.GetId())
-	again, err := api.createSession(ctx, a2aTestAgent, requestID)
+	again, err := startSessionOf(ctx, ms, api, sessions, agentRef(a2aTestAgent), requestID)
 	cancel()
 	if err != nil {
-		return fmt.Errorf("the second CreateSession with request_id %s: %w", requestID, err)
+		return fmt.Errorf("the second start_session with requestId %s: %w", requestID, err)
 	}
 	if again.GetId() != session.GetId() {
-		sessions.add(again.GetId())
-		return fmt.Errorf("CreateSession with the same request_id created a second session %s next to %s", again.GetId(), session.GetId())
+		return fmt.Errorf("start_session with the same requestId started a second session %s next to %s", again.GetId(), session.GetId())
 	}
 	if session.GetCreator() != user.Email {
 		return fmt.Errorf("session %s has creator %q, wanted %s", session.GetId(), session.GetCreator(), user.Email)
@@ -251,12 +253,11 @@ func A2ATest(cfg *config.Config, email string, opts A2ATestOptions) error {
 		// tried once more on a fresh instance, never silently.
 		note("the first turn failed (%s) — one retry on a fresh session, a cold worker's ResumeActor deadline is not retried by Substrate", excerpt(err.Error(), 200))
 		ctx, cancel = context.WithTimeout(context.Background(), kagentTurnTimeout)
-		session, err = api.createSession(ctx, a2aTestAgent, uuid.NewString())
+		session, err = startSessionOf(ctx, ms, api, sessions, agentRef(a2aTestAgent), uuid.NewString())
 		cancel()
 		if err != nil {
 			return err
 		}
-		sessions.add(session.GetId())
 		if pong, err = api.completedTurnOnce(session, pongPrompt); err != nil {
 			return err
 		}
@@ -284,26 +285,23 @@ func A2ATest(cfg *config.Config, email string, opts A2ATestOptions) error {
 		return fmt.Errorf("after %d approval(s) (%s) task %s ended %s (%s): %s", len(decided), strings.Join(decided, "; "), approved.taskID, stateName(approved.state()), approved.statesString(), excerpt(approved.text(), 300))
 	}
 	note("%d approval(s) (%s) → %s in %s; answered %q", len(decided), strings.Join(decided, "; "), stateName(approved.state()), time.Since(hitlStarted).Round(time.Millisecond), excerpt(approved.text(), 100))
-	calls, err := musterCallsSince(hitlStarted, user.Email, subject)
-	if err != nil {
+	if err := assertMusterAttribution(user.Email, subject, hitlStarted); err != nil {
 		return err
 	}
-	if calls.accepted == 0 || calls.calls == 0 {
-		return fmt.Errorf("muster's log since %s carries %d forwarded_id_token_accepted for %s and %d tools/call by that subject — the Harness did not reach muster as the person", hitlStarted.UTC().Format(time.RFC3339), calls.accepted, user.Email, calls.calls)
-	}
-	note("muster: %d × forwarded_id_token_accepted email=%s, %d × tools/call by the token's subject", calls.accepted, user.Email, calls.calls)
+	note("muster: the tool calls as %s (%s or %s), tools/call by the token's subject", user.Email, musterTokenAccepted, musterActorBearerAccepted)
 
 	step("HITL: a rejected tool_approval_request ends the task without the tool call")
-	declineStarted := time.Now()
 	// On a fresh instance: the first one's conversation already holds the
 	// count, and a model that answers from it makes no tool call to pause on.
 	ctx, cancel = context.WithTimeout(context.Background(), kagentTurnTimeout)
-	fresh, err := api.createSession(ctx, a2aTestAgent, uuid.NewString())
+	fresh, err := startSessionOf(ctx, ms, api, sessions, agentRef(a2aTestAgent), uuid.NewString())
 	cancel()
 	if err != nil {
 		return err
 	}
-	sessions.add(fresh.GetId())
+	// Counted from the started Session on: start_session is itself a muster
+	// tools/call by the person.
+	declineStarted := time.Now()
 	paused, err = api.turnOn(fresh, userMessage(a2aToolPrompt))
 	if err != nil {
 		return err
@@ -318,7 +316,7 @@ func A2ATest(cfg *config.Config, email string, opts A2ATestOptions) error {
 	if !declined.state().Terminal() {
 		return fmt.Errorf("after %d rejection(s) task %s is still %s (%s)", len(rejected), declined.taskID, stateName(declined.state()), declined.statesString())
 	}
-	calls, err = musterCallsSince(declineStarted, user.Email, subject)
+	calls, err := musterCallsSince(declineStarted, user.Email, subject)
 	if err != nil {
 		return err
 	}
@@ -362,7 +360,7 @@ func A2ATest(cfg *config.Config, email string, opts A2ATestOptions) error {
 
 	fmt.Println()
 	fmt.Printf("PASS: GRPCRoute %s (Accepted, ResolvedRefs, %d services) and AgentgatewayPolicy %s (Accepted) carry the controller on the edge; a call without a token is refused there\n", kagentControllerRoute, len(route.services), kagentControllerJWTPolicy)
-	fmt.Printf("PASS: native gRPC through %s as %s — the identity is the verified token's (a forged %s replaced), CreateSession idempotent on request_id, SendStreamingMessage with the HITL extension streamed %s\n", hostPort, user.Email, userIDHeader, excerpt(pong.text(), 30))
+	fmt.Printf("PASS: native gRPC through %s as %s — the identity is the verified token's (a forged %s replaced), start_session idempotent on requestId, SendStreamingMessage with the HITL extension streamed %s\n", hostPort, user.Email, userIDHeader, excerpt(pong.text(), 30))
 	fmt.Printf("PASS: ListAgents lists %s Ready on %s with %s and %s as Swarmgeist reads them\n", a2aTestAgent, kagentHarness, displayNameAnnotation, iconURLAnnotation)
 	fmt.Printf("PASS: HITL — the muster binding with requireApproval paused the task at input-required (tool_approval_request), the approval resumed it to completed with muster logging the call under %s, a rejection ended it without the call\n", user.Email)
 	fmt.Printf("PASS: CancelTask ended the running task server-side (GetTask → %s) and the session answered a following turn; nothing left behind\n", stateName(canceled.finalState))

@@ -82,7 +82,7 @@ func TestEndTurnRevokesTheShareFirst(t *testing.T) {
 	share := servedShare(t, f, "share-1")
 
 	out := stdoutOf(t, func() {
-		if err := endTurn(share.owner, share, fakeSessionID, true); err != nil {
+		if err := endTurn(share.owner.deleteSession, share, fakeSessionID, true); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -159,7 +159,8 @@ func TestDeleteKeptSession(t *testing.T) {
 	f.settling = 2
 
 	out := stdoutOf(t, func() {
-		if err := deleteKeptSession(f.serve(t, fakeToken), "admin@lab.local", fakeSessionID); err != nil {
+		api := f.serve(t, fakeToken)
+		if err := deleteKeptSession(api, api.deleteSession, "admin@lab.local", fakeSessionID); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -181,7 +182,8 @@ func TestDeleteKeptSession(t *testing.T) {
 func TestDeleteSessionOfAnotherUserIsRefused(t *testing.T) {
 	f := readyFake(t)
 
-	err := deleteKeptSession(f.serve(t, "other-jwt"), "user@lab.local", fakeSessionID)
+	api := f.serve(t, "other-jwt")
+	err := deleteKeptSession(api, api.deleteSession, "user@lab.local", fakeSessionID)
 
 	if err == nil || !strings.Contains(err.Error(), "user@lab.local has no Session "+fakeSessionID+" to delete") {
 		t.Errorf("deleting another user's Session: %v", err)

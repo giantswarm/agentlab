@@ -12,6 +12,7 @@ import (
 const (
 	renderedNoForwardToken    = "forwardToken: false"
 	renderedManagedByAgentlab = "app.kubernetes.io/managed-by: agentlab"
+	renderedOAuthAuth         = "type: oauth"
 )
 
 // TestOAuthFixtureTemplate pins the fixture CR to what the proofs look for:
@@ -31,7 +32,7 @@ func TestOAuthFixtureTemplate(t *testing.T) {
 		"namespace: " + platformNamespace,
 		"url: " + oauthFixtureURL,
 		"type: streamable-http",
-		"type: oauth",
+		renderedOAuthAuth,
 		renderedNoForwardToken,
 		"autoStart: true",
 		"agentlab.giantswarm.io/purpose:",
@@ -44,8 +45,50 @@ func TestOAuthFixtureTemplate(t *testing.T) {
 	if strings.Contains(out, "tokenExchange") {
 		t.Errorf("the fixture must not be an SSO server (token exchange):\n%s", out)
 	}
-	if got := strings.Count(out, "kind: MCPServer"); got != 1 {
-		t.Errorf("want exactly one MCPServer, got %d:\n%s", got, out)
+	if got := strings.Count(out, "kind: MCPServer"); got != 2 {
+		t.Errorf("want the fixture and its subject-scoped twin, got %d MCPServers:\n%s", got, out)
+	}
+}
+
+// TestOAuthSubjectFixtureTemplate: the twin files its grants under the
+// person, under an issuer identity of its own (scope is per identity, so the
+// session-scoped fixture keeps its scope), with the identifier Dex sends as
+// the expected RFC 9207 iss; the fixture itself stays session-scoped.
+func TestOAuthSubjectFixtureTemplate(t *testing.T) {
+	cfg := config.Default()
+	raw, err := renderTemplate(cfg, "oauth-fixture.yaml.tmpl", nil)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	docs := strings.Split(string(raw), "\n---\n")
+	var fixture, twin string
+	for _, doc := range docs {
+		switch {
+		case strings.Contains(doc, "name: "+oauthSubjectFixtureServer+"\n"):
+			twin = doc
+		case strings.Contains(doc, "kind: MCPServer") && strings.Contains(doc, "name: "+oauthFixtureServer+"\n"):
+			fixture = doc
+		}
+	}
+	if twin == "" || fixture == "" {
+		t.Fatalf("want both %s and %s rendered:\n%s", oauthFixtureServer, oauthSubjectFixtureServer, raw)
+	}
+	for _, want := range []string{
+		"url: " + oauthFixtureURL,
+		renderedOAuthAuth,
+		renderedNoForwardToken,
+		"grantScope: subject",
+		"issuer: " + cfg.MusterBaseURL() + "/" + oauthSubjectFixtureServer,
+		"expectedIssuer: " + cfg.Issuer(),
+		"name: " + oauthFixtureServer + "-client",
+		renderedManagedByAgentlab,
+	} {
+		if !strings.Contains(twin, want) {
+			t.Errorf("rendered twin missing %q:\n%s", want, twin)
+		}
+	}
+	if strings.Contains(fixture, "grantScope") {
+		t.Errorf("%s must stay session-scoped:\n%s", oauthFixtureServer, fixture)
 	}
 }
 

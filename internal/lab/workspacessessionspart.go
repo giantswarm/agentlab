@@ -405,7 +405,15 @@ func removeSessionsAgents() []error {
 // start_session as the person ms signs in as, with the grant and the
 // toolchains (name[@version] each) when given, and returns its id.
 func startAgentSession(ms *musterSession, agent, grant string, toolchains ...string) (string, error) {
-	args := map[string]any{nameKey: agent, namespaceKey: kagentNamespace, startSessionRequestIDArg: uuid.NewString()}
+	return startAgentSessionOf(ms, agentRef(agent), uuid.NewString(), grant, toolchains...)
+}
+
+// startAgentSessionOf is startAgentSession for an Agent of any namespace,
+// keyed by requestID: start_session answers a repeated requestID with the
+// Session it started for it.
+func startAgentSessionOf(ms *musterSession, ref *apiv1alpha1.ResourceReference, requestID, grant string, toolchains ...string) (string, error) {
+	agent := ref.GetName()
+	args := map[string]any{nameKey: agent, namespaceKey: ref.GetNamespace(), startSessionRequestIDArg: requestID}
 	if grant != "" {
 		args[startSessionGrantArg] = grant
 	}
@@ -433,7 +441,24 @@ func startAgentSession(ms *musterSession, agent, grant string, toolchains ...str
 // provider verifying the actor's JWT: its runtime would then reach muster as
 // nobody.
 func startBoundSession(ctx context.Context, ms *musterSession, api *kagentAPI, sessions *sessionSet, agent string) (*apiv1alpha1.Session, error) {
-	id, err := startAgentSession(ms, agent, "")
+	session, err := startSessionOf(ctx, ms, api, sessions, agentRef(agent), uuid.NewString())
+	if err != nil {
+		return nil, err
+	}
+	if !slices.ContainsFunc(session.GetProviders(), func(p *apiv1alpha1.SessionProvider) bool { return p.GetAudience() != "" }) {
+		return nil, fmt.Errorf("start_session started Session %s of %s with no provider that verifies the actor's JWT (providers %v): agent-manager did not bind it", session.GetId(), agent, session.GetProviders())
+	}
+	return session, nil
+}
+
+// startSessionOf starts a Session of the Agent through agent-manager's
+// start_session as the person ms signs in as, the way Slack and the portal
+// do, tracks it in sessions and returns it once it is ready. Where muster
+// trusts the actor JWT, agent-manager binds the Session's actor to the
+// person; a Session created straight at the kagent controller is never
+// bound, and its runtime reaches muster with no credential.
+func startSessionOf(ctx context.Context, ms *musterSession, api *kagentAPI, sessions *sessionSet, agent *apiv1alpha1.ResourceReference, requestID string) (*apiv1alpha1.Session, error) {
+	id, err := startAgentSessionOf(ms, agent, requestID, "")
 	if err != nil {
 		return nil, err
 	}
@@ -442,13 +467,7 @@ func startBoundSession(ctx context.Context, ms *musterSession, api *kagentAPI, s
 	if err != nil {
 		return nil, err
 	}
-	if session, err = api.awaitSessionReady(ctx, session); err != nil {
-		return nil, err
-	}
-	if !slices.ContainsFunc(session.GetProviders(), func(p *apiv1alpha1.SessionProvider) bool { return p.GetAudience() != "" }) {
-		return nil, fmt.Errorf("start_session started Session %s of %s with no provider that verifies the actor's JWT (providers %v): agent-manager did not bind it", id, agent, session.GetProviders())
-	}
-	return session, nil
+	return api.awaitSessionReady(ctx, session)
 }
 
 // createWorkspace defines the workspace as the admin and waits for its

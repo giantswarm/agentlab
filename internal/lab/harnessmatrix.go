@@ -170,11 +170,15 @@ func HarnessMatrixTest(cfg *config.Config, opts HarnessMatrixOptions) error {
 		return err
 	}
 	defer api.close()
+	ms, err := openMusterSession(cfg, token, "harness-matrix-test")
+	if err != nil {
+		return err
+	}
 
 	var errs []error
 	for _, cell := range cells {
 		step("%s on %s", cell.c.title, cell.harness)
-		if err := cell.run(api, opts.ReadyTimeout); err != nil {
+		if err := cell.run(api, ms, opts.ReadyTimeout); err != nil {
 			cell.outcome, cell.evidence = "ERROR", err.Error()
 			errs = append(errs, fmt.Errorf("%s on %s: %w", cell.c.key, cell.harness, err))
 		}
@@ -232,7 +236,7 @@ func (m *matrixCell) onMock() bool {
 
 // run applies the cell's templates, waits for the parent and, Ready, has
 // one turn with it. The cell's objects are removed on every path.
-func (m *matrixCell) run(api *kagentAPI, timeout time.Duration) error {
+func (m *matrixCell) run(api *kagentAPI, ms *musterSession, timeout time.Duration) error {
 	defer m.cleanup(api)
 	if _, err := applyManifests(context.Background(), []byte(m.manifests())); err != nil {
 		m.outcome = "REFUSED"
@@ -261,11 +265,12 @@ func (m *matrixCell) run(api *kagentAPI, timeout time.Duration) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*kagentTurnTimeout+sessionReadyTimeout)
 	defer cancel()
-	session, err := api.createSession(ctx, m.parent, uuid.NewString())
+	sessions := &sessionSet{api: api, manager: ms}
+	defer sessions.removeAll()
+	session, err := startSessionOf(ctx, ms, api, sessions, agentRef(m.parent), uuid.NewString())
 	if err != nil {
 		return err
 	}
-	defer api.removeSession(session.GetId())
 	t, err := api.turn(ctx, session, userMessage(m.prompt()))
 	if err != nil {
 		return err

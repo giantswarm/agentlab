@@ -46,6 +46,9 @@ with Dex doing the logins.
   `lab-oauth-fixture`, which points muster at its own protected `/mcp`. It
   exists for the per-server sign-in path (`core_auth_login`, the portal's
   Sign in button); `platform-test` and `backstage-test` assert the challenge.
+  Its twin `lab-oauth-subject-fixture` (`grantScope: subject`) is the one
+  whose portal sign-in reaches the person's agents (`toolsets-test` G6); a
+  session-scoped sign-in never does, by design.
   Not a real integration — never "fix" its Auth Required state, and after a
   muster pod roll it reads `Failed` for about a minute by design.
 - With `platform.observability: true` (the default), a minimal Prometheus
