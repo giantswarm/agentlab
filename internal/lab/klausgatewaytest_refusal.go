@@ -50,6 +50,10 @@ import (
 // nobody is told). A series the gateway sees for the first time counts
 // whole, so the refusal made while it was held is still noted.
 
+// createdByAnnotation records an agent's creator on its HelmRelease and
+// Agent (agent-manager writes the caller's email on create).
+const createdByAnnotation = "agent-platform.giantswarm.io/created-by"
+
 const (
 	// refusalAgentPrefix starts the name of the run's agent; a leftover of
 	// an aborted run is recognised by it.

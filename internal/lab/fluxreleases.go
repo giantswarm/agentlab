@@ -215,16 +215,16 @@ var offlineAPIVersions = []string{
 
 // componentAPIVersions are the API groups the component renders are given as
 // .Capabilities (offlineAPIVersions), plus the Prometheus Operator's when the
-// observability stack is on and, with the tenants, the
+// observability stack is on and, with the organizations, the
 // MutatingAdmissionPolicy the lab's apiserver serves, which the connectivity
-// chart requires for the Organizations' ModelConfig policy and refuses the
+// chart requires for the organizations' ModelConfig policy and refuses the
 // render without.
 func componentAPIVersions(cfg *config.Config) []string {
 	versions := slices.Clone(offlineAPIVersions)
 	if cfg.Platform.Observability {
 		versions = append(versions, "monitoring.coreos.com/v1")
 	}
-	if cfg.TenantsEnabled() {
+	if cfg.OrganizationsEnabled() {
 		versions = append(versions, mutatingAdmissionPolicyAPIVersion)
 	}
 	return versions

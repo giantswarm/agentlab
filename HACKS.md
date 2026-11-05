@@ -737,20 +737,15 @@ A claude Session works in its volume directory from kagent 1.9.0
 On an older kagent line, the proof's Session on the volume reports its default
 directory and fails.
 
-### U33. `agent-platform-values.yaml.tmpl`: the lab lists tenants-test's namespaces in Substrate's credential policy — BLOCKED UPSTREAM
-With `platform.tenants` on, an agent in an organization namespace needs
+### U33. `agent-platform-values.yaml.tmpl`: the lab lists tenants-test's namespaces in Substrate's credential policy — FIXED
+With `platform.tenants` on, an agent in an organization namespace needed
 Substrate's credential provider to read that namespace's Secrets (its model
-key), and the chart's policy names the kagent namespace only. **Fix:** the
-lab's values set `substrate.credentialProvider.namespacePolicies` to the
-chart's two entries plus `tenants-test`'s two namespaces
-(`tenantsTestNamespaces`, `tenantstest.go`): each read by the atespace of its
-own name, and by `ate-golden`. Other organization namespaces of the lab get
-no credentials. Unblocks when the chart selects the organizations'
-namespaces by label
-([agent-platform#1041](https://github.com/giantswarm/agent-platform/issues/1041),
-Substrate 1.12 with giantswarm/substrate#456): the chart then adds the
-selector entries to the lab's list, `tenants-test` checks the provider's live
-grants, and the list is redundant — the values template drops it.
+key), and the chart's policy named the kagent namespace only; the lab's
+values listed `tenants-test`'s two namespaces by hand. **Fix:** the tenants
+mode is gone (giantswarm/agent-platform#1272); with
+`agentPlatformOrganizations` the chart selects the organization namespaces
+by label (`ownNamespaceSelector`, Substrate 1.12), the lab's list is dropped,
+and `organizations-test` checks the provider's live grants.
 
 ### U32. `postRenderers` patch: the klaus-gateway component trusts the lab CA for muster — ACCEPTED
 The component dials muster at its public URL (`obo.musterUrl`): every Slack
@@ -768,8 +763,8 @@ Go reads; the image's own roots stay, read from its certificate directory.
 muster URL and the CA source in the in-cluster turn's error. Lab-only by
 construction: an installation's edge serves a publicly trusted certificate.
 
-### U35. `tenantstest_slack.go`: on macOS the Slack steps run the gateway's image on the kind network — ACCEPTED
-`tenants-test`'s Slack steps run klaus-gateway as `klaus-gateway-test` does,
+### U35. `organizationstest_slack.go`: on macOS the Slack steps run the gateway's image on the kind network — ACCEPTED
+`organizations-test`'s Slack steps run klaus-gateway as `klaus-gateway-test` does,
 the image on the host's network. Docker Desktop leaves host networking off by
 default, so the Mac has no route to the container's loopback ports and the
 readiness probe times out with an empty log; a darwin build of the gateway
@@ -780,10 +775,10 @@ ports are published on 127.0.0.1, `--add-host` names the edge's and muster's
 public hostnames as the node's address, the target and muster are the edge's
 NodePort (`config.GatewayNodePort`) under those names (TLS verifies as on the
 host), and the fake Slack Web API is `host.docker.internal`. Linux keeps the
-host network. The bridged shape is `tenants-test`'s only; `klaus-gateway-test`
+host network. The bridged shape is `organizations-test`'s only; `klaus-gateway-test`
 is unchanged.
 
-### U36. `tenantstest_slack.go`: an allowed collaborator sends again after the replay note — BLOCKED UPSTREAM
+### U36. `organizationstest_slack.go`: an allowed collaborator sends again after the replay note — BLOCKED UPSTREAM
 After the thread's person allows a collaborator who may not use the thread's
 agent, klaus-gateway 4.10.0-rc.1 replays the held message, the controller
 refuses it, and the replay path answers with its generic "Your message could
@@ -794,16 +789,32 @@ the refusal, and the verdict says so. Unblocks when the gateway's replay note
 uses its not-permitted note (giantswarm/klaus-gateway, `postReplayFailureNote`
 in `pkg/channels/slack/slack.go`): the resend then goes.
 
-### U37. `tenantstest_edge.go`: the editor's UpdateAgent is tried again while it answers Internal — BLOCKED UPSTREAM
+### U37. `organizationstest_edge.go`: the member's UpdateAgent is tried again while it answers Internal — BLOCKED UPSTREAM
 Right after the editor's `CreateAgent`, kagent 1.19.0's `UpdateAgent` reads
 the Agent from the controller's cache, which has not seen the create's own
 status write yet, and the API server's conflict comes back as `Internal`
 (`kubecrud.Service.Update` maps every error but Invalid to Internal). **Fix:**
-step E5 tries the update again while it answers `Internal`, for up to 30 s
+the kagent API surface tries the update again while it answers `Internal`, for up to 30 s
 (`edgeUpdateConflictWait`); any other answer, or `Internal` after that, fails
 the step. Unblocks when kagent's Update maps a conflict to `Aborted` or
 retries it on a fresh read (giantswarm/kagent-upstream,
 `go/core/internal/service/kubecrud`): the retry then goes.
+
+### U39. `organizationstest.go`: the erasure of an Orphaned organization is skipped — BLOCKED UPSTREAM
+The management-cluster profile asks that an organization's erasure finish
+while a person's session runs in it. On the lab it cannot: kagent answers
+`NotFound` to the operator for another creator's session, so the erasure
+stops at its Sessions step (giantswarm/kagent-extensions#27;
+kagent-upstream#957 is open); the lab runs apply mode, with no installation
+Kustomization whose inventory makes an organization `Orphaned`; and the
+operator's S3 client addresses the lab's in-cluster RustFS virtual-hosted
+(`<bucket>.rustfs…`), which neither resolves nor is served, so the Snapshots
+step would stop too. **Fix:** the check is a `SKIP` line naming the reasons
+(`organizationErasureSkip`), and the proof's two organizations stay for the
+next run instead of being erased. Unblocks when the lab's kagent line
+carries kagent-extensions#27 and the operator takes path-style addressing
+(an `AWS_S3_USE_PATH_STYLE`-like option, as Substrate reads): the check then
+deletes an organization with a running session and waits for its finalizer.
 
 ### U38. `postRenderers` patch: agentgateway binds IPv4 — BLOCKED UPSTREAM
 agentgateway binds its readiness (15021) and stats (15020) servers and its

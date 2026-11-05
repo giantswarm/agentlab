@@ -999,6 +999,16 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 			return err
 		}
 	}
+	// The default organization (organizations.go): after the platform's
+	// model key, which the organization's model is placed from the same way.
+	orgNamespace := ""
+	if cfg.OrganizationsEnabled() {
+		if orgNamespace, err = ensureDefaultOrganization(cfg); err != nil {
+			return err
+		}
+	} else if why := cfg.OrganizationsInactive(); why != "" {
+		note("no default organization: %s", why)
+	}
 
 	// The public URL runs client -> agentgateway edge -> muster: reaching it
 	// proves the Gateway is programmed, the data-plane pod serves TLS with the
@@ -1082,6 +1092,9 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 		for _, s := range substrate {
 			agentsHint += "\n  " + s.String()
 		}
+	}
+	if cfg.Platform.Agents {
+		agentsHint += "\n" + organizationsHint(cfg, orgNamespace)
 	}
 	fmt.Printf(`
 %s

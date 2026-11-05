@@ -36,9 +36,10 @@ const File = "agentlab.yaml"
 
 // The lab groups are a fixed vocabulary: RBAC binds the first three to
 // cluster-admin / edit-in-demo / view (see the rbac template). The two
-// tenant groups the lab binds nothing to: `agentlab tenants-test` binds each
-// to agent-platform:user in one organization namespace, so a token's groups
-// claim is what gives its person that tenant.
+// member groups the lab binds nothing to cluster-wide: `agentlab
+// organizations-test` binds each to agent-platform:editor in one
+// organization's namespace, so a token's groups claim is what makes its
+// person a member of that organization.
 const (
 	groupPlatformAdmins = "platform-admins"
 	groupDevelopers     = "developers"
@@ -49,9 +50,9 @@ const (
 
 var Groups = []string{groupPlatformAdmins, groupDevelopers, groupViewers, GroupTenantA, GroupTenantB}
 
-// TenantUsers are the people `agentlab configure --tenants` adds when no user
-// carries their tenant group: one person per organization of tenants-test,
-// in that group alone.
+// TenantUsers are the people `agentlab configure --organizations` adds when
+// no user carries their member group: one person per organization of
+// organizations-test, in that group alone.
 var TenantUsers = []User{
 	{Email: "alice@lab.local", Username: "alice", Name: "Lab Tenant A", Password: defaultPassword, Groups: []string{GroupTenantA}},
 	{Email: "bob@lab.local", Username: "bob", Name: "Lab Tenant B", Password: defaultPassword, Groups: []string{GroupTenantB}},
@@ -643,12 +644,20 @@ type Platform struct {
 	// Unset, the key is left out of the file: a lab with it off stays
 	// readable by a release before it.
 	ChatGPTSubscription ChatGPTSubscription `yaml:"chatgptSubscription,omitempty"`
-	// The Organizations' namespaces as tenants: the chart's
-	// tenants.organizations.enabled, which turns on agent-manager's tenant
-	// reconciler and admits the agent workers of every namespace labelled
-	// giantswarm.io/organization. Off by default; --tenants turns it on;
-	// needs the agents runtime. `agentlab tenants-test` is the proof.
-	Tenants Tenants `yaml:"tenants"`
+	// Agent Platform organizations: the chart's
+	// agentPlatformOrganizations.enabled, which installs
+	// agent-platform-operator and renders the organizations' roles and
+	// admission policies; `agentlab up` then keeps one default
+	// AgentPlatformOrganization in the root namespace
+	// (organizations.go). On by default; it takes effect with the agents
+	// runtime on a chart from OrganizationsChartFloor on
+	// (OrganizationsEnabled). `agentlab organizations-test` is the proof.
+	Organizations Organizations `yaml:"organizations"`
+	// Retired: the tenants mode (tenants.organizations, agent-manager's
+	// tenant reconciler), which the agent-platform chart removed in favour of
+	// the organizations (giantswarm/agent-platform#1272). Read so a file an
+	// earlier release wrote still loads, never written back.
+	RetiredTenants any `yaml:"tenants,omitempty"`
 	// Retired: the platform-manager fixture. Read so a file an earlier
 	// release wrote still loads, never written back.
 	RetiredPlatformManager any `yaml:"platformManager,omitempty"`
@@ -694,11 +703,19 @@ const ChatGPTSubscriptionModelConfig = "chatgpt-subscription"
 // Codex backend serves to a subscription.
 const DefaultChatGPTSubscriptionModel = "gpt-5.6-luna"
 
-// Tenants configures the Organizations' namespaces as tenants.
-type Tenants struct {
-	// On, `agentlab platform` renders tenants.organizations.enabled: true.
+// Organizations configures the Agent Platform's organizations.
+type Organizations struct {
+	// On, `agentlab platform` renders agentPlatformOrganizations.enabled:
+	// true on a chart that carries it, and `up` keeps the default
+	// organization.
 	Enabled bool `yaml:"enabled"`
 }
+
+// OrganizationsChartFloor is the first agent-platform release with
+// agentPlatformOrganizations: the operator component, the organizations'
+// roles and admission policies, and the tenants mode gone
+// (giantswarm/agent-platform#1270, #1272, #1273).
+var OrganizationsChartFloor = semver.MustParse("4.175.0-rc.5")
 
 // Workspaces configures the workspace storage in the lab.
 type Workspaces struct {
@@ -1653,6 +1670,7 @@ func Default() *Config {
 			Enabled:       true,
 			Agents:        true,
 			Observability: true,
+			Organizations: Organizations{Enabled: true},
 			AgentsPort:    8081,
 			MusterPort:    8090,
 			Domain:        "127.0.0.1.nip.io",
@@ -1695,6 +1713,7 @@ func load(validate bool) (*Config, error) {
 	}
 	cfg.Platform.RetiredFakeFleet = nil
 	cfg.Platform.RetiredPlatformManager = nil
+	cfg.Platform.RetiredTenants = nil
 	// Earlier versions wrote the one-backend form (backend/endpoint); read
 	// it as the one-item lists so the same lab renders exactly as before.
 	cfg.Platform.ModelManager.normalize()
@@ -1769,6 +1788,7 @@ func LoadReadOnly() (cfg *Config, note string, err error) {
 	}
 	cfg.Platform.RetiredFakeFleet = nil
 	cfg.Platform.RetiredPlatformManager = nil
+	cfg.Platform.RetiredTenants = nil
 	cfg.Platform.ModelManager.normalize()
 	if err := cfg.Validate(); err != nil {
 		return nil, "", fmt.Errorf("%s: %w", File, err)
@@ -2427,9 +2447,6 @@ func (c *Config) Validate() error {
 	if err := c.validateDevctl(); err != nil {
 		return err
 	}
-	if c.Platform.Tenants.Enabled && c.Platform.Enabled && !c.Platform.Agents {
-		return fmt.Errorf("platform.tenants requires platform.agents (the tenant reconciler is agent-manager's, and a tenant's agents run on kagent)")
-	}
 	if c.Platform.Serving.Enabled && c.Platform.Enabled && !c.Platform.Agents {
 		return fmt.Errorf("platform.serving requires platform.agents (model-manager wires a served model into kagent as a ModelConfig)")
 	}
@@ -2628,11 +2645,29 @@ func (c *Config) VMManagerEnabled() bool {
 	return c.Platform.Enabled && c.Platform.VMManager.Enabled
 }
 
-// TenantsEnabled reports whether the platform treats the Organizations'
-// namespaces as tenants: the platform with its agents runtime on the current
-// line, and the key on.
-func (c *Config) TenantsEnabled() bool {
-	return c.Platform.Enabled && c.Platform.Agents && c.Platform.Tenants.Enabled && !c.LegacyChart()
+// OrganizationsEnabled reports whether the platform runs Agent Platform
+// organizations: the platform with its agents runtime, the key on, and a
+// chart that carries the switch (OrganizationsChartFloor; a dev build or a
+// chart directory of the current line is taken to carry it).
+func (c *Config) OrganizationsEnabled() bool {
+	if !c.Platform.Enabled || !c.Platform.Agents || !c.Platform.Organizations.Enabled || c.LegacyChart() {
+		return false
+	}
+	_, below := c.chartBelow(OrganizationsChartFloor)
+	return !below
+}
+
+// OrganizationsInactive words why organizations are not on although the key
+// is, "" when they are on or the key is off: what `up` and the proof say.
+func (c *Config) OrganizationsInactive() string {
+	switch {
+	case !c.Platform.Organizations.Enabled || c.OrganizationsEnabled():
+		return ""
+	case !c.Platform.Enabled || !c.Platform.Agents:
+		return "platform.organizations needs the platform with its agents runtime (platform.agents)"
+	}
+	chart, _ := c.chartBelow(OrganizationsChartFloor)
+	return fmt.Sprintf("platform.organizations needs agent-platform %s or newer (agentPlatformOrganizations); %s — `agentlab configure --chart-version <version>`, then `agentlab platform`", OrganizationsChartFloor, chart)
 }
 
 // AlertmanagerEnabled reports whether the lab runs the Alertmanager: the

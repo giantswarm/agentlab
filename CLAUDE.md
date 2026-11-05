@@ -81,7 +81,8 @@ with Dex doing the logins.
   Flux of its own. Its default
   ModelConfig and Backstage's ai-chat both use `aiModel` from `agentlab.yaml`
   (Anthropic only); the API key lives only in the Secrets
-  `kagent/kagent-anthropic` and the portal's `agent-platform/agentlab-anthropic`
+  `kagent/kagent-anthropic`, the portal's `agent-platform/agentlab-anthropic`
+  and each lab organization's `tenant-credential-anthropic` (organizations.go)
   — never in `agentlab.yaml` or `state/` — which
   every `up`/`platform` fills (anthropic.go): from the reference
   `aiKey.source` records through `beekeeper secret copy --to-secret`
@@ -93,6 +94,16 @@ with Dex doing the logins.
   OpenAI-compatible endpoints, OpenRouter, Gemini, Ollama) with the same
   env-var -> Secret key handling; entries removed from the config are pruned
   on the next run (see docs/models.md "Extra model configs").
+- `platform.organizations` (on by default, from agent-platform
+  4.175.0-rc.5 on) runs Agent Platform organizations: the chart's
+  agent-platform-operator reconciles each `AgentPlatformOrganization` of a
+  parent namespace into `agents-<name>-<random>`. The lab's parent is the
+  fixed root namespace `agentlab-organizations`; `up` keeps the default
+  organization `default` there, Ready, with `platform-admins` as its first
+  admins, `developers` as its editors and its own model (organizations.go).
+  `agentlab organizations-test` is the proof (docs/agents.md "The
+  organizations proof"); its two organizations stay between runs, since an
+  organization's erasure is skipped on the lab (HACKS.md U39).
 - `agentlab configure` **discovers this machine on every run** (fresh or
   existing `agentlab.yaml`): the tools `up` shells out to, whether this
   configuration's kind node exists and which host ports it publishes (never
@@ -236,7 +247,7 @@ agentlab beekeeper-decisions-test  # beekeeper serve behind muster puts decision
 agentlab beekeeper-central-test --part notes  # beekeeper's central notes through two lab users' CLIs: note add --for the other, listed and answered on the other's machine, the answer printed once by the filer's watch across a restart; a withdrawal only its filer may make; a fold into and a park on a central note, the park settled with the answer once
 agentlab test            # RBAC assertions for every configured user
 agentlab backstage-test  # headless Backstage sign-in for every user, the portal's Agent Platform and Models pages (--agent kagent/<name>: on an existing agent, no create or delete)
-agentlab tenants-test    # platform.tenants: two organization namespaces, an editor in each: the reconciler's copies with the first agent, the other organization refused, a turn on the namespace's own credentials, the edge's RBAC authorizer and klaus-gateway as two tenant users bound by group (own roster, the other organization refused), muster's MCP servers per tenant (listed as the person, another organization's answered as missing, a tenant sign-in kept in its namespace), the Dev Portal's routes as each person (roster per tenant, the create flow's tenants, the access reviews behind Edit and Delete, a refused session start, the creator), the workers held against a cluster-admin, the copies gone with the last agent
+agentlab organizations-test  # platform.organizations: two AgentPlatformOrganizations, alice and bob each an editor of one by group: each creates and runs an agent in their own; every surface (Kubernetes, kagent API, Slack; the Dev Portal skipped until backstage#3363) gives each the same agents; the negative cross-organization tests per surface and boundary (Kubernetes RBAC, kagent API and A2A, muster, the other organization's model, in-cluster 443 through the egress gateway); the profile tests (object-count quota, a PolicyException that does not lift the sandbox policies, the credential provider's grants; the Orphaned erasure skipped, HACKS.md U39)
 agentlab coding-test     # platform.coding: the coding Harness from the values, agent-manager's guards, a coding agent's sandbox floor (uid split, forwarder paths, a write tool refused, no credentials, DNS canary, egress), a workspace Session's MCP call audited by muster as the person, nothing in the sandbox running between turns, the instruction fixture, suspend/resume, the turn's usage, a share refused, no muster call of the actor accepted after delete_session
 agentlab coding-test --part devctl  # platform.devctl: a coding agent opens a pull request as the person, waits for its CI (one pr_wait), merges it (pr_merge) and waits for its release (release_wait) through devctl's MCP server; one pr_wait with a progressToken beside it
 agentlab coding-test --part toolchains  # agent-manager's toolchains: start_session with --toolchains (default go) mounts them pinned by digest; a turn finds each tool under /opt/kagent/tools/<name> on its PATH, with go builds a fixture module; the actor template mounts those digests; --other-version go@0.1.0 adds a second Session at that version and a resume of the first (--harness claude|codex)

@@ -29,10 +29,11 @@ import (
 // lab's Kyverno is the fleet's (admission.go), so the proof needs no second
 // engine: the chart is rendered offline with the lab's values,
 // kyvernoPolicies.enabled: true — the shape every installation with Kyverno
-// renders — and, where the agents runtime is on, tenants.organizations
-// enabled, the switch that adds the exceptions for the Organizations'
-// workers, so the exceptions the fleet renders are judged whether or not
-// this lab runs the tenants. The meta chart and each component release it
+// renders — and, where the agents runtime is on, the switch that adds the
+// exceptions for the organizations' workers (agentPlatformOrganizations
+// from agent-platform 4.175.0 on, the tenants mode's
+// tenants.organizations before it), so the exceptions the fleet renders are
+// judged whether or not this lab runs the organizations. The meta chart and each component release it
 // carries are rendered (the connectivity chart's exceptions among them), and
 // every PolicyException in those renders is created as a server-side dry
 // run in its namespace. A refusal fails with the apiserver's message; a dry
@@ -181,12 +182,20 @@ func renderChartPolicyExceptions(cfg *config.Config, chart platformChart) ([]ren
 }
 
 // polexValues are the meta chart's values the proof renders: the lab's,
-// with the tenants on where the agents runtime is (the template's
-// platform.tenants block: tenants.organizations and what the chart requires
-// beside it), and kyvernoPolicies.enabled: true.
+// with the organizations on where the agents runtime is (the template's
+// organizations block, or the tenants mode on a chart before
+// config.OrganizationsChartFloor, with what the chart requires beside it),
+// and kyvernoPolicies.enabled: true.
 func polexValues(cfg *config.Config) (map[string]any, error) {
 	values, err := platformValuesWith(cfg, func(t *tmplData) {
-		t.TenantsEnabled = t.TenantsEnabled || polexTenants(cfg)
+		if !polexTenants(cfg) {
+			return
+		}
+		if polexOrganizationsChart(cfg) {
+			t.OrganizationsEnabled = true
+		} else {
+			t.TenantsEnabled = true
+		}
 	})
 	if err != nil {
 		return nil, err
@@ -207,14 +216,27 @@ func polexAPIVersions(cfg *config.Config) []string {
 	return versions
 }
 
-// polexTenants reports whether the proof renders the tenants: wherever the
-// agents runtime of the 4.x line is on, the tenants' requirement.
+// polexTenants reports whether the proof renders the organizations' (or
+// the tenants') exceptions: wherever the agents runtime of the 4.x line is
+// on, their requirement.
 func polexTenants(cfg *config.Config) bool {
 	return cfg.Platform.Enabled && cfg.Platform.Agents && !cfg.LegacyChart()
 }
 
+// polexOrganizationsChart reports whether the chart carries
+// agentPlatformOrganizations (and refuses the tenants mode): whatever
+// platform.organizations says, the switch is judged on the chart.
+func polexOrganizationsChart(cfg *config.Config) bool {
+	c := *cfg
+	c.Platform.Organizations.Enabled = true
+	return c.OrganizationsEnabled()
+}
+
 // polexShape words the values the proof renders, for its lines.
 func polexShape(cfg *config.Config) string {
+	if polexTenants(cfg) && polexOrganizationsChart(cfg) {
+		return "the lab's values, kyvernoPolicies.enabled: true, agentPlatformOrganizations on"
+	}
 	if polexTenants(cfg) {
 		return "the lab's values, kyvernoPolicies.enabled: true, tenants.organizations on"
 	}
