@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -413,11 +414,24 @@ func TestCredentialReads(t *testing.T) {
 {"time":"2026-10-15T15:42:29.846839471Z","level":"INFO","msg":"resolving credential","provider":"k8s.io","namespace":"` + orgAlpha + `","secret":"tenant-credential-anthropic","actor":"spiffe://substrate-actor.local/actor/` + orgAlpha + `/session-01a1403a"}
 {"time":"2026-10-15T15:43:05.512155877Z","level":"INFO","msg":"resolving credential","provider":"k8s.io","namespace":"` + orgBeta + `","secret":"tenant-credential-anthropic","actor":"spiffe://substrate-actor.local/actor/` + orgBeta + `/session-01a1403b"}
 not json`
-	if got := credentialReads(logs, orgAlpha); !slices.Equal(got, []string{orgAlpha}) {
+	if got := credentialReads(logs, orgAlpha, time.Time{}); !slices.Equal(got, []string{orgAlpha}) {
 		t.Errorf("%s's reads = %v", orgAlpha, got)
 	}
-	if got := credentialReads(logs, "agents-gamma-aaaaa"); got != nil {
+	if got := credentialReads(logs, "agents-gamma-aaaaa", time.Time{}); got != nil {
 		t.Errorf("an atespace without reads = %v", got)
+	}
+}
+
+// A read logged before since, inside the wider log window, is not counted:
+// an organization's own turn that answered just before a refused call.
+func TestCredentialReadsSince(t *testing.T) {
+	logs := `{"time":"2026-11-05T22:00:23.126Z","level":"INFO","msg":"resolving credential","provider":"k8s.io","namespace":"` + orgBeta + `","secret":"tenant-credential-anthropic","actor":"spiffe://substrate-actor.local/actor/` + orgBeta + `/session-01a1adba"}
+{"time":"2026-11-05T22:00:27.500Z","level":"INFO","msg":"resolving credential","provider":"k8s.io","namespace":"` + orgBeta + `","secret":"tenant-credential-anthropic","actor":"spiffe://substrate-actor.local/actor/` + orgBeta + `/session-01a1adbb"}`
+	if got := credentialReads(logs, orgBeta, time.Date(2026, 11, 5, 22, 0, 25, 0, time.UTC)); !slices.Equal(got, []string{orgBeta}) {
+		t.Errorf("reads since 22:00:25 = %v, want the 22:00:27 read alone", got)
+	}
+	if got := credentialReads(logs, orgBeta, time.Date(2026, 11, 5, 22, 0, 28, 0, time.UTC)); got != nil {
+		t.Errorf("reads since 22:00:28 = %v, want none", got)
 	}
 }
 

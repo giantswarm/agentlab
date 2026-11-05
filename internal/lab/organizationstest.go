@@ -1367,17 +1367,19 @@ func credentialProviderGrants(ctx context.Context) (map[string][]string, error) 
 }
 
 // credentialReads are the namespaces the provider read a credential from for
-// actors of the atespace, in its JSON log: its "resolving credential" lines,
-// whose actor is spiffe://<domain>/actor/<atespace>/<actor>.
-func credentialReads(logs, atespace string) []string {
+// actors of the atespace, in its JSON log: its "resolving credential" lines
+// logged at or after since, whose actor is
+// spiffe://<domain>/actor/<atespace>/<actor>.
+func credentialReads(logs, atespace string, since time.Time) []string {
 	var read []string
 	for _, line := range strings.Split(logs, "\n") {
 		var entry struct {
-			Msg       string `json:"msg"`
-			Namespace string `json:"namespace"`
-			Actor     string `json:"actor"`
+			Time      time.Time `json:"time"`
+			Msg       string    `json:"msg"`
+			Namespace string    `json:"namespace"`
+			Actor     string    `json:"actor"`
 		}
-		if json.Unmarshal([]byte(line), &entry) != nil || entry.Msg != credentialProviderResolvingLine {
+		if json.Unmarshal([]byte(line), &entry) != nil || entry.Msg != credentialProviderResolvingLine || entry.Time.Before(since) {
 			continue
 		}
 		if strings.Contains(entry.Actor, "/actor/"+atespace+"/") {
@@ -1392,11 +1394,13 @@ func credentialReads(logs, atespace string) []string {
 func credentialReadsSince(ns string, since time.Time) ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	defer cancel()
+	// The log window is wider than since (the kubelet counts it in whole
+	// seconds); credentialReads drops the lines logged before since.
 	logs, err := podLogs(ctx, substrateNamespace, "deploy/"+credentialProvider, credentialProvider, time.Since(since)+5*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("the credential provider's log: %w", err)
 	}
-	return credentialReads(logs, ns), nil
+	return credentialReads(logs, ns, since), nil
 }
 
 // cleanupAgents removes the proof's agents in both organizations: their
