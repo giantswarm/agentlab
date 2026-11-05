@@ -180,8 +180,12 @@ func A2ATest(cfg *config.Config, email string, opts A2ATestOptions) error {
 			note("cleanup: %v", err)
 		}
 	}()
+	modelConfig, err := labDefaultModelConfig(cfg, token)
+	if err != nil {
+		return err
+	}
 	spec := agentSpec{
-		Name: a2aTestAgent, ModelConfig: defaultModelConfig, DisplayName: a2aTestDisplayName, IconURL: a2aTestIconURL,
+		Name: a2aTestAgent, ModelConfig: modelConfig, DisplayName: a2aTestDisplayName, IconURL: a2aTestIconURL,
 		Description:   "Throwaway agent of `agentlab a2a-test`; deleted by the same run.",
 		SystemMessage: a2aTestPrompt, Toolset: []string{presetReadOnly}, RequireApproval: true,
 	}

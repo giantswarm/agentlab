@@ -216,7 +216,7 @@ func (gp *gitProof) preconditions(instance string) error {
 		return err
 	}
 	gp.set = &sessionSet{api: gp.api, manager: gp.admin.session}
-	if err := readySessionsAgents(ctx, rig, gp.timeout); err != nil {
+	if err := readySessionsAgents(ctx, gp.admin.session, rig, gp.timeout); err != nil {
 		return err
 	}
 	if res := sideloadImages(cfg, hostPullImages([]string{workspacesTestGitImage})); res.n > 0 {

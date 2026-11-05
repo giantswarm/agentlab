@@ -51,8 +51,9 @@ type SignInTestOptions struct {
 	// Harnesses are the Harnesses proven, of claude, codex, omp and kagent
 	// (the platform Harness); empty proves every one the lab renders.
 	Harnesses []string
-	// ModelConfig is the model of the claude and kagent agents (default
-	// default-model-config). codex runs on the lab's Responses model, else
+	// ModelConfig is the model of the claude and kagent agents (default the
+	// kagent namespace's default, as agent-manager's list_model_configs
+	// reports it). codex runs on the lab's Responses model, else
 	// the mockllm.
 	ModelConfig   string
 	MockLLMBinary string
@@ -84,9 +85,6 @@ func SignInTest(cfg *config.Config, email string, opts SignInTestOptions) error 
 	if user == nil {
 		return fmt.Errorf("no user %q in %s", email, config.File)
 	}
-	if opts.ModelConfig == "" {
-		opts.ModelConfig = defaultModelConfig
-	}
 	if opts.Timeout == 0 {
 		opts.Timeout = 5 * time.Minute
 	}
@@ -98,6 +96,11 @@ func SignInTest(cfg *config.Config, email string, opts SignInTestOptions) error 
 	}
 	if p.muster, err = openMusterSession(cfg, p.token, "signin-test"); err != nil {
 		return err
+	}
+	if p.opts.ModelConfig == "" {
+		if p.opts.ModelConfig, err = agentManagerModelConfig(p.muster); err != nil {
+			return err
+		}
 	}
 	if p.api, err = dialKagentAPI(cfg, p.token); err != nil {
 		return err

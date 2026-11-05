@@ -17,7 +17,7 @@
       customType: 'regex',
       description: 'config.DefaultChartVersion follows the agent-platform chart releases',
       managerFilePatterns: ['/^internal/config/config\\.go$/'],
-      matchStrings: ['const DefaultChartVersion = "(?<currentValue>\\d+\\.\\d+\\.\\d+)"'],
+      matchStrings: ['const DefaultChartVersion = "(?<currentValue>\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.]+)?)"'],
       depNameTemplate: 'gsoci.azurecr.io/charts/giantswarm/agent-platform',
       datasourceTemplate: 'docker',
       versioningTemplate: 'semver',

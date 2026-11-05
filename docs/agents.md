@@ -72,10 +72,28 @@ the control boot without the skill).
 
 ## The model
 
-Agents run against a **default `ModelConfig`** that the connectivity chart
-renders from the lab's `aiModel` setting (`agentlab.yaml`, default
-`claude-sonnet-4-6` — the BOM's own default), referencing the Secret
-`kagent/kagent-anthropic` (key `ANTHROPIC_API_KEY`). The API key is a **real
+Agents run against the **kagent namespace's default `ModelConfig`**: the one
+annotated `agent-platform.giantswarm.io/is-default-model-config: "true"`.
+The lab declares it as the `kagent.modelConfigs` entry `anthropic` marked
+`default: true`, on the lab's `aiModel` setting (`agentlab.yaml`, default
+`claude-sonnet-4-6`, the BOM's own default), and sets
+`kagent.defaultModelConfig.enabled: false`, so the kagent chart renders no
+`default-model-config` of its own. On an agent-platform release before
+4.175.0-rc.7 the lab renders `kagent.providers` instead, and the default is
+the kagent chart's `default-model-config`. Either way the ModelConfig
+references the Secret `kagent/kagent-anthropic` (key `ANTHROPIC_API_KEY`),
+and `agentlab platform` waits for the marked model to be Accepted, carry the
+annotation and resolve its Secret.
+
+The proofs never assume the model's name. One that is given no
+`--model-config` asks agent-manager for the namespace's default
+(`list_model_configs`, the entry with `default: true`) as the person it runs
+as. The lab takes agent-manager from 2.19.0-rc.2 on beside the marked entry
+(`components.agent-manager.versionRange`), the first release that reports
+the default (HACKS.md U39). An agent-manager that reports no `default` at
+all (an older line) answers `default-model-config`.
+
+The API key is a **real
 credential**, so unlike the lab's throwaway passwords it never enters
 `agentlab.yaml` or the rendered `state/` files. The Secret exists after every
 `agentlab up` and `agentlab platform`, so the ModelConfig resolves on a fresh
@@ -226,6 +244,13 @@ person who granted that App in a browser, which the proof does not walk. The
 agent goes away at the end of the run.
 
 ## Organizations as tenants
+
+The tenants mode is the agent-platform line before 4.175.0-rc.4: from that
+release the chart refuses `tenants.organizations` (an organization is an
+`AgentPlatformOrganization` there, giantswarm/agentlab#1149), and
+`agentlab.yaml` refuses `platform.tenants` on such a release. On the earlier
+line the tenant reconciler copies the platform's default ModelConfig
+(`default-model-config`, which the lab renders there) into each tenant.
 
 `platform.tenants` (`agentlab configure --tenants`) renders the chart's
 `tenants.organizations.enabled: true`: agent-manager's tenant reconciler runs

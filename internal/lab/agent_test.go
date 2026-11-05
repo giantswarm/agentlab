@@ -36,7 +36,7 @@ const (
 
 func testSpec() agentSpec {
 	return agentSpec{
-		Name: testAgentName, ModelConfig: defaultModelConfig, DisplayName: testDisplay, Description: testDescription,
+		Name: testAgentName, ModelConfig: testModelConfig, DisplayName: testDisplay, Description: testDescription,
 		SystemMessage: "Reply with pong.", IconURL: testIconURL, Toolset: []string{presetReadOnly, workflowIncidentTriage},
 		Skills: []agentSkill{{Name: testSkillName, Path: testSkillName, Git: &gitSkill{URL: testSkillURL, Commit: testCommit}}},
 	}
@@ -53,24 +53,24 @@ func TestCreateAgentArgs(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]any{
-		nameKey: testAgentName, modelConfigKey: defaultModelConfig, displayNameKey: testDisplay, descriptionKey: testDescription,
+		nameKey: testAgentName, modelConfigKey: testModelConfig, displayNameKey: testDisplay, descriptionKey: testDescription,
 		systemMessageKey: "Reply with pong.", iconURLKey: testIconURL, toolsetKey: spec.Toolset, skillsKey: spec.Skills,
 	}
 	if !reflect.DeepEqual(args, want) {
 		t.Errorf("args = %v, want %v", args, want)
 	}
-	bare, err := createAgentArgs(agentSpec{Name: testAgentName, ModelConfig: defaultModelConfig})
+	bare, err := createAgentArgs(agentSpec{Name: testAgentName, ModelConfig: testModelConfig})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(bare, map[string]any{nameKey: testAgentName, modelConfigKey: defaultModelConfig}) {
+	if !reflect.DeepEqual(bare, map[string]any{nameKey: testAgentName, modelConfigKey: testModelConfig}) {
 		t.Errorf("a bare spec composes %v", bare)
 	}
-	other, err := createAgentArgs(agentSpec{Name: testAgentName, ModelConfig: defaultModelConfig, Harness: testOtherHarness})
+	other, err := createAgentArgs(agentSpec{Name: testAgentName, ModelConfig: testModelConfig, Harness: testOtherHarness})
 	if err != nil || other[harnessKey] != testOtherHarness {
 		t.Errorf("another Harness through agent-manager: %v, %v", other, err)
 	}
-	platform, err := createAgentArgs(agentSpec{Name: testAgentName, ModelConfig: defaultModelConfig, Harness: kagentHarness})
+	platform, err := createAgentArgs(agentSpec{Name: testAgentName, ModelConfig: testModelConfig, Harness: kagentHarness})
 	if _, named := platform[harnessKey]; err != nil || named {
 		t.Errorf("the platform Harness named explicitly composes %v, %v: agent-manager's default needs no argument", platform, err)
 	}
@@ -97,12 +97,12 @@ func TestAgentPluginJSON(t *testing.T) {
 			t.Errorf("%+v marshals to %s, want %s", tc.plugin, got, tc.want)
 		}
 	}
-	bare, err := createAgentArgs(agentSpec{Name: testAgentName, ModelConfig: defaultModelConfig})
+	bare, err := createAgentArgs(agentSpec{Name: testAgentName, ModelConfig: testModelConfig})
 	if _, sent := bare[pluginsKey]; err != nil || sent {
 		t.Errorf("a spec without plugins composes %v, %v", bare, err)
 	}
 	plugins := []agentPlugin{{Git: git, Skills: []string{pluginExampleSkill}}}
-	args, err := createAgentArgs(agentSpec{Name: testAgentName, ModelConfig: defaultModelConfig, Plugins: plugins})
+	args, err := createAgentArgs(agentSpec{Name: testAgentName, ModelConfig: testModelConfig, Plugins: plugins})
 	if err != nil || !reflect.DeepEqual(args[pluginsKey], plugins) {
 		t.Errorf("plugins compose %v, %v", args[pluginsKey], err)
 	}
@@ -146,7 +146,7 @@ func TestAgentManifests(t *testing.T) {
 	iconURL, _, _ := unstructured.NestedString(values, "agent", iconURLKey)
 	modelConfig, _, _ := unstructured.NestedString(values, modelConfigKey, nameKey)
 	skills, _, _ := unstructured.NestedSlice(values, skillsKey)
-	if !reflect.DeepEqual(toolset, spec.Toolset) || harness != kagentHarness || displayName != testDisplay || iconURL != testIconURL || modelConfig != defaultModelConfig || len(skills) != 1 {
+	if !reflect.DeepEqual(toolset, spec.Toolset) || harness != kagentHarness || displayName != testDisplay || iconURL != testIconURL || modelConfig != testModelConfig || len(skills) != 1 {
 		t.Errorf("values = %v", values)
 	}
 	skill, _ := skills[0].(map[string]any)
@@ -160,7 +160,7 @@ func TestAgentManifests(t *testing.T) {
 		t.Errorf("skillCommits = %v", got)
 	}
 
-	unscoped := agentValues(agentSpec{Name: testAgentName, ModelConfig: defaultModelConfig, Harness: testNoHarness})
+	unscoped := agentValues(agentSpec{Name: testAgentName, ModelConfig: testModelConfig, Harness: testNoHarness})
 	if _, declared := unscoped[toolsetKey]; declared {
 		t.Errorf("a spec without a toolset renders one: %v", unscoped)
 	}
@@ -202,7 +202,7 @@ func TestReadAgentRelease(t *testing.T) {
 	odd := helmRelease("odd", map[string]any{toolsetKey: presetReadOnly}, "", "", "")
 	newFakeLab(t,
 		helmRelease(testAgentName, values, conditionTrue, "InstallSucceeded", "Helm install succeeded"),
-		helmRelease("unscoped", agentValues(agentSpec{Name: "unscoped", ModelConfig: defaultModelConfig}), condFalse, helmInstallFailed, retriesExhausted),
+		helmRelease("unscoped", agentValues(agentSpec{Name: "unscoped", ModelConfig: testModelConfig}), condFalse, helmInstallFailed, retriesExhausted),
 		odd,
 	)
 	release, err := readAgentRelease(testAgentName)
@@ -403,9 +403,9 @@ func renderedAgent(spec agentSpec) *unstructured.Unstructured {
 // a header on an unscoped release, and an Authorization header.
 func TestAssertAgentRender(t *testing.T) {
 	spec := testSpec()
-	chatOnly := agentSpec{Name: "chat", ModelConfig: defaultModelConfig, DisplayName: "Chat", Toolset: []string{presetNone}}
-	unscoped := agentSpec{Name: "unscoped", ModelConfig: defaultModelConfig}
-	authzSpec := agentSpec{Name: "authz", ModelConfig: defaultModelConfig, Toolset: []string{presetReadOnly}}
+	chatOnly := agentSpec{Name: "chat", ModelConfig: testModelConfig, DisplayName: "Chat", Toolset: []string{presetNone}}
+	unscoped := agentSpec{Name: "unscoped", ModelConfig: testModelConfig}
+	authzSpec := agentSpec{Name: "authz", ModelConfig: testModelConfig, Toolset: []string{presetReadOnly}}
 	server := agentServer(spec.Name, strings.Join(spec.Toolset, ","))
 	authz := agentServer("authz", presetReadOnly)
 	_ = unstructured.SetNestedSlice(authz.Object, []any{map[string]any{nameKey: toolsetHeader, fieldValue: presetReadOnly}, map[string]any{nameKey: "Authorization", fieldValue: "Bearer static"}}, "spec", "headersFrom")
@@ -476,7 +476,7 @@ func TestHelmReleaseWriter(t *testing.T) {
 	if toolset, _, _ := unstructured.NestedStringSlice(release.Object, "spec", "values", toolsetKey); !reflect.DeepEqual(toolset, testSpec().Toolset) {
 		t.Errorf("HelmRelease values.toolset = %v", toolset)
 	}
-	second := agentSpec{Name: "second", ModelConfig: defaultModelConfig, Toolset: []string{presetNone}}
+	second := agentSpec{Name: "second", ModelConfig: testModelConfig, Toolset: []string{presetNone}}
 	written, err = helmReleaseWriter{}.createAgent(second)
 	if err != nil {
 		t.Fatal(err)

@@ -367,7 +367,7 @@ func TestMockLLMScriptDelegatesToTheChild(t *testing.T) {
 	}
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
-	cell := matrixCells([]string{config.CodingRuntimeCodex}, HarnessMatrixOptions{Cases: []string{caseSharedPrompt}})[0]
+	cell := matrixCells([]string{config.CodingRuntimeCodex}, HarnessMatrixOptions{Cases: []string{caseSharedPrompt}}, "lab-default")[0]
 	tools := []string{mockLLMExecTool, mockLLMMultiAgentNamespace}
 	prompt := userItem(cell.prompt())
 
@@ -438,7 +438,7 @@ func TestMockLLMScriptSearchesForTheSpawnTool(t *testing.T) {
 	}
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
-	cell := matrixCells([]string{config.CodingRuntimeCodex}, HarnessMatrixOptions{Cases: []string{caseSharedPrompt}})[0]
+	cell := matrixCells([]string{config.CodingRuntimeCodex}, HarnessMatrixOptions{Cases: []string{caseSharedPrompt}}, "lab-default")[0]
 	prompt := userItem(cell.prompt())
 
 	search := mockLLMCallOffering(t, srv, []string{mockLLMExecTool}, prompt)

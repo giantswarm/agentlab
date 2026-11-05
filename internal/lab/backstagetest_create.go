@@ -381,21 +381,14 @@ func proveCreatePath(primary, viewer *portalSession) (agentSpec, *agentTemplate,
 		return fail(fmt.Errorf("get_info reports chart %q on Harness %q, wanted one major line of the agent chart on the platform Harness", info.Chart.Semver, info.Harness.Name))
 	}
 	var configs struct {
-		ModelConfigs []struct {
-			Name string `json:"name"`
-		} `json:"modelConfigs"`
+		ModelConfigs []listedModelConfig `json:"modelConfigs"`
 	}
 	if err := portalToolCall(primary, "list_model_configs", map[string]any{namespaceKey: kagentNamespace}, &configs); err != nil {
 		return fail(err)
 	}
-	modelConfig := ""
-	for _, mc := range configs.ModelConfigs {
-		if modelConfig == "" || mc.Name == defaultModelConfig {
-			modelConfig = mc.Name
-		}
-	}
-	if modelConfig == "" {
-		return fail(fmt.Errorf("list_model_configs lists no ModelConfig in %s", kagentNamespace))
+	modelConfig, err := defaultModelConfigOf(configs.ModelConfigs)
+	if err != nil {
+		return fail(err)
 	}
 	note("chart %s@%s, Harness %s, muster.url %s, flux.serviceAccountName %q; ModelConfig %s", info.Chart.OCIURL, info.Chart.Semver, info.Harness.Name, firstNonEmpty(info.Muster.URL, defaultMusterMCPURL), info.Flux.ServiceAccountName, modelConfig)
 

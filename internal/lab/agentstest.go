@@ -633,28 +633,6 @@ func readAgentManagerInfo(s *musterSession) (*agentManagerInfo, error) {
 	return &info, nil
 }
 
-// agentManagerModelConfig is the ModelConfig the throwaway agents run on:
-// the lab's default when list_model_configs has it, else the first.
-func agentManagerModelConfig(s *musterSession) (string, error) {
-	var configs struct {
-		ModelConfigs []struct {
-			Name string `json:"name"`
-		} `json:"modelConfigs"`
-	}
-	if err := s.callServerJSON(agentManagerToolPrefix+"list_model_configs", nil, &configs); err != nil {
-		return "", err
-	}
-	if len(configs.ModelConfigs) == 0 {
-		return "", fmt.Errorf("no ModelConfig in %s — the platform's default one is missing", kagentNamespace)
-	}
-	for _, mc := range configs.ModelConfigs {
-		if mc.Name == defaultModelConfig {
-			return mc.Name, nil
-		}
-	}
-	return configs.ModelConfigs[0].Name, nil
-}
-
 // listedSkill is one skill of list_skills' answer: its frontmatter name and
 // its directory within the repository.
 type listedSkill struct {

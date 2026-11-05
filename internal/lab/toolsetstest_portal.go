@@ -485,7 +485,7 @@ func proveToolsetPortal(cfg *config.Config, user *config.User, opts ToolsetsTest
 		return verdicts, nil
 	}
 	writer := portalAgentManagerWriter{ps}
-	spec := toolsetsSpec(toolsetsAgentPortal, defaultModelConfig, []string{presetReadOnly})
+	spec := toolsetsSpec(toolsetsAgentPortal, opts.ModelConfig, []string{presetReadOnly})
 	spec.Description = "Throwaway agent of `agentlab toolsets-test`, created through the portal's muster backend; deleted by the same run."
 	step("The portal's create path: %s with toolset %v as %s", writer, spec.Toolset, user.Email)
 	readiness, written, err := readyAgent(writer, spec, agentReadyTimeout)

@@ -43,7 +43,7 @@ func TestMatrixJudge(t *testing.T) {
 }
 
 func TestMatrixCells(t *testing.T) {
-	cells := matrixCells([]string{kagentHarness, config.CodingRuntimeClaude, config.CodingRuntimeCodex}, HarnessMatrixOptions{})
+	cells := matrixCells([]string{kagentHarness, config.CodingRuntimeClaude, config.CodingRuntimeCodex}, HarnessMatrixOptions{}, "lab-default")
 	// Four Shared cases on three Harnesses, the plugin case on claude only.
 	if len(cells) != 13 {
 		t.Fatalf("%d cells, want 13", len(cells))
@@ -52,6 +52,9 @@ func TestMatrixCells(t *testing.T) {
 		if c.harness == config.CodingRuntimeCodex && (c.noTurn == (c.c.key == caseSharedPrompt) || c.modelConfig != MockLLMModelConfig) {
 			t.Errorf("codex cell %s without a real model: noTurn %v on %s, wanted the mockllm and a turn on shared-prompt alone", c.c.key, c.noTurn, c.modelConfig)
 		}
+		if c.harness != config.CodingRuntimeCodex && c.modelConfig != "lab-default" {
+			t.Errorf("%s cell %s on %s, want the default model it was given", c.harness, c.c.key, c.modelConfig)
+		}
 		if c.c.key == casePluginParts && c.harness != config.CodingRuntimeClaude {
 			t.Errorf("plugin-parts on %s", c.harness)
 		}
@@ -59,7 +62,7 @@ func TestMatrixCells(t *testing.T) {
 }
 
 func TestMatrixManifestsParse(t *testing.T) {
-	for _, c := range matrixCells([]string{config.CodingRuntimeClaude}, HarnessMatrixOptions{}) {
+	for _, c := range matrixCells([]string{config.CodingRuntimeClaude}, HarnessMatrixOptions{}, "lab-default") {
 		for doc := range strings.SplitSeq(c.manifests(), "---\n") {
 			var obj map[string]any
 			if err := yaml.Unmarshal([]byte(doc), &obj); err != nil {

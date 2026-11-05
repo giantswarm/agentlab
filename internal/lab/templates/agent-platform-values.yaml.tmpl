@@ -250,6 +250,12 @@ components:
   # the caller), on whenever kagent is — the standalone umbrella's contract.
   agent-manager:
     enabled: true
+{{- with .AgentManagerRange }}
+    # The first agent-manager that reports a namespace's default model
+    # (list_model_configs' `default`) and fills an omitted modelConfig from
+    # it: the chart's own range ends before it (HACKS.md U39).
+    versionRange: "{{ . }}"
+{{- end }}
 {{- with index .PostRenderers "agent-manager" }}
     postRenderers:
 {{ . | indent 6 }}
@@ -733,10 +739,17 @@ kagent:
       bundled:
         enabled: false
 {{- end }}
-  # The default ModelConfig every agent starts from (the kagent chart renders
-  # it from providers.<default>). The chart would only create the referenced
-  # Secret if the raw key were inlined in these values — which would put a
-  # real credential into state/ and the Helm release Secret — so the lab
+{{- if .DefaultModel }}
+  # The agents' default model is the marked kagent.modelConfigs[] entry
+  # below, so the kagent chart renders no default-model-config of its own.
+  defaultModelConfig:
+    enabled: false
+{{- else }}
+  # The default ModelConfig every agent starts from on a line below the
+  # default model floor (the kagent chart renders it from
+  # providers.<default>). The chart would only create the referenced Secret
+  # if the raw key were inlined in these values — which would put a real
+  # credential into state/ and the Helm release Secret — so the lab
   # pre-creates kagent-anthropic from $ANTHROPIC_API_KEY instead (`agentlab
   # platform`, after the install; agents mount it at run time).
   providers:
@@ -746,6 +759,7 @@ kagent:
       model: {{ .AIModel }}
       apiKeySecretRef: kagent-anthropic
       apiKeySecretKey: ANTHROPIC_API_KEY
+{{- end }}
   controller:
     auth:
 {{- if .LegacyChart }}
@@ -869,14 +883,29 @@ kagent:
 {{- end }}
 {{- end }}
 {{- end }}
-{{- with .ChatGPTSubscription }}
-  # A person's own ChatGPT subscription (platform.chatgptSubscription;
-  # chatgptsubscription.go): an entry with credentialType chatgptOAuth and
-  # no apiKeySecret is the model "ChatGPT (your subscription)", from which
-  # the chart derives muster's provider App chatgpt and kagent's
-  # installation provider chatgpt. A codex turn on it runs on the login the
-  # Session's person connected in muster (core_auth_login app=chatgpt).
+{{- if or .DefaultModel .ChatGPTSubscription }}
   modelConfigs:
+{{- with .DefaultModel }}
+    # The kagent namespace's default model (config.DefaultModelConfig): the
+    # connectivity chart renders it annotated
+    # agent-platform.giantswarm.io/is-default-model-config, and Anthropic
+    # entries inherit the chart's prompt caching. Its Secret is the one the
+    # lab places (anthropic.go), never an inline key.
+    - name: {{ .Name }}
+      provider: Anthropic
+      model: {{ .Model }}
+      apiKeySecret: {{ .Secret }}
+      apiKeySecretKey: {{ .SecretKey }}
+      default: true
+{{- end }}
+{{- end }}
+{{- with .ChatGPTSubscription }}
+    # A person's own ChatGPT subscription (platform.chatgptSubscription;
+    # chatgptsubscription.go): an entry with credentialType chatgptOAuth and
+    # no apiKeySecret is the model "ChatGPT (your subscription)", from which
+    # the chart derives muster's provider App chatgpt and kagent's
+    # installation provider chatgpt. A codex turn on it runs on the login the
+    # Session's person connected in muster (core_auth_login app=chatgpt).
     - name: {{ .ModelConfig }}
       provider: OpenAI
       model: {{ .Model }}

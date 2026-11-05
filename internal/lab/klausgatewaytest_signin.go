@@ -122,6 +122,11 @@ func klausGatewaySignInTest(cfg *config.Config, user *config.User, opts KlausGat
 	if err != nil {
 		return err
 	}
+	if opts.ModelConfig == "" {
+		if opts.ModelConfig, err = agentManagerModelConfig(muster); err != nil {
+			return err
+		}
+	}
 	step("Creating Agent %s on Harness %s through agent-manager's create_agent as %s, its toolset %s (the OAuth fixture %s, Auth Required)",
 		klausGatewaySignInAgent, opts.Harness, user.Email, toolsetFixtureSelector, oauthFixtureServer)
 	spec := agentSpec{

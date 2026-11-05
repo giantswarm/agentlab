@@ -306,15 +306,22 @@ func TestReportAnthropicKeyLine(t *testing.T) {
 // TestWaitDefaultModelConfigResolved: the wait outlives the controller's
 // resync — a ResolvedRefs that turns True on a later look passes, one that
 // stays False fails with its message after the looks, a status without the
-// condition (the 0.x line) passes at once.
+// condition (the 0.x line) passes at once. The model waited on is the marked
+// one, which must carry the default annotation.
 func TestWaitDefaultModelConfigResolved(t *testing.T) {
+	cfg := labConfig(true, true, false, false, false)
+	if !cfg.DefaultModelChart() {
+		t.Fatalf("the default chart %s is below the default model floor", cfg.Platform.ChartVersion)
+	}
 	prevAccepted, prevResolved, prevLooks := modelConfigAcceptedPoll, modelConfigResolvedPoll, modelConfigResolvedLooks
 	modelConfigAcceptedPoll, modelConfigResolvedPoll, modelConfigResolvedLooks = time.Millisecond, time.Millisecond, 5
 	t.Cleanup(func() {
 		modelConfigAcceptedPoll, modelConfigResolvedPoll, modelConfigResolvedLooks = prevAccepted, prevResolved, prevLooks
 	})
 	accepted := func() *unstructured.Unstructured {
-		return withCondition(customObject(gvkModelConfig, kagentNamespace, defaultModelConfig, nil), "Accepted", conditionTrue, "")
+		mc := customObject(gvkModelConfig, kagentNamespace, config.DefaultModelConfig, nil)
+		mc.SetAnnotations(map[string]string{defaultModelAnnotation: defaultModelAnnotationValue})
+		return withCondition(mc, "Accepted", conditionTrue, "")
 	}
 	resolvedRefs := func(mc *unstructured.Unstructured, status, message string) *unstructured.Unstructured {
 		conds, _, _ := unstructured.NestedSlice(mc.Object, fieldStatus, "conditions")
@@ -323,12 +330,26 @@ func TestWaitDefaultModelConfigResolved(t *testing.T) {
 	}
 
 	newFakeLab(t, accepted())
-	if err := waitDefaultModelConfigResolved(); err != nil {
+	if err := waitDefaultModelConfigResolved(cfg); err != nil {
 		t.Errorf("no ResolvedRefs condition (the 0.x line): %v", err)
 	}
 
+	unmarked := accepted()
+	unmarked.SetAnnotations(nil)
+	newFakeLab(t, unmarked)
+	if err := waitDefaultModelConfigResolved(cfg); err == nil || !strings.Contains(err.Error(), "is not annotated "+defaultModelAnnotation) {
+		t.Errorf("an Accepted model without the annotation: %v", err)
+	}
+
+	below := labConfig(true, true, false, false, false)
+	below.Platform.ChartVersion = "4.174.3"
+	newFakeLab(t, withCondition(customObject(gvkModelConfig, kagentNamespace, config.KagentChartDefaultModelConfig, nil), "Accepted", conditionTrue, ""))
+	if err := waitDefaultModelConfigResolved(below); err != nil {
+		t.Errorf("the kagent chart's own default below the floor: %v", err)
+	}
+
 	f := newFakeLab(t, resolvedRefs(accepted(), condFalseStatus, "secret kagent-anthropic not found"))
-	err := waitDefaultModelConfigResolved()
+	err := waitDefaultModelConfigResolved(cfg)
 	if err == nil || !strings.Contains(err.Error(), "ResolvedRefs=False after 5ms: secret kagent-anthropic not found") {
 		t.Errorf("a False that stays: %v", err)
 	}
@@ -342,7 +363,7 @@ func TestWaitDefaultModelConfigResolved(t *testing.T) {
 		}
 		return false, nil, nil
 	})
-	if err := waitDefaultModelConfigResolved(); err != nil {
+	if err := waitDefaultModelConfigResolved(cfg); err != nil {
 		t.Errorf("a False that turns True within the looks: %v", err)
 	}
 }

@@ -291,6 +291,9 @@ type tenantsPortal struct {
 	users      [2]*config.User
 	editor     *config.User
 	admin      *config.User
+	// modelConfig is the tenant reconciler's copy of the platform default,
+	// the model of the refused create of P3.
+	modelConfig string
 }
 
 // run is the portal half, steps P1 to P6 (P2 last: it takes the first
@@ -365,7 +368,7 @@ func (p *tenantsPortal) run() ([]string, error) {
 	if managed := info.Namespaces.Managed; !slices.Contains(managed, a) || slices.Contains(managed, b) {
 		return nil, fmt.Errorf("P3: %s's get_info through the portal names namespaces.managed %v, want %s and not %s (they are an editor of the first only)", p.editor.Email, managed, a, b)
 	}
-	created := portalToolCall(dev, "create_agent", tenantsTestAgentSpec(b, tenantsTestCrossAgent, defaultModelConfig), nil)
+	created := portalToolCall(dev, "create_agent", tenantsTestAgentSpec(b, tenantsTestCrossAgent, p.modelConfig), nil)
 	if created == nil || !strings.Contains(created.Error(), refusalForbidden) {
 		return nil, fmt.Errorf("P3: %s's create_agent through the portal in %s: %v, want agent-manager's %s", p.editor.Email, b, created, refusalForbidden)
 	}
