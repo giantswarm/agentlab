@@ -822,8 +822,11 @@ func TestPlatformValuesExportNoOTLP(t *testing.T) {
 func TestPlatformValuesLegacyChartShape(t *testing.T) {
 	// The GitHub token keys the 4.x line alone takes (githubtoken.go) stay
 	// out of both renders: no githubToken.source is recorded — that half is
-	// TestGitHubTokenLegacyChartTakesNoKeys'.
+	// TestGitHubTokenLegacyChartTakesNoKeys'. The organizations stay off:
+	// they follow a chart floor inside the current line
+	// (TestPlatformValuesOrganizations), not the line.
 	render := func(cfg *config.Config) (map[string]any, string) {
+		cfg.Platform.Organizations.Enabled = false
 		out, err := renderTemplate(cfg, "agent-platform-values.yaml.tmpl", nil)
 		if err != nil {
 			t.Fatal(err)

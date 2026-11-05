@@ -16,30 +16,41 @@ The default configuration ships three users (password: `password`):
 | `dev@lab.local`    | `developers` | `edit` inside `ns/demo` only |
 | `viewer@lab.local` | `viewers` | `view` cluster-wide |
 
-`agentlab configure --tenants` adds two more, one per organization of
-`agentlab tenants-test`, when no user carries their group:
+### The member users
+
+`agentlab configure --organizations` adds two more, one member per
+organization of `agentlab organizations-test`, when no user carries their
+group:
 
 | User | Groups in the token | Effective access |
 |---|---|---|
-| `alice@lab.local` | `tenant-a` | the platform tenant; with `tenants-test`, `agent-platform:user` in its first organization |
-| `bob@lab.local`   | `tenant-b` | the platform tenant; with `tenants-test`, `agent-platform:user` in its second organization |
+| `alice@lab.local` | `tenant-a` | the platform tenant; with `organizations-test`, `agent-platform:editor` in the organization `agentlab-a` |
+| `bob@lab.local`   | `tenant-b` | the platform tenant; with `organizations-test`, `agent-platform:editor` in the organization `agentlab-b` |
+
+The default organization `agentlab-organizations/default`, which `agentlab
+up` keeps ([Organizations](agents.md#organizations)), binds `platform-admins`
+as its first admins and `developers` as its editors.
 
 Users are fully configurable: `agentlab configure` lets you keep, edit, remove
 and add users, with per-user passwords and group membership. The **groups are
 a fixed vocabulary** — RBAC binds exactly `platform-admins` → cluster-admin,
-`developers` → edit-in-demo, `viewers` → view, and nothing to `tenant-a` and
-`tenant-b`, which `tenants-test` binds per organization — and the form only
+`developers` → edit-in-demo, `viewers` → view, and nothing cluster-wide to
+`tenant-a` and `tenant-b`, which `organizations-test` binds per
+organization — and the form only
 offers those five. Passwords are bcrypt-hashed automatically; the hash is cached in
 `agentlab.yaml` so renders stay deterministic (no spurious Dex pod rolls). After
 editing users, run `agentlab reload`.
 
 ## The tenant model
 
-What `agentlab tenants-test` asserts about who sees and runs which agent
-(giantswarm/agentlab#166; the plan is giantswarm/giantswarm#36698):
+What `agentlab organizations-test` asserts about who sees and runs which
+agent (giantswarm/agentlab#166 and #1149; the plans are
+giantswarm/giantswarm#36698 and #38891):
 
-- **A tenant is a namespace.** The platform tenant is `kagent`; an
-  organization's tenant is a namespace labelled `giantswarm.io/organization`.
+- **A tenant is a namespace.** The platform tenant is `kagent` (until
+  giantswarm/agent-manager#166); an organization's tenant is the namespace
+  agent-platform-operator keeps for an `AgentPlatformOrganization`,
+  `agents-<name>-<random>`, labelled `agent-platform.giantswarm.io/organization`.
 - **Kubernetes RBAC decides, at the kagent controller.** The chart's three
   ClusterRoles are bound per tenant: `agent-platform:user` (see the agents,
   start conversations), `agent-platform:editor` (also write agents),
@@ -67,7 +78,8 @@ What `agentlab tenants-test` asserts about who sees and runs which agent
   workspaces on).
 - **Slack asks as the person**: klaus-gateway (4.10.0 and later) fetches each
   person's roster as that person, across tenants, each row naming its tenant
-  (`platform`, or `organization <name>` for `org-<name>`), and refuses an
+  (`platform`, `organization <name>` for `org-<name>`, else `namespace
+  <namespace>`, which an organization namespace reads today), and refuses an
   agent of another tenant — a pick, or a turn as a thread's collaborator —
   with a note naming the tenant, sending nothing to it.
 
@@ -76,11 +88,13 @@ tenant, as on an installation.
 
 ### MCP servers per tenant
 
-With `platform.tenants` on, muster serves the `MCPServer`s of the
-organization namespaces (`org-…`) next to its own namespace's
-(`muster.muster.mcpServersInAllNamespaces`, muster 5.48.0 or later, where the
-chart's range starts from agent-platform 4.157.1 on). What `tenants-test` asserts (the
-agent-permissions plan's D9):
+With `platform.organizations` on, muster serves the `MCPServer`s of the
+organization namespaces next to its own namespace's
+(`muster.muster.mcpServersInAllNamespaces`, muster 5.48.0 or later). What
+`organizations-test` asserts is the first two points below (the
+agent-permissions plan's D9); the old tenants proof also asserted the rest,
+which an organization namespace's admission does not let the lab set up
+([The organizations proof](agents.md#the-organizations-proof)):
 
 - **Kubernetes RBAC decides what a person sees.** muster lists the
   `MCPServer`s of each namespace with the person's own Dex token: a person
@@ -106,15 +120,12 @@ agent-permissions plan's D9):
   in through `<muster>/oauth/ns/<namespace>/callback` with a client of its own
   namespace, and its token is filed under its namespace and issuer: a sign-in
   to it gives no token to a server of the same issuer in muster's namespace or
-  in another organization. The lab Dex lists the callbacks of `tenants-test`'s
-  two namespaces on the platform client.
+  in another organization.
 - **A tenant namespace's sign-ins go with its servers.** muster forgets them
   when the namespace's last server, or the namespace, goes (a server deleted
   next to others takes the issuers only it named): a namespace created again
   with the same name starts with no sign-in, and
-  `core_auth_login` there answers a sign-in link, not a connect. Every
-  `tenants-test` run creates its namespaces again, so a second run right
-  after the first signs in again.
+  `core_auth_login` there answers a sign-in link, not a connect.
 - **Through an agent, as the person**: an organization's agent bound to
   muster lists, in a turn as the person, the servers that person sees.
 
@@ -126,17 +137,19 @@ read outside muster's namespace (least privilege). So whoever declares the
 alone (`resourceNames`) and a RoleBinding of it to muster's ServiceAccount
 (`muster` in `agent-platform`), as muster's how-to ["Servers outside muster's
 namespace"](https://github.com/giantswarm/muster/blob/main/docs/how-to/connecting-non-rfc9728-mcp-servers.md#servers-outside-musters-namespace)
-describes. `tenants-test`'s fixture does this for
-`agentlab-tenants-mcp` (the Role and RoleBinding
-`agentlab-tenants-mcp-secret-reader`). Without them, muster answers the
+describes. In an organization namespace the organizations' subject policy
+refuses that RoleBinding (a ServiceAccount of another namespace). Without
+them, muster answers the
 sign-in with `Cannot sign in to '<namespace>/<name>': the server's sign-in is
 not ready: <reason>`, and the reason names the Secret and the Role.
 
 ### The portal per tenant
 
 The Dev Portal (Backstage with giantswarm/backstage#3161) reads the same
-model as the person, through its own backend routes. What `tenants-test`
-asserts (steps P, [The Agent Platform proof](backstage.md#the-agent-platform-proof)):
+model as the person, through its own backend routes. What the retired
+tenants proof asserted over `org-<name>` namespaces (steps P, [The Agent
+Platform proof](backstage.md#the-agent-platform-proof)); `organizations-test`
+skips the portal until giantswarm/backstage#3363:
 
 - **The roster per tenant.** The portal asks the controller which namespaces
   hold an agent the person may list (`GET /api/agent-platform/kagent/agent-namespaces`,

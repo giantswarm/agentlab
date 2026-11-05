@@ -158,12 +158,13 @@ type tmplData struct {
 	// unless the workspaces and the agents are on and the chart takes the
 	// workspaces values.
 	WorkspaceAdmission *workspaceAdmissionValues
-	// TenantsEnabled mirrors cfg.TenantsEnabled(): the chart's
-	// tenants.organizations.enabled, and the credential provider's policies
-	// for TenantsTestNamespaces, tenants-test's two organization namespaces
-	// (tenantstest.go).
-	TenantsEnabled        bool
-	TenantsTestNamespaces []string
+	// OrganizationsEnabled mirrors cfg.OrganizationsEnabled(): the chart's
+	// agentPlatformOrganizations.enabled, with the LLM listener it needs.
+	OrganizationsEnabled bool
+	// TenantsEnabled renders the tenants mode of a chart before
+	// config.OrganizationsChartFloor; polex-test alone sets it
+	// (polextest.go), never a lab's install.
+	TenantsEnabled bool
 	// CodingHarnesses are the lab's coding Harnesses (coding.go), rendered
 	// as kagent.harnesses; none with coding agents and the workspaces off.
 	CodingHarnesses []codingHarness
@@ -355,8 +356,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		WorkspaceProviderApps:        workspaceProviderAppsFor(cfg, workspaceProviders),
 		WorkspaceReleasable:          workspaceReleasableFor(cfg),
 		WorkspaceAdmission:           workspaceAdmissionValuesFor(cfg, workspacesChart.Carries),
-		TenantsEnabled:               cfg.TenantsEnabled(),
-		TenantsTestNamespaces:        tenantsTestNamespaces[:],
+		OrganizationsEnabled:         cfg.OrganizationsEnabled(),
 		CodingHarnesses:              codingHarnessesFor(cfg, workspaceAdmissionValuesFor(cfg, workspacesChart.Carries), nil),
 		ChatGPTSubscription:          chatgptSubscriptionValuesFor(cfg),
 		DefaultModel:                 defaultModelValuesFor(cfg),

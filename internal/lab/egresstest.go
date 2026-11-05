@@ -277,11 +277,7 @@ type egressProbeTarget struct {
 func egressProbeCommand(t egressProbeTarget) string {
 	timeout := strconv.Itoa(egressProbeTimeout)
 	return `P=` + probeMarker + `
-get() {
-  o=$(timeout ` + strconv.Itoa(egressProbeTimeout+10) + ` wget -q -S -O /dev/null -T ` + timeout + ` "$2" 2>&1); rc=$?
-  s=$(printf '%s\n' "$o" | grep -o 'HTTP/[0-9.]* [0-9][0-9][0-9]' | tail -1 | cut -d' ' -f2)
-  echo "$P $1=rc$rc status=$s $(printf '%s\n' "$o" | grep -v '^  ' | tail -2 | tr '\n' ' ' | head -c 160)"
-}
+` + egressProbeGet + `
 tcp() {
   o=$(timeout ` + timeout + ` bash -c 'exec 3<>"/dev/tcp/$0/$1" || exit 7; IFS= read -r -t ` + timeout + ` l <&3; r=$?; printf "%s" "$l"; exit $r' "$2" "$3" 2>&1); rc=$?
   echo "$P $1=rc$rc $(printf '%s' "$o" | tr -d '\000-\037\177-\377' | head -c 120)"
@@ -292,6 +288,15 @@ get muster '` + t.muster + `'
 tcp tcp-name ` + t.tcpHost + ` ` + strconv.Itoa(t.tcpPort) + `
 tcp tcp-address ` + t.tcpAddress + ` ` + strconv.Itoa(t.tcpPort)
 }
+
+// egressProbeGet is the probe's HTTP function, `get <key> <url>`: one line
+// `rc<exit> status=<the last HTTP status seen, empty for none> <wget's last
+// words>`, which the egress and the organizations proofs both parse.
+var egressProbeGet = `get() {
+  o=$(timeout ` + strconv.Itoa(egressProbeTimeout+10) + ` wget -q -S -O /dev/null -T ` + strconv.Itoa(egressProbeTimeout) + ` "$2" 2>&1); rc=$?
+  s=$(printf '%s\n' "$o" | grep -o 'HTTP/[0-9.]* [0-9][0-9][0-9]' | tail -1 | cut -d' ' -f2)
+  echo "$P $1=rc$rc status=$s $(printf '%s\n' "$o" | grep -v '^  ' | tail -2 | tr '\n' ' ' | head -c 160)"
+}`
 
 // egressProbePrompt asks the agent to run the probe once and relay it.
 func egressProbePrompt(t egressProbeTarget) string {

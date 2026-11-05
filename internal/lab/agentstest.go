@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -406,14 +407,14 @@ func AgentsTest(cfg *config.Config, email string) error {
 	if err != nil {
 		return err
 	}
-	rec, err := readTenantReconciler()
+	multiTenant, err := agentManagerMultiTenant()
 	if err != nil {
 		return err
 	}
-	if switchedOn, _ := nestedValue(values, "tenants", "organizations", valuesEnabled).(bool); switchedOn && !rec.multiTenant {
+	if switchedOn, _ := nestedValue(values, "tenants", "organizations", valuesEnabled).(bool); switchedOn && !multiTenant {
 		note("tenants.organizations.enabled is on, but agent-manager runs without --multi-tenant=true: the installed chart does not turn the tenant reconciler on, so its ClusterRole is not allowed")
 	}
-	grants := agentManagerGrants(values, rec.multiTenant)
+	grants := agentManagerGrants(values, multiTenant)
 	granted, err := rulesBeyondGrants(rulesBeyond(rules, baseline), grants)
 	if err != nil {
 		return err
@@ -732,6 +733,41 @@ func agentManagerUpdate(s *musterSession, args map[string]any) (*agentManagerUpd
 		return nil, err
 	}
 	return &updated, nil
+}
+
+// agentManagerMultiTenant reads off agent-manager's Deployment whether it
+// runs --multi-tenant: before agent-platform 4.175.0 the tenant reconciler
+// of the tenants mode, whose ClusterRole agentManagerGrants then allows.
+func agentManagerMultiTenant() (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
+	defer cancel()
+	deploy, err := getObject(ctx, gvrDeployments, platformNamespace, agentManagerMCPServer)
+	if err != nil {
+		return false, fmt.Errorf("the agent-manager Deployment in %s: %w", platformNamespace, err)
+	}
+	containers, _, _ := unstructured.NestedSlice(deploy.Object, "spec", "template", "spec", "containers")
+	var args []string
+	for _, c := range containers {
+		container, _ := c.(map[string]any)
+		a, _, _ := unstructured.NestedStringSlice(container, "args")
+		args = append(args, a...)
+	}
+	return multiTenantArg(args), nil
+}
+
+// multiTenantArg reads --multi-tenant off the arguments as the chart writes
+// them (--name=value; a bare boolean flag is true).
+func multiTenantArg(args []string) bool {
+	on := false
+	for _, arg := range args {
+		name, value, hasValue := strings.Cut(strings.TrimPrefix(arg, "--"), "=")
+		if name != "multi-tenant" {
+			continue
+		}
+		parsed, _ := strconv.ParseBool(value)
+		on = !hasValue || parsed
+	}
+	return on
 }
 
 // agentManagerStatus is get_agent_status as the proofs read it.

@@ -242,158 +242,147 @@ pull request itself takes an agent-manager pinned to a GitHub App and a
 person who granted that App in a browser, which the proof does not walk. The
 agent goes away at the end of the run.
 
-## Organizations as tenants
+## Organizations
 
-The tenants mode is the agent-platform line before 4.175.0-rc.4: from that
-release the chart refuses `tenants.organizations` (an organization is an
-`AgentPlatformOrganization` there, giantswarm/agentlab#1149), and
-`agentlab.yaml` refuses `platform.tenants` on such a release. On the earlier
-line the tenant reconciler copies the platform's default ModelConfig
-(`default-model-config`, which the lab renders there) into each tenant.
+`platform.organizations` (on by default; `agentlab configure
+--organizations[=false]`) renders the chart's
+`agentPlatformOrganizations.enabled: true` with the LLM listener it needs
+(`llmRouting.enabled`): the meta chart installs agent-platform-operator, and
+the connectivity chart renders the organizations' roles
+(`agent-platform:organizations-admin`, `admin`, `editor`, `user`) and their
+admission policies, and selects the organization namespaces by the label
+`agent-platform.giantswarm.io/organization` (Substrate's credential provider,
+the workers' admission, kagent's authorizer, muster with
+`mcpServersInAllNamespaces`). It takes effect with the agents runtime on a
+chart from agent-platform 4.175.0-rc.4 on (`config.OrganizationsChartFloor`), the default chart included;
+below it, `up` says so and leaves the chart's earlier shape alone. The
+tenants mode the chart removed (`platform.tenants`, agent-manager's tenant
+reconciler) is gone from the lab: an `agentlab.yaml` that still names it
+loads, and the key is not written back.
 
-`platform.tenants` (`agentlab configure --tenants`) renders the chart's
-`tenants.organizations.enabled: true`: agent-manager's tenant reconciler runs
-(`--multi-tenant`) and the chart admits the agent workers of every namespace
-labelled `giantswarm.io/organization`. The reconciler keeps in each such
-namespace, always, the agent chart's OCIRepository `agent`, the agents' Flux
-ServiceAccount and its RoleBinding (`kagent-flux`) and, when the platform's
-network policies are on, their copies — labelled
-`agent-manager.giantswarm.io/tenant-object=namespace` — and, while the
-namespace holds an agent, copies of the platform Harness, its WorkerPool and
-the pool's ServiceAccount, the default ModelConfig and its key Secret,
-labelled `…/tenant-object=agents`. The switch needs the agents runtime and a
-chart that carries it (giantswarm/agent-platform#1037 and #1050; until a
-release does, a dev build through `--chart-branch`).
+Each organization is an `AgentPlatformOrganization` in a parent namespace,
+reconciled by the operator into an organization namespace of its own,
+`agents-<name>-<random>`. On an installation the parent is a KaaS
+`org-<name>` namespace; the lab has no KaaS, so its parent is the fixed root
+namespace `agentlab-organizations`.
 
-Substrate's credential provider reads a namespace's Secrets only where its
-policy allows it. Until the chart selects the organizations' namespaces by
-label (giantswarm/agent-platform#1041, Substrate 1.12), the lab's values list
-the two namespaces `tenants-test` uses by hand in
-`substrate.credentialProvider.namespacePolicies` — each read by the atespace
-of its own name, and by `ate-golden` — next to the chart's two entries. The
-list goes with #1041. A `platform.valuesFiles` overlay that sets that list
-replaces the lab's.
+**The default organization.** `agentlab up` (and `agentlab platform`) keeps
+the organization `agentlab-organizations/default` (display name `Lab`) and
+waits until the operator reports it `Ready`. Then, as an organization's
+creator does after `Ready`, it writes the first admins, `organization-admins`
+to `agent-platform:admin` for the group `platform-admins`; the editors,
+`organization-editors` to `agent-platform:editor` for the group
+`developers`; and the organization's model: the ModelConfig `anthropic` on
+the lab's model, marked default, its key in the tenant credential
+`tenant-credential-anthropic`, placed the way the lab places the Anthropic
+key everywhere (`anthropic.go`: the recorded source, the host environment,
+else the placeholder; agentlab never reads the value). The chart's admission
+policy fills in the LLM listener as its `baseUrl`. Last, the first developer
+creates an agent's HelmRelease there as a server-side dry run with their own
+Dex token, which RBAC and every admission policy of the namespace (the
+HelmRelease field lock among them) judge; `up` fails if it is refused. The
+summary names the namespace. The lab's values also count the operator's
+ServiceAccount quota under `count/serviceaccounts` (HACKS.md U42).
 
-`agentlab tenants-test [email email]` is the proof
-(giantswarm/agentlab#739). It creates `org-agentlab-tenants-a` and
-`org-agentlab-tenants-b`, labelled, and binds one person to
-`agent-platform:editor` in each (default: the first two users outside
-`platform-admins`, `dev@lab.local` and `viewer@lab.local`; a platform admin is
-refused, being cluster-admin). It calls agent-manager's REST API (`/api/v1`,
-on a port-forward to its pod) as each person with their Dex token (audiences
-`kubernetes` and `agent-platform`) and checks:
+## The organizations proof
 
-1. before an agent, each namespace holds only the always-kept objects;
-2. a person's create in the other organization is refused (403; under a name
-   that does not exist there, so a person with the lab's cluster-wide `view`
-   reaches the create and does not get 409); the create
-   in their own (201, `requestedBy` the person) makes the reconciler copy the
-   Harness, the WorkerPool with agent-manager's
-   `--tenant-worker-pool-replicas`, its ServiceAccount, the ModelConfig and
-   its Secret;
-3. the WorkerPool's workers are Running and ready, the agent `ready`, and a
-   turn as the person (through the edge) answers, the credential provider
-   reading for the namespace's atespace from that namespace only (its log);
-4. the same in the second organization;
+`agentlab organizations-test` (`tenants-test` is an alias) is the proof
+(giantswarm/agentlab#1149, the agent-platform-organizations plan). It keeps
+two organizations, `agentlab-a` and `agentlab-b`, in the root namespace, and
+binds one member to each as an editor by the group in their token
+(RoleBinding `agentlab-members`, subject `oidc:tenant-a` or
+`oidc:tenant-b`): `alice@lab.local` and `bob@lab.local`, which `agentlab
+configure --organizations` adds ([The member users](identity.md#the-member-users)).
+A member who is also in `platform-admins`, `viewers` or `developers` is
+refused: each reaches agents outside their organization. Each organization
+gets the lab's model.
 
-   then, with both organizations' agents up and the platform tenant's
-   (`agentlab-tenants-platform`, created by the admin in `kagent` at the
-   start), the authorizer through the edge (steps E) and in Slack (steps S),
-   as the tenant users of [The tenant model](identity.md#the-tenant-model)
-   — the first user in group `tenant-a` and in `tenant-b`, `alice@lab.local`
-   and `bob@lab.local` after `agentlab configure --tenants`:
+Each member creates the agent `agentlab-organizations` in their own
+organization as themselves: a HelmRelease of the agent chart written through
+the Kubernetes API with their Dex token, which the chart's HelmRelease field
+lock admits (the operator's chart source and Helm ServiceAccount). The agent
+becomes `Ready` on the organization's copy of the platform Harness, and a
+turn as its member answers, the credential provider reading credentials for
+the namespace's atespace from that namespace only. Then:
 
-   - E1. the first tenant user, whose group is bound nowhere yet, lists
-     (`ListAgents` with no namespace) the platform tenant's agents only;
-   - E2. each group bound to `agent-platform:user` in its organization
-     (RoleBinding `agentlab-tenants-test-users`, subject `oidc:<group>`):
-     each person lists exactly their organization's agents and the platform
-     tenant's, read back against the cluster;
-   - E3. the first user's `CreateSession` and first A2A message on the second
-     organization's agent are `PermissionDenied`, no Session of it is made
-     (every creator's, listed by the admin) and the credential provider reads
-     nothing for its atespace; on their own organization's agent the
-     `CreateSession` succeeds;
-   - E4. the user's `CreateAgent`, `UpdateAgent` and `DeleteAgent` in their
-     own organization are `PermissionDenied` and its agent is unchanged;
-   - E5. the first editor creates, changes (a label) and deletes an Agent in
-     their organization through the edge (on a Harness that does not exist,
-     so it never boots); `CreateAgent`, `UpdateAgent` and `DeleteAgent` in the
-     other organization are `PermissionDenied` and its agent is unchanged;
-   - E6. `ListSessions` with `all_creators` is `PermissionDenied` for both
-     users and answered for the admin;
-   - S. klaus-gateway on the host (klaus-gateway-test's shape: `--gateway-image`
-     or `--gateway-binary`, default the component's release; it needs
-     giantswarm/klaus-gateway#486, 4.10.0 or later), both users linked:
-     S1. `@bot agents` as both at the same time: each roster lists their
-     organization's agent labelled `organization <name>` and the platform
-     tenant's labelled `platform`, nothing of the other organization, and the
-     first person's roster is the same when asked again; S2. the first person
-     submits the agent picker with the other organization's agent: refused
-     with a note naming that tenant, and nothing reaches it (no
-     `turn_dispatch`, no Session, no credential read) — the picker is how a
-     person starts another agent in Slack: a mention runs the thread's agent
-     or the default, it names none; S3. the second person
-     starts a conversation with their agent from the picker and it answers;
-     S4. the first person mentions the bot in that thread (allowed by its
-     person when the gateway asks): refused with the same note, the Session's
-     tasks unchanged (klaus-gateway 4.10.0-rc.1 answers the held message's
-     replay after the Allow with its generic "could not be picked up again"
-     note; the person sends again and gets the refusal, HACKS.md U36). On
-     macOS the image runs on the `kind` network with its ports published on
-     loopback (Docker Desktop's host networking is off, HACKS.md U35);
-   - M. muster's MCP servers per tenant
-     ([MCP servers per tenant](identity.md#mcp-servers-per-tenant)), on a
-     sign-in fixture `agentlab-tenants-mcp` in each organization (muster's own
-     protected `/mcp`, pinned to the lab Dex with the issuer of
-     `lab-oauth-fixture`, its client Secret readable by muster there):
-     M1. through muster (`core_mcpserver_list`, `list_tools`), each tenant
-     user lists the servers of muster's namespace and their organization's
-     fixture, and is offered the sign-in to that one only; the second user,
-     their group's RoleBinding gone a moment, lists muster's namespace's
-     only; M2. the second user signs in to their fixture; the first user's
-     call of one of its tools, `core_service_start` and `core_auth_login` for
-     it are answered word for word as for a server that does not exist;
-     M3. an `MCPServer` of the first organization with `auth.forwardToken`,
-     `auth.requiredAudiences`, `auth.tokenExchange`, `family` or
-     `auth.type: sigv4` reads `Failed` with muster's refusal naming the field;
-     M4. the first user signs in to their fixture: muster sends
-     `redirect_uri` `<muster>/oauth/ns/<namespace>/callback` and the sign-in
-     ends there; `lab-oauth-fixture` (muster's namespace, the same issuer)
-     still awaits its own sign-in on `/oauth/proxy/callback`; the admin signs
-     in to the first organization's fixture and the second's still awaits its
-     own, on its namespace's callback; M5. the first editor creates
-     `agentlab-tenants-muster` in the first organization (toolset
-     `preset:full`), and a turn as the first user reports tools of their
-     fixture and of agent-manager, none of the other organization's, and a
-     second turn has it call `core_mcpserver_list`: it lists the first
-     user's fixture and agent-manager, not the second organization's (the
-     agent is deleted again). The same through Slack (klaus-gateway) is not
-     proved yet;
-5. as the admin (cluster-admin): a WorkerPool patch and delete and a pod
-   labelled `ate.dev/worker-pool` (server-side dry runs), and an exec into a
-   worker, are refused by the chart's `agent-platform-tenant-*` admission
-   policies; the network policy copies exist — skipped while agent-manager
-   copies none (the lab runs with network policies off); the credential
-   provider's live grants (`/statusz`) give each tenant's atespace its own
-   namespace only — skipped while its policy has no `ownNamespaceSelector`
-   entry;
-6. deleting each namespace's last agent removes the copies and keeps the
-   always-kept objects (giantswarm/agent-manager#175: the delete also
-   removes the OCIRepository, which the reconciler creates again; the proof
-   asserts the end state only).
+- **The same answer on every surface.** The agents each member sees through
+  the Kubernetes API (a list in every organization namespace as the
+  member), through the kagent API at the edge (`ListAgents`) and in Slack
+  (klaus-gateway's per-caller roster, giantswarm/klaus-gateway#354) are one
+  set: their own organization's agent, nothing of the other's. The platform
+  tenant's agents in `kagent` are not judged (they go with
+  giantswarm/agent-manager#166). The Dev Portal surface is skipped until its
+  organization page and New agent picker land
+  (giantswarm/backstage#3363).
+- **The negative cross-organization tests.** Each is a verdict that names
+  its surface and the boundary it proves, and each has a twin in the
+  member's own organization that is admitted, so a refusal for another
+  reason fails it:
+  - Kubernetes API (RBAC): the first member's lists of agents, agent
+    templates, RemoteMCPServers, muster MCPServers, HelmReleases,
+    ModelConfigs and Secrets in the other organization answer 403 (their own
+    are answered; an editor reads no Secret anywhere); their create of an
+    agent there answers 403, in their own it is admitted (dry runs); a
+    SelfSubjectAccessReview for `list sessions.api.kagent.dev` there is
+    denied (its twin: `list agents.api.kagent.dev` in their own is allowed);
+  - kagent API and A2A (kagent's authorizer): `CreateSession` and a first
+    A2A message on the other organization's agent are `PermissionDenied`, no
+    Session of it is made and no credential read for its atespace; an
+    Agent's create, change and delete there are `PermissionDenied`, while the
+    same in their own organization pass; `ListSessions` with `all_creators`
+    is `PermissionDenied` for both members and answered for the admin;
+  - Slack: each roster is the member's own organization's, a pick of the
+    other organization's agent is refused with nothing reaching it, and a
+    turn in a thread on it is refused;
+  - muster: with an `MCPServer` in each organization namespace, each member
+    lists muster's namespace's servers and their own organization's; with
+    their RoleBinding gone a moment, their own goes too; the first member's
+    `core_service_start` and `core_auth_login` naming the other
+    organization's server read word for word as for a server that does not
+    exist;
+  - models and the llm listener: the first member's agent naming the other
+    organization's ModelConfig is refused at admission or fails on that
+    reference, and no credential of the other organization is read for its
+    atespace, so the other's key never travels through the listener for it;
+    the same agent on their own model is admitted;
+  - egress gateway: the first member's agent (declaring
+    `https://example.com`) probes that origin, the API server and
+    Substrate's API on 443 from its actor; judged from the gateway's record,
+    the declared origin is forwarded (the twin) and each in-cluster request
+    is refused by the gate for the actor's egress policy, or held before any
+    connection opened: the probe's own line shows no HTTP status and a name
+    resolution or connection failure. An HTTP answer from the endpoint, a TLS
+    or certificate failure, or an ambiguous failure fails the check.
+- **The management-cluster profile.** The operator's ResourceQuota
+  `agent-platform-organization-objects` admits ServiceAccounts up to its hard
+  `count/serviceaccounts` and refuses the next; with a Kyverno PolicyException in
+  `policy-exceptions` that lifts every rule for `agents-*`, a WorkerPool
+  patch and delete, a worker-labelled pod and an exec into a worker are still
+  refused by the chart's ValidatingAdmissionPolicies (as the admin,
+  cluster-admin); the credential provider's live grants (`/statusz`) give each
+  organization's atespace its own namespace only. The erasure of an
+  `Orphaned` organization with a running session is skipped: it stalls at the
+  Sessions step until the lab's kagent line carries
+  giantswarm/kagent-extensions#27 (HACKS.md U41). Slice 17
+  (giantswarm/agent-platform#1269) adds Substrate's Secret access to the same
+  list (`profileChecks`).
 
-A lab without the switch fails before any write, naming
-`agentlab configure --tenants` and `agentlab platform`; so does a credential
-policy that does not list the two namespaces, a lab without the tenant users,
-and a kagent controller without the RBAC authorizer (its ConfigMap's
-`KAGENT_AUTHORIZATION_MODE` not `kubernetes`, the groups not read from
-`groups`, or the prefixes not the lab API server's `oidc:` — a chart before
-agent-platform 4.151, or values without the lab's prefixes), and a muster
-before 5.48.0, or one with `mcpServersInAllNamespaces` off in its
-`config.yaml`. The namespaces, their agents
-and bindings, and the platform tenant's agent go at the end of the run, also after a failure, and at the
-start of the next one.
+The report prints one `PASS` or `SKIP` line per verdict, `[surface]
+boundary — what was seen`; a failure stops the run as `FAIL [surface]
+boundary: ...`. `--skip-slack` leaves klaus-gateway out (its lines read
+`SKIP`); `--gateway-image` and `--gateway-binary` pick the gateway as for
+`klaus-gateway-test` (on macOS the image runs on the `kind` network, HACKS.md
+U35). The two organizations stay for the next run, since their erasure is
+skipped on the lab; their agents, the Sessions (deleted by their creators),
+the PolicyException and the quota's ServiceAccounts go at the end of the run,
+also after a failure.
+
+The proof leaves out muster's per-organization sign-in: a server of an
+organization namespace that signs in needs muster to read its client Secret
+there, and the organizations' subject policy refuses a RoleBinding of
+muster's ServiceAccount, which lives in another namespace; and its callback
+(`/oauth/ns/<namespace>/callback`) names a namespace the operator generates,
+which the lab Dex's static redirect URIs cannot list ahead.
 
 ## The UI and the controller's route
 

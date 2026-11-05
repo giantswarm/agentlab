@@ -571,8 +571,9 @@ func TestRenderFailureText(t *testing.T) {
 }
 
 // The component renders are told the MutatingAdmissionPolicy is served while
-// the tenants are on, which the connectivity chart requires for them, and
-// not otherwise; the Prometheus Operator's API with the observability stack.
+// the organizations are on, which the connectivity chart requires for them,
+// and not otherwise; the Prometheus Operator's API with the observability
+// stack.
 func TestComponentAPIVersions(t *testing.T) {
 	for _, tc := range []struct {
 		name                 string
@@ -580,13 +581,14 @@ func TestComponentAPIVersions(t *testing.T) {
 		wantMAP, wantMonitor bool
 	}{
 		{"no switch on", false, false, false, false},
-		{"the tenants alone", true, false, true, false},
+		{"the organizations alone", true, false, true, false},
 		{"observability on", false, true, false, true},
-		{"tenants and observability on", true, true, true, true},
+		{"organizations and observability on", true, true, true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := config.Default()
-			cfg.Platform.Tenants.Enabled = tc.tenants
+			cfg.Platform.ChartVersion = config.OrganizationsChartFloor.String()
+			cfg.Platform.Organizations.Enabled = tc.tenants
 			cfg.Platform.Observability = tc.observ
 			got := componentAPIVersions(cfg)
 			if has := slices.Contains(got, mutatingAdmissionPolicyAPIVersion); has != tc.wantMAP {

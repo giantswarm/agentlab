@@ -126,7 +126,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		inGroup(groupTesting, polexTestCmd()),
 		inGroup(groupTesting, agentsTestCmd()),
 		inGroup(groupTesting, agentsGitOpsTestCmd()),
-		inGroup(groupTesting, tenantsTestCmd()),
+		inGroup(groupTesting, organizationsTestCmd()),
 		inGroup(groupTesting, toolsetsTestCmd()),
 		inGroup(groupTesting, signInTestCmd()),
 		inGroup(groupTesting, modelsTestCmd()),
@@ -1148,7 +1148,7 @@ func configureCmd() *cobra.Command {
 	var defaults, accessible bool
 	var platform, agents, observability, backstage, modelManager, vmManager, klausGateway, devctl, musterPodNetwork, alertmanager, installationsPage bool
 	var devctlVersion string
-	var serving, workspaces, workspacesCSICompanion, coding, tenants, github, githubSignIn, chatgptSubscription bool
+	var serving, workspaces, workspacesCSICompanion, coding, organizations, github, githubSignIn, chatgptSubscription bool
 	var chatgptSubscriptionModel string
 	var workspacesStorage string
 	var githubSignInClientID string
@@ -1339,8 +1339,8 @@ func configureCmd() *cobra.Command {
 			if cmd.Flags().Changed("coding-harnesses") {
 				cfg.Platform.Coding.Harnesses = codingHarnesses
 			}
-			if cmd.Flags().Changed("tenants") {
-				cfg.Platform.Tenants.Enabled = tenants
+			if cmd.Flags().Changed("organizations") {
+				cfg.Platform.Organizations.Enabled = organizations
 			}
 			if cmd.Flags().Changed("chatgpt-subscription") {
 				cfg.Platform.ChatGPTSubscription.Enabled = chatgptSubscription
@@ -1348,13 +1348,13 @@ func configureCmd() *cobra.Command {
 			if cmd.Flags().Changed("chatgpt-subscription-model") {
 				cfg.Platform.ChatGPTSubscription.Model = chatgptSubscriptionModel
 			}
-			if cmd.Flags().Changed("tenants") && tenants {
-				// tenants-test's tenant users, one per organization, in a
-				// group the lab binds nothing to (docs/identity.md); added
-				// when --tenants is given, so a user removed by hand stays
-				// removed.
+			if cmd.Flags().Changed("organizations") && organizations {
+				// organizations-test's members, one per organization, in a
+				// group the lab binds nothing to cluster-wide
+				// (docs/identity.md); added when --organizations is given,
+				// so a user removed by hand stays removed.
 				if added := cfg.EnsureTenantUsers(); len(added) > 0 {
-					fmt.Printf("  users      added %s for tenants-test (`agentlab reload` renders them into Dex)\n", strings.Join(added, ", "))
+					fmt.Printf("  users      added %s for organizations-test (`agentlab reload` renders them into Dex)\n", strings.Join(added, ", "))
 				}
 			}
 			if cmd.Flags().Changed("coding-images") {
@@ -1486,7 +1486,7 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().StringSliceVar(&githubSignInOrgs, "github-signin-orgs", nil, "GitHub sign-in: admit members of these GitHub organizations only, their teams as groups (`<org>:<team-slug>`); empty admits any GitHub account")
 	cmd.Flags().BoolVar(&workspaces, "workspaces", false, "workspace storage: a read-write-many StorageClass that serves git — an in-cluster NFS server, the NFS CSI driver behind an mTLS proxy only Agent Substrate's API server may reach, and the StorageClass "+lab.WorkspacesStorageClass+"; with --agents=false the storage and the workspace-manager run without Agent Substrate, the shape a later --agents switches on in place; --workspaces=false turns it off")
 	cmd.Flags().BoolVar(&coding, "coding", false, "coding agents: the chart's kagent.harnesses renders the coding Harnesses (claude, Claude Code run headless, unless --coding-harnesses names others), which `agentlab coding-test` proves (needs agents); --coding=false turns it off")
-	cmd.Flags().BoolVar(&tenants, "tenants", false, "the Organizations' namespaces as tenants: the chart's tenants.organizations.enabled turns on agent-manager's tenant reconciler for every namespace labelled giantswarm.io/organization, which `agentlab tenants-test` proves (needs agents and an agent-platform release before 4.175.0-rc.4); --tenants=false turns it off")
+	cmd.Flags().BoolVar(&organizations, "organizations", false, "Agent Platform organizations (on by default): the chart's agentPlatformOrganizations.enabled installs agent-platform-operator and the organizations' roles and admission policies, `up` keeps one default organization, and the people of `agentlab organizations-test` are added (alice and bob, one per organization); needs agents and agent-platform "+config.OrganizationsChartFloor.String()+" or newer; --organizations=false turns it off")
 	cmd.Flags().BoolVar(&chatgptSubscription, "chatgpt-subscription", false, "a person's own ChatGPT subscription as a codex model: the chart's kagent.modelConfigs entry "+config.ChatGPTSubscriptionModelConfig+" (chatgptOAuth, no apiKeySecret), from which it derives muster's provider App chatgpt (OpenAI's device-code sign-in) and kagent's provider chatgpt, muster's token encryption on, which `agentlab chatgpt-test` proves (needs the codex coding Harness and --workspaces); --chatgpt-subscription=false turns it off")
 	cmd.Flags().StringVar(&chatgptSubscriptionModel, "chatgpt-subscription-model", "", "the ChatGPT Codex backend's model of --chatgpt-subscription (default "+config.DefaultChatGPTSubscriptionModel+"); \"\" returns to the default")
 	cmd.Flags().StringSliceVar(&codingHarnesses, "coding-harnesses", nil, fmt.Sprintf("the coding Harnesses rendered with --coding, by runtime (%s; each named after its runtime; default claude alone); codex needs a kagent line whose chart takes runtime codex, omp one whose chart takes runtime byo and an image from --coding-images; \"\" returns to claude alone", strings.Join(config.CodingRuntimes, ", ")))
@@ -2037,27 +2037,24 @@ func agentsTestCmd() *cobra.Command {
 	}
 }
 
-func tenantsTestCmd() *cobra.Command {
-	var opts lab.TenantsTestOptions
+func organizationsTestCmd() *cobra.Command {
+	var opts lab.OrganizationsTestOptions
 	cmd := &cobra.Command{
-		Use:   "tenants-test [email email]",
-		Short: "Headless tenant proof (platform.tenants) over two organization namespaces, one person an editor in each (default the first two users outside platform-admins and the tenant groups) and one tenant user bound by group in each: only the always-kept objects before an agent -> the other organization's create refused, the first agent's copies -> the worker admitted, a turn on the namespace's own credentials -> the same in the second -> through the edge, each tenant user lists their organization's agents and the platform tenant's, the other organization's refused, a user writes nothing, an editor writes their organization only, all_creators refused -> in Slack, per-person rosters with tenant labels, the other organization's pick and a collaborator refused -> through the Dev Portal's routes, each tenant user's roster per tenant, the editor's create flow offering their organization only, the access reviews behind Edit and Delete, a refused session start, the creator, an empty roster -> the workers held against a cluster-admin -> the last delete removing the copies",
-		Args: func(cmd *cobra.Command, args []string) error {
-			if len(args) != 0 && len(args) != 2 {
-				return fmt.Errorf("tenants-test takes no email or two (one editor per organization), got %d", len(args))
-			}
-			return nil
-		},
+		Use:     "organizations-test",
+		Aliases: []string{"tenants-test"},
+		Short:   "Headless Agent Platform organizations proof (platform.organizations): two AgentPlatformOrganizations in the lab's root namespace, one member each (alice and bob, bound by group as editors): each creates and runs an agent in their own organization and every surface (the Kubernetes API, the kagent API through the edge, Slack; the Dev Portal skipped until backstage#3363) lists the same agents -> the negative cross-organization tests, each naming its surface and boundary: Kubernetes (agents, sessions, connectors, models, Secrets, HelmReleases), the kagent API and A2A, muster's listing, the other organization's model, in-cluster endpoints on 443 through the egress gateway -> the management-cluster profile: the object-count ResourceQuota, a Kyverno PolicyException for agents-* that does not lift the sandbox admission policies, the erasure of an Orphaned organization (skipped with its reason)",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadProofLab()
 			if err != nil {
 				return err
 			}
-			return lab.TenantsTest(cfg, args, opts)
+			return lab.OrganizationsTest(cfg, opts)
 		},
 	}
 	cmd.Flags().StringVar(&opts.GatewayImage, "gateway-image", "", "the klaus-gateway image the Slack steps run on the host network (on macOS the kind network, HACKS.md U35; default: the release the lab's meta chart runs as its klaus-gateway component); the steps need one with giantswarm/klaus-gateway#486, 4.10.0 or later")
 	cmd.Flags().StringVar(&opts.GatewayBinary, "gateway-binary", "", "a local klaus-gateway build to run instead of the image")
+	cmd.Flags().BoolVar(&opts.SkipSlack, "skip-slack", false, "leave out the Slack surface (klaus-gateway on the host): its lines read SKIP")
 	return cmd
 }
 

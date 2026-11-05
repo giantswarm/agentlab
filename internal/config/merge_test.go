@@ -62,7 +62,7 @@ func readFile(t *testing.T) string {
 }
 
 // `configure --defaults --chart-path <dir>` on an existing agentlab.yaml
-// changes the chart path line and nothing else: non-default tenants and
+// changes the chart path line and nothing else: non-default organizations and
 // portal values, the lab's own comments and its key order stay as they are.
 func TestSaveChangesOnlyTheChartPath(t *testing.T) {
 	t.Chdir(t.TempDir())
@@ -71,7 +71,7 @@ func TestSaveChangesOnlyTheChartPath(t *testing.T) {
 	cfg.Platform.ChartVersion = loadTestChart
 	oldPath, newPath := chartCheckout(t, "old"), chartCheckout(t, "new")
 	cfg.Platform.ChartPath = oldPath
-	cfg.Platform.Tenants.Enabled = true
+	cfg.Platform.Organizations.Enabled = false
 	cfg.Backstage.Portal = PortalClassic
 	if err := cfg.Save(); err != nil {
 		t.Fatal(err)
@@ -110,8 +110,8 @@ func TestSaveChangesOnlyTheChartPath(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !got.Platform.Tenants.Enabled || got.Backstage.Portal != PortalClassic || got.Platform.ChartPath != tc.path {
-				t.Fatalf("values lost: tenants=%v portal=%q chartPath=%q", got.Platform.Tenants.Enabled, got.Backstage.Portal, got.Platform.ChartPath)
+			if got.Platform.Organizations.Enabled || got.Backstage.Portal != PortalClassic || got.Platform.ChartPath != tc.path {
+				t.Fatalf("values lost: organizations=%v portal=%q chartPath=%q", got.Platform.Organizations.Enabled, got.Backstage.Portal, got.Platform.ChartPath)
 			}
 		})
 	}
@@ -122,7 +122,7 @@ func TestSaveChangesOnlyTheChartPath(t *testing.T) {
 func TestSaveAddsAbsentKeysOnly(t *testing.T) {
 	t.Chdir(t.TempDir())
 	// Indented by two, the backstage block first.
-	raw := "# my lab\nclusterName: lab # mine\nbackstage:\n  enabled: true\n  portal: classic\nplatform:\n  enabled: true\n  agents: true\n  chartVersion: " + loadTestChart + "\n  tenants:\n    enabled: true\n"
+	raw := "# my lab\nclusterName: lab # mine\nbackstage:\n  enabled: true\n  portal: classic\nplatform:\n  enabled: true\n  agents: true\n  chartVersion: " + loadTestChart + "\n  organizations:\n    enabled: false\n"
 	if err := os.WriteFile(File, []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestSaveAddsAbsentKeysOnly(t *testing.T) {
 	if removed, _ := changedLines(raw, after); len(removed) != 0 {
 		t.Fatalf("lines of the lab's file changed: %q in:\n%s", removed, after)
 	}
-	for _, want := range []string{"  enabled: true\n  port: 7007\n  portal: classic\n", "  tenants:\n    enabled: true\n", "dexPort: 32000\n"} {
+	for _, want := range []string{"  enabled: true\n  port: 7007\n  portal: classic\n", "  organizations:\n    enabled: false\n", "dexPort: 32000\n"} {
 		if !strings.Contains(after, want) {
 			t.Errorf("want %q in:\n%s", want, after)
 		}

@@ -388,31 +388,23 @@ func TestFeatureChartFloors(t *testing.T) {
 	}
 }
 
-// platform.tenants is refused on a released chart from the release that
-// removes tenants.organizations, kept below it, and not judged on a chart
-// directory; TenantsModeChart follows the same floor, a directory being the
-// current line.
-func TestTenantsOnTheChartLine(t *testing.T) {
+// The tenants mode (tenants.organizations) is the chart line before the
+// organizations' floor; a chart directory is the current line.
+func TestTenantsModeChart(t *testing.T) {
 	for _, tc := range []struct {
-		name, version, path  string
-		refused, tenantsMode bool
+		name, version, path string
+		tenantsMode         bool
 	}{
-		{name: "default release", version: DefaultChartVersion, refused: true},
-		{name: "the removal's release", version: "4.175.0-rc.4", refused: true},
+		{name: "default release", version: DefaultChartVersion},
+		{name: "the removal's release", version: "4.175.0-rc.4"},
 		{name: "before the removal", version: "4.175.0-rc.3", tenantsMode: true},
 		{name: "4.174", version: "4.174.3", tenantsMode: true},
 		{name: "chart directory", version: DefaultChartVersion, path: t.TempDir()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := Default()
-			cfg.Platform.Agents = true
-			cfg.Platform.Tenants.Enabled = true
 			cfg.Platform.ChartVersion = tc.version
 			cfg.Platform.ChartPath = tc.path
-			err := cfg.Validate()
-			if refused := err != nil && strings.Contains(err.Error(), "platform.tenants needs an agent-platform release before 4.175.0-rc.4"); refused != tc.refused {
-				t.Errorf("Validate() = %v, want refused %v", err, tc.refused)
-			}
 			if got := cfg.TenantsModeChart(); got != tc.tenantsMode {
 				t.Errorf("TenantsModeChart() = %v, want %v", got, tc.tenantsMode)
 			}

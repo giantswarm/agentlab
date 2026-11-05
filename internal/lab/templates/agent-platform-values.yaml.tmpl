@@ -427,13 +427,13 @@ muster:
     # token for muster carries already.
     writesAsCaller:
       kubernetesAudience: kubernetes
-{{- if .TenantsEnabled }}
-    # platform.tenants: muster also serves the MCPServers of the
-    # organization namespaces (org-…), each seen only by a person whom RBAC
-    # lets list mcpservers there (the agent-permissions plan, D9;
-    # docs/identity.md "MCP servers per tenant"). The chart binds that list in
-    # muster's namespace to every signed-in person
-    # (agent-platform:mcpserver-viewer).
+{{- if or .TenantsEnabled .OrganizationsEnabled }}
+    # platform.organizations: muster also serves the MCPServers of the
+    # organization namespaces, each seen only by a person whom RBAC lets
+    # list mcpservers there (the agent-permissions plan, D9; docs/identity.md
+    # "MCP servers per tenant"), which organizations-test's muster
+    # surface proves. The chart binds that list in muster's namespace to
+    # every signed-in person (agent-platform:mcpserver-viewer).
     mcpServersInAllNamespaces: true
 {{- end }}
     # muster's ServiceMonitor, PrometheusRule and Grafana dashboard: the chart
@@ -608,35 +608,47 @@ substrate:
         effect: NoSchedule
 {{- end }}
 {{- if .TenantsEnabled }}
-  # platform.tenants: the credential provider reads an organization
-  # namespace's Secrets only where a policy names it. Until the chart selects
-  # those namespaces by label (giantswarm/agent-platform#1041, Substrate
-  # 1.12), the lab lists tenants-test's two namespaces by hand: the chart's
-  # two entries, ate-golden also reading both, each namespace read by its own
-  # atespace only. Drop this list with #1041 (HACKS.md U33).
-  credentialProvider:
-    namespacePolicies:
-      - atespace: kagent
-        allowedNamespaces: [kagent]
-      - atespace: ate-golden
-        allowedNamespaces: [kagent{{ range .TenantsTestNamespaces }}, {{ . }}{{ end }}]
-{{- range .TenantsTestNamespaces }}
-      - atespace: {{ . }}
-        allowedNamespaces: [{{ . }}]
-{{- end }}
 
-# platform.tenants: the namespaces labelled giantswarm.io/organization are
-# tenants — agent-manager's tenant reconciler keeps what an agent needs in
-# each, and their agent workers are admitted (`agentlab tenants-test`).
+# The tenants mode of a chart before agent-platform 4.175.0 (agentlab
+# polex-test only, polextest.go): the namespaces labelled
+# giantswarm.io/organization are tenants, so the chart's tenant
+# PolicyExceptions render. A chart from 4.175.0 on refuses the key.
 tenants:
   organizations:
     enabled: true
+{{- end }}
+{{- if .OrganizationsEnabled }}
 
-# platform.tenants: a ModelConfig in an organization namespace must name the
-# LLM listener as its baseUrl (giantswarm/agent-platform#1082; from 4.151 the
-# chart refuses tenants.organizations.enabled without it), so the listener is
-# on: the chart's admission policies fill it into every tenant ModelConfig,
-# the reconciler's copy of the default one included. The platform tenant's
+# platform.organizations: Agent Platform organizations. The meta chart
+# installs agent-platform-operator, which reconciles each
+# AgentPlatformOrganization into a namespace of its own
+# (agents-<name>-<random>), and the connectivity chart renders the
+# organizations' roles and admission policies and selects those namespaces
+# by the label agent-platform.giantswarm.io/organization (the credential
+# provider's grants, the workers' admission, kagent's authorizer). `agentlab
+# up` keeps the default organization (organizations.go); `agentlab
+# organizations-test` is the proof. The operator's values are the chart's
+# derivation: the lab's in-cluster snapshot store gives it the bucket
+# (snapshots.bucket from kagent.harness.snapshotLocation below).
+agentPlatformOrganizations:
+  enabled: true
+
+# The operator's object-count ResourceQuota counts ServiceAccounts under the
+# bare key serviceaccounts, which is no standard quota resource: the API
+# server refuses the quota, and the operator, which writes it last, never
+# reports an organization Ready. The lab drops that key (null) and counts
+# them as count/serviceaccounts, the same 100 (HACKS.md U42).
+agent-platform-operator:
+  objectQuota:
+    serviceaccounts: null
+    count/serviceaccounts: "100"
+{{- end }}
+{{- if or .TenantsEnabled .OrganizationsEnabled }}
+
+# A ModelConfig in an organization namespace must name the LLM listener as
+# its baseUrl (the chart refuses agentPlatformOrganizations, and the earlier
+# tenants mode, without it), so the listener is on: the chart's admission
+# policies fill it into every organization ModelConfig. The platform's own
 # default ModelConfig keeps calling Anthropic directly.
 llmRouting:
   enabled: true
@@ -785,8 +797,9 @@ kagent:
     # caller as the API server's OIDC authenticator maps the same token: the
     # groups claim, and the oidc: the lab's API server puts before the
     # username and every group (kind-config.yaml.tmpl), where the chart's
-    # default is none; a chart without the authorizer ignores the keys. `agentlab tenants-test` proves it (docs/agents.md
-    # "Organizations as tenants").
+    # default is none; a chart without the authorizer ignores the keys.
+    # `agentlab organizations-test` proves it (docs/agents.md "The
+    # organizations proof").
     authorization:
       mode: kubernetes
       groupsClaim: groups
