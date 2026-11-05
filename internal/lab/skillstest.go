@@ -274,7 +274,7 @@ func SkillsTest(cfg *config.Config, email string, opts SkillsTestOptions) error 
 		note("%s", line)
 	}
 	if !facts.propagatesToken {
-		note("Harness %s does not set %s=true: muster would see the agent, not the person, on the turn's tool calls", kagentHarness, propagateIdentityEnv)
+		note("Harness %s does not set %s=true: the turn's tool calls reach muster as the person only through the actor start_session binds", kagentHarness, propagateIdentityEnv)
 	}
 
 	// The fixture goes in before the template and after it on every exit
@@ -380,8 +380,8 @@ func SkillsTest(cfg *config.Config, email string, opts SkillsTestOptions) error 
 	fmt.Println()
 	fmt.Printf("PASS: AgentTemplate %s with the git skill %s (%s @ %.12s%s) reached Ready on Harness %s in %s — the Go ADK fetched the skill during the golden boot under Substrate's egress gate (%s)\n",
 		skillsTestAgent, fixture.name(), fixture.Repo, fixture.Commit, fixture.credentialNote(), kagentHarness, boot.elapsed.Round(time.Second), facts.summary())
-	fmt.Printf("PASS: one turn through the edge as %s named the skill and answered %q from its text; the Harness re-emits the person's bearer on tool calls (%s=true), so muster attributes any tool call of the turn to %s\n",
-		user.Email, fixture.Expect, propagateIdentityEnv, user.Email)
+	fmt.Printf("PASS: one turn through the edge as %s, in a Session started through agent-manager's start_session, named the skill and answered %q from its text\n",
+		user.Email, fixture.Expect)
 	if golden != "" {
 		fmt.Printf("PASS: %s\n", golden)
 	}

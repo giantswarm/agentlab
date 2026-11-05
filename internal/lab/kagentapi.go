@@ -1413,14 +1413,19 @@ func agentSessionTurnOf(cfg *config.Config, agent *apiv1alpha1.ResourceReference
 		return "", "", err
 	}
 	defer api.close()
-	ctx, cancel := context.WithTimeout(context.Background(), kagentTurnTimeout)
-	defer cancel()
-	session, err := api.createSessionOf(ctx, agent, uuid.NewString())
+	ms, err := openMusterSession(cfg, token, "agentlab-turn")
 	if err != nil {
 		return "", "", err
 	}
-	defer api.removeSession(session.GetId())
-	note("Session %s of %s (creator %s, %s)", session.GetId(), name, session.GetCreator(), sessionState(session))
+	ctx, cancel := context.WithTimeout(context.Background(), kagentTurnTimeout)
+	defer cancel()
+	sessions := &sessionSet{api: api, manager: ms}
+	defer sessions.removeAll()
+	session, err := startSessionOf(ctx, ms, api, sessions, agent, uuid.NewString())
+	if err != nil {
+		return "", "", err
+	}
+	note("Session %s of %s through start_session (creator %s, %s)", session.GetId(), name, session.GetCreator(), sessionState(session))
 	t, err := api.turn(ctx, session, userMessage(prompt))
 	if err != nil {
 		return "", session.GetId(), fmt.Errorf("A2A turn on %s: %w", name, err)
