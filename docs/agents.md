@@ -350,8 +350,10 @@ the namespace's atespace from that namespace only. Then:
     `https://example.com`) probes that origin, the API server and
     Substrate's API on 443 from its actor; judged from the gateway's record,
     the declared origin is forwarded (the twin) and each in-cluster request
-    is refused by the gate for the actor's egress policy, or held before the
-    gateway with the probe's own line showing the failure.
+    is refused by the gate for the actor's egress policy, or held before any
+    connection opened: the probe's own line shows no HTTP status and a name
+    resolution or connection failure. An HTTP answer from the endpoint, a TLS
+    or certificate failure, or an ambiguous failure fails the check.
 - **The management-cluster profile.** The operator's ResourceQuota
   `agent-platform-organization-objects` admits ServiceAccounts up to its hard
   `count/serviceaccounts` and refuses the next; with a Kyverno PolicyException in

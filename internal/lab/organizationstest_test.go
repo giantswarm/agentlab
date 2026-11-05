@@ -3,6 +3,9 @@ package lab
 import (
 	"errors"
 	"maps"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -227,25 +230,37 @@ func TestOutsidePlatform(t *testing.T) {
 
 // An in-cluster target passes when the gate refused it for the actor's
 // egress policy, or when no request reached the gateway and the probe's own
-// line shows it failed; it fails when the gateway forwarded it, refused it
-// for another reason, the probe reached it around the gateway, or the probe
-// never reported it.
+// line shows the request never got a connection (no HTTP status, a name
+// resolution or connection failure). It fails when the gateway forwarded
+// it or refused it for another reason, when the endpoint answered the
+// actor directly (any HTTP status: 401, 403, 404), when the failure came
+// after a connection opened (a TLS or certificate error), when the failure
+// is ambiguous, and when the probe never reported it.
 func TestInClusterVerdict(t *testing.T) {
 	target := "https://" + kubernetesAPIHost + "/version"
 	request := func(status, reason, endpoint string) egressGatewayRecord {
 		return egressGatewayRecord{actor: "a", requests: []egressGatewayRequest{{host: kubernetesAPIHost, path: "/version", status: status, reason: reason, endpoint: endpoint}}}
 	}
+	none := egressGatewayRecord{actor: "a"}
 	for name, tc := range map[string]struct {
 		record egressGatewayRecord
 		line   string
 		want   string
 	}{
-		"refused by the gate":        {request(egressGateStatus, egressPolicyDenied, ""), "rc8 403 Forbidden", "refused by the gate"},
-		"held before the gateway":    {egressGatewayRecord{actor: "a"}, "rc4 bad address", "held before the gateway"},
-		"forwarded":                  {request("200", "", "10.96.0.1:443"), rcSuccess, ""},
-		"refused for another reason": {request("503", "upstream connect error", ""), "rc8", ""},
-		"reached around the gateway": {egressGatewayRecord{actor: "a"}, rcSuccess + " ", ""},
-		"the probe never ran":        {egressGatewayRecord{actor: "a"}, "", ""},
+		"refused by the gate":            {request(egressGateStatus, egressPolicyDenied, ""), "rc1 status=403 wget: server returned error: HTTP/1.1 403 Forbidden", "refused by the gate"},
+		"the name does not resolve":      {none, "rc1 status= wget: bad address 'kubernetes.default.svc'", "held before any connection"},
+		"the connection is refused":      {none, "rc4 status= Connecting to 10.96.0.1:443... failed: Connection refused.", "held before any connection"},
+		"forwarded":                      {request("200", "", "10.96.0.1:443"), "rc0 status=200", ""},
+		"refused for another reason":     {request("503", "upstream connect error", ""), "rc1 status=503", ""},
+		"answered 401 directly":          {none, "rc1 status=401 wget: server returned error: HTTP/1.1 401 Unauthorized", ""},
+		"answered 403 directly":          {none, "rc1 status=403 wget: server returned error: HTTP/1.1 403 Forbidden", ""},
+		"answered 404 directly":          {none, "rc8 status=404 ERROR 404: Not Found.", ""},
+		"a certificate failure":          {none, "rc5 status= ERROR: cannot verify kubernetes.default.svc's certificate", ""},
+		"a TLS failure":                  {none, "rc1 status= wget: TLS error from peer (alert code 42): bad certificate", ""},
+		"an ambiguous failure":           {none, "rc124 status= ", ""},
+		"reached around the gateway":     {none, rcSuccess + " status=200", ""},
+		"a line without the status part": {none, "rc4 bad address", ""},
+		"the probe never ran":            {none, "", ""},
 	} {
 		got, err := inClusterVerdict(tc.record, target, tc.line)
 		switch {
@@ -253,6 +268,50 @@ func TestInClusterVerdict(t *testing.T) {
 			t.Errorf("%s: passed: %q", name, got)
 		case tc.want != "" && (err != nil || !strings.Contains(got, tc.want)):
 			t.Errorf("%s: %q, %v; want %q", name, got, err, tc.want)
+		}
+	}
+}
+
+// The probe's own script, run against a stand-in wget, writes the lines the
+// judge reads: a request that never resolved is held, one the endpoint
+// answered or that failed its TLS handshake is not. The judge's parser and
+// the script's output stay one contract.
+func TestInClusterProbeScriptIsJudged(t *testing.T) {
+	bin := t.TempDir()
+	write := func(name, body string) {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n"+body), 0o700); err != nil { // #nosec G306 -- a test stand-in that must execute
+			t.Fatal(err)
+		}
+	}
+	// timeout <seconds> <command...>: run the command.
+	write("timeout", "shift\nexec \"$@\"\n")
+	targets := []string{"https://" + kubernetesAPIHost + "/version", "https://" + ateAPIHost + "/", "https://unreachable.svc/"}
+	// The stand-in answers by URL: the API server with a 401, Substrate's
+	// API with a certificate failure, the third never resolves.
+	write("wget", `for a in "$@"; do url=$a; done
+case $url in
+  *`+kubernetesAPIHost+`*) echo '  HTTP/1.1 401 Unauthorized' >&2; echo 'wget: server returned error: HTTP/1.1 401 Unauthorized' >&2; exit 1 ;;
+  *`+ateAPIHost+`*) echo 'wget: TLS error from peer (alert code 42): bad certificate' >&2; exit 1 ;;
+  *) echo "wget: bad address 'unreachable.svc'" >&2; exit 1 ;;
+esac
+`)
+	prompt := inClusterProbePrompt(targets)
+	_, script, ok := strings.Cut(prompt, "\n\n")
+	if !ok {
+		t.Fatalf("no script in the prompt: %q", prompt)
+	}
+	cmd := exec.Command("bash", "-c", script) // #nosec G204 -- the probe's own script against stand-ins
+	cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("the script: %v\n%s", err, out)
+	}
+	probe := parseCodingProbe(string(out))
+	none := egressGatewayRecord{actor: "a"}
+	for i, target := range targets {
+		_, err := inClusterVerdict(none, target, probe[inClusterProbeKey(i)])
+		if held := err == nil; held != (i == 2) {
+			t.Errorf("%s: held=%v (%v), the line %q", target, held, err, probe[inClusterProbeKey(i)])
 		}
 	}
 }

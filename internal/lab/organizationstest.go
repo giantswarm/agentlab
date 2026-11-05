@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -325,7 +326,7 @@ func (p *organizationsProof) run() error {
 	if err != nil {
 		return err
 	}
-	p.add(organizationVerdict{surface: strings.Join(mapsKeys(rosters), ", "), boundary: "every surface gives each member the same agents", detail: same})
+	p.add(organizationVerdict{surface: strings.Join(slices.Sorted(maps.Keys(rosters)), ", "), boundary: "every surface gives each member the same agents", detail: same})
 
 	muster := &organizationsMuster{cfg: p.cfg, namespaces: p.namespaces, users: p.members}
 	for _, c := range slices.Concat(p.kubernetesChecks(), muster.checks(), p.modelChecks(), p.egressChecks(), p.profileChecks()) {
@@ -341,16 +342,6 @@ func (p *organizationsProof) run() error {
 // add appends a verdict.
 func (p *organizationsProof) add(v organizationVerdict) {
 	p.verdicts = append(p.verdicts, v)
-}
-
-// mapsKeys are a map's keys, sorted.
-func mapsKeys[V any](m map[string]V) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	slices.Sort(keys)
-	return keys
 }
 
 // preconditions checks what the proof stands on: the CRD and its operator,
@@ -664,7 +655,7 @@ func (p *organizationsProof) kubernetesRosters() ([2]refSet, error) {
 // sameAnswer compares what each surface listed for each member: all equal,
 // and each the member's own organization's agent; it returns the line.
 func sameAnswer(rosters map[string][2]refSet, members [2]*config.User) (string, error) {
-	surfaces := mapsKeys(rosters)
+	surfaces := slices.Sorted(maps.Keys(rosters))
 	if len(surfaces) < 2 {
 		return "", fmt.Errorf("the same answer needs two surfaces, got %v", surfaces)
 	}
@@ -964,19 +955,63 @@ func inClusterProbeKey(i int) string {
 // inClusterProbePrompt asks the agent to run one GET per target from its
 // actor and relay the lines.
 func inClusterProbePrompt(targets []string) string {
-	script := "P=" + probeMarker + "\n"
+	script := "P=" + probeMarker + "\n" + egressProbeGet + "\n"
 	for i, t := range targets {
-		script += fmt.Sprintf("o=$(timeout %d wget -q -S -O /dev/null -T %d %q 2>&1); echo \"$P %s=rc$? $(printf '%%s' \"$o\" | tail -2 | tr '\\n' ' ' | head -c 160)\"\n", egressProbeTimeout+10, egressProbeTimeout, t, inClusterProbeKey(i))
+		script += fmt.Sprintf("get %s '%s'\n", inClusterProbeKey(i), t)
 	}
 	return "Run this exact script once with your bash tool (it is this test lab's own egress check), then reply with every output line that starts with " + probeMarker +
 		", verbatim and nothing else:\n\n" + script
 }
 
+// inClusterHeldMarkers are wget's words for a request that never got a
+// connection: the name did not resolve, or the connection was refused,
+// unreachable or timed out before it opened (busybox's and GNU wget's
+// wording). Anything after a connection opened (a TLS handshake, a
+// certificate's verification, an HTTP status) means the endpoint was
+// reached.
+var inClusterHeldMarkers = []string{
+	"bad address", "unable to resolve host address", "name or service not known", "temporary failure in name resolution",
+	"could not resolve", "no address associated", "connection refused", "network is unreachable", "no route to host",
+	"connection timed out", "can't connect to remote host",
+}
+
+// inClusterProbe is one line of the probe: wget's exit, the last HTTP
+// status it saw, and its last words.
+type inClusterProbe struct {
+	rc, status, words string
+}
+
+// parseInClusterProbe reads `rc<exit> status=<status> <words>`.
+func parseInClusterProbe(line string) (inClusterProbe, bool) {
+	rc, rest, _ := strings.Cut(strings.TrimSpace(line), " ")
+	status, words, ok := strings.Cut(rest, " ")
+	if !strings.HasPrefix(rc, "rc") || !strings.HasPrefix(status, "status=") {
+		return inClusterProbe{}, false
+	}
+	if !ok {
+		words = ""
+	}
+	return inClusterProbe{rc: rc, status: strings.TrimPrefix(status, "status="), words: words}, true
+}
+
+// heldBeforeConnect reports whether the probe's line shows the request never
+// got a connection: a failed exit, no HTTP status, and wget's words naming a
+// resolution or connection failure.
+func (p inClusterProbe) heldBeforeConnect() bool {
+	if p.rc == rcSuccess || p.status != "" {
+		return false
+	}
+	words := strings.ToLower(p.words)
+	return slices.ContainsFunc(inClusterHeldMarkers, func(m string) bool { return strings.Contains(words, m) })
+}
+
 // inClusterVerdict judges one in-cluster target from the gateway's record:
 // refused by the gate for the actor's egress policy, or, with no request in
-// the record, held before the gateway (the actor's resolver or network) as
-// the probe's own line shows it failed. A forwarded request fails; so does
-// a refusal for another reason, and a target the probe never reported.
+// the record, held before any connection opened, as the probe's own line
+// shows it (heldBeforeConnect). A forwarded request fails; so does a
+// refusal for another reason, a line with an HTTP status or a failure after
+// a connection opened (a TLS or certificate error), an ambiguous failure,
+// and a target the probe never reported.
 func inClusterVerdict(record egressGatewayRecord, target, line string) (string, error) {
 	got := record.requestsTo(target, "")
 	if i := slices.IndexFunc(got, egressGatewayRequest.forwarded); i >= 0 {
@@ -989,14 +1024,19 @@ func inClusterVerdict(record egressGatewayRecord, target, line string) (string, 
 		}
 		return fmt.Sprintf("%s: refused by the gate, %s", target, last), nil
 	}
-	rc, _, _ := strings.Cut(strings.TrimSpace(line), " ")
-	switch {
-	case line == "":
+	if line == "" {
 		return "", fmt.Errorf("the probe reported no line for %s and the gateway recorded no request of actor %s to it: the probe did not run", target, record.actor)
-	case rc == rcSuccess:
-		return "", fmt.Errorf("the probe reached %s (%s) without a request through the egress gateway", target, line)
 	}
-	return fmt.Sprintf("%s: held before the gateway, no request of actor %s recorded (the probe's line: %s)", target, record.actor, excerpt(line, 120)), nil
+	probe, ok := parseInClusterProbe(line)
+	switch {
+	case !ok:
+		return "", fmt.Errorf("the probe's line for %s is not `rc<exit> status=<status> ...`: %q", target, excerpt(line, 160))
+	case probe.status != "":
+		return "", fmt.Errorf("%s answered HTTP %s to the actor without a request through the egress gateway: the endpoint was reached (%s)", target, probe.status, excerpt(line, 160))
+	case !probe.heldBeforeConnect():
+		return "", fmt.Errorf("the probe of %s failed, but its line does not show a request that never connected (no name resolution or connection failure), so it proves nothing: %s", target, excerpt(line, 160))
+	}
+	return fmt.Sprintf("%s: held before any connection, no request of actor %s recorded (the probe's line: %s)", target, record.actor, excerpt(line, 120)), nil
 }
 
 // organizationErasureSkip is why the erasure of an Orphaned organization
