@@ -6,6 +6,18 @@ by `configure`; on a terminal, a missing file starts the form), `certs/` and
 `state/` — and talks to its kind cluster through the cluster's own exported
 kubeconfig, `state/kubeconfig`, never your shell's current-context.
 
+## OAuth consent proof
+
+`agentlab oauth-consent-test [email]` checks the default OAuth behavior through
+the public HTTPS edge for muster and mcp-kubernetes. It discovers their metadata,
+uses a public CIMD client, approves consent, exchanges the code with S256 PKCE,
+and reads Kubernetes namespaces both directly and through muster. It also checks
+denial, CSRF, replay, remembered grants and callback binding, then replaces both
+pods of each server while a login is pending and completes that login. Configure
+the two-replica muster pod-network topology before running this proof. Tokens,
+cookies and lab passwords stay out of its output. The registered external client
+callback is intercepted locally; no authorization code is sent to that client.
+
 ## Where things live
 
 agentlab keeps to the freedesktop folders, like every other program on the

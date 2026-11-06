@@ -362,11 +362,20 @@ components:
 
 # The connectivity chart's key for the mcp-kubernetes MCPServer CR (dropped
 # from the values the mcp-kubernetes chart itself receives): the audience
-# muster requests for the forwarded token. The chart default is
+# requested upstream for Kubernetes RBAC. The chart default is
 # dex-k8s-authenticator (Giant Swarm apiservers); the lab Dex lists
 # agent-platform under the kubernetes client's trustedPeers for this.
 mcp-kubernetes:
   kubernetesAudience: kubernetes
+  mcpKubernetes:
+    oauth:
+      baseURL: {{ .GatewayURL "mcp-kubernetes" }}
+      cimd:
+        privateIPHosts:
+          - muster.{{ .Platform.Domain }}
+      redirectURISecurity:
+        privateIPHosts:
+          - muster.{{ .Platform.Domain }}
 {{- if not .FamilylessChart }}
   # The lab's cluster as a member of muster's kubernetes family, the shape
   # every management cluster's mcp-kubernetes has: MCPServer

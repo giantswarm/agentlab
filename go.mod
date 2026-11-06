@@ -22,6 +22,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/smallstep/truststore v0.13.0
 	github.com/spf13/cobra v1.10.2
+	github.com/stretchr/testify v1.12.1
 	golang.org/x/crypto v0.58.0
 	golang.org/x/sys v0.49.0
 	golang.org/x/term v0.47.0

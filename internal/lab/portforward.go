@@ -44,7 +44,7 @@ func portForwardPod(ctx context.Context, ns, pod string, remotePort int) (int, f
 	go func() { done <- fw.ForwardPorts() }()
 	stopFn := sync.OnceFunc(func() {
 		close(stop)
-		<-done
+		<-done //nolint:errcheck // Closing the forward intentionally discards its terminal error.
 	})
 	select {
 	case <-ready:
