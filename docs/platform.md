@@ -868,8 +868,9 @@ giantswarm/agent-skills, the repository most of the fleet's skills come
 from — and the shared muster server as its tools, waits for `Ready` on the
 Harness (`--ready-timeout`, 10 min by default) and, on success, drives one
 turn through the edge as the signed-in user that names the skill and
-answers a fact only its `SKILL.md` has (the Harness re-emits the person's
-bearer on tool calls, `KAGENT_PROPAGATE_TOKEN`, which the proof asserts).
+answers a fact only its `SKILL.md` has (the Session is started through
+agent-manager's `start_session`, so its tool calls reach muster with the
+Session actor's JWT; the Harness does not forward the person's token).
 On a failed boot it prints the evidence — the Agent's conditions and
 warnings; Substrate's ActorTemplate, actor and pinned worker as the
 controller's `GetSubstrateSummary` and `ListSubstrateActors` report them; the controller's, atenet's
