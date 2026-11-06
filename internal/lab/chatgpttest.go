@@ -18,7 +18,7 @@ import (
 )
 
 // The ChatGPT subscription proof: codex on a person's own ChatGPT login
-// (platform.chatgptSubscription), from the chart's values, with a real login
+// (platform.chatgptSubscription), the lab's ModelConfig, with a real login
 // the person connects through muster's device-code sign-in. Every verdict on
 // the ChatGPT backend is read from Substrate's egress gateway's record of the
 // Session's actor (egressrecord.go), never from a reply.
@@ -162,7 +162,7 @@ func openChatGPTPerson(cfg *config.Config, user *config.User) (*chatgptPerson, e
 }
 
 func (p *chatgptProof) run() error {
-	p.stages.begin("values", "The ModelConfig %s from the chart's values: chatgptOAuth without apiKeySecret, Accepted, no login Secret; muster lists the provider App %s", config.ChatGPTSubscriptionModelConfig, chatgptProviderApp)
+	p.stages.begin("values", "The ModelConfig %s: chatgptOAuth without apiKeySecret, Accepted, no login Secret; muster lists the provider App %s", config.ChatGPTSubscriptionModelConfig, chatgptProviderApp)
 	if err := p.proveValues(); err != nil {
 		return err
 	}
@@ -216,13 +216,13 @@ func (p *chatgptProof) run() error {
 	return nil
 }
 
-// proveValues reads the chart's model and muster's App: the ModelConfig
+// proveValues reads the lab's model and muster's App: the ModelConfig
 // without a Secret of its own and Accepted, and the App in the person's
 // auth status.
 func (p *chatgptProof) proveValues() error {
 	model, err := readModelConfig(config.ChatGPTSubscriptionModelConfig)
 	if err != nil {
-		return fmt.Errorf("the chart's ModelConfig %s: %w", config.ChatGPTSubscriptionModelConfig, err)
+		return fmt.Errorf("the ModelConfig %s: %w", config.ChatGPTSubscriptionModelConfig, err)
 	}
 	if verdict := judgeChatGPTModel(model); verdict != "" {
 		return fmt.Errorf("ModelConfig %s: %s", config.ChatGPTSubscriptionModelConfig, verdict)
@@ -244,7 +244,7 @@ func (p *chatgptProof) proveValues() error {
 	return nil
 }
 
-// judgeChatGPTModel is the verdict on the chart's ModelConfig: what is wrong
+// judgeChatGPTModel is the verdict on the ChatGPT login's ModelConfig: what is wrong
 // with it, "" for a person's own login that kagent accepted.
 func judgeChatGPTModel(model *unstructured.Unstructured) string {
 	credential, _, _ := unstructured.NestedString(model.Object, crSpec, "openAI", "credentialType")
@@ -639,7 +639,7 @@ func chatgptSandboxPrompt() string {
 // Every reading is one plain line, without a shell function or a ${...}
 // expansion: the ChatGPT backend's model rewrites those when it carries the
 // script to its shell tool. The model key covers the codex runtime's keys and
-// the ChatGPT access token variable the chart's ModelConfig sets.
+// the ChatGPT access token variable the ChatGPT login's ModelConfig sets.
 func chatgptSandboxCommand(rt codingRuntime) string {
 	keys := strings.Join(append(slices.Clone(rt.modelKeys), chatgptAccessTokenEnv), " ")
 	m := probeMarker

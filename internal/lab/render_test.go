@@ -1535,19 +1535,24 @@ func workspaceManagerPatchEnv(t *testing.T, entry any) map[string]string {
 // kagentProviderAnthropic is the kagent.providers key of the lab's provider.
 const kagentProviderAnthropic = "anthropic"
 
-// withKagentChartDefault turns a render from the default model floor on into
-// the one below it: kagent.providers in place of the marked
-// kagent.modelConfigs[] entry and kagent.defaultModelConfig.
+// withKagentChartDefault turns a render of a chart that declares no model
+// into one below the default model floor: kagent.providers added, and a
+// marked kagent.modelConfigs[] entry and kagent.defaultModelConfig, which the
+// render must not carry, absent.
 func withKagentChartDefault(t *testing.T, values map[string]any, model string) {
 	t.Helper()
 	kagent := values["kagent"].(map[string]any)
-	delete(kagent, "defaultModelConfig")
+	for _, key := range []string{kagentProvidersKey, "defaultModelConfig"} {
+		if _, ok := kagent[key]; ok {
+			t.Fatalf("kagent.%s rendered on a chart that declares no model: %v", key, kagent[key])
+		}
+	}
 	entries, _ := kagent["modelConfigs"].([]any)
 	kept := slices.DeleteFunc(slices.Clone(entries), func(e any) bool {
 		return e.(map[string]any)[modelConfigDefaultField] == true
 	})
-	if len(kept) == len(entries) {
-		t.Fatalf("no marked kagent.modelConfigs entry in %v", entries)
+	if len(kept) != len(entries) {
+		t.Fatalf("a marked kagent.modelConfigs entry on a chart that declares no model: %v", entries)
 	}
 	if len(kept) == 0 {
 		delete(kagent, "modelConfigs")

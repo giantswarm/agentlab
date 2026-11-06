@@ -575,6 +575,9 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	if err != nil {
 		return err
 	}
+	if why := chatgptLoginUnwired(cfg, workspaceProviders); why != "" {
+		warn("%s", why)
+	}
 	workspaceGrant := workspaceGrantFor(cfg, workspaceProviders)
 	workspaceApps := workspaceProviderAppsFor(cfg, workspaceProviders)
 	signIns := workspaceApps
@@ -974,18 +977,21 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	if err := ensureDevctl(cfg); err != nil {
 		return err
 	}
-	// The agents' model key. The default ModelConfig (the marked
-	// kagent.modelConfigs entry, or on an older line the kagent chart's own
-	// from providers.anthropic; defaultmodel.go) references this secret; agent pods
-	// mount it at run time, so it can land after the install — which it must,
-	// since the chart itself creates the kagent namespace. The Secret always
-	// exists after this (anthropic.go: the recorded source, the host
-	// environment, else the placeholder), and the ModelConfig is waited for
-	// until it resolves it: an agent's Harness refuses every template on a
-	// reference it cannot resolve.
+	// The agents' model key. The default ModelConfig (defaultmodel.go)
+	// references this secret; agent pods mount it at run time, so it can land
+	// after the install — which it must, since the chart itself creates the
+	// kagent namespace and the ModelConfig CRD. The Secret always exists after
+	// this (anthropic.go: the recorded source, the host environment, else the
+	// placeholder). On a chart that declares no model the lab's own
+	// ModelConfigs follow it (platformmodels.go), before anything names them;
+	// then the default is waited for until it resolves the Secret: an agent's
+	// Harness refuses every template on a reference it cannot resolve.
 	if cfg.Platform.Agents {
 		step("Wiring the agents to Anthropic (ModelConfig %s, model %s)", renderedDefaultModelConfig(cfg), cfg.AIModel)
 		if _, err := ensureAnthropicSecret(cfg); err != nil {
+			return err
+		}
+		if err := ensurePlatformModels(cfg); err != nil {
 			return err
 		}
 		if err := waitDefaultModelConfigResolved(cfg); err != nil {

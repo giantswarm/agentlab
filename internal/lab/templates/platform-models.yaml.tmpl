@@ -1,0 +1,51 @@
+# The lab's own ModelConfigs on a chart that declares no model
+# (config.ModelObjectsChart; platformmodels.go), applied after the install,
+# which brings the ModelConfig CRD and the kagent namespace:
+# - the agents' default model, annotated the kagent namespace's default, on
+#   the lab's aiModel and the Secret anthropic.go places (never an inline key);
+# - with platform.chatgptSubscription, a person's own ChatGPT login: no
+#   apiKeySecret, so the chart wires muster's provider App chatgpt and
+#   kagent's installation provider chatgpt, and a codex turn on it runs on the
+#   login the Session's person connected in muster.
+# Neither carries a baseUrl: the chart's LLM routing policy sets the listener
+# on admission where it routes the provider, and keeps the ChatGPT login off it.
+{{- if .ModelObjects }}
+{{- with .DefaultModel }}
+---
+apiVersion: {{ $.ModelConfigAPIVersion }}
+kind: ModelConfig
+metadata:
+  name: {{ .Name }}
+  namespace: kagent
+  labels:
+    app.kubernetes.io/managed-by: agentlab
+  annotations:
+    agent-platform.giantswarm.io/is-default-model-config: "true"
+spec:
+  provider: Anthropic
+  model: {{ .Model }}
+  apiKeySecret: {{ .Secret }}
+  apiKeySecretKey: {{ .SecretKey }}
+  anthropic:
+    promptCaching: true
+    cacheTTL: "5m"
+{{- end }}
+{{- with .ChatGPTSubscription }}
+---
+apiVersion: {{ $.ModelConfigAPIVersion }}
+kind: ModelConfig
+metadata:
+  name: {{ .ModelConfig }}
+  namespace: kagent
+  labels:
+    app.kubernetes.io/managed-by: agentlab
+  annotations:
+    ui.giantswarm.io/display-name: ChatGPT (your subscription)
+spec:
+  provider: OpenAI
+  model: {{ .Model }}
+  openAI:
+    apiFormat: responses
+    credentialType: chatgptOAuth
+{{- end }}
+{{- end }}

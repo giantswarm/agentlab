@@ -79,8 +79,8 @@ func readModelConfig(name string) (*unstructured.Unstructured, error) {
 	return obj, nil
 }
 
-// managedByAgentlab labels the extra ModelConfigs so pruning can be scoped to
-// lab-owned CRs — the chart-rendered default ModelConfig is never touched.
+// managedByAgentlab labels the ModelConfigs the lab applies, so pruning can be
+// scoped to lab-owned CRs; the lab's own (platformModelNames) are never pruned.
 const managedByAgentlab = "app.kubernetes.io/managed-by=agentlab"
 
 // extraModelsTemplate renders the lab-owned ModelConfigs.
@@ -254,7 +254,7 @@ func pruneExtraModels(want []config.ExtraModel) error {
 	}
 	for _, mc := range existing {
 		name := mc.GetName()
-		if keep[name] {
+		if keep[name] || isPlatformModel(name) {
 			continue
 		}
 		note("pruning model config %s (removed from %s or gone from its host server)", name, config.File)

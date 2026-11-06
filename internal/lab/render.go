@@ -171,10 +171,13 @@ type tmplData struct {
 	// ChatGPTSubscription is a person's own ChatGPT login as a codex model
 	// (chatgptsubscription.go), nil with platform.chatgptSubscription off.
 	ChatGPTSubscription *chatgptSubscriptionValues
-	// DefaultModel is the kagent namespace's marked default model
+	// DefaultModel is the kagent namespace's default model
 	// (defaultmodel.go), nil below the default model floor or without the
 	// agents.
 	DefaultModel *defaultModelValues
+	// ModelObjects is config.ModelObjectsChart: the values carry no model
+	// key, and platform-models.yaml.tmpl renders the lab's own ModelConfigs.
+	ModelObjects bool
 	// PostRenderers is the lab's per-component `postRenderers` list as
 	// indented YAML, keyed by agent-platform component name
 	// (postrenderers.go): the hostNetwork, sidecar and nodePort patches plus
@@ -360,6 +363,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		CodingHarnesses:              codingHarnessesFor(cfg, workspaceAdmissionValuesFor(cfg, workspacesChart.Carries), nil),
 		ChatGPTSubscription:          chatgptSubscriptionValuesFor(cfg),
 		DefaultModel:                 defaultModelValuesFor(cfg),
+		ModelObjects:                 cfg.ModelObjectsChart(),
 		CertsDir:                     certsDir,
 		NodeFilesDir:                 nodeFiles,
 		MusterNodePort:               config.MusterNodePort,
@@ -541,6 +545,7 @@ var manifests = map[string]struct {
 	"oauth-fixture.yaml.tmpl":                {out: "oauth-fixture.yaml"},
 	"github-mcp.yaml.tmpl":                   {out: "github-mcp.yaml"},
 	"extra-models.yaml.tmpl":                 {out: "extra-models.yaml"},
+	platformModelsTemplate:                   {out: "platform-models.yaml"},
 	"coredns.yaml.tmpl":                      {out: "coredns.yaml"},
 	"gateway-nodeport.yaml.tmpl":             {out: "gateway-nodeport.yaml"},
 	"backstage-catalog.yaml.tmpl":            {out: "backstage-catalog.yaml"},
@@ -620,8 +625,11 @@ func RenderAll(cfg *config.Config) error {
 	extraModels := cfg.Platform.ExtraModels
 	for _, tmpl := range slices.Sorted(maps.Keys(manifests)) {
 		var mutate func(*tmplData)
-		if tmpl == extraModelsTemplate {
+		switch tmpl {
+		case extraModelsTemplate:
 			mutate = func(d *tmplData) { d.ExtraModels = extraModels }
+		case platformModelsTemplate:
+			mutate = platformModelsData
 		}
 		if _, _, err := renderManifestWith(cfg, tmpl, mutate); err != nil {
 			return err

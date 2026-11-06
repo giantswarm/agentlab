@@ -11,23 +11,36 @@ import (
 )
 
 // A person's own ChatGPT subscription as a codex model
-// (platform.chatgptSubscription): the lab renders the chart's
-// kagent.modelConfigs[] entry with credentialType chatgptOAuth and no
-// apiKeySecret, and the chart derives the rest from it — muster's provider
-// App chatgpt (OpenAI's device-code sign-in), kagent's installation provider
-// chatgpt (chatgpt.com, /backend-api/codex/, Bearer) and the ModelConfig
-// "ChatGPT (your subscription)". The lab adds what the chart refuses the
-// entry without: muster's token encryption (the key oauth-encryption-key is
-// in muster's OAuth Secret from the first boot) and component ranges at the
-// first releases that serve the entry, where the chart's own admit older
-// ones. Nothing is applied by hand; `agentlab chatgpt-test` is the proof.
+// (platform.chatgptSubscription): the ModelConfig "ChatGPT (your
+// subscription)" with credentialType chatgptOAuth and no apiKeySecret, beside
+// which the chart wires muster's provider App chatgpt (OpenAI's device-code
+// sign-in) and kagent's installation provider chatgpt (chatgpt.com,
+// /backend-api/codex/, Bearer). On a config.ModelObjectsChart the lab applies
+// the ModelConfig as an object (platformmodels.go) and the chart wires the
+// login wherever the platform carries it; on an older line the lab renders it
+// as a kagent.modelConfigs[] entry the chart derives the wiring from. The lab
+// renders what the chart wires no login without: muster's token encryption
+// (the key oauth-encryption-key is in muster's OAuth Secret from the first
+// boot) and component ranges at the first releases that serve it, where the
+// chart's own admit older ones. `agentlab chatgpt-test` is the proof.
 
-// chatgptSubscriptionValues is the values template's
-// platform.chatgptSubscription input: the model entry and the component
-// ranges the lab renders, by component.
+// chatgptSubscriptionValues is the templates' platform.chatgptSubscription
+// input: the model and the component ranges the lab renders, by component.
 type chatgptSubscriptionValues struct {
 	ModelConfig, Model string
 	Ranges             map[string]string
+}
+
+// chatgptLoginUnwired says why the chart wires no ChatGPT login for the lab's
+// ModelConfig, "" when it does or the switch is off. On a
+// config.ModelObjectsChart the chart wires it only where kagent's Session
+// admission is derived, which needs the workspace-manager's grant key, which
+// the lab names only beside a provider instance; it refuses nothing without.
+func chatgptLoginUnwired(cfg *config.Config, providers []workspaceProviderValues) string {
+	if !cfg.ChatGPTSubscriptionEnabled() || !cfg.ModelObjectsChart() || len(providers) > 0 {
+		return ""
+	}
+	return fmt.Sprintf("platform.chatgptSubscription: the workspace-manager has no provider instance, so the chart wires no ChatGPT login and a codex turn on %s finds none: give the workspace-manager the provider instance platform.workspaces.provider names (docs/workspaces.md)", config.ChatGPTSubscriptionModelConfig)
 }
 
 // ChatGPTRange is the range the values template renders for a component
@@ -47,7 +60,7 @@ type chatgptComponentFloor struct {
 	component, floor, override string
 }
 
-// The first kagent and muster releases that serve the entry, and the ranges
+// The first kagent and muster releases that serve the login, and the ranges
 // the lab renders from them.
 const (
 	kagentChatGPTFloor = "1.24.0"
@@ -56,8 +69,8 @@ const (
 	musterChatGPTRange = ">=5.51.0 <6.0.0"
 )
 
-// chatgptComponentFloors are the components the chart checks against the
-// entry (agent-platform.validateChatGPTPersonalLogin).
+// chatgptComponentFloors are the components whose ranges the chart checks
+// before it wires the login (agent-platform.chatgpt.personalLogin).
 var chatgptComponentFloors = []chatgptComponentFloor{
 	{component: componentKagent, floor: kagentChatGPTFloor, override: kagentChatGPTRange},
 	{component: componentKagentCRDs, floor: kagentChatGPTFloor, override: kagentChatGPTRange},
@@ -84,7 +97,7 @@ func chatgptSubscriptionValuesFor(cfg *config.Config) *chatgptSubscriptionValues
 
 // chatgptRangeOverrides are the ranges the lab renders over the chart's: a
 // component whose chart range floors below the first release that serves
-// the entry, or that the chart names no range of, gets its override.
+// the login, or that the chart names no range of, gets its override.
 func chatgptRangeOverrides(chart map[string]string) map[string]string {
 	overrides := map[string]string{}
 	for _, f := range chatgptComponentFloors {

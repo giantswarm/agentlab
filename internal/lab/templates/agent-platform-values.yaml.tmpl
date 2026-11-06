@@ -162,7 +162,8 @@ components:
 {{- with $.ChatGPTRange "muster" }}
     # The first muster with the ChatGPT provider App and up
     # (platform.chatgptSubscription; chatgptsubscription.go): the chart's own
-    # range admits older releases, and the chart refuses the model entry then.
+    # range admits older releases, and the chart wires no ChatGPT login on
+    # them.
     versionRange: "{{ . }}"
 {{- end }}
 {{- with $musterPatches }}
@@ -495,8 +496,7 @@ muster:
 {{- if .ChatGPTSubscription }}
         # Tokens encrypted at rest with the Secret's oauth-encryption-key:
         # the chart keeps a person's ChatGPT login (platform
-        # .chatgptSubscription) only encrypted and refuses the model entry
-        # without it.
+        # .chatgptSubscription) only encrypted and wires no login without it.
         encryptionKey: true
 {{- end }}
         # Lab only: lets Claude Code register itself over DCR without a
@@ -756,7 +756,10 @@ kagent:
       bundled:
         enabled: false
 {{- end }}
-{{- if .DefaultModel }}
+{{- if .ModelObjects }}
+  # No model key: the chart declares no model, and the lab applies its
+  # ModelConfigs as objects after the install (platform-models.yaml.tmpl).
+{{- else if .DefaultModel }}
   # The agents' default model is the marked kagent.modelConfigs[] entry
   # below, so the kagent chart renders no default-model-config of its own.
   defaultModelConfig:
@@ -895,7 +898,7 @@ kagent:
       snapshotLocation: {{ .SnapshotLocation }}
 {{- end }}
 {{- end }}
-{{- if or .DefaultModel .ChatGPTSubscription }}
+{{- if and (not .ModelObjects) (or .DefaultModel .ChatGPTSubscription) }}
   modelConfigs:
 {{- with .DefaultModel }}
     # The kagent namespace's default model (config.DefaultModelConfig): the
@@ -910,7 +913,6 @@ kagent:
       apiKeySecretKey: {{ .SecretKey }}
       default: true
 {{- end }}
-{{- end }}
 {{- with .ChatGPTSubscription }}
     # A person's own ChatGPT subscription (platform.chatgptSubscription;
     # chatgptsubscription.go): an entry with credentialType chatgptOAuth and
@@ -923,6 +925,7 @@ kagent:
       model: {{ .Model }}
       credentialType: chatgptOAuth
       apiFormat: responses
+{{- end }}
 {{- end }}
   # No OTLP gateway in kind; the exporters would only log dial errors.
   otel:

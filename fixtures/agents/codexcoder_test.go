@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strings"
 	"testing"
 
@@ -37,11 +36,20 @@ type codexCoderWorkspace struct {
 	} `json:"sources"`
 }
 
-// codexCoderValues is the agent-platform values overlay with the model.
-type codexCoderValues struct {
-	Kagent struct {
-		ModelConfigs []map[string]string `yaml:"modelConfigs"`
-	} `yaml:"kagent"`
+// codexCoderModelConfig is the agent's ModelConfig object.
+type codexCoderModelConfig struct {
+	APIVersion string `yaml:"apiVersion"`
+	Kind       string `yaml:"kind"`
+	Metadata   struct {
+		Name      string `yaml:"name"`
+		Namespace string `yaml:"namespace"`
+	} `yaml:"metadata"`
+	Spec struct {
+		Provider        string            `yaml:"provider"`
+		APIKeySecret    string            `yaml:"apiKeySecret"`
+		APIKeySecretKey string            `yaml:"apiKeySecretKey"`
+		OpenAI          map[string]string `yaml:"openAI"`
+	} `yaml:"spec"`
 }
 
 var dns1123 = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
@@ -57,7 +65,7 @@ func readFixture(t *testing.T, name string) []byte {
 
 // TestCodexCoderDefinition pins what agent-manager and the
 // workspace-manager would otherwise refuse at write time, and the model the
-// agent names to the values entry that renders it.
+// agent names to the ModelConfig object that declares it.
 func TestCodexCoderDefinition(t *testing.T) {
 	var agent codexCoderAgent
 	if err := json.Unmarshal(readFixture(t, "agent.json"), &agent); err != nil {
@@ -76,21 +84,25 @@ func TestCodexCoderDefinition(t *testing.T) {
 		t.Errorf("agent systemMessage is %d characters, want 1 to 20000", n)
 	}
 
-	var values codexCoderValues
-	if err := yaml.Unmarshal(readFixture(t, "values.yaml"), &values); err != nil {
-		t.Fatalf("values.yaml: %v", err)
+	var model codexCoderModelConfig
+	if err := yaml.Unmarshal(readFixture(t, "model-config.yaml"), &model); err != nil {
+		t.Fatalf("model-config.yaml: %v", err)
 	}
-	i := slices.IndexFunc(values.Kagent.ModelConfigs, func(m map[string]string) bool { return m["name"] == agent.ModelConfig })
-	if i < 0 {
-		t.Fatalf("values.yaml renders no ModelConfig %q, the one agent.json names", agent.ModelConfig)
+	if model.APIVersion != "api.kagent.dev/v1alpha3" || model.Kind != "ModelConfig" || model.Metadata.Namespace != "kagent" {
+		t.Errorf("model-config.yaml is %s %s in %q, want an api.kagent.dev/v1alpha3 ModelConfig in kagent", model.APIVersion, model.Kind, model.Metadata.Namespace)
 	}
-	model := values.Kagent.ModelConfigs[i]
-	for key, want := range map[string]string{"provider": "OpenAI", "credentialType": "chatgptOAuth", "apiFormat": "responses"} { // #nosec G101 -- the ModelConfig's field values, no credential
-		if model[key] != want {
-			t.Errorf("ModelConfig %s: %s %q, want %q (a codex model on a ChatGPT login)", agent.ModelConfig, key, model[key], want)
+	if model.Metadata.Name != agent.ModelConfig {
+		t.Fatalf("model-config.yaml declares ModelConfig %q, agent.json names %q", model.Metadata.Name, agent.ModelConfig)
+	}
+	if model.Spec.Provider != "OpenAI" {
+		t.Errorf("ModelConfig %s: provider %q, want OpenAI (a codex model on a ChatGPT login)", agent.ModelConfig, model.Spec.Provider)
+	}
+	for key, want := range map[string]string{"credentialType": "chatgptOAuth", "apiFormat": "responses"} { // #nosec G101 -- the ModelConfig's field values, no credential
+		if model.Spec.OpenAI[key] != want {
+			t.Errorf("ModelConfig %s: openAI.%s %q, want %q (a codex model on a ChatGPT login)", agent.ModelConfig, key, model.Spec.OpenAI[key], want)
 		}
 	}
-	if _, ok := model["apiKeySecretKey"]; ok || model["apiKeySecret"] == "" {
+	if model.Spec.APIKeySecretKey != "" || model.Spec.APIKeySecret == "" {
 		t.Errorf("ModelConfig %s: a ChatGPT login names its Secret in apiKeySecret and carries no apiKeySecretKey", agent.ModelConfig)
 	}
 

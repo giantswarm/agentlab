@@ -158,6 +158,7 @@ internal/lab/                    everything operational:
   toolsetstest*.go                 the toolset proof: muster, kagent, the portal
   agentmanager.go agentstest.go    the agent-manager MCPServer + the agents proof
   models.go hostmodels.go          ModelConfigs from extraModels (+ pruning); the host model servers' inventories
+  defaultmodel.go platformmodels.go  the agents' default model per chart line; the lab's own ModelConfig objects on a chart that declares no model
   backends.go                      one table per host model server: probe, inventory reader, bind fix, models-test expectations
   modelmanager.go modelstest.go    managed models: host preflight, install, the models proof
   anthropic.go                     the API key: host environment -> Secret, never config or state/

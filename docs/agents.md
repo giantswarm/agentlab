@@ -74,16 +74,21 @@ the control boot without the skill).
 
 Agents run against the **kagent namespace's default `ModelConfig`**: the one
 annotated `agent-platform.giantswarm.io/is-default-model-config: "true"`.
-The lab declares it as the `kagent.modelConfigs` entry `anthropic` marked
-`default: true`, on the lab's `aiModel` setting (`agentlab.yaml`, default
-`claude-sonnet-4-6`, the BOM's own default), and sets
-`kagent.defaultModelConfig.enabled: false`, so the kagent chart renders no
-`default-model-config` of its own. On an agent-platform release before
-4.175.0-rc.15 the lab renders `kagent.providers` instead, and the default is
-the kagent chart's `default-model-config`. Either way the ModelConfig
-references the Secret `kagent/kagent-anthropic` (key `ANTHROPIC_API_KEY`),
-and `agentlab platform` waits for the marked model to be Accepted, carry the
-annotation and resolve its Secret.
+The chart declares no model, so the lab declares it the way an installation
+does: `agentlab platform` applies the ModelConfig `anthropic` in `kagent`
+after the install, annotated the default, on the lab's `aiModel` setting
+(`agentlab.yaml`, default `claude-sonnet-4-6`, the BOM's own default) with
+prompt caching on (`anthropic.promptCaching: true`, `cacheTTL: "5m"`) and no
+`baseUrl`, which the chart's LLM routing policy sets on admission. The lab
+renders none of `kagent.providers`, `kagent.defaultModelConfig` and
+`kagent.modelConfigs`, which the chart refuses from agent-platform
+4.175.0-rc.22. On an older release the values carry the model: from
+4.175.0-rc.15 the `kagent.modelConfigs` entry `anthropic` marked
+`default: true` with `kagent.defaultModelConfig.enabled: false`, before it
+`kagent.providers` and the kagent chart's `default-model-config`. On every
+line the ModelConfig references the Secret `kagent/kagent-anthropic` (key
+`ANTHROPIC_API_KEY`), and `agentlab platform` waits for the default to be
+Accepted, carry the annotation and resolve its Secret.
 
 The proofs never assume the model's name. One that is given no
 `--model-config` asks agent-manager for the namespace's default
@@ -516,7 +521,7 @@ nothing applied by hand:
 
 | File | What |
 |---|---|
-| `values.yaml` | The agent-platform values for its model: the `kagent.modelConfigs` entry `openai-chatgpt-codex` (`credentialType: chatgptOAuth`, `apiFormat: responses`, the login Secret `kagent-chatgpt-login`). On an installation the same entry in its values; on the lab a `platform.valuesFiles` overlay on a chart that renders `credentialType`, or on any chart the `platform.extraModels` entry `chatgpt-login` with `credentialType: chatgptOAuth`, whose ModelConfig agentlab renders itself ([Extra model configs](models.md#extra-model-configs-self-hosted-openrouter-gemini-openai)) |
+| `model-config.yaml` | Its model, a ModelConfig object: `openai-chatgpt-codex` in `kagent` (`openAI.credentialType: chatgptOAuth`, `openAI.apiFormat: responses`, the login Secret `kagent-chatgpt-login`). An installation declares it next to its agents; on the lab the `platform.extraModels` entry `chatgpt-login` with `credentialType: chatgptOAuth` is the same model, whose ModelConfig agentlab renders itself ([Extra model configs](models.md#extra-model-configs-self-hosted-openrouter-gemini-openai)) |
 | `agent.json` | agent-manager's `create_agent` input: `codex-coder` on the Harness `codex` and that ModelConfig, the toolset `preset:read-only`, a system message for branch-per-change work in `/workspace` |
 | `workspace.json` | workspace-manager's `create_workspace` input: the workspace `giantswarm`, one source on the provider instance `github`, owner `giantswarm`, the public repositories by name. `organization` and the provider instance are the lab's (`lab`, `github`); an installation sets its own, and adds the private repositories it is meant to see with `update_workspace` |
 

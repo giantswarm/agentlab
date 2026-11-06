@@ -315,9 +315,9 @@ var servingChartFloor = semver.MustParse("4.44.0")
 var codingChartFloor = semver.MustParse("4.110.0")
 
 // chatgptSubscriptionChartFloor is the first agent-platform release that
-// wires a person's own ChatGPT login: a kagent.modelConfigs[] entry with
-// credentialType chatgptOAuth and no apiKeySecret derives muster's provider
-// App chatgpt and kagent's installation provider chatgpt.
+// wires a person's own ChatGPT login (muster's provider App chatgpt and
+// kagent's installation provider chatgpt) for a ModelConfig with
+// credentialType chatgptOAuth and no apiKeySecret.
 var chatgptSubscriptionChartFloor = semver.MustParse("4.164.0-0")
 
 // refusalNoticesChartFloor is the first agent-platform release that runs
@@ -387,12 +387,29 @@ func (c *Config) FamilylessChart() bool {
 // that default on list_model_configs (2.19, giantswarm/agent-platform#1288).
 var defaultModelChartFloor = semver.MustParse("4.175.0-rc.15")
 
-// DefaultModelChart reports whether the lab declares the agents' default
-// model as a marked kagent.modelConfigs[] entry: a released chart from
-// defaultModelChartFloor on, a chart directory, a branch build. Below it the
-// kagent chart renders default-model-config from kagent.providers.
+// DefaultModelChart reports whether the agents' default model is the lab's
+// own DefaultModelConfig, annotated the namespace's default: a released chart
+// from defaultModelChartFloor on, a chart directory, a branch build. Below it
+// the kagent chart renders default-model-config from kagent.providers.
 func (c *Config) DefaultModelChart() bool {
 	_, below := c.chartBelow(defaultModelChartFloor)
+	return !below
+}
+
+// modelObjectsChartFloor is the first agent-platform release that declares
+// no model: it refuses kagent.providers, kagent.defaultModelConfig and
+// kagent.modelConfigs, and an installation declares its ModelConfigs as
+// objects next to its agents (giantswarm/agent-platform#1295).
+var modelObjectsChartFloor = semver.MustParse("4.175.0-rc.22")
+
+// ModelObjectsChart reports whether the lab applies its models
+// (DefaultModelConfig, ChatGPTSubscriptionModelConfig) as ModelConfig objects
+// and renders none of the chart's model keys: a released chart from
+// modelObjectsChartFloor on, a chart directory, a branch build. Between
+// defaultModelChartFloor and it the lab renders them as kagent.modelConfigs[]
+// entries, the default marked `default: true`.
+func (c *Config) ModelObjectsChart() bool {
+	_, below := c.chartBelow(modelObjectsChartFloor)
 	return !below
 }
 
@@ -659,14 +676,14 @@ type Platform struct {
 	// by default; --coding turns it on; needs the agents runtime. `agentlab
 	// coding-test` is the proof.
 	Coding Coding `yaml:"coding"`
-	// A person's own ChatGPT subscription as a codex model: the chart's
-	// kagent.modelConfigs[] entry ChatGPTSubscriptionModelConfig with
-	// credentialType chatgptOAuth and no apiKeySecret, from which the chart
-	// derives muster's provider App chatgpt (OpenAI's device-code sign-in)
-	// and kagent's installation provider chatgpt; muster's token encryption
-	// on. Off by default; --chatgpt-subscription turns it on; needs the codex
-	// coding Harness and the workspaces (muster's credential provider and the
-	// Session admission). `agentlab chatgpt-test` is the proof.
+	// A person's own ChatGPT subscription as a codex model: the ModelConfig
+	// ChatGPTSubscriptionModelConfig with credentialType chatgptOAuth and no
+	// apiKeySecret, beside which the chart derives muster's provider App
+	// chatgpt (OpenAI's device-code sign-in) and kagent's installation
+	// provider chatgpt; muster's token encryption on. Off by default;
+	// --chatgpt-subscription turns it on; needs the codex coding Harness and
+	// the workspaces with a provider instance (muster's credential provider
+	// and the Session admission). `agentlab chatgpt-test` is the proof.
 	// Unset, the key is left out of the file: a lab with it off stays
 	// readable by a release before it.
 	ChatGPTSubscription ChatGPTSubscription `yaml:"chatgptSubscription,omitempty"`
@@ -712,7 +729,7 @@ type Coding struct {
 // ChatGPTSubscription configures a person's own ChatGPT login as a codex
 // model.
 type ChatGPTSubscription struct {
-	// On, `agentlab platform` renders the model entry and muster's token
+	// On, `agentlab platform` declares the model and renders muster's token
 	// encryption.
 	Enabled bool `yaml:"enabled"`
 	// Model is the ChatGPT Codex backend's model the entry runs; empty is
@@ -720,8 +737,8 @@ type ChatGPTSubscription struct {
 	Model string `yaml:"model,omitempty"`
 }
 
-// ChatGPTSubscriptionModelConfig is the ModelConfig the chart renders of a
-// person's own ChatGPT login, "ChatGPT (your subscription)" in the portal.
+// ChatGPTSubscriptionModelConfig is the ModelConfig of a person's own ChatGPT
+// login, "ChatGPT (your subscription)" in the portal.
 const ChatGPTSubscriptionModelConfig = "chatgpt-subscription"
 
 // DefaultChatGPTSubscriptionModel is the model of a person's own ChatGPT
@@ -1428,8 +1445,7 @@ type ExtraModel struct {
 	// reasoning off on Ollama's /v1 alias.
 	ReasoningEffort string `yaml:"reasoningEffort,omitempty"`
 	// OpenAI provider only: the ModelConfig's openAI.apiFormat, the HTTP API
-	// the model is called through — the key agent-platform-connectivity's
-	// kagent.modelConfigs[] entries carry. `responses` for a model a codex
+	// the model is called through. `responses` for a model a codex
 	// agent uses (the codex runtime speaks the Responses API only);
 	// `chatCompletions` is the CRD's default.
 	APIFormat string `yaml:"apiFormat,omitempty"`
@@ -2045,15 +2061,14 @@ func ValidateAIModel(s string) error {
 	return nil
 }
 
-// reservedModelNames collide with what the lab's agents default to: the
-// marked kagent.modelConfigs[] entry DefaultModelConfig, whose Secret
-// kagent-anthropic is the name an extra model's Secret would take, and
-// default-model-config, the kagent chart's own on a line below the default
-// model floor.
-var reservedModelNames = []string{KagentChartDefaultModelConfig, DefaultModelConfig}
+// reservedModelNames are the lab's own ModelConfigs: DefaultModelConfig,
+// whose Secret kagent-anthropic is the name an extra model's Secret would
+// take, ChatGPTSubscriptionModelConfig, and default-model-config, the kagent
+// chart's own on a line below the default model floor.
+var reservedModelNames = []string{KagentChartDefaultModelConfig, DefaultModelConfig, ChatGPTSubscriptionModelConfig}
 
-// DefaultModelConfig is the lab's marked kagent.modelConfigs[] entry, the
-// kagent namespace's default model on a DefaultModelChart.
+// DefaultModelConfig is the lab's default ModelConfig, the kagent
+// namespace's default model on a DefaultModelChart.
 const DefaultModelConfig = "anthropic"
 
 // KagentChartDefaultModelConfig is the ModelConfig the kagent chart renders
@@ -2067,7 +2082,7 @@ func ValidateModelName(s string) error {
 		return fmt.Errorf("lowercase alphanumeric and dashes only")
 	}
 	if slices.Contains(reservedModelNames, s) {
-		return fmt.Errorf("%q is reserved (the default ModelConfig and its Secret)", s)
+		return fmt.Errorf("%q is reserved (one of the lab's own ModelConfigs)", s)
 	}
 	return nil
 }
@@ -2801,7 +2816,7 @@ func (c *Config) validateChatGPTSubscription() error {
 		return fmt.Errorf("platform.chatgptSubscription.model %q is no model name", c.Platform.ChatGPTSubscription.Model)
 	}
 	if chart, below := c.chartBelow(chatgptSubscriptionChartFloor); below {
-		return fmt.Errorf("platform.chatgptSubscription needs agent-platform %s or newer (the person's ChatGPT login wired from kagent.modelConfigs); %s — `agentlab configure --chatgpt-subscription=false`", chatgptSubscriptionChartFloor, chart)
+		return fmt.Errorf("platform.chatgptSubscription needs agent-platform %s or newer (the person's ChatGPT login wired by the chart); %s — `agentlab configure --chatgpt-subscription=false`", chatgptSubscriptionChartFloor, chart)
 	}
 	return nil
 }

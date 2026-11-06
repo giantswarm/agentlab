@@ -83,10 +83,14 @@ with Dex doing the logins.
   reconciles the HelmRelease — nothing watches git, and the lab installs no
   Flux of its own. The kagent namespace's default ModelConfig is the one
   annotated `agent-platform.giantswarm.io/is-default-model-config: "true"`:
-  from agent-platform 4.175.0-rc.15 the lab's `kagent.modelConfigs` entry
-  `anthropic` marked `default: true`, with `kagent.defaultModelConfig.enabled:
-  false` (below that release, the kagent chart's `default-model-config` from
-  `kagent.providers`; defaultmodel.go). Proofs never hard-code a model name:
+  the chart declares no model from agent-platform 4.175.0-rc.22 (it refuses
+  `kagent.providers`, `kagent.defaultModelConfig`, `kagent.modelConfigs`), so
+  `platform` applies the lab's ModelConfig `anthropic` as an object after the
+  install, and `chatgpt-subscription` with `platform.chatgptSubscription`
+  (platformmodels.go); from 4.175.0-rc.15 the values carry them as
+  `kagent.modelConfigs` entries, the default marked `default: true`, below it
+  the kagent chart's `default-model-config` from `kagent.providers`
+  (defaultmodel.go). Proofs never hard-code a model name:
   without `--model-config` they take the entry agent-manager's
   `list_model_configs` reports `default: true` (`agentManagerModelConfig`),
   which agent-manager does from 2.19, the chart's own range from that
@@ -270,7 +274,7 @@ agentlab coding-test --part devctl  # platform.devctl: a coding agent opens a pu
 agentlab coding-test --part toolchains  # agent-manager's toolchains: start_session with --toolchains (default go) mounts them pinned by digest; a turn finds each tool under /opt/kagent/tools/<name> on its PATH, with go builds a fixture module; the actor template mounts those digests; --other-version go@0.1.0 adds a second Session at that version and a resume of the first (--harness claude|codex)
 agentlab egress-test     # an agent with one declared origin, probed from its actor and judged from the egress gateway's record, never the reply: the origin forwarded, an undeclared host 403 (actor egress policy denied), muster forwarded without an entry, raw TCP to github.com:22 held at the gate
 agentlab signin-test     # an MCP URL elicitation (muster's sign-in link) per Harness (kagent, claude, codex, omp): the turn paused at input-required, a decline completes it without the call, an accept after the sign-in runs the call in the same task
-agentlab chatgpt-test    # platform.chatgptSubscription: codex on a person's own ChatGPT login from the chart's values (--connect: OpenAI's device code), judged from the egress gateway's record: the turn on the login, placeholders in the sandbox, a second person and a non-codex agent refused, the disconnect
+agentlab chatgpt-test    # platform.chatgptSubscription: codex on a person's own ChatGPT login, the lab's ModelConfig chatgpt-subscription (--connect: OpenAI's device code), judged from the egress gateway's record: the turn on the login, placeholders in the sandbox, a second person and a non-codex agent refused, the disconnect
 agentlab skills-test     # kagent API v2: an AgentTemplate with a git-pinned skill boots (the golden boot) and answers from the skill
 agentlab substrate-step-test --to <release>  # a suspended conversation and its /data file survive the step to a newer Substrate; a new one starts from a golden in the layout it writes (taken again on a layout change, kept otherwise)
 agentlab kagent-step-test --to <kagent> | --chart <agent-platform>  # a suspended conversation and a file on its durable volume survive: it resumes, takes a turn reading both back, suspends and deletes across a kagent step (a kagent pin, a platform candidate — chart-only included — or both)
