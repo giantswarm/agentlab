@@ -830,7 +830,7 @@ organization becomes Ready, and `up` fails at the default organization.
 `count/serviceaccounts` and the chart pins that release: the override then
 goes.
 
-### U43. `agent-platform-values.yaml.tmpl`: muster accepts the klaus-gateway component's CIMD client on a private address — ACCEPTED
+### U43. `agent-platform-values.yaml.tmpl`: muster accepts the klaus-gateway component's CIMD client on a private address — BLOCKED UPSTREAM
 The component signs people in to muster as a public client whose `client_id`
 is its Client ID Metadata Document on `agentgateway.<domain>` and whose
 redirect URI is on the same host. In-cluster that hostname resolves to the
@@ -843,8 +843,14 @@ hostname resolves to private IP address`). **Fix in the lab:** with
 CIMD fetch verifies the edge with the lab CA of `extraCaFile`) and set
 `oauth.server.allowPrivateIPRedirectURIs: true`, which muster has only as a
 switch for every host. Both are muster's own settings for an installation
-whose hostnames resolve to an internal load balancer; no upstream change is
-owed. `klaus-gateway-test --part refresh` completes a real sign-in through
+whose hostnames resolve to an internal load balancer. The host-scoped list is
+the end state; the global redirect switch is what stays a hack: every
+client's redirect URI loses the DNS-rebinding guard in the lab. **Unblocked
+by** a host-scoped redirect allowance, `AllowPrivateIPRedirectURIHosts` in
+mcp-oauth (giantswarm/mcp-oauth#669) exposed as
+`oauth.server.allowPrivateIPRedirectURIHosts` in muster
+(giantswarm/muster#1787); the lab then lists `agentgateway.<domain>` there
+and drops `allowPrivateIPRedirectURIs`. `klaus-gateway-test --part refresh` completes a real sign-in through
 them. The OAuth fixture's pin (U18) is unchanged: muster's own CIMD host is not
 listed.
 
