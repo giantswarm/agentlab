@@ -252,8 +252,9 @@ the connectivity chart renders the organizations' roles
 (`agent-platform:organizations-admin`, `admin`, `editor`, `user`) and their
 admission policies, and selects the organization namespaces by the label
 `agent-platform.giantswarm.io/organization` (Substrate's credential provider,
-the workers' admission, kagent's authorizer, muster with
-`mcpServersInAllNamespaces`). It takes effect with the agents runtime on a
+the workers' admission, kagent's authorizer). muster serves those
+namespaces' `MCPServer`s only once the chart sets its
+`mcpServerNamespaceSelector` ([MCP servers per tenant](identity.md#mcp-servers-per-tenant)). It takes effect with the agents runtime on a
 chart from agent-platform 4.175.0-rc.4 on (`config.OrganizationsChartFloor`), the default chart included;
 below it, `up` says so and leaves the chart's earlier shape alone. The
 tenants mode the chart removed (`platform.tenants`, agent-manager's tenant
