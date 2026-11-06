@@ -214,10 +214,12 @@ with Dex doing the logins.
   `platform.devImages.klaus-gateway` swaps a build in. The proof's component
   half: the Role scoped to the link Secret, two links seeded through
   `pkg/auth/musterlink`, the pod deleted and its replacement Ready with the
-  same links, a Slack turn through the pod. A real OBO sign-in is out of reach
-  here (docs/klaus-gateway.md): the proof links the person with a record
-  carrying the lab user's own Dex id_token — never "fix" that with a fake
-  muster identity.
+  same links, a Slack turn through the pod. That part links the person with a
+  record carrying the lab user's own Dex id_token — never "fix" that with a
+  fake muster identity. `--part refresh` is the one real OBO sign-in: muster's
+  values let the component's CIMD host and its redirect URI resolve to the
+  edge's cluster IP (HACKS.md U43), and the part proves two replicas refreshing
+  one link at once keep the person signed in.
 - For verifying RBAC as a specific user, use `agentlab login <email>` and
   `kubectl --kubeconfig kubeconfig.oidc` — that is the OIDC path.
 - The cluster's admin kubeconfig (`state/kubeconfig`, context `kind-agentlab`)
@@ -260,6 +262,7 @@ agentlab serving-test    # platform.serving: llm-d controller + models Gateway u
 agentlab vm-manager-test # the vm-manager pod as the person: 401 anonymous -> tools via muster -> create_vm -> ready -> attestation -> delete_vm
 agentlab klaus-gateway-test # Swarmgeist on the host against the edge, and with platform.klausGateway the in-cluster component: the OBO link store in a Secret across a pod loss
 agentlab klaus-gateway-test --part signin  # a sign-in a turn needs, decided from Slack (Not now, a typed no, stop, the sign-in's landing resuming with accept) and the portal's answer route; an answer to a request the other surface already answered is refused on both
+agentlab klaus-gateway-test --part refresh  # a real Slack sign-in through muster, then two replicas refreshing the same link at once: the person stays signed in and muster logs no refresh token reuse
 agentlab decisions-test  # klaus-gateway's POST /decisions as a ServiceAccount: answered by click, modal and thread reply, each a muster tool call as the user; a refusal, a close as defaulted
 agentlab beekeeper-decisions-test  # beekeeper serve behind muster puts decisions to people through klaus-gateway: a click (another user's refused), a thread reply, a default at the due time, a withdrawal; the guide conversing with its person in a direct message
 agentlab beekeeper-central-test --part notes  # beekeeper's central notes through two lab users' CLIs: note add --for the other, listed and answered on the other's machine, the answer printed once by the filer's watch across a restart; a withdrawal only its filer may make; a fold into and a park on a central note, the park settled with the answer once

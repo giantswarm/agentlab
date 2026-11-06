@@ -51,11 +51,10 @@ import (
 //     and it talks to the controller over the in-cluster plaintext h2c
 //     target, which the host-mode gateway never touches.
 //
-// Not provable here, and stated in docs/klaus-gateway.md: a real OBO sign-in
-// and a link's refresh at muster. The linker's callback checks the muster
-// identity's e-mail against the Slack workspace's, and muster refuses a CIMD
-// client_id on a private-IP hostname, so no sign-in completes and no muster
-// refresh token exists for the gateway to spend.
+// The person's link here carries the lab user's Dex id_token and a
+// placeholder refresh token, so no step of this half refreshes at muster: a
+// real sign-in and refreshes at muster across two replicas are the refresh
+// part's (klausgatewaytest_refresh.go).
 
 // The Slack user ids of the proof's link records (the keys of the link
 // Secret; the values are sealed) carry slackUserPrefix, so a leftover of an

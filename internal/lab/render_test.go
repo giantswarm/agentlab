@@ -1135,6 +1135,12 @@ func TestPlatformValuesKlausGateway(t *testing.T) {
 	if off("components", klausGatewayComponent) != nil || off(block) != nil {
 		t.Fatalf("off by default: components.klaus-gateway=%v klausGateway=%v", off("components", klausGatewayComponent), off(block))
 	}
+	if got := off("muster", "muster", "oauth", "server", "allowPrivateIPClientMetadataHosts"); got != nil {
+		t.Errorf("off, muster lists no private CIMD host: %v", got)
+	}
+	if got := off("muster", "muster", "oauth", "server", "allowPrivateIPRedirectURIs"); got != nil {
+		t.Errorf("off, muster keeps its private redirect URI guard: %v", got)
+	}
 
 	cfg := config.Default()
 	cfg.Platform.KlausGateway.Enabled = true
@@ -1174,6 +1180,15 @@ func TestPlatformValuesKlausGateway(t *testing.T) {
 	}
 	if at(block, "web") != nil {
 		t.Errorf("the Slack-only gateway's closed schema has no web key: %v", at(block, "web"))
+	}
+	// muster's OAuth server accepts the component as a CIMD client on the
+	// edge's in-cluster address: the one host, and private redirect URIs.
+	hosts, _ := at("muster", "muster", "oauth", "server", "allowPrivateIPClientMetadataHosts").([]any)
+	if want := "agentgateway." + cfg.Platform.Domain; len(hosts) != 1 || hosts[0] != want {
+		t.Errorf("muster.muster.oauth.server.allowPrivateIPClientMetadataHosts = %v, want [%s]", hosts, want)
+	}
+	if got := at("muster", "muster", "oauth", "server", "allowPrivateIPRedirectURIs"); got != true {
+		t.Errorf("muster.muster.oauth.server.allowPrivateIPRedirectURIs = %v, want true", got)
 	}
 	if at(block, "agentgatewayRoute") != nil {
 		t.Errorf("the edge route for the channels stays the meta chart's default (off): %v", at(block, "agentgatewayRoute"))

@@ -80,6 +80,16 @@ platform:
   build`, or `CGO_ENABLED=0 go build`; the releases are), or name one with
   `--slack-fake-binary`. A probe pod fetches the fake through the Service
   before anything else runs.
+- **muster accepts the component as an OAuth client.** The component signs
+  people in to muster as a public client identified by its Client ID
+  Metadata Document, `https://agentgateway.<domain>/auth/slack/client.json`,
+  with the redirect URI `https://agentgateway.<domain>/auth/slack/callback`.
+  In-cluster that hostname resolves to the edge's cluster IP, which muster's
+  SSRF guards refuse by default, so the lab sets
+  `muster.oauth.server.allowPrivateIPClientMetadataHosts` to that one
+  hostname and `allowPrivateIPRedirectURIs: true` (HACKS.md U43, muster
+  5.35.0 and later). muster fetches the document through the edge and
+  verifies it with the lab CA it already trusts (`extraCaFile`).
 - **What the chart renders** with `obo.store: secret`: Deployment
   `klaus-gateway` (`KLAUS_GATEWAY_OBO_STORE=secret`, no store volume, the
   default RollingUpdate strategy — a mounted ReadWriteOnce claim is what used
@@ -244,27 +254,74 @@ The stages run on `--harness` (default the platform Harness; `omp` and
 `claude` as the lab renders them) on the Anthropic default model; codex needs
 a Responses model through `--model-config`.
 
+## The refresh race
+
+`agentlab klaus-gateway-test --part refresh` proves that two replicas of the
+component sharing the Secret link store never sign a person out when both
+refresh that person's link at the same time (giantswarm/klaus-gateway#568).
+muster rotates the refresh token on every refresh, and a rotated token
+presented again is a replay to it: it revokes the token's whole family, the
+token it has just issued included. The gateway's refresh lease, written
+into the stored link, lets one process present the token while the other
+waits for the rotated link and adopts it. The part runs on the component
+alone (no host gateway, no fixture, no model) and needs
+`platform.klausGateway` with muster's client allowances above (run
+`agentlab platform` with this agentlab first).
+
+1. **A real sign-in.** For a new Slack user under the `UAGENTLABTEST`
+   prefix (a leftover of an aborted run removed first, by that prefix),
+   `@bot login` through a port-forward to the component's pod gets the Sign
+   in button. Its `/auth/slack/link` URL is followed headlessly: the
+   component, muster's authorize, the Dex login form as the lab user, muster,
+   and the component's `/auth/slack/callback`, which must end on its `?done=`
+   landing. The link Secret must then hold the person's record, read through
+   `pkg/auth/musterlink` with the lab's `store-key`, linked to the lab user's
+   e-mail with a refresh token muster issued (never printed).
+2. **Two replicas.** Deployment `klaus-gateway` is scaled to 2 replicas and
+   both pods must be Ready within 3 minutes. The original replica count is
+   restored on every exit path; the HelmRelease has no drift detection, so
+   the scale holds until then.
+3. **The rounds.** Five times: the person's record is rewritten through the
+   package with its cached id_token expired (the refresh token and the rest
+   kept), the part waits 40 s so both pods' process-local copies of the link
+   (30 s) are read from the store again, then `@bot login` goes to both pods
+   at the same instant, each through its own port-forward, each in a new
+   thread. login probes the link with `TokenFor`, so both pods find an
+   expired token and refresh. Each pod must answer "Signed in" within 2
+   minutes (not the Sign in button, not "could not be refreshed"), and the
+   record must hold a rotated refresh token and an id_token that has not
+   expired. A round whose token did not rotate fails too: nothing raced. A
+   failed round names each pod's answer and the gateway's failed
+   `token_refresh` records for the person.
+4. **muster's log.** muster's log since the part started must carry no
+   refresh token reuse (`Refresh token reuse detected`,
+   `refresh_token_reuse_detected`, `revoked_token_family_reuse_attempt`,
+   `Attempted use of revoked token family`), and a last `@bot login` must
+   still answer "Signed in".
+
+Then the person's record is removed (the Secret's count is back where it
+was) and the Deployment is back at its replicas.
+
+On a klaus-gateway without the refresh lease (before
+giantswarm/klaus-gateway#568) the part is expected to fail in its first
+round: both pods present the same refresh token, muster revokes the family,
+and at least one pod answers with the Sign in button. That failure is the
+bug the part exists to show; there is no version gate.
+
 ## What the lab cannot prove
 
-**A real OBO sign-in, and a link's refresh.** muster refuses a CIMD
-`client_id` on a private-IP hostname (`*.127.0.0.1.nip.io`), so the
-gateway's `/auth/slack/link` flow can be started but never completes here,
-and no muster refresh token exists for the gateway to spend. The proof links
-the person the way a sign-in leaves them linked — a record in the link store,
-written through the gateway's own package, whose cached id_token is the lab
-user's Dex id_token and whose expiry is that token's `exp` — and the gateway
-forwards it unmodified: `TokenFor` serves a cached, unexpired id_token
-without calling muster, the path a linked person's turn takes between
-refreshes. The proof requires the token to have an hour left at the start
-(the gateway's refresher would spend the placeholder refresh token five
-minutes before the expiry) and fails on any `token_refresh` record. The
-refresh itself (muster's token endpoint, the rotation, `invalid_grant`
-dropping the link) is the gateway's unit tests' and an installation's; that
-a linked person is not asked to sign in again after a pod loss is an
-installation proof too. Should a lab sign-in ever matter, the way is a
-registered client instead of CIMD: a DCR client at muster's
-`POST /oauth/register`, `KLAUS_GATEWAY_OBO_CLIENT_ID` on the gateway, and the
-lab CA through `SSL_CERT_FILE` — none of it wired here.
+**A refresh in the main proof.** Steps 7 to 9 link the person the way a
+sign-in leaves them linked (a record in the link store, written through the
+gateway's own package, whose cached id_token is the lab user's Dex id_token
+and whose expiry is that token's `exp`), and the gateway forwards it
+unmodified: `TokenFor` serves a cached, unexpired id_token without calling
+muster, the path a linked person's turn takes between refreshes. The proof
+requires the token to have an hour left at the start (the gateway's
+refresher would spend the placeholder refresh token five minutes before the
+expiry) and fails on any `token_refresh` record. A real sign-in and
+refreshes at muster are [the refresh race](#the-refresh-race)'s; that a
+linked person is not asked to sign in again after a pod loss stays an
+installation proof.
 
 **Slack itself**: the fake answers what the gateway asks (`auth.test`,
 `users.info`, `{"ok":true,"ts":…}` for the rest) and renders nothing, so how

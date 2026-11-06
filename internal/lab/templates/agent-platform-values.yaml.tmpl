@@ -503,6 +503,18 @@ muster:
         # pre-shared registration token (its loopback port is random, so no
         # other registration gate can be opened for it).
         allowPublicClientRegistration: true
+{{- if .KlausGatewayEnabled }}
+        # Lab only (HACKS.md U43): the klaus-gateway component signs people in
+        # as a CIMD client whose client_id and redirect URI live on
+        # {{ .KlausGateway.OBOHost }}, which resolves to the edge's cluster IP
+        # in-cluster. That one host may resolve to a private address for its
+        # CIMD document (fetched with the lab CA of extraCaFile), and redirect
+        # URIs may, so `klaus-gateway-test --part refresh` completes a real
+        # sign-in.
+        allowPrivateIPClientMetadataHosts:
+          - "{{ .KlausGateway.OBOHost }}"
+        allowPrivateIPRedirectURIs: true
+{{- end }}
         # Lab only: accept Dex id_tokens as bearer tokens so the stack can be
         # smoke-tested headlessly with the password grant (aud
         # agent-platform), and so Backstage-forwarded tokens (aud
