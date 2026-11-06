@@ -1,6 +1,6 @@
 # The fleet's flux-multi-tenancy admission, verbatim from
-# giantswarm/management-cluster-bases at 4ab756dbb293 (2026-09-16):
-#   bases/flux-app-v2/common/resource-kyverno-policies.yaml   (the ClusterPolicy, last changed in 8717d97)
+# giantswarm/management-cluster-bases at 1d7a7e0d8e00 (2026-11-06):
+#   bases/flux-app-v2/common/resource-kyverno-policies.yaml   (the ClusterPolicy, last changed in 1d7a7e0)
 #   bases/flux-app-v2/common/resource-kyverno-clusterrole.yaml (the aggregated ClusterRole its rules read with)
 #
 # Every Giant Swarm management cluster enforces this ClusterPolicy (delivered
@@ -173,23 +173,6 @@ spec:
         - list: "request.object.spec.resources"
           pattern:
             =(namespace): "{{request.object.metadata.namespace}}"
-    - name: eventsObjectMustBeLocal
-      exclude:
-        resources:
-          namespaces:
-            - "flux-giantswarm"
-            - "giantswarm"
-            - "monitoring"
-      match:
-        resources:
-          kinds:
-            - Event
-      validate:
-        message: "spec.involvedObject namespace must be the same as metadata.namespace"
-        pattern:
-          spec:
-            involvedObject:
-              =(namespace): "{{request.object.metadata.namespace}}"
     - name: imagePolicyRepositoryMustBeLocal
       exclude:
         resources:

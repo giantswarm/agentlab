@@ -18,7 +18,7 @@ const aggregated = "true"
 var fleetExemptNamespaces = []string{"flux-giantswarm", "giantswarm", "monitoring"}
 
 // TestFluxMultiTenancyBundleIsTheFleets: the embedded bundle is the fleet's
-// ClusterPolicy — Enforce, the nine rules by name, every rule excluding the
+// ClusterPolicy — Enforce, the eight rules by name, every rule excluding the
 // fleet's three namespaces, the HelmRelease rules the lab exercises among
 // them — next to the aggregated ClusterRole its rules read with.
 func TestFluxMultiTenancyBundleIsTheFleets(t *testing.T) {
@@ -39,7 +39,7 @@ func TestFluxMultiTenancyBundleIsTheFleets(t *testing.T) {
 	wantRules := []string{
 		"serviceAccountNameMustBeSet", "kustomizationSourceRefNamespaceIsSafe", "helmReleaseSourceRefNamespaceIsSafe",
 		"targetNamespaceMustBeLocal", "storageNamespaceMustBeLocal", "alertEventSourcesMustBeLocal",
-		"receiverResourcesMustBeLocal", "eventsObjectMustBeLocal", "imagePolicyRepositoryMustBeLocal",
+		"receiverResourcesMustBeLocal", "imagePolicyRepositoryMustBeLocal",
 	}
 	rules, _, _ := unstructured.NestedSlice(policy.Object, "spec", "rules")
 	var names []string
