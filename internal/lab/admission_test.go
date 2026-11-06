@@ -18,7 +18,7 @@ const aggregated = "true"
 var fleetExemptNamespaces = []string{"flux-giantswarm", "giantswarm", "monitoring"}
 
 // TestFluxMultiTenancyBundleIsTheFleets: the embedded bundle is the fleet's
-// ClusterPolicy — Enforce, the nine rules by name, every rule excluding the
+// ClusterPolicy — Enforce, the eight rules by name, every rule excluding the
 // fleet's three namespaces, the HelmRelease rules the lab exercises among
 // them — next to the aggregated ClusterRole its rules read with.
 func TestFluxMultiTenancyBundleIsTheFleets(t *testing.T) {
@@ -39,7 +39,7 @@ func TestFluxMultiTenancyBundleIsTheFleets(t *testing.T) {
 	wantRules := []string{
 		"serviceAccountNameMustBeSet", "kustomizationSourceRefNamespaceIsSafe", "helmReleaseSourceRefNamespaceIsSafe",
 		"targetNamespaceMustBeLocal", "storageNamespaceMustBeLocal", "alertEventSourcesMustBeLocal",
-		"receiverResourcesMustBeLocal", "eventsObjectMustBeLocal", "imagePolicyRepositoryMustBeLocal",
+		"receiverResourcesMustBeLocal", "imagePolicyRepositoryMustBeLocal",
 	}
 	rules, _, _ := unstructured.NestedSlice(policy.Object, "spec", "rules")
 	var names []string
@@ -84,8 +84,8 @@ func TestLabFleetPolicyExemptsThePlatformNamespace(t *testing.T) {
 		t.Fatal(err)
 	}
 	rules, _, _ := unstructured.NestedSlice(objs[0].Object, "spec", "rules")
-	if len(rules) != 9 {
-		t.Fatalf("%d rules, want 9", len(rules))
+	if len(rules) != 8 {
+		t.Fatalf("%d rules, want 8", len(rules))
 	}
 	want := append(slices.Clone(fleetExemptNamespaces), platformNamespace)
 	for _, r := range rules {
