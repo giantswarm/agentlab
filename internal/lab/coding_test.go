@@ -2,7 +2,6 @@ package lab
 
 import (
 	"reflect"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -17,8 +16,7 @@ func codingLab() *config.Config {
 }
 
 // With coding agents on, kagent.harnesses carries claude: the claude
-// runtime, a snapshot location of its own, the caller's token propagated and
-// no limits.
+// runtime, a snapshot location of its own, no caller token and no limits.
 func TestCodingHarnessValues(t *testing.T) {
 	values, raw, _, _ := renderWorkspaceTemplates(t, codingLab(), nil)
 	kagent, _ := values["kagent"].(map[string]any)
@@ -42,9 +40,8 @@ func TestCodingHarnessValues(t *testing.T) {
 			t.Errorf("the values carry %s:\n%s", key, excerptAround(raw, key))
 		}
 	}
-	env, _ := h["env"].([]any)
-	if len(env) != 1 || env[0].(map[string]any)["name"] != "KAGENT_PROPAGATE_TOKEN" || env[0].(map[string]any)["value"] != strconv.FormatBool(true) {
-		t.Errorf("%s env = %v, want KAGENT_PROPAGATE_TOKEN=true", claudeHarness, env)
+	if _, ok := h["env"]; ok {
+		t.Errorf("%s carries env %v, wanted none", claudeHarness, h["env"])
 	}
 }
 
