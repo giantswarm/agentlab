@@ -14,6 +14,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -546,24 +547,35 @@ func TestRefusalProblem(t *testing.T) {
 	}
 }
 
-// The muster check passes on a config.yaml whose namespace selector selects
-// the organization namespaces, and otherwise names the missing piece.
+// The muster check passes on a config.yaml whose selectors select both
+// organization namespaces by their labels and the proof's MCPServer, and
+// otherwise names the missing piece.
 func TestMusterTenancyProblem(t *testing.T) {
+	namespaces := map[string]labels.Set{
+		"agents-agentlab-a-vgfhb": {organizationLabel: "agentlab-a"},
+		"agents-agentlab-b-x7k2p": {organizationLabel: "agentlab-b"},
+	}
 	for name, tc := range map[string]struct {
 		config string
 		want   string
 	}{
-		"selects the organization label": {"mcpServerNamespaceSelector:\n  matchExpressions:\n    - key: " + organizationLabel + "\n      operator: Exists\n", ""},
-		"every namespace":                {"mcpServerNamespaceSelector: {}\n", ""},
-		"unset":                          {"namespace: agent-platform\n", "without mcpServerNamespaceSelector"},
-		"another label":                  {"mcpServerNamespaceSelector:\n  matchLabels:\n    team: a\n", "does not select a namespace labelled"},
-		"an invalid operator":            {"mcpServerNamespaceSelector:\n  matchExpressions:\n    - key: a\n      operator: Near\n", "is invalid"},
+		"the organization label exists":   {"mcpServerNamespaceSelector:\n  matchExpressions:\n    - key: " + organizationLabel + "\n      operator: Exists\n", ""},
+		"both organizations by name":      {"mcpServerNamespaceSelector:\n  matchExpressions:\n    - key: " + organizationLabel + "\n      operator: In\n      values: [agentlab-a, agentlab-b]\n", ""},
+		"every namespace":                 {"mcpServerNamespaceSelector: {}\n", ""},
+		"the proof's server selected":     {"mcpServerNamespaceSelector: {}\nmcpServerSelector:\n  matchLabels:\n    " + organizationsTestLabel + ": " + organizationsTestMark + "\n", ""},
+		"unset":                           {"namespace: agent-platform\n", "without mcpServerNamespaceSelector"},
+		"null":                            {"mcpServerNamespaceSelector: null\n", "without mcpServerNamespaceSelector"},
+		"another label":                   {"mcpServerNamespaceSelector:\n  matchLabels:\n    team: a\n", "does not select namespace agents-agentlab-a-vgfhb"},
+		"one organization only":           {"mcpServerNamespaceSelector:\n  matchLabels:\n    " + organizationLabel + ": agentlab-a\n", "does not select namespace agents-agentlab-b-x7k2p"},
+		"an invalid operator":             {"mcpServerNamespaceSelector:\n  matchExpressions:\n    - key: a\n      operator: Near\n", "mcpServerNamespaceSelector is invalid"},
+		"the proof's server not selected": {"mcpServerNamespaceSelector: {}\nmcpServerSelector:\n  matchLabels:\n    tier: gold\n", "does not select the proof's MCPServer"},
+		"an invalid server selector":      {"mcpServerNamespaceSelector: {}\nmcpServerSelector:\n  matchExpressions:\n    - key: a\n      operator: Near\n", "mcpServerSelector is invalid"},
 	} {
 		tenancy, err := parseMusterTenancy(tc.config)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		p := tenancy.problem()
+		p := tenancy.problem(namespaces, organizationMCPServerLabels)
 		if tc.want == "" && p != "" || tc.want != "" && !strings.Contains(p, tc.want) {
 			t.Errorf("%s: %q, want %q", name, p, tc.want)
 		}
@@ -608,7 +620,7 @@ func TestPlatformValuesOrganizations(t *testing.T) {
 			t.Errorf("%s: agentPlatformOrganizations %v, llmRouting %v; want both on: %v", name, values["agentPlatformOrganizations"], values["llmRouting"], tc.on)
 		}
 		if musterAll(values) != nil {
-			t.Errorf("%s: muster.muster.mcpServersInAllNamespaces is %v; the chart sets muster's namespace selector", name, musterAll(values))
+			t.Errorf("%s: muster.muster.mcpServersInAllNamespaces is %v; muster's namespace selector is the chart's", name, musterAll(values))
 		}
 		if !tc.on && (values["agentPlatformOrganizations"] != nil || values["llmRouting"] != nil || musterAll(values) != nil) {
 			t.Errorf("%s: a part renders: %v %v %v", name, values["agentPlatformOrganizations"], values["llmRouting"], musterAll(values))

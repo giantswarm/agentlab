@@ -4,21 +4,22 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
-	"gopkg.in/yaml.v3"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	sigsyaml "sigs.k8s.io/yaml"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
 
 // The muster surface of organizations-test (the muster half of the old
 // tenants proof, giantswarm/agentlab#166, the agent-permissions plan's D9):
-// with mcpServerNamespaceSelector muster serves the MCPServers of the
+// with mcpServerNamespaceSelector (giantswarm/muster#1783) muster serves the MCPServers of the
 // organization namespaces next to its own and lists them as the caller with
 // the person's token, so a member lists none of the other organization's
 // servers and every call naming one is answered as for a server that does
@@ -53,27 +54,47 @@ func tenantServerKey(ns, name string) string {
 	return ns + "/" + name
 }
 
-// musterTenancy is what decides whether muster serves the organizations'
-// MCPServers: the namespace selector in its config.yaml
-// (mcpServerNamespaceSelector, giantswarm/muster#1779), which the
-// agent-platform chart sets with agentPlatformOrganizations.enabled.
+// musterTenancy is what decides whether muster serves the proof's
+// MCPServers in the organization namespaces: the selectors in its
+// config.yaml (giantswarm/muster#1779).
 type musterTenancy struct {
-	// namespaceSelector is the configured selector; nil when unset.
-	namespaceSelector *metav1.LabelSelector
+	// NamespaceSelector selects the namespaces besides muster's whose
+	// MCPServers muster serves; nil when unset, which selects none.
+	NamespaceSelector *metav1.LabelSelector `json:"mcpServerNamespaceSelector"`
+	// ServerSelector selects the served MCPServers by their own labels; nil
+	// when unset, which selects every one.
+	ServerSelector *metav1.LabelSelector `json:"mcpServerSelector"`
 }
 
-// problem words what keeps muster from serving the organizations' MCP
-// servers, "" when nothing does.
-func (t musterTenancy) problem() string {
-	if t.namespaceSelector == nil {
-		return "muster runs without mcpServerNamespaceSelector: it serves no organization namespace's MCPServer. The agent-platform chart sets it with agentPlatformOrganizations.enabled once its muster range carries giantswarm/muster#1779"
+// problem words what keeps muster from serving the proof's MCPServer
+// (labelled serverLabels) in each of namespaces (name to labels), "" when
+// nothing does.
+func (t musterTenancy) problem(namespaces map[string]labels.Set, serverLabels labels.Set) string {
+	if t.NamespaceSelector == nil {
+		return fmt.Sprintf("muster runs without mcpServerNamespaceSelector: it serves no organization namespace's MCPServer. The agent-platform chart is to set it on the label %s with agentPlatformOrganizations.enabled, on a muster range that carries giantswarm/muster#1783", organizationLabel)
 	}
-	selector, err := metav1.LabelSelectorAsSelector(t.namespaceSelector)
+	selector, err := metav1.LabelSelectorAsSelector(t.NamespaceSelector)
 	if err != nil {
 		return fmt.Sprintf("muster's mcpServerNamespaceSelector is invalid: %v", err)
 	}
-	if !selector.Matches(labels.Set{organizationLabel: "organizations-test"}) {
-		return fmt.Sprintf("muster's mcpServerNamespaceSelector (%s) does not select a namespace labelled %s", selector, organizationLabel)
+	names := make([]string, 0, len(namespaces))
+	for ns := range namespaces {
+		names = append(names, ns)
+	}
+	sort.Strings(names)
+	for _, ns := range names {
+		if !selector.Matches(namespaces[ns]) {
+			return fmt.Sprintf("muster's mcpServerNamespaceSelector (%s) does not select namespace %s (labels %s)", selector, ns, namespaces[ns])
+		}
+	}
+	if t.ServerSelector != nil {
+		servers, err := metav1.LabelSelectorAsSelector(t.ServerSelector)
+		if err != nil {
+			return fmt.Sprintf("muster's mcpServerSelector is invalid: %v", err)
+		}
+		if !servers.Matches(serverLabels) {
+			return fmt.Sprintf("muster's mcpServerSelector (%s) does not select the proof's MCPServer (labels %s)", servers, serverLabels)
+		}
 	}
 	return ""
 }
@@ -82,41 +103,40 @@ func (t musterTenancy) problem() string {
 func readMusterTenancy() (musterTenancy, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	defer cancel()
-	var t musterTenancy
 	cm, err := getObject(ctx, gvrConfigMaps, platformNamespace, musterConfigMap)
 	if err != nil {
-		return t, fmt.Errorf("muster's ConfigMap %s/%s: %w", platformNamespace, musterConfigMap, err)
+		return musterTenancy{}, fmt.Errorf("muster's ConfigMap %s/%s: %w", platformNamespace, musterConfigMap, err)
 	}
 	file, _, _ := unstructured.NestedString(cm.Object, "data", musterConfigKey)
 	return parseMusterTenancy(file)
 }
 
-// parseMusterTenancy reads the namespace selector of muster's config.yaml.
+// parseMusterTenancy reads the MCPServer selectors of muster's config.yaml.
 func parseMusterTenancy(file string) (musterTenancy, error) {
-	var conf struct {
-		NamespaceSelector *struct {
-			MatchLabels      map[string]string `yaml:"matchLabels"`
-			MatchExpressions []struct {
-				Key      string   `yaml:"key"`
-				Operator string   `yaml:"operator"`
-				Values   []string `yaml:"values"`
-			} `yaml:"matchExpressions"`
-		} `yaml:"mcpServerNamespaceSelector"`
-	}
-	if err := yaml.Unmarshal([]byte(file), &conf); err != nil {
+	var t musterTenancy
+	if err := sigsyaml.Unmarshal([]byte(file), &t); err != nil {
 		return musterTenancy{}, fmt.Errorf("muster's %s: %w", musterConfigKey, err)
 	}
-	if conf.NamespaceSelector == nil {
-		return musterTenancy{}, nil
-	}
-	selector := &metav1.LabelSelector{MatchLabels: conf.NamespaceSelector.MatchLabels}
-	for _, e := range conf.NamespaceSelector.MatchExpressions {
-		selector.MatchExpressions = append(selector.MatchExpressions, metav1.LabelSelectorRequirement{
-			Key: e.Key, Operator: metav1.LabelSelectorOperator(e.Operator), Values: e.Values,
-		})
-	}
-	return musterTenancy{namespaceSelector: selector}, nil
+	return t, nil
 }
+
+// namespaceLabels reads the labels of namespaces.
+func namespaceLabels(namespaces []string) (map[string]labels.Set, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
+	defer cancel()
+	out := make(map[string]labels.Set, len(namespaces))
+	for _, ns := range namespaces {
+		obj, err := getObject(ctx, gvrNamespaces, "", ns)
+		if err != nil {
+			return nil, fmt.Errorf("namespace %s: %w", ns, err)
+		}
+		out[ns] = labels.Set(obj.GetLabels())
+	}
+	return out, nil
+}
+
+// organizationMCPServerLabels are the labels of the proof's MCPServer.
+var organizationMCPServerLabels = labels.Set{organizationsTestLabel: organizationsTestMark}
 
 // organizationMCPServerManifest is the proof's MCPServer of an
 // organization namespace: muster's own /mcp, no auth, not started.
@@ -333,7 +353,11 @@ func (m *organizationsMuster) listing() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if problem := tenancy.problem(); problem != "" {
+	nsLabels, err := namespaceLabels(m.namespaces[:])
+	if err != nil {
+		return "", err
+	}
+	if problem := tenancy.problem(nsLabels, organizationMCPServerLabels); problem != "" {
 		return "", fmt.Errorf("%s", problem)
 	}
 	for _, ns := range m.namespaces {

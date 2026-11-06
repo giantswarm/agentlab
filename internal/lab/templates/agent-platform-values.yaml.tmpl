@@ -430,8 +430,9 @@ muster:
 {{- if .TenantsEnabled }}
     # The tenants mode of a chart before 4.175: muster also serves the
     # MCPServers of the org-* namespaces (the agent-permissions plan, D9).
-    # With platform.organizations the agent-platform chart sets muster's
-    # mcpServerNamespaceSelector itself.
+    # With platform.organizations, muster's mcpServerNamespaceSelector is
+    # the agent-platform chart's to set (docs/identity.md "MCP servers per
+    # tenant").
     mcpServersInAllNamespaces: true
 {{- end }}
     # muster's ServiceMonitor, PrometheusRule and Grafana dashboard: the chart

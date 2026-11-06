@@ -89,10 +89,15 @@ tenant, as on an installation.
 ### MCP servers per tenant
 
 With `platform.organizations` on, muster serves the `MCPServer`s of the
-organization namespaces next to its own namespace's: the agent-platform
-chart sets muster's `mcpServerNamespaceSelector` on the label
-`agent-platform.giantswarm.io/organization` (giantswarm/muster#1779), and
-`organizations-test` checks that muster's config selects it. What
+organization namespaces next to its own namespace's once its
+`mcpServerNamespaceSelector` (giantswarm/muster#1783) selects them. The lab
+does not set it: the agent-platform chart is to set it on the label
+`agent-platform.giantswarm.io/organization`, and agent-platform charts that
+do not yet leave it unset, so muster serves none of them.
+`organizations-test` reads muster's config and stops at its muster step,
+naming the gap, unless the selector selects both organization namespaces (by
+their labels) and `mcpServerSelector`, when set, selects the proof's
+`MCPServer`. What
 `organizations-test` asserts is the first two points below (the
 agent-permissions plan's D9); the old tenants proof also asserted the rest,
 which an organization namespace's admission does not let the lab set up
