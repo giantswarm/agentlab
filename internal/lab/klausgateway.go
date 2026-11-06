@@ -26,8 +26,7 @@ import (
 //     placeholder credentials Secret, its Web API base patched to the lab's
 //     Service in front of the proof's fake Slack Web API (the chart has no
 //     value for it; postrenderers.go): events mode makes no outbound call at
-//     start, and no workspace ever answers, which is why a real OBO sign-in
-//     is out of the lab's reach (klausgatewaytest_component.go);
+//     start, and no workspace ever answers;
 //   - OBO with the link store in a Kubernetes Secret (obo.store: secret, the
 //     store the fleet runs since klaus-gateway 1.3.0): the chart renders the
 //     empty link Secret with a Role scoped to it by resourceNames, and the
@@ -136,16 +135,21 @@ type klausGatewayValues struct {
 	// MusterURL is muster's public URL: the MCP endpoint of agent-manager's
 	// tools every Session starts through, verified with the lab CA (the
 	// header), and the OBO authorization server the linker discovers lazily
-	// (RFC 8414) on the first link — never in the lab.
+	// (RFC 8414) on the first link (`klaus-gateway-test --part refresh`).
 	MusterURL string
 	// CallbackBaseURL is the component's public base URL as the OBO redirect
-	// URI and CIMD client_id derive from it: the agentgateway hostname
-	// without a port, whatever platform.gatewayPort is. The connectivity
-	// chart derives the hostname of the OBO HTTPRoute it renders on the edge
-	// from this value, and a Gateway API hostname cannot carry a port; the
-	// route matches the Host header's name part either way, and no link
-	// ever completes here.
+	// URI and CIMD client_id derive from it: https:// and OBOHost, without a
+	// port, whatever platform.gatewayPort is. The connectivity chart derives
+	// the hostname of the OBO HTTPRoute it renders on the edge from this
+	// value, and a Gateway API hostname cannot carry a port; the route
+	// matches the Host header's name part either way.
 	CallbackBaseURL string
+	// OBOHost is the agentgateway hostname the component's CIMD document
+	// and OBO callback are served on. In-cluster it resolves to the edge's
+	// cluster IP, so muster's OAuth server lists it as the one CIMD host
+	// allowed a private address and accepts private redirect URIs
+	// (agent-platform-values.yaml.tmpl, HACKS.md U43).
+	OBOHost string
 }
 
 // klausGatewayValuesFor is the `klausGateway:` block's data for this lab.
@@ -157,8 +161,15 @@ func klausGatewayValuesFor(cfg *config.Config) klausGatewayValues {
 		SlackSecret:     klausGatewaySlackPlaceholder,
 		KeysSecret:      klausGatewayOBOKeys,
 		MusterURL:       cfg.MusterBaseURL(),
-		CallbackBaseURL: "https://agentgateway." + cfg.Platform.Domain,
+		CallbackBaseURL: "https://" + klausGatewayOBOHost(cfg),
+		OBOHost:         klausGatewayOBOHost(cfg),
 	}
+}
+
+// klausGatewayOBOHost is the hostname the component serves its OBO routes on
+// through the edge: agentgateway.<domain>.
+func klausGatewayOBOHost(cfg *config.Config) string {
+	return "agentgateway." + cfg.Platform.Domain
 }
 
 // ensureKlausGatewaySecrets creates the component's two Secrets once: the

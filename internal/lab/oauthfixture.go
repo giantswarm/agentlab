@@ -309,6 +309,11 @@ func completeSignInEnding(challengeURL string, user *config.User, where string, 
 	if err != nil {
 		return err
 	}
+	return completeSignInVia(transport, challengeURL, user, where, done)
+}
+
+// completeSignInVia is completeSignInEnding on transport.
+func completeSignInVia(transport http.RoundTripper, challengeURL string, user *config.User, where string, done func(end *url.URL, body []byte) bool) error {
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		return err
