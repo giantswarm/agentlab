@@ -7,17 +7,18 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Masterminds/semver/v3"
 	"gopkg.in/yaml.v3"
 	rbacv1 "k8s.io/api/rbac/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
 
 // The muster surface of organizations-test (the muster half of the old
 // tenants proof, giantswarm/agentlab#166, the agent-permissions plan's D9):
-// with mcpServersInAllNamespaces muster serves the MCPServers of the
+// with mcpServerNamespaceSelector muster serves the MCPServers of the
 // organization namespaces next to its own and lists them as the caller with
 // the person's token, so a member lists none of the other organization's
 // servers and every call naming one is answered as for a server that does
@@ -30,8 +31,6 @@ import (
 // giantswarm/muster#1598) names a namespace the operator generates, which the
 // lab Dex's static redirect URIs cannot list ahead.
 const (
-	// tenantsMusterMinimum is the first muster with giantswarm/muster#1603.
-	tenantsMusterMinimum = "5.48.0"
 	// organizationsMCPServer is the server the proof declares in each
 	// organization namespace: no auth, not started; listing it is what
 	// RBAC decides.
@@ -55,63 +54,68 @@ func tenantServerKey(ns, name string) string {
 }
 
 // musterTenancy is what decides whether muster serves the organizations'
-// MCPServers: its version (the image's tag) and mcpServersInAllNamespaces in
-// its config.yaml.
+// MCPServers: the namespace selector in its config.yaml
+// (mcpServerNamespaceSelector, giantswarm/muster#1779), which the
+// agent-platform chart sets with agentPlatformOrganizations.enabled.
 type musterTenancy struct {
-	image         string
-	allNamespaces bool
+	// namespaceSelector is the configured selector; nil when unset.
+	namespaceSelector *metav1.LabelSelector
 }
 
-// problem words what keeps muster from serving MCP servers per tenant, ""
-// when nothing does.
+// problem words what keeps muster from serving the organizations' MCP
+// servers, "" when nothing does.
 func (t musterTenancy) problem() string {
-	tag := t.image[strings.LastIndex(t.image, ":")+1:]
-	if at := strings.Index(t.image, "@"); at >= 0 {
-		before := t.image[:at]
-		tag = before[strings.LastIndex(before, ":")+1:]
+	if t.namespaceSelector == nil {
+		return "muster runs without mcpServerNamespaceSelector: it serves no organization namespace's MCPServer. The agent-platform chart sets it with agentPlatformOrganizations.enabled once its muster range carries giantswarm/muster#1779"
 	}
-	minimum := semver.MustParse(tenantsMusterMinimum)
-	if v, err := semver.NewVersion(tag); err == nil && v.LessThan(minimum) {
-		return fmt.Sprintf("muster %s is older than organizations-test needs: it needs %s or later (giantswarm/muster#1601, #1603); the agent-platform chart's muster range starts there from 4.157.1 on", tag, tenantsMusterMinimum)
+	selector, err := metav1.LabelSelectorAsSelector(t.namespaceSelector)
+	if err != nil {
+		return fmt.Sprintf("muster's mcpServerNamespaceSelector is invalid: %v", err)
 	}
-	if !t.allNamespaces {
-		return "muster runs without mcpServersInAllNamespaces: it serves no organization namespace's MCPServer. `agentlab platform` with this agentlab sets muster.muster.mcpServersInAllNamespaces with platform.organizations on (a platform.valuesFiles overlay that sets it false wins)"
+	if !selector.Matches(labels.Set{organizationLabel: "organizations-test"}) {
+		return fmt.Sprintf("muster's mcpServerNamespaceSelector (%s) does not select a namespace labelled %s", selector, organizationLabel)
 	}
 	return ""
 }
 
-// readMusterTenancy reads muster's image and config.yaml.
+// readMusterTenancy reads muster's config.yaml.
 func readMusterTenancy() (musterTenancy, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	defer cancel()
 	var t musterTenancy
-	deploy, err := getObject(ctx, gvrDeployments, platformNamespace, componentMuster)
-	if err != nil {
-		return t, fmt.Errorf("the muster Deployment in %s: %w", platformNamespace, err)
-	}
-	containers, _, _ := unstructured.NestedSlice(deploy.Object, "spec", "template", "spec", "containers")
-	for _, c := range containers {
-		container, _ := c.(map[string]any)
-		if container[nameKey] == componentMuster {
-			t.image, _ = container["image"].(string)
-		}
-	}
 	cm, err := getObject(ctx, gvrConfigMaps, platformNamespace, musterConfigMap)
 	if err != nil {
 		return t, fmt.Errorf("muster's ConfigMap %s/%s: %w", platformNamespace, musterConfigMap, err)
 	}
 	file, _, _ := unstructured.NestedString(cm.Object, "data", musterConfigKey)
+	return parseMusterTenancy(file)
+}
+
+// parseMusterTenancy reads the namespace selector of muster's config.yaml.
+func parseMusterTenancy(file string) (musterTenancy, error) {
 	var conf struct {
-		MCPServersInAllNamespaces bool `yaml:"mcpServersInAllNamespaces"`
+		NamespaceSelector *struct {
+			MatchLabels      map[string]string `yaml:"matchLabels"`
+			MatchExpressions []struct {
+				Key      string   `yaml:"key"`
+				Operator string   `yaml:"operator"`
+				Values   []string `yaml:"values"`
+			} `yaml:"matchExpressions"`
+		} `yaml:"mcpServerNamespaceSelector"`
 	}
 	if err := yaml.Unmarshal([]byte(file), &conf); err != nil {
-		return t, fmt.Errorf("muster's %s: %w", musterConfigKey, err)
+		return musterTenancy{}, fmt.Errorf("muster's %s: %w", musterConfigKey, err)
 	}
-	t.allNamespaces = conf.MCPServersInAllNamespaces
-	if t.image == "" {
-		return t, fmt.Errorf("the muster Deployment in %s has no container %q with an image: muster's version cannot be read", platformNamespace, componentMuster)
+	if conf.NamespaceSelector == nil {
+		return musterTenancy{}, nil
 	}
-	return t, nil
+	selector := &metav1.LabelSelector{MatchLabels: conf.NamespaceSelector.MatchLabels}
+	for _, e := range conf.NamespaceSelector.MatchExpressions {
+		selector.MatchExpressions = append(selector.MatchExpressions, metav1.LabelSelectorRequirement{
+			Key: e.Key, Operator: metav1.LabelSelectorOperator(e.Operator), Values: e.Values,
+		})
+	}
+	return musterTenancy{namespaceSelector: selector}, nil
 }
 
 // organizationMCPServerManifest is the proof's MCPServer of an

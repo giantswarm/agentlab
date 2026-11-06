@@ -421,19 +421,17 @@ muster:
   muster:
     # The audience muster checks a person's token for before it calls the
     # API server with it (its writes as the caller, and with
-    # mcpServersInAllNamespaces its listing of MCPServers as the caller). The
+    # mcpServerNamespaceSelector its listing of MCPServers as the caller). The
     # muster default is dex-k8s-authenticator (Giant Swarm API servers); this
     # lab's API server trusts client id `kubernetes`, the audience every lab
     # token for muster carries already.
     writesAsCaller:
       kubernetesAudience: kubernetes
-{{- if or .TenantsEnabled .OrganizationsEnabled }}
-    # platform.organizations: muster also serves the MCPServers of the
-    # organization namespaces, each seen only by a person whom RBAC lets
-    # list mcpservers there (the agent-permissions plan, D9; docs/identity.md
-    # "MCP servers per tenant"), which organizations-test's muster
-    # surface proves. The chart binds that list in muster's namespace to
-    # every signed-in person (agent-platform:mcpserver-viewer).
+{{- if .TenantsEnabled }}
+    # The tenants mode of a chart before 4.175: muster also serves the
+    # MCPServers of the org-* namespaces (the agent-permissions plan, D9).
+    # With platform.organizations the agent-platform chart sets muster's
+    # mcpServerNamespaceSelector itself.
     mcpServersInAllNamespaces: true
 {{- end }}
     # muster's ServiceMonitor, PrometheusRule and Grafana dashboard: the chart
