@@ -854,19 +854,6 @@ IPv6 anyway. Unblocks when agentgateway falls back to the IPv4 wildcard on a
 host without IPv6 (an absent `/proc/net/if_inet6`, or `EAFNOSUPPORT` from
 the IPv6 socket) — then the patch goes.
 
-### U39. `agent-platform-values.yaml.tmpl`: the lab renders agent-manager's range beside the marked default model — FIXED upstream
-From agent-platform 4.175.0-rc.7 the chart takes a `kagent.modelConfigs`
-entry marked `default: true`, and the proofs ask agent-manager for it:
-`list_model_configs` reports the namespace's default from agent-manager 2.19
-on. The chart's own range was `components.agent-manager.versionRange:
-">=2.16.0 <2.19.0"`, which installs a 2.18 that reports no default, so the
-lab's values set `">=2.19.0-rc.2 <3.0.0-0"` beside the marked entry.
-**Fixed:** agent-platform 4.175.0-rc.15 (giantswarm/agent-platform#1288)
-moves the range to `>=2.19.0 <3.0.0`. The lab's default model floor
-(`config.DefaultModelChart`) moves to that release, `DefaultChartVersion` to
-4.175.0-rc.16, and the range override is deleted: below the floor the lab
-renders `kagent.providers` and the kagent chart's `default-model-config`.
-
 ## Accepted lab trade-offs (not hacks to fix)
 
 - **No HSTS from the portal** — Backstage's helmet sends
