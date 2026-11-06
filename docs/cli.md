@@ -12,8 +12,10 @@ kubeconfig, `state/kubeconfig`, never your shell's current-context.
 the public HTTPS edge for muster and mcp-kubernetes. It discovers their metadata,
 uses a public CIMD client, approves consent, exchanges the code with S256 PKCE,
 and reads Kubernetes namespaces both directly and through muster. It also checks
-denial, CSRF, replay, remembered grants and callback binding, then replaces both
-pods of each server while a login is pending and completes that login. Configure
+denial, CSRF, replay, remembered grants, callback binding, invalid resource
+bearers, blocked CIMD addresses, refresh rotation and wrong-PKCE rejection.
+It replaces both pods of each server while a login is pending and completes
+that login using shared state. Configure
 the two-replica muster pod-network topology before running this proof. Tokens,
 cookies and lab passwords stay out of its output. The registered external client
 callback is intercepted locally; no authorization code is sent to that client.

@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -17,12 +18,14 @@ import (
 )
 
 const (
-	consentProofClientID = "https://claude.ai/oauth/mcp-oauth-client-metadata"
-	consentProofRedirect = "https://claude.ai/api/mcp/auth_callback"
-	consentProofScopes   = "openid email profile groups audience:server:client_id:kubernetes"
-	consentScopeParam    = "scope"
-	consentLoginParam    = "login"
-	consentApprove       = "approve"
+	consentProofClientID        = "https://claude.ai/oauth/mcp-oauth-client-metadata"
+	consentProofRedirect        = "https://claude.ai/api/mcp/auth_callback"
+	consentProofScopes          = "openid email profile groups"
+	consentScopeParam           = "scope"
+	consentLoginParam           = "login"
+	consentApprove              = "approve"
+	oauthAuthorizationCodeGrant = "authorization_code"
+	oauthResourceParam          = "resource"
 )
 
 type consentMetadata struct {
@@ -81,6 +84,10 @@ func proveOAuthConsent(ctx context.Context, configuration *config.Config, user *
 		if err != nil {
 			return err
 		}
+		stages.begin(target.name+" bearer rejection", "Rejecting ID tokens, refresh tokens, unknown bearers and unsigned JWTs at %s", target.name)
+		if err := flow.checkInvalidBearers(ctx, configuration, user, target.base); err != nil {
+			return err
+		}
 		stages.begin(target.name+" MCP request", "Using the issued token for an MCP initialize and a Kubernetes namespace read")
 		if err := consentMCPRead(ctx, configuration, user, target.base, accessToken, target.name == componentMuster); err != nil {
 			return err
@@ -91,6 +98,14 @@ func proveOAuthConsent(ctx context.Context, configuration *config.Config, user *
 		}
 		stages.begin(target.name+" replica replacement", "Replacing both %s processes before completing a pending browser callback", target.name)
 		if err := flow.checkReplicaReplacement(ctx, configuration, user, target.name, target.base, accessToken); err != nil {
+			return err
+		}
+		stages.begin(target.name+" refresh rotation", "Refreshing the public client's grant and using the rotated access token at %s", target.name)
+		if err := flow.checkRefresh(ctx, configuration, user, target.base, target.name == componentMuster); err != nil {
+			return err
+		}
+		stages.begin(target.name+" PKCE rejection", "Rejecting an incorrect S256 verifier at %s", target.name)
+		if err := flow.checkPKCE(ctx, user); err != nil {
 			return err
 		}
 	}
@@ -112,7 +127,7 @@ func discoverConsentIssuer(ctx context.Context, browser *http.Client, base strin
 	if err := consentGetJSON(ctx, browser, base+"/.well-known/oauth-authorization-server", &metadata); err != nil {
 		return nil, "", err
 	}
-	if metadata.Issuer != base || metadata.Authorization != base+"/oauth/authorize" || metadata.Token != base+"/oauth/token" || !metadata.CIMD {
+	if metadata.Issuer != base || metadata.Authorization != base+"/oauth/authorize" || metadata.Token != base+"/oauth/token" || !metadata.CIMD || !slices.Contains(metadata.PKCEMethods, "S256") {
 		return nil, "", fmt.Errorf("authorization metadata does not advertise this issuer's endpoints and CIMD")
 	}
 	return &metadata, protected.Resource, nil
@@ -140,6 +155,7 @@ type consentProofFlow struct {
 	resource, verifier, state string
 	upstream                  string
 	providerOrigin            string
+	refreshToken              string
 }
 
 func newConsentProofFlow(browser *http.Client, metadata *consentMetadata, resource string) *consentProofFlow {
@@ -151,9 +167,9 @@ func (flow *consentProofFlow) authorizationURL(prompt string) string {
 	flow.state = rand.Text()
 	challenge := sha256.Sum256([]byte(flow.verifier))
 	query := url.Values{
-		"client_id": {consentProofClientID}, "redirect_uri": {consentProofRedirect}, "response_type": {oauthCodeParam},
+		oauthClientID: {consentProofClientID}, oauthRedirectURI: {consentProofRedirect}, "response_type": {oauthCodeParam},
 		oauthStateParam: {flow.state}, "code_challenge": {base64.RawURLEncoding.EncodeToString(challenge[:])},
-		"code_challenge_method": {"S256"}, consentScopeParam: {consentProofScopes}, "resource": {flow.resource},
+		"code_challenge_method": {"S256"}, consentScopeParam: {consentProofScopes}, oauthResourceParam: {flow.resource},
 	}
 	if prompt != "" {
 		query.Set("prompt", prompt)
@@ -163,9 +179,13 @@ func (flow *consentProofFlow) authorizationURL(prompt string) string {
 
 func (flow *consentProofFlow) exchange(ctx context.Context, code string) (string, error) {
 	form := url.Values{
-		"grant_type": {"authorization_code"}, "client_id": {consentProofClientID}, "redirect_uri": {consentProofRedirect},
-		oauthCodeParam: {code}, "code_verifier": {flow.verifier}, "resource": {flow.resource},
+		grantTypeParam: {oauthAuthorizationCodeGrant}, oauthClientID: {consentProofClientID}, oauthRedirectURI: {consentProofRedirect},
+		oauthCodeParam: {code}, "code_verifier": {flow.verifier}, oauthResourceParam: {flow.resource},
 	}
+	return flow.token(ctx, form)
+}
+
+func (flow *consentProofFlow) token(ctx context.Context, form url.Values) (string, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, flow.metadata.Token, strings.NewReader(form.Encode()))
 	if err != nil {
 		return "", err
@@ -180,7 +200,8 @@ func (flow *consentProofFlow) exchange(ctx context.Context, code string) (string
 		return "", fmt.Errorf("code exchange returned HTTP %d", response.StatusCode)
 	}
 	var tokens struct {
-		AccessToken string `json:"access_token"`
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
 	}
 	if err := json.NewDecoder(response.Body).Decode(&tokens); err != nil {
 		return "", err
@@ -188,6 +209,7 @@ func (flow *consentProofFlow) exchange(ctx context.Context, code string) (string
 	if tokens.AccessToken == "" {
 		return "", fmt.Errorf("code exchange returned no access token")
 	}
+	flow.refreshToken = tokens.RefreshToken
 	return tokens.AccessToken, nil
 }
 

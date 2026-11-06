@@ -97,6 +97,20 @@ func expectConsentStatus(reply *consentReply, err error, status int) error {
 }
 
 func (flow *consentProofFlow) checkConsentGate(ctx context.Context) error {
+	blocked, err := url.Parse(flow.authorizationURL(""))
+	if err != nil {
+		return err
+	}
+	parameters := blocked.Query()
+	parameters.Set("client_id", "https://100.64.0.1/client.json")
+	blocked.RawQuery = parameters.Encode()
+	rejected, err := consentRequest(ctx, flow.browser, http.MethodGet, blocked.String(), nil, "")
+	if err := expectConsentStatus(rejected, err, http.StatusBadRequest); err != nil {
+		return err
+	}
+	if rejected.header.Get("Location") != "" || !strings.Contains(string(rejected.body), "invalid_client") {
+		return fmt.Errorf("blocked CIMD address did not receive a local invalid_client error")
+	}
 	silent, err := consentRequest(ctx, flow.browser, http.MethodGet, flow.authorizationURL("none"), nil, "")
 	if err := expectConsentStatus(silent, err, http.StatusFound); err != nil {
 		return err
@@ -147,7 +161,7 @@ func (flow *consentProofFlow) checkConsentGate(ctx context.Context) error {
 		return err
 	}
 	callback := flow.metadata.Issuer + "/oauth/callback?code=unusable&state=" + url.QueryEscape(upstream.Query().Get("state"))
-	rejected, err := consentRequest(ctx, otherBrowser, http.MethodGet, callback, nil, "")
+	rejected, err = consentRequest(ctx, otherBrowser, http.MethodGet, callback, nil, "")
 	return expectConsentStatus(rejected, err, http.StatusBadRequest)
 }
 
