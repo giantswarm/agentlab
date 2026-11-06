@@ -14,6 +14,12 @@ import (
 // The answer to `@bot login`: the Sign in button wins over anything else in
 // the thread, another person's ephemeral is not the person's, and the
 // confirmation and the transient failure are told apart.
+
+const (
+	testPodA = "pod-a"
+	testPodB = "pod-b"
+)
+
 func TestLoginReplyIn(t *testing.T) {
 	signIn := []map[string]any{{slackKeyElements: []any{map[string]any{slackKeyActionID: slackActionSignIn, slackKeyURL: "https://gw/auth/slack/link?u=x"}}}}
 	for _, tc := range []struct {
@@ -22,7 +28,7 @@ func TestLoginReplyIn(t *testing.T) {
 		want loginOutcome
 	}{
 		{"nothing yet", nil, loginPending},
-		{"signed in as", []slackMessage{{Method: slackPostEphemeral, Recipient: "U1", Text: "Signed in as admin@lab.local."}}, loginLinked},
+		{"signed in as", []slackMessage{{Method: slackPostEphemeral, Recipient: "U1", Text: "Signed in as " + testPortalUser + "."}}, loginLinked},
 		{"signed in", []slackMessage{{Method: slackPostEphemeral, Recipient: "U1", Text: "Signed in."}}, loginLinked},
 		{"another person's confirmation", []slackMessage{{Method: slackPostEphemeral, Recipient: "U2", Text: "Signed in as dev@lab.local."}}, loginPending},
 		{"the Sign in button", []slackMessage{
@@ -47,7 +53,7 @@ func TestLoginReplyIn(t *testing.T) {
 // The rewrite expires the cached id_token and keeps everything else.
 func TestExpiredLink(t *testing.T) {
 	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
-	link := &musterlink.Link{Sub: "sub", Email: "admin@lab.local", RefreshToken: "rt", LinkedAt: now.Add(-time.Hour), IDToken: "id", Expiry: now.Add(time.Hour)}
+	link := &musterlink.Link{Sub: "sub", Email: testPortalUser, RefreshToken: "rt", LinkedAt: now.Add(-time.Hour), IDToken: "id", Expiry: now.Add(time.Hour)}
 	got := expiredLink(link, now)
 	if !got.Expiry.Before(now) {
 		t.Errorf("expiry %s, want before %s", got.Expiry, now)
@@ -65,7 +71,7 @@ func TestRoundVerdict(t *testing.T) {
 	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
 	before := &musterlink.Link{RefreshToken: "rt-1", Expiry: now.Add(-time.Minute)}
 	rotated := &musterlink.Link{RefreshToken: "rt-2", Expiry: now.Add(time.Hour)}
-	linked := map[string]loginOutcome{"pod-a": loginLinked, "pod-b": loginLinked}
+	linked := map[string]loginOutcome{testPodA: loginLinked, testPodB: loginLinked}
 	for _, tc := range []struct {
 		name    string
 		after   *musterlink.Link
@@ -73,8 +79,8 @@ func TestRoundVerdict(t *testing.T) {
 		want    string
 	}{
 		{"pass", rotated, linked, ""},
-		{"a pod signed out", rotated, map[string]loginOutcome{"pod-a": loginLinked, "pod-b": loginSignedOut}, "pod pod-b answered the Sign in button"},
-		{"a pod silent", rotated, map[string]loginOutcome{"pod-a": loginPending, "pod-b": loginLinked}, "pod pod-a answered no answer"},
+		{"a pod signed out", rotated, map[string]loginOutcome{testPodA: loginLinked, testPodB: loginSignedOut}, "pod " + testPodB + " answered the Sign in button"},
+		{"a pod silent", rotated, map[string]loginOutcome{testPodA: loginPending, testPodB: loginLinked}, "pod " + testPodA + " answered no answer"},
 		{"record gone", nil, linked, "gone from the link Secret"},
 		{"no refresh token", &musterlink.Link{Expiry: now.Add(time.Hour)}, linked, "holds no refresh token"},
 		{"not rotated", &musterlink.Link{RefreshToken: "rt-1", Expiry: now.Add(time.Hour)}, linked, "was not rotated"},
@@ -132,13 +138,16 @@ func TestRefreshFailures(t *testing.T) {
 // The lab's hostnames on the https port go to the edge's published port;
 // everything else is dialled as given.
 func TestEdgeDialAddr(t *testing.T) {
-	const domain = "127.0.0.1.nip.io"
+	const (
+		domain    = "127.0.0.1.nip.io"
+		edgeHTTPS = "agentgateway.127.0.0.1.nip.io:443"
+	)
 	for _, tc := range []struct {
 		addr, edgePort, want string
 	}{
-		{"agentgateway.127.0.0.1.nip.io:443", "8443", "agentgateway.127.0.0.1.nip.io:8443"},
+		{edgeHTTPS, "8443", "agentgateway.127.0.0.1.nip.io:8443"},
 		{"127.0.0.1.nip.io:443", "8443", "127.0.0.1.nip.io:8443"},
-		{"agentgateway.127.0.0.1.nip.io:443", "443", "agentgateway.127.0.0.1.nip.io:443"},
+		{edgeHTTPS, "443", edgeHTTPS},
 		{"muster.127.0.0.1.nip.io:8443", "8443", "muster.127.0.0.1.nip.io:8443"},
 		{"localhost:5556", "8443", "localhost:5556"},
 		{"example.com:443", "8443", "example.com:443"},

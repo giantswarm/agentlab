@@ -86,7 +86,7 @@ const (
 // (slackActionSignIn) of a person who is not linked.
 const (
 	loginSignedInText  = "Signed in"
-	loginTokenErrorTxt = "could not be refreshed"
+	loginTransientText = "could not be refreshed"
 )
 
 // The records of refresh token reuse in muster's log (mcp-oauth's server
@@ -137,7 +137,7 @@ func loginReplyIn(msgs []slackMessage, user string) (loginOutcome, slackMessage)
 		}
 		shown := strings.TrimSpace(m.shown())
 		switch {
-		case strings.Contains(shown, loginTokenErrorTxt):
+		case strings.Contains(shown, loginTransientText):
 			return loginTransient, m
 		case strings.HasPrefix(shown, loginSignedInText):
 			return loginLinked, m
