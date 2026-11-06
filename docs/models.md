@@ -54,8 +54,8 @@ read from discovery — `api.kagent.dev/v1alpha3` on the kagent API v2 line,
 (kagent 0.10); the ModelConfig spec is the same in all three, and a lab that
 serves neither group stops with an error naming both. Entries
 removed from `agentlab.yaml` are **pruned** on the next run — the managed-by
-label scopes the pruning to lab-created ModelConfigs, so the chart's default
-one is never touched.
+label scopes the pruning to lab-created extra ModelConfigs; the lab's own
+default model and ChatGPT login model are never pruned.
 
 Key handling follows the Anthropic pattern: `apiKeyEnv` names a host env var
 read at deploy time, and the value lands only in the Secret
@@ -77,8 +77,7 @@ field for it), and `Ollama` requires one (its `host`) and is keyless. An
 `OpenAI` entry may set `reasoningEffort` (`none`, `minimal`, `low`,
 `medium`, `high` or `xhigh`), rendered as the ModelConfig's
 `openAI.reasoningEffort`, and `apiFormat` (`chatCompletions` or
-`responses`, the key agent-platform-connectivity's `kagent.modelConfigs[]`
-entries carry), rendered as the ModelConfig's `openAI.apiFormat` — `responses`
+`responses`), rendered as the ModelConfig's `openAI.apiFormat` — `responses`
 for a model a codex agent uses, since the codex runtime speaks the Responses
 API only and its compiler refuses any other OpenAI option, `tls` included;
 an `OpenAI` entry may set `credentialType: chatgptOAuth` (kagent 1.21.0 or

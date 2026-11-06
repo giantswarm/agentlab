@@ -8,13 +8,19 @@ import (
 	"github.com/giantswarm/agentlab/internal/config"
 )
 
-// The agents' default model. On a config.DefaultModelChart the lab declares
-// it as a kagent.modelConfigs[] entry marked `default: true`, which the
-// connectivity chart renders annotated defaultModelAnnotation, and turns the
-// kagent chart's own default-model-config off; below that floor the kagent
-// chart renders default-model-config from kagent.providers. Either way the
-// Secret is anthropicSecret, placed by anthropic.go. A proof that names no
-// model asks agent-manager for the namespace's default
+// The agents' default model, by chart line:
+//   - config.ModelObjectsChart: the chart declares no model, and the lab
+//     applies config.DefaultModelConfig as a ModelConfig object annotated
+//     defaultModelAnnotation (platformmodels.go);
+//   - config.DefaultModelChart below that: a kagent.modelConfigs[] entry
+//     marked `default: true`, which the connectivity chart renders annotated
+//     defaultModelAnnotation, with the kagent chart's own default-model-config
+//     off;
+//   - below it: the kagent chart's default-model-config from
+//     kagent.providers.
+//
+// Every line's Secret is anthropicSecret, placed by anthropic.go. A proof
+// that names no model asks agent-manager for the namespace's default
 // (agentManagerModelConfig); it never assumes a name.
 
 // defaultModelAnnotation, with defaultModelAnnotationValue, marks a
@@ -28,14 +34,15 @@ const (
 	modelConfigProviderField    = "provider"
 )
 
-// defaultModelValues is the values template's marked kagent.modelConfigs[]
-// entry.
+// defaultModelValues is the lab's default model, which the values template
+// renders as the marked kagent.modelConfigs[] entry and
+// platform-models.yaml.tmpl as a ModelConfig object.
 type defaultModelValues struct {
 	Name, Model, Secret, SecretKey string
 }
 
-// defaultModelValuesFor is the marked entry the lab renders, nil without the
-// agents or below the default model floor.
+// defaultModelValuesFor is the lab's default model, nil without the agents
+// or below the default model floor.
 func defaultModelValuesFor(cfg *config.Config) *defaultModelValues {
 	if !cfg.Platform.Agents || !cfg.DefaultModelChart() {
 		return nil
@@ -43,8 +50,8 @@ func defaultModelValuesFor(cfg *config.Config) *defaultModelValues {
 	return &defaultModelValues{Name: config.DefaultModelConfig, Model: cfg.AIModel, Secret: anthropicSecret, SecretKey: anthropicSecretKey}
 }
 
-// renderedDefaultModelConfig is the ModelConfig the lab's values make the
-// kagent namespace's default.
+// renderedDefaultModelConfig is the ModelConfig that is the kagent
+// namespace's default on the lab's chart line.
 func renderedDefaultModelConfig(cfg *config.Config) string {
 	if cfg.DefaultModelChart() {
 		return config.DefaultModelConfig
@@ -110,7 +117,7 @@ func defaultModelConfigOf(configs []listedModelConfig) (string, error) {
 	case len(marked) > 1:
 		return "", fmt.Errorf("list_model_configs reports %d defaults in %s (%s): a namespace has at most one", len(marked), kagentNamespace, strings.Join(marked, ", "))
 	case reported:
-		return "", fmt.Errorf("list_model_configs reports no default ModelConfig in %s among %s: the lab marks %s (kagent.modelConfigs[].default, annotation %s)", kagentNamespace, strings.Join(names, ", "), config.DefaultModelConfig, defaultModelAnnotation)
+		return "", fmt.Errorf("list_model_configs reports no default ModelConfig in %s among %s: the lab marks %s (annotation %s)", kagentNamespace, strings.Join(names, ", "), config.DefaultModelConfig, defaultModelAnnotation)
 	case slices.Contains(names, config.KagentChartDefaultModelConfig):
 		return config.KagentChartDefaultModelConfig, nil
 	default:

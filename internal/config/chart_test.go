@@ -412,18 +412,43 @@ func TestTenantsModeChart(t *testing.T) {
 	}
 }
 
-// The agents' default model is a marked kagent.modelConfigs entry from the
-// default model floor on, a chart directory included, and the kagent chart's
-// own below it.
+// The agents' default model is the lab's own from the default model floor on,
+// a chart directory included, and the kagent chart's below it; from the model
+// objects floor on the lab declares its models as ModelConfig objects.
 func TestDefaultModelChart(t *testing.T) {
-	for version, want := range map[string]bool{DefaultChartVersion: true, "4.175.0": true, "4.175.0-rc.14": false, "4.174.3": false, "3.23.1": false} {
+	for _, tc := range []struct {
+		version, path         string
+		defaultModel, objects bool
+	}{
+		{version: DefaultChartVersion, defaultModel: true, objects: true},
+		{version: "4.175.1", defaultModel: true, objects: true},
+		{version: "4.175.0-rc.22", defaultModel: true, objects: true},
+		{version: "4.175.0-rc.21", defaultModel: true, objects: false},
+		{version: "4.175.0-rc.15", defaultModel: true, objects: false},
+		{version: "4.175.0-rc.14", defaultModel: false, objects: false},
+		{version: "4.174.3", defaultModel: false, objects: false},
+		{version: "3.23.1", defaultModel: false, objects: false},
+		{version: DefaultChartVersion, path: t.TempDir(), defaultModel: true, objects: true},
+	} {
 		cfg := Default()
-		cfg.Platform.ChartVersion = version
-		if got := cfg.DefaultModelChart(); got != want {
-			t.Errorf("%s: DefaultModelChart() = %v, want %v", version, got, want)
+		cfg.Platform.ChartVersion = tc.version
+		cfg.Platform.ChartPath = tc.path
+		if got := cfg.DefaultModelChart(); got != tc.defaultModel {
+			t.Errorf("%s %s: DefaultModelChart() = %v, want %v", tc.version, tc.path, got, tc.defaultModel)
+		}
+		if got := cfg.ModelObjectsChart(); got != tc.objects {
+			t.Errorf("%s %s: ModelObjectsChart() = %v, want %v", tc.version, tc.path, got, tc.objects)
 		}
 	}
-	if slices.Contains(reservedModelNames, "") || !slices.Contains(reservedModelNames, DefaultModelConfig) || !slices.Contains(reservedModelNames, KagentChartDefaultModelConfig) {
-		t.Errorf("reservedModelNames = %v, want the marked entry and the kagent chart's default", reservedModelNames)
+	for _, name := range []string{DefaultModelConfig, KagentChartDefaultModelConfig, ChatGPTSubscriptionModelConfig} {
+		if !slices.Contains(reservedModelNames, name) {
+			t.Errorf("reservedModelNames = %v, want %s among them", reservedModelNames, name)
+		}
+		if err := ValidateModelName(name); err == nil {
+			t.Errorf("ValidateModelName(%q) accepted one of the lab's own ModelConfigs", name)
+		}
+	}
+	if slices.Contains(reservedModelNames, "") {
+		t.Errorf("reservedModelNames = %v holds an empty name", reservedModelNames)
 	}
 }

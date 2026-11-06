@@ -1131,18 +1131,25 @@ are removed on every exit path, the Sessions through `delete_session`.
 
 `platform.chatgptSubscription` (`agentlab configure --chatgpt-subscription`;
 agent-platform 4.164.0 or newer, the codex coding Harness and the
-workspaces beside it) runs codex on a person's own ChatGPT subscription the
-way an installation does, from the chart's values: the lab renders the
-`kagent.modelConfigs[]` entry `chatgpt-subscription` (`credentialType:
-chatgptOAuth`, `apiFormat: responses`, no `apiKeySecret`; the model
-`gpt-5.6-luna` unless `--chatgpt-subscription-model` names another), muster's
-token encryption (`muster.muster.oauth.server.encryptionKey`, the key
-`oauth-encryption-key` of `agent-platform-secrets`), and, where the chart's
-own ranges admit older releases, kagent and its CRDs at `>=1.24.0 <1.25.0`
-and muster at `>=5.51.0 <6.0.0`. The chart derives the rest: muster's
-provider App `chatgpt` (OpenAI's device-code sign-in), kagent's installation
-provider `chatgpt` (`chatgpt.com`, `/backend-api/codex/`, Bearer) and the
-ModelConfig "ChatGPT (your subscription)". Nothing is applied by hand.
+workspaces with a provider instance beside it) runs codex on a person's own
+ChatGPT subscription the way an installation does: the lab declares the
+ModelConfig `chatgpt-subscription`, "ChatGPT (your subscription)"
+(`openAI.credentialType: chatgptOAuth`, `openAI.apiFormat: responses`, no
+`apiKeySecret`; the model `gpt-5.6-luna` unless `--chatgpt-subscription-model`
+names another), and renders muster's token encryption
+(`muster.muster.oauth.server.encryptionKey`, the key `oauth-encryption-key` of
+`agent-platform-secrets`) and, where the chart's own ranges admit older
+releases, kagent and its CRDs at `>=1.24.0 <1.25.0` and muster at
+`>=5.51.0 <6.0.0`. From agent-platform 4.175.0-rc.22 the ModelConfig is an
+object `agentlab platform` applies in `kagent` after the install, and the
+chart wires the login wherever the platform carries it (kagent's Session
+admission derived from the workspace-manager's grant key, which the lab names
+beside a provider instance; without one `agentlab platform` warns that no
+login is wired). Below that release the lab renders it as the
+`kagent.modelConfigs[]` entry the chart derives the login from. Either way
+the chart wires muster's provider App `chatgpt` (OpenAI's device-code
+sign-in) and kagent's installation provider `chatgpt` (`chatgpt.com`,
+`/backend-api/codex/`, Bearer).
 
 `agentlab chatgpt-test` proves it with a real ChatGPT login. The admin
 connects it once: `agentlab chatgpt-test --connect` starts the sign-in and
@@ -2153,7 +2160,7 @@ data the page reads — see [The muster plugin](backstage.md#the-muster-plugin).
 | `postgres`: one instance, a 2Gi claim, no backups | The fleet's CNPG `Cluster` runs three instances on 20Gi with Barman backups; the lab keeps the shape (the same operand and pgvector images, the same `Database` CRs and derived Secrets) on one kind node. |
 | `kagent.ui.service.type: NodePort`, nodePort 30880 pinned by the kagent `postRenderers` patch | On a real MC the UI sits behind the agentgateway edge; this lab publishes it through the kind port mapping instead (host side `platform.agentsPort`, default 8081). The chart's Service template renders no `nodePort` field, so the fixed node port is a patch (HACKS.md U9). |
 | `components.flux.enabled: true`, `gitops.self.enabled: false` | The lab shape (see [The agent platform](#the-agent-platform-muster--kubernetes-mcp)): a management cluster runs its own Flux and installs the chart through it; the lab has none, so the chart brings the engine — and must not adopt its own release, because the lab installs charts and images that are not released. |
-| `kagent.modelConfigs` entry `anthropic` with `default: true` and `kagent.defaultModelConfig.enabled: false` (from agent-platform 4.175.0-rc.15) | An installation marks its own default model in values or in the portal; the lab declares one on its `aiModel` so agents have a default, and the kagent chart renders no `default-model-config` beside it. Below 4.175.0-rc.15 the lab renders `kagent.providers` and the kagent chart's `default-model-config` is the default ([Agents](agents.md#the-model)) |
+| The ModelConfig `anthropic` annotated `agent-platform.giantswarm.io/is-default-model-config: "true"`, applied by `agentlab platform` (from agent-platform 4.175.0-rc.22) | An installation declares its own models as ModelConfig objects next to its agents; the lab declares one on its `aiModel` so agents have a default. From 4.175.0-rc.15 to rc.21 the lab renders it as the `kagent.modelConfigs` entry marked `default: true` with `kagent.defaultModelConfig.enabled: false`; below 4.175.0-rc.15 it renders `kagent.providers` and the kagent chart's `default-model-config` is the default ([Agents](agents.md#the-model)) |
 | The chart pinned to an exact release (`platform.chartVersion`) | Component versions are the chart's own ranges, resolved by its Flux at reconcile time (the fleet's dogfooding track). The chart itself never floats in the lab: two runs install the same thing, and a bump is a deliberate edit with a lab run behind it. |
 | The kind config turns on the `ClusterTrustBundle`, `ClusterTrustBundleProjection` and `PodCertificateRequest` gates | Agent Substrate (from the chart) needs them on the apiserver, controller-manager and kubelet; a Giant Swarm cluster sets them through its cluster chart. Fixed at `kind create` — the boot refuses a cluster that predates them. See [Agent Substrate and the platform Postgres](#agent-substrate-and-the-platform-postgres--from-the-chart). |
 | `mcp-prometheus` as a lab-rendered Flux `HelmRelease` | The one release the lab installs outside the chart rides the same engine, as the same tenant identity, so its lab-only sidecar is a `postRenderers` patch like the others and there is exactly one Helm writer (the embedded Helm, for the chart) and one Flux engine on the cluster. |

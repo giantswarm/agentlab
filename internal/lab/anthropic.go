@@ -284,7 +284,7 @@ func checkDefaultModelAnnotation(name string) error {
 		return err
 	}
 	if got := obj.GetAnnotations()[defaultModelAnnotation]; got != defaultModelAnnotationValue {
-		return fmt.Errorf("ModelConfig %s is not annotated %s: \"true\" (got %q): the chart did not render kagent.modelConfigs[].default", name, defaultModelAnnotation, got)
+		return fmt.Errorf("ModelConfig %s is not annotated %s: \"true\" (got %q)", name, defaultModelAnnotation, got)
 	}
 	return nil
 }

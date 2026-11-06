@@ -131,3 +131,27 @@ func TestRangeFloorsAt(t *testing.T) {
 		}
 	}
 }
+
+// On a chart that declares no model the ChatGPT login is wired only beside
+// a workspace provider instance: without one the lab says so, with one, on
+// an older chart or with the switch off it says nothing.
+func TestChatGPTLoginUnwired(t *testing.T) {
+	cfg := chatgptLab(t, nil)
+	cfg.Platform.ChartVersion = config.DefaultChartVersion
+	provider := []workspaceProviderValues{{}}
+	if why := chatgptLoginUnwired(cfg, nil); !strings.Contains(why, "no provider instance") {
+		t.Errorf("without a provider instance: %q, want the reason", why)
+	}
+	if why := chatgptLoginUnwired(cfg, provider); why != "" {
+		t.Errorf("with a provider instance: %q", why)
+	}
+	older := chatgptLab(t, nil)
+	older.Platform.ChartVersion = modelEntriesChart
+	if why := chatgptLoginUnwired(older, nil); why != "" {
+		t.Errorf("on %s: %q", older.Platform.ChartVersion, why)
+	}
+	cfg.Platform.ChatGPTSubscription.Enabled = false
+	if why := chatgptLoginUnwired(cfg, nil); why != "" {
+		t.Errorf("with the switch off: %q", why)
+	}
+}

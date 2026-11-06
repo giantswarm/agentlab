@@ -79,17 +79,34 @@ func TestDefaultModelValuesFor(t *testing.T) {
 	}
 }
 
-// TestPlatformValuesDefaultModel: from the floor on the values mark the lab's
-// Anthropic entry default, turn the kagent chart's own default off, render no
-// kagent.providers and leave agent-manager on the chart's own range; a
-// ChatGPT subscription entry joins the same list.
+// TestPlatformValuesDefaultModel: on a chart that declares no model the
+// values carry none of kagent.providers, kagent.defaultModelConfig and
+// kagent.modelConfigs, the ChatGPT login on or off; between the default model
+// floor and it they mark the lab's Anthropic entry default, turn the kagent
+// chart's own default off and list the ChatGPT entry beside it. agent-manager
+// stays on the chart's own range on both.
 func TestPlatformValuesDefaultModel(t *testing.T) {
-	cfg := chatgptLab(t, nil)
-	cfg.Platform.ChartVersion = config.DefaultChartVersion
-	values, raw, _, _ := renderWorkspaceTemplates(t, cfg, nil)
+	for _, version := range []string{config.DefaultChartVersion, "4.175.1", "4.175.0-rc.22"} {
+		for _, chatgpt := range []bool{true, false} {
+			cfg := chatgptLab(t, nil)
+			cfg.Platform.ChartVersion = version
+			cfg.Platform.ChatGPTSubscription.Enabled = chatgpt
+			values, raw, _, _ := renderWorkspaceTemplates(t, cfg, nil)
+			kagent, _ := values["kagent"].(map[string]any)
+			for _, key := range []string{kagentProvidersKey, "defaultModelConfig", "modelConfigs"} {
+				if _, ok := kagent[key]; ok {
+					t.Errorf("%s, ChatGPT login %v: kagent.%s rendered on a chart that declares no model:\n%s", version, chatgpt, key, excerptAround(raw, key+":"))
+				}
+			}
+			assertAgentManagerOnChartRange(t, version, values)
+		}
+	}
 
+	cfg := chatgptLab(t, nil)
+	cfg.Platform.ChartVersion = modelEntriesChart
+	values, raw, _, _ := renderWorkspaceTemplates(t, cfg, nil)
 	kagent, _ := values["kagent"].(map[string]any)
-	if _, ok := kagent["providers"]; ok {
+	if _, ok := kagent[kagentProvidersKey]; ok {
 		t.Errorf("kagent.providers rendered beside the marked entry:\n%s", excerptAround(raw, "providers:"))
 	}
 	if got, _ := kagent["defaultModelConfig"].(map[string]any); got["enabled"] != false {
@@ -106,8 +123,15 @@ func TestPlatformValuesDefaultModel(t *testing.T) {
 	if got, _ := models[1].(map[string]any); got[nameKey] != config.ChatGPTSubscriptionModelConfig || got[modelConfigDefaultField] != nil {
 		t.Errorf("kagent.modelConfigs[1] = %v, want the unmarked ChatGPT entry", got)
 	}
+	assertAgentManagerOnChartRange(t, cfg.Platform.ChartVersion, values)
+}
+
+// assertAgentManagerOnChartRange requires agent-manager on, on the chart's
+// own range.
+func assertAgentManagerOnChartRange(t *testing.T, version string, values map[string]any) {
+	t.Helper()
 	components, _ := values["components"].(map[string]any)
 	if am, _ := components["agent-manager"].(map[string]any); am["enabled"] != true || am["versionRange"] != nil {
-		t.Errorf("components.agent-manager = %v, want enabled on the chart's own range", am)
+		t.Errorf("%s: components.agent-manager = %v, want enabled on the chart's own range", version, am)
 	}
 }
