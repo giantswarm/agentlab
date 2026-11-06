@@ -221,7 +221,8 @@ type KlausGatewayTestOptions struct {
 	// (klausgatewaytest_refusal.go): no host gateway, no fixture.
 	RefusalOnly bool
 	// Part runs one part instead of the proof: KlausGatewayPartSignIn
-	// (klausgatewaytest_signin.go).
+	// (klausgatewaytest_signin.go) or KlausGatewayPartRefresh
+	// (klausgatewaytest_refresh.go).
 	Part string
 }
 
@@ -239,14 +240,17 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	if user == nil {
 		return fmt.Errorf("no user %q in %s", email, config.File)
 	}
-	if opts.Part != "" && opts.Part != KlausGatewayPartSignIn {
-		return fmt.Errorf("--part %s: the parts are %s", opts.Part, KlausGatewayPartSignIn)
+	if opts.Part != "" && opts.Part != KlausGatewayPartSignIn && opts.Part != KlausGatewayPartRefresh {
+		return fmt.Errorf("--part %s: the parts are %s and %s", opts.Part, KlausGatewayPartSignIn, KlausGatewayPartRefresh)
 	}
 	if opts.RefusalOnly && !cfg.KlausGatewayEnabled() {
 		return fmt.Errorf("--refusal-only proves the meta chart's klaus-gateway component, which is off in this lab (platform.klausGateway; `agentlab configure --klaus-gateway` turns it on)")
 	}
 	opts.Port = cmp.Or(opts.Port, gatewayTestPort(cfg))
 	opts = opts.withDefaults()
+	if opts.Part == KlausGatewayPartRefresh {
+		return klausGatewayRefreshTest(cfg, user, opts)
+	}
 	if err := portsFree(opts.Port, opts.Port+1, opts.Port+3); err != nil {
 		return err
 	}

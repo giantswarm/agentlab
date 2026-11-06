@@ -830,6 +830,30 @@ organization becomes Ready, and `up` fails at the default organization.
 `count/serviceaccounts` and the chart pins that release: the override then
 goes.
 
+### U43. `agent-platform-values.yaml.tmpl`: muster accepts the klaus-gateway component's CIMD client on a private address — BLOCKED UPSTREAM
+The component signs people in to muster as a public client whose `client_id`
+is its Client ID Metadata Document on `agentgateway.<domain>` and whose
+redirect URI is on the same host. In-cluster that hostname resolves to the
+edge's cluster IP (the CoreDNS rewrite), and muster's SSRF guards refuse a
+CIMD URL and a redirect URI that resolve to a private address (`client_id
+metadata URL resolves to private/internal IP address`, `redirect_uri:
+hostname resolves to private IP address`). **Fix in the lab:** with
+`platform.klausGateway` on, muster's values list that one hostname in
+`oauth.server.allowPrivateIPClientMetadataHosts` (muster 5.35.0 and later; the
+CIMD fetch verifies the edge with the lab CA of `extraCaFile`) and set
+`oauth.server.allowPrivateIPRedirectURIs: true`, which muster has only as a
+switch for every host. Both are muster's own settings for an installation
+whose hostnames resolve to an internal load balancer. The host-scoped list is
+the end state; the global redirect switch is what stays a hack: every
+client's redirect URI loses the DNS-rebinding guard in the lab. **Unblocked
+by** a host-scoped redirect allowance, `AllowPrivateIPRedirectURIHosts` in
+mcp-oauth (giantswarm/mcp-oauth#669) exposed as
+`oauth.server.allowPrivateIPRedirectURIHosts` in muster
+(giantswarm/muster#1787); the lab then lists `agentgateway.<domain>` there
+and drops `allowPrivateIPRedirectURIs`. `klaus-gateway-test --part refresh` completes a real sign-in through
+them. The OAuth fixture's pin (U18) is unchanged: muster's own CIMD host is not
+listed.
+
 ### U38. `postRenderers` patch: agentgateway binds IPv4 — BLOCKED UPSTREAM
 agentgateway binds its readiness (15021) and stats (15020) servers and its
 listeners on the IPv6 wildcard unless IPv6 is switched off
