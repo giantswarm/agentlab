@@ -235,8 +235,7 @@ func usersBlock(cfg *config.Config) string {
 	var b strings.Builder
 	b.WriteString("\n  Users:\n")
 	for _, u := range cfg.Users {
-		fmt.Fprintf(&b, "    %-22s password: %-12s groups: %s\n",
-			u.Email, u.Password, strings.Join(u.Groups, ", "))
+		fmt.Fprintf(&b, "    %-22s groups: %s\n", u.Email, strings.Join(u.Groups, ", "))
 	}
 	return b.String()
 }

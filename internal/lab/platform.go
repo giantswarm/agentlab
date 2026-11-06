@@ -1570,27 +1570,19 @@ func claudeCodeHint(cfg *config.Config) string {
 	return b.String()
 }
 
-// ensureMusterValidatesTokens proves the auth path end to end (Dex password
-// grant -> Bearer on /mcp) and heals the one known way it silently breaks:
-// muster can come up with a TLS trust pool that is missing the extra CA
-// (HACKS.md U6), rejecting every token with invalid_token until the pod is
-// replaced — while everything else (rollout, MCPServer Connected, the OAuth
-// metadata endpoint) looks healthy. One bounce, then re-probe.
-//
-// Only called once muster's OAuth endpoint answers 2xx, which implies OIDC
-// discovery already succeeded — so a rejected token here is the trust flake,
-// not a still-starting OAuth server.
+// ensureMusterValidatesTokens requires browser consent and an authorization-code
+// exchange before exercising the MCP resource with its own access token.
 func ensureMusterValidatesTokens(cfg *config.Config) error {
-	step("Verifying muster accepts Dex tokens")
+	step("Verifying muster issues and accepts an MCP access token after browser consent")
 	var lastErr error
 	if waitFor(3, 2*time.Second, func() bool {
 		lastErr = musterTokenProbe(cfg)
 		return lastErr == nil
 	}) {
-		note("muster validated a fresh Dex token")
+		note("muster validated its issued MCP access token")
 		return nil
 	}
-	note("muster rejects Dex tokens (%v)", lastErr)
+	note("muster authorization probe failed (%v)", lastErr)
 	note("known muster startup flake (HACKS.md U6) — replacing the muster pod once")
 	ctx := context.Background()
 	if err := restartDeployment(ctx, platformNamespace, componentMuster); err != nil {
@@ -1605,9 +1597,9 @@ func ensureMusterValidatesTokens(cfg *config.Config) error {
 		lastErr = musterTokenProbe(cfg)
 		return lastErr == nil
 	}) {
-		return fmt.Errorf("muster still rejects Dex tokens after a restart: %w", lastErr)
+		return fmt.Errorf("muster authorization probe failed after a restart: %w", lastErr)
 	}
-	note("muster validated a fresh Dex token after the restart")
+	note("muster validated its issued MCP access token after the restart")
 	return nil
 }
 

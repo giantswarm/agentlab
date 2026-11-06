@@ -132,6 +132,7 @@ stringData:
         secret: {{ .AgentPlatformClientSecret }}
         redirectURIs:
           - {{ .MusterBaseURL }}/oauth/callback
+          - {{ .GatewayURL "mcp-kubernetes" }}/oauth/callback
           - {{ .BackstageBaseURL }}/api/auth/oidc-agent-platform/handler/frame
           {{- with .BackstageLocalDevURL }}
           # A Backstage run with hot reload from a checkout on this machine

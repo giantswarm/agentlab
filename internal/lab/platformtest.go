@@ -695,16 +695,11 @@ func substrateShipped(ctx context.Context, cfg *config.Config) (bool, error) {
 	return false, nil
 }
 
-// musterTokenProbe is the smallest end-to-end auth check: a Dex password
-// grant for the admin user, then an MCP initialize with the id_token as
-// Bearer. A session id back means muster's whole token-validation chain
-// (JWKS / userinfo over the lab CA) works. PlatformTest proves the same and
-// more; this exists so `up` can verify and heal cheaply (see
-// ensureMusterValidatesTokens).
+// musterTokenProbe checks consent, the authorization-code exchange and a
+// resource request using the access token issued by muster.
 func musterTokenProbe(cfg *config.Config) error {
 	admin := cfg.AdminUser()
-	token, err := passwordGrant(cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret,
-		admin.Email, admin.Password, musterLoginScopes)
+	token, err := labMusterAccessToken(context.Background(), cfg, admin)
 	if err != nil {
 		return err
 	}

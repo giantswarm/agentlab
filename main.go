@@ -123,6 +123,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 
 		inGroup(groupTesting, labCmd("test", "Assert RBAC for every configured user (token from Dex, kubectl auth can-i)", lab.Test)),
 		inGroup(groupTesting, platformTestCmd()),
+		inGroup(groupTesting, oauthConsentTestCmd()),
 		inGroup(groupTesting, polexTestCmd()),
 		inGroup(groupTesting, agentsTestCmd()),
 		inGroup(groupTesting, agentsGitOpsTestCmd()),
@@ -1774,6 +1775,25 @@ func platformTestCmd() *cobra.Command {
 				email = args[0]
 			}
 			return lab.PlatformTest(cfg, email)
+		},
+	}
+}
+
+func oauthConsentTestCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "oauth-consent-test [email]",
+		Short: "Prove default CIMD consent, PKCE and shared browser state through both MCP issuers",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(command *cobra.Command, arguments []string) error {
+			configuration, err := loadProofLab()
+			if err != nil {
+				return err
+			}
+			email := configuration.AdminUser().Email
+			if len(arguments) == 1 {
+				email = arguments[0]
+			}
+			return lab.OAuthConsentTest(command.Context(), configuration, email)
 		},
 	}
 }
