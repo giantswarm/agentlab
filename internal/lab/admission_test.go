@@ -84,8 +84,8 @@ func TestLabFleetPolicyExemptsThePlatformNamespace(t *testing.T) {
 		t.Fatal(err)
 	}
 	rules, _, _ := unstructured.NestedSlice(objs[0].Object, "spec", "rules")
-	if len(rules) != 9 {
-		t.Fatalf("%d rules, want 9", len(rules))
+	if len(rules) != 8 {
+		t.Fatalf("%d rules, want 8", len(rules))
 	}
 	want := append(slices.Clone(fleetExemptNamespaces), platformNamespace)
 	for _, r := range rules {
