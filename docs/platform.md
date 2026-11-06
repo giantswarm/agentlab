@@ -726,7 +726,7 @@ mounts but does not render (the CA/JWT pools, the actor-identity trust
 anchor, ate-api-server's authentication config; a pool that exists is never
 touched), the kagent chart creates the `WorkerPool kagent-default` and the
 connectivity chart renders the one platform `Harness kagent` (the Go ADK
-image by digest, `KAGENT_PROPAGATE_TOKEN`, the WorkerPool, the snapshot
+image by digest, the WorkerPool, the snapshot
 location; an `Agent` runs on it by naming it in `spec.harnessRef`). The lab
 installs **nothing** of it — one Helm owner, the objects an
 installation has (the [agent-platform README](https://github.com/giantswarm/agent-platform#agent-substrate)).
@@ -1181,23 +1181,19 @@ A coding agent is an agent whose Agent names a coding Harness: a coding CLI
 run headless in a Substrate actor by the kagent line's image of its runtime
 — `claude` (Claude Code, `claude-harness`), `codex` (OpenAI's Codex CLI,
 `codex-harness`) or `omp` (oh-my-pi, a BYO Harness on the kagent line's
-`omp-harness` adapter, on the Anthropic ModelConfig claude uses). On codex
-and omp, which have no caller forwarder, the proof's Sessions start through
-agent-manager's `start_session` as the person, as Slack's and the portal's
-do: that binds the Session's actor to them in muster, and the runtime reaches
-muster as the person on the actor's JWT, which the egress gateway sets in
-place of kagent's placeholder. On claude they are created through the kagent
-API, unbound, so the turns reach muster through the caller forwarder the
-claude stages prove. An installation turns coding
+`omp-harness` adapter, on the Anthropic ModelConfig claude uses). Every
+proof Session starts through agent-manager's `start_session` as the person,
+as Slack's and the portal's do: that binds the Session's actor to them in
+muster. The runtime reaches muster on the actor's JWT, which the egress
+gateway sets in place of kagent's placeholder. An installation turns coding
 agents on through the meta chart's `kagent.harnesses` alone, and the lab
 does the same: with `platform.coding` (`agentlab configure --coding`,
 agent-platform 4.110.0 or newer) `agentlab platform` renders one coding
 Harness per runtime of `platform.coding.harnesses`
 (`--coding-harnesses claude,codex,omp`; default `claude` alone), named after it,
-snapshots under `s3://ate-snapshots/<runtime>`. `claude` carries
-`KAGENT_PROPAGATE_TOKEN` (the caller's bearer reaches MCP servers through
-the harness's loopback forwarder, never the process environment) and no turn
-limits (the kagent line dropped `spec.claude.limits`; a lab whose Harnesses
+snapshots under `s3://ate-snapshots/<runtime>`. No coding Harness enables
+caller token propagation. `claude` carries no turn limits (the kagent line
+dropped `spec.claude.limits`; a lab whose Harnesses
 still carry them has them removed by `agentlab platform` before the chart is
 applied). `codex` needs a kagent line whose chart takes `runtime: codex`, and
 a ModelConfig codex speaks (the OpenAI Responses API, or Bedrock `gpt-*`).
@@ -1289,8 +1285,8 @@ the one that runs on both of those:
 | claude-format refused on omp | the same package on `omp` (with the run's ModelConfig, an Anthropic one): `validate_agent` and `create_agent` refuse it as Claude-format, naming `plugin.json` at the plugin root, and no HelmRelease is written. agent-manager tells omp from another BYO Harness by its workload image (2.15.0). Gated like the kagent row: where `validate_agent` accepts the package, the line lacks the check on `omp` and the row SKIPs naming it (the write would pass and fail at the adapter's boot refusal); SKIP where the lab renders no `omp` Harness or the run is on `codex`, whose ModelConfig omp does not speak |
 | create | `create_agent` on the Harness with that toolset (`preset:read-only` alone below agent-manager 1.14.0) and the example package, `migrate-agent-plugin` selected (on `claude` with `explanatory-output-style` beside it), as the person; Ready; its `RemoteMCPServer` Accepted and sending the toolset as `X-Muster-Toolset`; the Agent's `spec.egress` is the Harness's origin list agent-manager writes |
 | uid split (*claude*) | the agent's commands run as uid 65532; the root harness's `/proc/<pid>/environ` and `mem` refuse it |
-| forwarder paths (*claude*) | the forwarder answers 400 to `../..`, `%2e%2e` and `..%2f`, 404 for a server it does not front (401 where the MCP config holds only kagent's placeholder: the probe has no loopback token to send, and the forwarder refuses before it matches a server), 401 without its token |
-| write tool refused (*claude*) | `x_agent-manager_delete_agent`, called through the forwarder with the turn's bearer, refused by muster as outside the toolset |
+| mcp binding (*claude*) | Claude Code's MCP configuration names the direct muster endpoint with a placeholder credential |
+| write tool refused (*claude*) | `x_agent-manager_delete_agent`, called through the actor's binding with the placeholder, refused by muster as outside the toolset |
 | credentials | no forge token or bearer in the environment, `/data` or `/workspace` (one admitted: Claude Code's signed policy cache `/data/claude/policy-limits.json.signature.json`, while its every match is a JWS of header `typ: cc-signed-cache+jws`, Anthropic's signature over the cached policy that authenticates nothing); the model key kagent's placeholder, or unset where the runtime keeps it out of the shell's environment (omp); on `codex` every `KAGENT_CODEX_MCP_CREDENTIAL_*` the sandbox sees the placeholder too, on `omp` every `KAGENT_CREDENTIAL_*` |
 | dns canary | a recorded state, not a gate: `example.org` through the cluster resolver and directly at 1.1.1.1 |
 | egress | `proxy.golang.org` denied 403 at the egress gate; `api.github.com`, one of the Agent's origins, reached |
@@ -1310,8 +1306,8 @@ the one that runs on both of those:
 
 The sandbox stages read one turn: the agent's shell tool runs a POSIX script
 and relays its `AGENTLAB_PROBE` lines, and each stage judges its own. The
-script never prints a credential: the forwarder's loopback token stays in a
-shell variable, and the token search prints counts. The DNS canary and the
+script sends only the fixed MCP placeholder and prints token counts. The
+DNS canary and the
 instruction fixture are records because the floor accepts both as known
 residuals: DNS leaves through the cluster resolver until a resolver answers
 only the allowlist's names, and a workspace is an instruction source for

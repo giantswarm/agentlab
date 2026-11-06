@@ -35,9 +35,6 @@ type codingHarness struct {
 	// renders it as the ui.giantswarm.io/display-name annotation), required
 	// on a BYO entry since its image alone does not say what runs.
 	DisplayName string
-	// PropagateToken turns on the claude runtime's caller forwarder
-	// (KAGENT_PROPAGATE_TOKEN): muster called as the person who sent the turn.
-	PropagateToken bool
 }
 
 // codingHarnessesFor is what the lab renders into kagent.harnesses: the
@@ -65,7 +62,6 @@ func codingHarnessesFor(cfg *config.Config, rig *workspaceAdmissionValues, image
 			Image:            image,
 			Command:          codingHarnessCommand(runtime),
 			DisplayName:      codingHarnessDisplayName(runtime),
-			PropagateToken:   runtime == claudeRuntime,
 		})
 	}
 	return out

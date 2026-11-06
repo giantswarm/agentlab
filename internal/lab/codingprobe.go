@@ -12,8 +12,8 @@ import (
 // agent's Bash tool runs, and the verdicts on the lines it relays. Every
 // line starts with probeMarker and names one reading; the commands are POSIX
 // sh on the coding Harnesses' images (Alpine with BusyBox and git). No
-// reading prints a credential: the forwarder's loopback token stays in a
-// shell variable, and a token or credential search prints counts.
+// reading prints a credential: requests use the placeholder, and a token or
+// credential search prints counts.
 
 // codingProbe is the readings a turn relayed, by name.
 type codingProbe map[string]string
@@ -42,8 +42,8 @@ var (
 )
 
 // codingSandboxCommand probes the sandbox on the runtime: on claude the uid
-// split, the forwarder's path refusals and a write tool through the
-// forwarder; on every runtime its uid, credentials, a DNS canary and the
+// split, the direct MCP binding and a write tool through it; on every
+// runtime its uid, credentials, a DNS canary and the
 // egress gate.
 func codingSandboxCommand(rt codingRuntime) string {
 	cmd := `P=` + probeMarker + `
@@ -56,7 +56,7 @@ echo "$P uid=$(id -u)"
 }
 
 // claudeSandboxCommand is the claude runtime's own readings: the root
-// harness beside Claude Code and the caller forwarder in front of muster.
+// harness beside Claude Code and the direct muster binding.
 func claudeSandboxCommand() string {
 	return `h=""
 for p in /proc/[0-9]*; do
@@ -70,30 +70,25 @@ if [ -n "$h" ]; then
 else
   echo "$P harness="
 fi
-cfg=""
+mcp_config=""
 for p in /proc/[0-9]*; do
   c=$(tr '\0' '\n' < "$p/cmdline" 2>/dev/null | awk 'f{print;exit} $0=="--mcp-config"{f=1}')
-  [ -n "$c" ] && { cfg=$c; break; }
+  [ -n "$c" ] && { mcp_config=$c; break; }
 done
-url=""; [ -n "$cfg" ] && [ -r "$cfg" ] && url=$(grep -o 'http://127\.0\.0\.1:[0-9]*/mcp/[^"]*' "$cfg" | head -1)
-if [ -n "$url" ]; then
-  tok=$(grep -o 'Bearer [0-9a-f]*' "$cfg" | head -1 | cut -d' ' -f2); kind=loopback; [ -n "$tok" ] || { tok=` + credentialPlaceholder + `; kind=placeholder; }
-  port=$(echo "$url" | sed 's|http://127\.0\.0\.1:\([0-9]*\)/.*|\1|'); name=${url##*/mcp/}
-  echo "$P forwarder=$name"
-  echo "$P fwd-token=$kind"
-  get() { printf 'GET %s HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer %s\r\n\r\n' "$1" "${2:-$tok}" | nc -w 5 127.0.0.1 "$port" 2>/dev/null | head -1 | cut -d' ' -f2; }
-  echo "$P fwd-dots=$(get "/mcp/$name/../../x")"
-  echo "$P fwd-encoded-dots=$(get "/mcp/$name/%2e%2e/%2e%2e/x")"
-  echo "$P fwd-encoded-slash=$(get "/mcp/$name/..%2fx")"
-  echo "$P fwd-unknown=$(get "/mcp/agentlab-unknown-server")"
-  echo "$P fwd-no-token=$(get "/mcp/$name" agentlab-wrong-token)"
-  F="http://127.0.0.1:$port/mcp/$name"
-  sid=$(wget -S -q -O /dev/null --header "Authorization: Bearer $tok" --header 'Content-Type: application/json' --header 'Accept: application/json, text/event-stream' --post-data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"agentlab-probe","version":"0"}}}' "$F" 2>&1 | tr -d '\r' | sed -n 's/^ *[Mm][Cc][Pp]-[Ss][Ee][Ss][Ss][Ii][Oo][Nn]-[Ii][Dd]: *//p' | head -1)
+endpoint=""; credential=missing
+if [ -n "$mcp_config" ] && [ -r "$mcp_config" ]; then
+  grep -qF '"url":"` + defaultMusterMCPURL + `"' "$mcp_config" && endpoint=` + defaultMusterMCPURL + `
+  grep -qF '"Authorization":"Bearer ` + credentialPlaceholder + `"' "$mcp_config" && credential=placeholder
+fi
+echo "$P mcp-endpoint=$endpoint"
+echo "$P mcp-credential=$credential"
+if [ -n "$endpoint" ] && [ "$credential" = placeholder ]; then
+  sid=$(wget -S -q -O /dev/null --header 'Authorization: Bearer ` + credentialPlaceholder + `' --header 'Content-Type: application/json' --header 'Accept: application/json, text/event-stream' --post-data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"agentlab-probe","version":"0"}}}' "$endpoint" 2>&1 | tr -d '\r' | sed -n 's/^ *[Mm][Cc][Pp]-[Ss][Ee][Ss][Ss][Ii][Oo][Nn]-[Ii][Dd]: *//p' | head -1)
   call() {
     if [ -n "$sid" ]; then
-      wget -q -O - --header "Authorization: Bearer $tok" --header 'Content-Type: application/json' --header 'Accept: application/json, text/event-stream' --header "Mcp-Session-Id: $sid" --post-data "$1" "$F" 2>&1
+      wget -q -O - --header 'Authorization: Bearer ` + credentialPlaceholder + `' --header 'Content-Type: application/json' --header 'Accept: application/json, text/event-stream' --header "Mcp-Session-Id: $sid" --post-data "$1" "$endpoint" 2>&1
     else
-      wget -q -O - --header "Authorization: Bearer $tok" --header 'Content-Type: application/json' --header 'Accept: application/json, text/event-stream' --post-data "$1" "$F" 2>&1
+      wget -q -O - --header 'Authorization: Bearer ` + credentialPlaceholder + `' --header 'Content-Type: application/json' --header 'Accept: application/json, text/event-stream' --post-data "$1" "$endpoint" 2>&1
     fi
   }
   call '{"jsonrpc":"2.0","method":"notifications/initialized"}' >/dev/null
@@ -101,8 +96,6 @@ if [ -n "$url" ]; then
   case "$out" in *"Unknown tool"*) out=$(call '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"` + musterCallTool + `","arguments":{"name":"` + codingTestWriteTool + `","arguments":{"name":"` + codingTestAbsentAgent + `"}}}}');; esac
   r=$(echo "$out" | tr '\n' ' ' | sed -n 's/.*"error":{[^}]*"message":"\([^"]*\)".*/\1/p' | head -c 200)
   echo "$P write-tool=${r:-answered: $(echo "$out" | tr '\n' ' ' | head -c 200)}"
-else
-  echo "$P forwarder="
 fi`
 }
 
@@ -202,40 +195,21 @@ func (p codingProbe) uidSplit([]string) (string, error) {
 	return fmt.Sprintf("uid %s; harness %s; /proc environ %s; /proc mem %s", uid, p["harness"], p["harness-environ"], p["harness-mem"]), nil
 }
 
-// forwarderPaths: the three path rows answered 400, an unknown server 404
-// and a request without the loopback token 401. Where the MCP config holds
-// only kagent's placeholder (fwd-token=placeholder), the probe has no
-// loopback token to send: the forwarder refuses the unknown server's
-// request at its authentication, 401, before it matches a server.
-func (p codingProbe) forwarderPaths([]string) (string, error) {
-	if p["forwarder"] == "" {
-		return "", fmt.Errorf("the session runs Claude Code without a caller forwarder (no loopback MCP endpoint in its --mcp-config): the agent has no MCP server, or KAGENT_PROPAGATE_TOKEN is off on the Harness")
+// mcpBinding requires the direct muster endpoint and its placeholder.
+func (p codingProbe) mcpBinding([]string) (string, error) {
+	if p["mcp-endpoint"] != defaultMusterMCPURL || p["mcp-credential"] != "placeholder" {
+		return "", fmt.Errorf("the Session needs a direct muster binding with a placeholder credential (%s)", p.lines("mcp-endpoint", "mcp-credential"))
 	}
-	want := map[string]string{"fwd-dots": "400", "fwd-encoded-dots": "400", "fwd-encoded-slash": "400", "fwd-unknown": "404", "fwd-no-token": "401"}
-	if p["fwd-token"] == "placeholder" {
-		want["fwd-unknown"] = "401"
-	}
-	var wrong []string
-	for _, key := range []string{"fwd-dots", "fwd-encoded-dots", "fwd-encoded-slash", "fwd-unknown", "fwd-no-token"} {
-		if p[key] != want[key] {
-			wrong = append(wrong, fmt.Sprintf("%s answered %q, wanted %s", key, p[key], want[key]))
-		}
-	}
-	if len(wrong) > 0 {
-		return "", fmt.Errorf("the forwarder of %s: %s", p["forwarder"], strings.Join(wrong, "; "))
-	}
-	return fmt.Sprintf("forwarder of %s: ../.. %s, %%2e%%2e %s, ..%%2f %s, an unknown server %s, no token %s", p["forwarder"], p["fwd-dots"], p["fwd-encoded-dots"], p["fwd-encoded-slash"], p["fwd-unknown"], p["fwd-no-token"]), nil
+	return "direct muster binding with a placeholder credential", nil
 }
 
-// writeToolRefused: muster refuses the write tool through the forwarder,
-// naming the toolset. Under a tool selection on muster the forwarder knows
-// the write tool only behind muster's call_tool, which the probe then calls.
+// writeToolRefused requires muster's toolset refusal through the binding.
 func (p codingProbe) writeToolRefused([]string) (string, error) {
 	// Under the toolset muster resolves the agent's endpoint to the
 	// toolset's tools alone: a tool outside it is refused as outside the
 	// toolset, or not found where muster hides it.
 	if got := p["write-tool"]; !strings.Contains(got, codingTestOutsideToolset) && !strings.Contains(got, "not found") {
-		return "", fmt.Errorf("%s through the forwarder was not refused under the toolset: %q", codingTestWriteTool, got)
+		return "", fmt.Errorf("%s through the binding was not refused under the toolset: %q", codingTestWriteTool, got)
 	}
 	return fmt.Sprintf("%s: %s", codingTestWriteTool, p["write-tool"]), nil
 }
