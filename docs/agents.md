@@ -7,7 +7,7 @@ The platform's agent runtime is an **optional component**, on by default
 the platform's Substrate: every agent is an `AgentTemplate` paired by an
 `Agent` of the same name with the platform's Go ADK **Harness** `kagent`
 (`spec.templateRef`, `spec.harnessRef`; the connectivity chart renders the
-Harness, digest-pinned runtime image, `KAGENT_PROPAGATE_TOKEN` on), compiled
+Harness and digest-pinned runtime image), compiled
 by the controller into a golden snapshot and run as a Substrate actor; a
 conversation is a `Session` of the Agent, its turns A2A messages through the
 edge as the signed-in person (`docs/platform.md` "Dev channel" and
@@ -429,10 +429,10 @@ platform's CNPG `Cluster kagent-pg` next to Substrate's (see [Agent Substrate
 and the platform
 Postgres](platform.md#agent-substrate-and-the-platform-postgres--from-the-chart)).
 The agent chart 1.x renders one `RemoteMCPServer` per agent pointing it at
-muster with its toolset header; the Harness re-emits the *caller's* bearer on
-every MCP call (`KAGENT_PROPAGATE_TOKEN`), so agent tool calls through muster
-are the person's, never the platform's — they need a real Dex token on the way
-in. Lab deviations on the kagent side, same spirit as the [deviations
+muster with its toolset header. Sessions started through agent-manager are
+bound to the person in muster; the egress gateway authenticates MCP calls
+with the actor's JWT in place of the runtime's placeholder. Lab deviations
+on the kagent side, same spirit as the [deviations
 table](platform.md#lab-specific-deviations-from-a-real-management-cluster):
 the JWKS source is the lab Dex, the snapshot store the bundled RustFS, the
 ServiceMonitor / OTel exporters are off (the line serves no /metrics, no

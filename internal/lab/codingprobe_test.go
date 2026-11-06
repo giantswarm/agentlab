@@ -14,13 +14,8 @@ const codingReply = "Here is the output:\n```\n" +
 	"AGENTLAB_PROBE harness=pid 7 uid 0\n" +
 	"AGENTLAB_PROBE harness-environ=rc1 cat: can't open '/proc/7/environ': Permission denied\n" +
 	"AGENTLAB_PROBE harness-mem=rc1 head: /proc/7/mem: Permission denied\n" +
-	"AGENTLAB_PROBE forwarder=agentlab-coding\n" +
-	"AGENTLAB_PROBE fwd-token=loopback\n" +
-	"AGENTLAB_PROBE fwd-dots=400\n" +
-	"AGENTLAB_PROBE fwd-encoded-dots=400\n" +
-	"AGENTLAB_PROBE fwd-encoded-slash=400\n" +
-	"AGENTLAB_PROBE fwd-unknown=404\n" +
-	"AGENTLAB_PROBE fwd-no-token=401\n" +
+	"AGENTLAB_PROBE mcp-endpoint=" + defaultMusterMCPURL + "\n" +
+	"AGENTLAB_PROBE mcp-credential=placeholder\n" +
 	"AGENTLAB_PROBE write-tool=outside the toolset [preset:read-only]\n" +
 	"AGENTLAB_PROBE env-tokens=0\n" +
 	"AGENTLAB_PROBE data-tokens=0\n" +
@@ -36,7 +31,7 @@ var codingOrigins = []string{"https://github.com", "https://api.github.com"}
 func TestCodingProbePasses(t *testing.T) {
 	p := parseCodingProbe(codingReply)
 	for name, verdict := range map[string]func(codingProbe, []string) (string, error){
-		"uid split": codingProbe.uidSplit, "forwarder": codingProbe.forwarderPaths, "write tool": codingProbe.writeToolRefused,
+		"uid split": codingProbe.uidSplit, "mcp binding": codingProbe.mcpBinding, "write tool": codingProbe.writeToolRefused,
 		"credentials": codingProbe.credentials, "dns": codingProbe.dnsCanary, "egress": codingProbe.egress,
 	} {
 		if got, err := verdict(p, codingOrigins); err != nil || got == "" {
@@ -109,10 +104,10 @@ func TestCodingProbeFailures(t *testing.T) {
 		{"root claude", "uid=65532", "uid=0", codingProbe.uidSplit},
 		{"no harness", "harness=pid 7 uid 0", "harness=", codingProbe.uidSplit},
 		{"environ read", "harness-environ=rc1 cat: can't open '/proc/7/environ': Permission denied", "harness-environ=rc0 ", codingProbe.uidSplit},
-		{"dots forwarded", "fwd-dots=400", "fwd-dots=200", codingProbe.forwarderPaths},
-		{"encoded slash forwarded", "fwd-encoded-slash=400", "fwd-encoded-slash=404", codingProbe.forwarderPaths},
-		{"no forwarder", "forwarder=agentlab-coding", "forwarder=", codingProbe.forwarderPaths},
-		{"unknown server refused with the loopback token", "fwd-unknown=404", "fwd-unknown=401", codingProbe.forwarderPaths},
+		{"no MCP endpoint", "mcp-endpoint=" + defaultMusterMCPURL, "mcp-endpoint=", codingProbe.mcpBinding},
+		{"caller forwarder", "mcp-endpoint=" + defaultMusterMCPURL, "mcp-endpoint=http://127.0.0.1:1234/mcp/agentlab-coding", codingProbe.mcpBinding},
+		{"no MCP credential", "mcp-credential=placeholder", "mcp-credential=missing", codingProbe.mcpBinding},
+		{"real MCP credential", "mcp-credential=placeholder", "mcp-credential=other", codingProbe.mcpBinding},
 		{"write tool other error", "write-tool=outside the toolset [preset:read-only]", "write-tool=unauthorized", codingProbe.writeToolRefused},
 		{"write tool answered", "write-tool=outside the toolset [preset:read-only]", "write-tool=answered: {\"result\":{}}", codingProbe.writeToolRefused},
 		{"token in env", "env-tokens=0", "env-tokens=1", codingProbe.credentials},
@@ -131,23 +126,6 @@ func TestCodingProbeFailures(t *testing.T) {
 				t.Errorf("passed: %q", got)
 			}
 		})
-	}
-}
-
-// With only kagent's placeholder in the MCP config the probe sends the
-// placeholder: the forwarder refuses an unknown server at its
-// authentication (401); a 404 then means it routed an unauthenticated
-// request.
-func TestCodingProbeForwarderPlaceholderToken(t *testing.T) {
-	reply := strings.Replace(codingReply, "fwd-token=loopback", "fwd-token=placeholder", 1)
-	if _, err := parseCodingProbe(reply).forwarderPaths(nil); err == nil {
-		t.Error("an unknown server answered 404 to the placeholder passed")
-	}
-	reply = strings.Replace(reply, "fwd-unknown=404", "fwd-unknown=401", 1)
-	if got, err := parseCodingProbe(reply).forwarderPaths(nil); err != nil {
-		t.Errorf("the placeholder's 401 for an unknown server: %v", err)
-	} else if !strings.Contains(got, "an unknown server 401") {
-		t.Errorf("verdict = %q", got)
 	}
 }
 
@@ -185,16 +163,15 @@ func TestCodingFixtureRecord(t *testing.T) {
 	}
 }
 
-// The probe never prints the forwarder's token: it stays in a variable, and
-// every echo of a reading names no $tok.
+// The probe sends only the fixed placeholder and reports no credential value.
 func TestCodingSandboxCommandKeepsTheToken(t *testing.T) {
 	claude := codingRuntimes[config.CodingRuntimeClaude]
 	for _, line := range strings.Split(codingSandboxCommand(claude), "\n") {
-		if strings.Contains(line, "echo") && strings.Contains(line, "$tok") {
+		if strings.Contains(line, "echo") && strings.Contains(line, credentialPlaceholder) {
 			t.Errorf("a reading echoes the token: %s", line)
 		}
 	}
-	for _, want := range []string{"/mcp/$name/../../x", "%2e%2e/%2e%2e", "..%2fx", codingTestWriteTool, codingTestOutsideHost} {
+	for _, want := range []string{defaultMusterMCPURL, "Authorization: Bearer " + credentialPlaceholder, codingTestWriteTool, codingTestOutsideHost} {
 		if !strings.Contains(codingSandboxCommand(claude), want) {
 			t.Errorf("the probe lacks %q", want)
 		}

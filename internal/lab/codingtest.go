@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
-	"github.com/google/uuid"
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
@@ -24,7 +23,7 @@ import (
 // (coding.go), with an agent created through agent-manager as the person,
 // the way the portal creates one. --harness picks the Harness, claude by
 // default; the stages that only make sense on claude (the root harness's
-// uid split, the caller forwarder, Claude Code's instruction files) run on
+// uid split, the direct MCP binding, Claude Code's instruction files) run on
 // claude alone.
 //
 //  1. The Harness Ready from the values (on claude: no limits on it).
@@ -47,10 +46,9 @@ import (
 //  4. One Session, one turn whose shell tool probes the sandbox; its lines
 //     are judged stage by stage. On claude: Claude Code runs as the
 //     unprivileged uid and cannot read the harness's environment or memory;
-//     the caller forwarder refuses dot segments and encoded slashes, answers
-//     404 for a server it does not front and 401 without its token; a write
-//     tool outside the agent's toolset is refused by muster through the
-//     forwarder with the turn's bearer. On every Harness: no forge token or
+//     the MCP binding holds a placeholder credential; a write tool outside
+//     the agent's toolset is refused by muster through that binding.
+//     On every Harness: no forge token or
 //     bearer in the environment, /data or /workspace, the model key and
 //     every MCP credential a placeholder; a DNS lookup of a name outside the
 //     allowlist recorded (through the cluster resolver and directly); a host
@@ -95,7 +93,7 @@ type codingRuntime struct {
 	// placeholder.
 	modelKeys []string
 	// claude marks Claude Code's own stages: the Harness's limits, the root
-	// harness's uid split, the caller forwarder and the instruction files.
+	// harness's uid split, the MCP binding and the instruction files.
 	claude bool
 	// mcpCredentialPrefix names the environment variables the runtime is
 	// handed its Secret-backed MCP credentials in; "" where it has none of
@@ -692,14 +690,14 @@ type judgedStage struct {
 }
 
 // judgedStages are the verdicts on the sandbox turn for the runtime: Claude
-// Code's uid split, forwarder and write tool through it on claude alone.
+// Code's uid split, MCP binding and write tool through it on claude alone.
 func (p *codingProof) judgedStages() []judgedStage {
 	var stages []judgedStage
 	if p.rt.claude {
 		stages = append(stages,
 			judgedStage{"uid split", "Claude Code as uid " + claudeUnprivilegedUID + " cannot read the root harness's environment or memory", codingProbe.uidSplit},
-			judgedStage{"forwarder paths", "The caller forwarder refuses dot segments and encoded slashes before it matches a server", codingProbe.forwarderPaths},
-			judgedStage{"write tool refused", "A write tool outside the toolset, called through the forwarder with the turn's bearer, refused by muster", codingProbe.writeToolRefused},
+			judgedStage{"mcp binding", "The direct muster binding uses a placeholder credential", codingProbe.mcpBinding},
+			judgedStage{"write tool refused", "A write tool outside the toolset, called through the actor's binding, refused by muster", codingProbe.writeToolRefused},
 		)
 	}
 	return append(stages,
@@ -848,23 +846,12 @@ func (p *codingProof) proveBinding(toolset []string) error {
 	return nil
 }
 
-// createSession is a Session of the agent as the person, tracked for
-// removal. On a runtime without a caller forwarder (codex, omp) it is started
-// the way Slack and the portal do (startBoundSession), the only way such a
-// runtime reaches muster as the person. On claude it is created through the
-// kagent API, unbound, so its turns reach muster through the caller
-// forwarder the claude stages prove.
+// createSession starts a Session through agent-manager and tracks it for
+// removal. Every runtime needs an actor binding to reach muster.
 func (p *codingProof) createSession(ctx context.Context, agent string) (*apiv1alpha1.Session, error) {
 	ctx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
-	if !p.rt.claude {
-		return startBoundSession(ctx, p.muster, p.api, p.sessions, agent)
-	}
-	session, err := p.api.createSession(ctx, agent, uuid.NewString())
-	if session != nil && session.GetId() != "" {
-		p.sessions.add(session.GetId())
-	}
-	return session, err
+	return startBoundSession(ctx, p.muster, p.api, p.sessions, agent)
 }
 
 // codingTurn is what one completed turn of the proof answered: the reply's
