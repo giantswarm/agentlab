@@ -141,23 +141,24 @@ func TestEdgeDialAddr(t *testing.T) {
 	const (
 		domain    = "127.0.0.1.nip.io"
 		edgeHTTPS = "agentgateway.127.0.0.1.nip.io:443"
+		edgePort  = "8443"
 	)
 	for _, tc := range []struct {
 		addr, edgePort, want string
 	}{
-		{edgeHTTPS, "8443", "agentgateway.127.0.0.1.nip.io:8443"},
-		{"127.0.0.1.nip.io:443", "8443", "127.0.0.1.nip.io:8443"},
+		{edgeHTTPS, edgePort, "agentgateway.127.0.0.1.nip.io:8443"},
+		{"127.0.0.1.nip.io:443", edgePort, "127.0.0.1.nip.io:8443"},
 		{edgeHTTPS, "443", edgeHTTPS},
-		{"muster.127.0.0.1.nip.io:8443", "8443", "muster.127.0.0.1.nip.io:8443"},
-		{"localhost:5556", "8443", "localhost:5556"},
-		{"example.com:443", "8443", "example.com:443"},
-		{"evil127.0.0.1.nip.io:443", "8443", "evil127.0.0.1.nip.io:443"},
+		{"muster.127.0.0.1.nip.io:8443", edgePort, "muster.127.0.0.1.nip.io:8443"},
+		{"localhost:5556", edgePort, "localhost:5556"},
+		{"example.com:443", edgePort, "example.com:443"},
+		{"evil127.0.0.1.nip.io:443", edgePort, "evil127.0.0.1.nip.io:443"},
 	} {
 		if got := edgeDialAddr(tc.addr, domain, tc.edgePort); got != tc.want {
 			t.Errorf("edgeDialAddr(%s, edge %s) = %s, want %s", tc.addr, tc.edgePort, got, tc.want)
 		}
 	}
-	if got := edgeDialAddr("agentgateway.x:443", "", "8443"); got != "agentgateway.x:443" {
+	if got := edgeDialAddr("agentgateway.x:443", "", edgePort); got != "agentgateway.x:443" {
 		t.Errorf("edgeDialAddr outside a lab = %s", got)
 	}
 }
