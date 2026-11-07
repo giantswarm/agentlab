@@ -450,6 +450,9 @@ func loadProofLab() (*config.Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := lab.RefuseUndrivenLab(cfg); err != nil {
+		return nil, err
+	}
 	installed, err := lab.NoteChartUnderTest(cfg)
 	if err != nil {
 		return nil, err
@@ -1061,6 +1064,9 @@ func turnCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := lab.RefuseUndrivenLab(cfg); err != nil {
+				return err
+			}
 			if user == "" {
 				user = cfg.AdminUser().Email
 			}
@@ -1443,6 +1449,11 @@ func configureCmd() *cobra.Command {
 			// chartVersion now, so the file says what `up` will install and
 			// a branch without builds is refused here, not after a boot.
 			if _, err := lab.ResolveChartVersion(cfg); err != nil {
+				return err
+			}
+			// A pin on a kagent line another agentlab drives is that
+			// agentlab's to write: this release's file would lock it out.
+			if err := lab.RefuseUndrivenPin(cfg); err != nil {
 				return err
 			}
 			if err := saveLab(cfg); err != nil {

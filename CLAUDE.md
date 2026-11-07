@@ -251,7 +251,7 @@ agentlab configure       # interactive form; --defaults keeps/writes the canonic
 agentlab up              # certs, kind cluster, Dex, RBAC, the agent platform — verified
                            # on a terminal it ends by offering `trust` and the portal (--trust/--open pre-answer)
 agentlab open portal     # the portal (Backstage) in the browser; `open agents` the kagent UI, `open prometheus` the lab Prometheus
-agentlab list            # the labs on this machine: state, components, URLs, CA trust
+agentlab list            # the labs on this machine: state, components, kagent line, URLs, CA trust
 agentlab status          # the lab's live state: the chart in place (a dev chart named as such) vs agentlab.yaml's, every platform.valuesFiles overlay with what it pins, the platform HelmReleases
 agentlab configure --released  # the restore step before handing a lab on: drops overlays, dev images, chart directory, dev channel
 agentlab pods            # the lab's pods (kubectl get pods -A, without kubectl); -n <namespace>
@@ -333,6 +333,17 @@ The lab's own e2e checks are the `*-test` subcommands, not `go test`.
   The read-only commands (`trust`, `status`, `open`, `pods`, `logs`, `list`)
   read an `agentlab.yaml` a newer release wrote (`config.LoadReadOnly`,
   `Peek`); every writer keeps the strict refusal.
+- **One binary per kagent line** (`internal/lab/kagentline.go`): a lab's
+  line is the major.minor of `components.kagent.versionRange`'s floor. This
+  agentlab drives the Session API lines (kagent 1.3 on, agent-platform
+  4.121.0 on) and the 3.x chart; the 4.x lines before 1.3 are agentlab
+  v0.84.6's. `up`/`platform` record the line in `state/kagent-line.json` as
+  the install starts and `list` shows it (the chart pin when no record:
+  4.x up to 4.120.1 is `a line before 1.3`); `configure`, `up`,
+  `platform`, `turn` and the proofs refuse such a lab, naming v0.84.6, except
+  an upgrade seed. Never write a lab on another line's `agentlab.yaml` with
+  this release: the line's binary refuses the newer fields. Two labs on two
+  lines: docs/cli.md "One binary per kagent line".
 - `internal/telemetry` — anonymous usage signals to TelemetryDeck
   (giantswarm/telemetrydeck-go). One per user-facing command, kubectl-gs's
   signal shape: `GiantSwarm.command` with the command path and the version

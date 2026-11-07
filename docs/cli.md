@@ -101,6 +101,85 @@ field this release does not know is read past with a note naming the release
 that wrote it, and nothing is written. Every command that writes the file
 refuses it instead, so a newer release's switch is never dropped.
 
+## One binary per kagent line
+
+A lab's **kagent line** is the major.minor of the kagent its chart installs,
+read off `components.kagent.versionRange` (the chart's default, or a
+`platform.valuesFiles` overlay's): agent-platform 4.175.1's `>=1.31.0 <1.32.0`
+is the 1.31 line. The line decides the kagent API the lab serves, and so which
+agentlab drives it:
+
+| kagent line | agent-platform | kagent API | agentlab |
+|---|---|---|---|
+| 1.3 and later | 4.121.0 and later | v1alpha3 Agents, a Session per conversation | this release and every one from v0.85.0 |
+| before 1.3 | 4.x up to 4.120.1 | AgentTemplates and AgentInstances | v0.84.6, the last release that drives them |
+| the 3.x chart's | 3.x | the 0.10 product | this release (`platform-test` skips what the line lacks) |
+
+`agentlab list` shows each lab's line on its `kagent` row (`-o json`:
+`kagentLine` and `driven`): the line every `up` and `platform` records in the
+lab's `state/kagent-line.json` as the install starts, or, for a lab no install
+of this agentlab recorded, what the chart pin alone says — a 4.x pin up to
+4.120.1 is `a line before 1.3`. A lab on a line another agentlab drives is
+marked `driven by agentlab v0.84.6, not this binary`.
+
+This agentlab leaves such a lab to its own: `configure` does not save a pin
+on a line before 1.3 (the file it writes is one v0.84.6 no longer reads), `up`
+and `platform` refuse it before their first step, again once the chart is
+loaded (an overlay can move the line), and `turn` and the proofs refuse a lab
+recorded or pinned there, each naming the release that drives it. The
+exception is an upgrade proof's seed (`platform.upgradeSeed`), which installs
+an older line on purpose for this agentlab to upgrade.
+
+### Two labs, two lines
+
+The recipe for proving a change on one line while another line runs beside
+it: each lab is its own kind cluster with its own ports and directory, and
+each is driven by the binary of its line, so `up`, `platform`, `turn` and the
+proofs of one never touch the other.
+
+```bash
+# The line's binary, verified, beside the installed agentlab (never in its place).
+mkdir dl && gh release download v0.84.6 --repo giantswarm/agentlab \
+  -D dl -p 'agentlab-linux-amd64' -p 'agentlab-linux-amd64.bundle'
+cosign verify-blob --bundle dl/agentlab-linux-amd64.bundle \
+  --certificate-oidc-issuer https://oidc.circleci.com \
+  --certificate-identity-regexp '^https://circleci\.com/api/v2/projects/[a-f0-9-]+/pipeline-definitions/[a-f0-9-]+$' \
+  dl/agentlab-linux-amd64
+install -m 0755 dl/agentlab-linux-amd64 ~/.local/bin/agentlab-v0.84.6
+
+# The lab on the older line: its own directory and cluster name, configured
+# and booted by its binary (v0.84.6 has no --cluster-name and no --lab).
+mkdir -p ~/.local/state/agentlab/labs/agentlab-12 && cd ~/.local/state/agentlab/labs/agentlab-12
+printf 'clusterName: agentlab-12\n' > agentlab.yaml
+agentlab-v0.84.6 configure --defaults --chart-version 4.120.1
+agentlab list                   # compare its ports with every other lab's before the boot
+agentlab-v0.84.6 up
+agentlab-v0.84.6 platform-test  # its turns and proofs: v0.84.6, in this directory
+
+# The lab on the current line: the installed agentlab, by name, from anywhere.
+agentlab --lab agentlab platform-test
+
+agentlab list                   # both, each with its kagent line
+```
+
+Ports: v0.84.6 predates the lab registry, so its `configure` moves off the
+ports in use only — not those a stopped lab records, nor the lab registry's
+host port (`platform.devRegistryPort`, 5001 for the first lab). Before its
+`up`, give every port `agentlab list` and the other labs' `agentlab.yaml`
+already hold one of its own (`dexPort`, `apiServerPort`, `platform.agentsPort`,
+`platform.musterPort`, `platform.gatewayPort`, `platform.devRegistryPort`,
+`backstage.port`). It serves its edge on `127.0.0.1` with a port suffix
+(`https://portal.127.0.0.1.nip.io:8443`), since the loopback address per lab
+(`platform.gatewayAddress`) came later.
+
+The current agentlab registers the older lab on any command run in its
+directory (`agentlab pods`), which also moves its `agentlab.yaml` into the
+configuration folder and leaves a link that v0.84.6 follows. It never writes
+the file. Each lab stays on its line until it is moved on deliberately:
+`agentlab configure --chart-version <a 4.121.0 or later release>` and
+`agentlab platform` with the current agentlab, or `down` and `up` on the new
+line.
+
 ## Headless use
 
 Nothing asks without a terminal (stdin not a TTY): no first-run question, no
@@ -125,7 +204,7 @@ The sections below are the groups `agentlab --help` prints, in the same order.
 | Command | What it does |
 |---|---|
 | `open <portal\|agents\|prometheus>` | Open a lab URL in the browser and print it (so it can be copied where the opener finds no browser — SSH, WSL): `portal` is Backstage, `agents` the kagent UI, `prometheus` the lab Prometheus's web UI on the edge (`https://observability.<domain>/prometheus`, the path Backstage queries). The target is required; without one, the refusal names them. Refused when the target is disabled in `agentlab.yaml`, when the cluster is not running, or when the target does not answer yet (a short reachability probe, before any trust question, so a sudo prompt is never spent on a command that then opens nothing) — a plain fact instead of an error page in the browser. While the lab CA is untrusted, `open portal` and `open prometheus` offer `agentlab trust` first on a terminal and warn off one; `open agents` is plain HTTP on loopback and asks nothing. |
-| `list` (`ls`) | Every lab registered on this machine: its name, directory, cluster state (`running`, `exited`, `not created`), enabled components with the chart, the portal and muster URLs (with the port suffix when the edge is not on 443), and whether its lab CA is trusted here; `*` marks the current directory's. Docker and the files answer, so it works while a lab is down. `-o json` for scripts. It never asks which lab. |
+| `list` (`ls`) | Every lab registered on this machine: its name, directory, cluster state (`running`, `exited`, `not created`), enabled components with the chart, the portal and muster URLs (with the port suffix when the edge is not on 443), the kagent line it runs, with the agentlab that drives it when that is another release ([One binary per kagent line](#one-binary-per-kagent-line)), and whether its lab CA is trusted here; `*` marks the current directory's. Docker and the files answer, so it works while a lab is down. `-o json` for scripts. It never asks which lab. |
 | `status` | The lab's live state, for the lab here (or `--lab`): the chart the cluster runs — its version, whether it is a dev chart (a chart directory's build or a branch's dev build), its Helm revision and which agentlab installed it from where — against the chart `agentlab.yaml` installs; when the two differ, the drift with both versions and which side is behind (an `agentlab.yaml` put back from a copy without a platform run pins an older release than runs) and the two ways to end it — `agentlab platform` installs the configured chart over the one in place, `agentlab configure --adopt-chart` writes the chart in place into the config; and the platform HelmReleases, how many are Ready and every other one with helm-controller's message. An `overlay` line per `platform.valuesFiles` entry: the file and every value it sets (`components.kagent.versionRange=1.15.0-rc.4`; the first eight, then a count), an unreadable one named as such, one the release in place does not carry yet marked, and one the release in place was installed with that `agentlab.yaml` no longer lists (every platform run records its overlays in the revision's description, which the `chart` line shows) — so a lab handed on with a proof's pins never reads as the chart's own component ranges; `overlays` and `staleOverlays` in JSON. Refused with `agentlab up` when the cluster is not running. A `registry` line: the lab registry container (`<cluster>-registry`) running, stopped, or missing, which `agentlab platform` recreates (`registry` in JSON). `-o json` for scripts (`drift` carries the line). With `platform.workspaces`, a `workspaces` line: the NFS server and its node, the NFS CSI controller with its mTLS proxy (without it while Agent Substrate is off), the node plugin, the StorageClass, and whose CSIDriverConfig registers the driver with Substrate (the chart's, the lab's, or one applied by hand), worded as the platform summary words it. |
 | `pods [-n <namespace>]` | The lab's pods across namespaces through the embedded client, shaped like `kubectl get pods -A` (NAMESPACE, NAME, READY, STATUS with a waiting reason such as `ImagePullBackOff`, RESTARTS, AGE); `-n` narrows to one namespace. Refused with `agentlab up` when the cluster is not running. |
 | `logs <component>` | Tail a component's logs: `backstage`, `dex`, `klaus-gateway`, `mcp-prometheus`, `muster` or `prometheus`. |
