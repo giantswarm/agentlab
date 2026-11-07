@@ -800,22 +800,6 @@ the step. Unblocks when kagent's Update maps a conflict to `Aborted` or
 retries it on a fresh read (giantswarm/kagent-upstream,
 `go/core/internal/service/kubecrud`): the retry then goes.
 
-### U41. `organizationstest.go`: the erasure of an Orphaned organization is skipped — BLOCKED UPSTREAM
-The management-cluster profile asks that an organization's erasure finish
-while a person's session runs in it. On the lab it cannot: kagent answers
-`NotFound` to the operator for another creator's session, so the erasure
-stops at its Sessions step (giantswarm/kagent-extensions#27;
-kagent-upstream#957 is open); the lab runs apply mode, with no installation
-Kustomization whose inventory makes an organization `Orphaned`; and the
-operator's S3 client addresses the lab's in-cluster RustFS virtual-hosted
-(`<bucket>.rustfs…`), which neither resolves nor is served, so the Snapshots
-step would stop too. **Fix:** the check is a `SKIP` line naming the reasons
-(`organizationErasureSkip`), and the proof's two organizations stay for the
-next run instead of being erased. Unblocks when the lab's kagent line
-carries kagent-extensions#27 and the operator takes path-style addressing
-(an `AWS_S3_USE_PATH_STYLE`-like option, as Substrate reads): the check then
-deletes an organization with a running session and waits for its finalizer.
-
 ### U42. `agent-platform-values.yaml.tmpl`: the operator's quota counts ServiceAccounts under `count/serviceaccounts` — BLOCKED UPSTREAM
 agent-platform-operator's default `objectQuota` (v0.1.0-rc.5 through main)
 carries the bare key `serviceaccounts`, which is no standard quota resource,
