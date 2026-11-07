@@ -1270,7 +1270,7 @@ The workspaces proof's claude Session runs on the same `claude` Harness,
 which the lab also renders with the workspaces on and coding off.
 
 `agentlab coding-test [email] [--harness claude|codex|omp] [--model-config
-<name>] [--muster-tools meta|<tool,…>]` is the proof, and the floor a coding agent rests on, on one Harness
+<name>] [--muster-tools meta|<tool,…>] [--step <stage>]` is the proof, and the floor a coding agent rests on, on one Harness
 per run (default `claude`). Every stage runs on the lines the lab pins, so
 it repeats on every release candidate. The stages marked *claude* prove
 Claude Code's own mechanisms and run on `claude` alone; *codex, omp* marks
@@ -1304,6 +1304,26 @@ the one that runs on both of those:
 | share refused | a read-write share of the coding Session is refused: a collaborator's turn would run under what the first sender's turns left behind (git hooks, Makefiles, background processes) |
 | empty selection | `update_agent` with the example package's selection `[]`: the AgentTemplate carries it, the Agent is Ready on a new revision, and a new Session's agent has no `migrate-agent-plugin` (its listing on a real model; on the mockllm none of the new Session's requests carries it) |
 | model (*codex on the mockllm*) | the mockllm answered every model call of the turns from its script, none outside it |
+
+`--step <stage>` reruns one stage: the stage, the stages it builds on and
+the harnesses stage run, and the summary lists every other stage as SKIP
+`(--step <stage>)`, so a step's run never reads as the proof's pass. A
+sandbox stage (`uid split` to `egress`) needs the sandbox turn and the agent;
+`plugin hook` needs `plugin skills`; `usage` needs `suspend and resume`;
+`harness change to kagent refused` and `harness change to omp refused` need
+their `claude-format refused on …` row; every stage after `create` needs the
+agent, and the first stage that turns starts the Session. Run without the
+instruction fixture, `suspend and resume` writes the code word and its file
+in a turn of its own before the suspend. On the mockllm the model stage
+closes every run and judges the model calls that run made. A stage the
+Harness has not (a *claude* stage on `codex`), `model` or an unknown name is
+refused before the lab is touched, naming the stages `--step` takes:
+
+```sh
+agentlab coding-test --step egress                # harnesses, create, sandbox turn, egress
+agentlab coding-test --step suspend-and-resume    # harnesses, create, suspend and resume
+agentlab coding-test --harness codex --step usage # harnesses, create, suspend and resume, usage, model
+```
 
 The sandbox stages read one turn: the agent's shell tool runs a POSIX script
 and relays its `AGENTLAB_PROBE` lines, and each stage judges its own. The

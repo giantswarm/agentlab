@@ -69,9 +69,15 @@ func (p *proofStages) skip(format string, a ...any) {
 // leaveOut records stages the configuration leaves out as a whole — a
 // component that is off — skipped with the one reason, in one note.
 func (p *proofStages) leaveOut(reason string, names ...string) {
+	note("skipped %s: %s", strings.Join(names, ", "), reason)
+	p.omit(reason, names...)
+}
+
+// omit records stages the run leaves out, skipped with the one reason,
+// without a note: the run said what it runs when it started.
+func (p *proofStages) omit(reason string, names ...string) {
 	at := p.now()
 	p.endAt(at, stagePass, "")
-	note("skipped %s: %s", strings.Join(names, ", "), reason)
 	for _, name := range names {
 		p.stages = append(p.stages, &proofStage{name: name, outcome: stageSkip, reason: reason, began: at})
 	}
