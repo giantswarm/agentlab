@@ -101,3 +101,20 @@ func TestMissingSecretKeys(t *testing.T) {
 		}
 	}
 }
+
+// TestSecretGap: a warning says a Secret does not exist when it is absent,
+// and names the keys without a value otherwise.
+func TestSecretGap(t *testing.T) {
+	for _, tc := range []struct {
+		missing []string
+		want    string
+	}{
+		{[]string{secretAbsent}, "Secret agent-platform/github-oauth-client does not exist"},
+		{[]string{"key client-secret"}, "Secret agent-platform/github-oauth-client lacks key client-secret"},
+		{[]string{"key client-id", "key client-secret"}, "Secret agent-platform/github-oauth-client lacks key client-id and key client-secret"},
+	} {
+		if got := secretGap(config.DefaultGitHubSecretNamespace, config.DefaultGitHubSecretName, tc.missing); got != tc.want {
+			t.Errorf("secretGap(%v) = %q, want %q", tc.missing, got, tc.want)
+		}
+	}
+}
