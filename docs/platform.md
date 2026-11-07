@@ -1317,7 +1317,7 @@ instruction fixture, `suspend and resume` writes the code word and its file
 in a turn of its own before the suspend. On the mockllm the model stage
 closes every run and judges the model calls that run made. A stage the
 Harness has not (a *claude* stage on `codex`), `model` or an unknown name is
-refused before the lab is touched, naming the stages `--step` takes:
+refused before any stage runs, naming the stages `--step` takes:
 
 ```sh
 agentlab coding-test --step egress                # harnesses, create, sandbox turn, egress
