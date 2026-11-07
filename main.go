@@ -909,6 +909,11 @@ func upCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// A lab another agentlab drives is left as it is: nothing below
+			// may write into it (kagentline.go).
+			if err := lab.RefuseUndrivenPin(cfg); err != nil {
+				return err
+			}
 			// A lab from before the registry registers on its next boot. A
 			// convenience: it never fails the boot.
 			if err := labs.Register(cfg.ClusterName, "."); err != nil {
@@ -1656,6 +1661,11 @@ func platformCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
 			if err != nil {
+				return err
+			}
+			// A lab another agentlab drives is left as it is: not even its
+			// Dex is applied (kagentline.go).
+			if err := lab.RefuseUndrivenPin(cfg); err != nil {
 				return err
 			}
 			if err := lab.RequireLabCerts(cfg); err != nil {

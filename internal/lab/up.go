@@ -14,10 +14,6 @@ import (
 // OIDC verification, and then the components the configuration enables — the
 // agent platform (the default; it is what the lab tests) and Backstage.
 func Up(cfg *config.Config, offers Offers) error {
-	// A lab another agentlab drives is left as it is (kagentline.go).
-	if err := RefuseUndrivenPin(cfg); err != nil {
-		return err
-	}
 	// Before any real work: a docker VM too small for what this
 	// configuration schedules leaves pods Pending forever (the scheduler
 	// refuses CPU requests that do not fit — resources.go), and the symptom
