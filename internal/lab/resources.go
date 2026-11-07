@@ -248,6 +248,10 @@ var labResourceGroups = []resourceGroup{
 		func(c *config.Config, _ platformTopology) bool { return c.Platform.Enabled }},
 	{"observability", resourceRequests{reqObservabilityCPU, reqObservabilityMem}, useObservabilityMem,
 		func(c *config.Config, _ platformTopology) bool { return c.Platform.Enabled && c.Platform.Observability }},
+	// A conservative budget until measured under the trace proof: use the
+	// sink's hard memory bound rather than claim a measured working set.
+	{"local trace sink", resourceRequests{200, 192}, 768,
+		func(c *config.Config, _ platformTopology) bool { return c.TracesEnabled() }},
 	{"fleet admission (Kyverno)", resourceRequests{reqKyvernoCPU, reqKyvernoMem}, useKyvernoMem,
 		func(c *config.Config, _ platformTopology) bool { return c.Platform.Enabled }},
 }

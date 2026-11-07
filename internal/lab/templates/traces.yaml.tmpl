@@ -1,0 +1,160 @@
+{{- if .TracesEnabled }}
+# Optional, ephemeral lab trace store and UI. No host ports or persistent data.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agentlab-traces
+  labels:
+    app: agentlab
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agentlab-traces
+  namespace: agentlab-traces
+data:
+  tempo.yaml: |
+    auth_enabled: false
+    server:
+      http_listen_port: 3200
+    distributor:
+      receivers:
+        otlp:
+          protocols:
+            grpc:
+              endpoint: 0.0.0.0:4317
+    ingester:
+      trace_idle_period: 5s
+      max_block_duration: 5m
+      max_block_bytes: 10485760
+    compactor:
+      compaction:
+        block_retention: 1h
+    storage:
+      trace:
+        backend: local
+        wal:
+          path: /var/tempo/wal
+        local:
+          path: /var/tempo/blocks
+    overrides:
+      defaults:
+        ingestion:
+          rate_limit_bytes: 1048576
+          burst_size_bytes: 2097152
+          max_traces_per_user: 1000
+        global:
+          max_bytes_per_trace: 1048576
+    usage_report:
+      reporting_enabled: false
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Lab traces
+        uid: lab-traces
+        type: tempo
+        access: proxy
+        url: http://127.0.0.1:3200
+        isDefault: true
+        editable: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentlab-traces
+  namespace: agentlab-traces
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: agentlab-traces
+  template:
+    metadata:
+      labels:
+        app: agentlab-traces
+      annotations:
+        checksum/inputs: REPLACED_AT_APPLY
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: tempo
+          image: gsoci.azurecr.io/giantswarm/tempo:2.10.10
+          args: ["-config.file=/etc/tempo/tempo.yaml", "-target=all"]
+          env:
+            - name: GOMEMLIMIT
+              value: 400MiB
+          ports:
+            - {name: otlp-grpc, containerPort: 4317}
+            - {name: tempo-http, containerPort: 3200}
+          readinessProbe:
+            httpGet: {path: /ready, port: tempo-http}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi, ephemeral-storage: 256Mi}
+            limits: {cpu: "1", memory: 512Mi, ephemeral-storage: 2Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: config, mountPath: /etc/tempo, readOnly: true}
+            - {name: tempo, mountPath: /var/tempo}
+            - {name: tmp, mountPath: /tmp}
+        - name: grafana
+          image: gsoci.azurecr.io/giantswarm/grafana:12.4.14
+          env:
+            - {name: GF_AUTH_ANONYMOUS_ENABLED, value: "true"}
+            - {name: GF_AUTH_ANONYMOUS_ORG_ROLE, value: Viewer}
+            - {name: GF_AUTH_DISABLE_LOGIN_FORM, value: "true"}
+            - {name: GF_AUTH_BASIC_ENABLED, value: "false"}
+            - {name: GF_SECURITY_DISABLE_INITIAL_ADMIN_CREATION, value: "true"}
+            - {name: GF_ANALYTICS_REPORTING_ENABLED, value: "false"}
+            - {name: GF_ANALYTICS_CHECK_FOR_UPDATES, value: "false"}
+            - {name: GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES, value: "false"}
+            - {name: GF_PLUGINS_PREINSTALL_DISABLED, value: "true"}
+            - {name: GF_SERVER_ROOT_URL, value: "{{ .TracesBaseURL }}"}
+          ports:
+            - {name: ui, containerPort: 3000}
+          readinessProbe:
+            httpGet: {path: /api/health, port: ui}
+          resources:
+            requests: {cpu: 100m, memory: 64Mi}
+            limits: {cpu: "1", memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: config, mountPath: /etc/grafana/provisioning/datasources/datasources.yaml, subPath: datasources.yaml, readOnly: true}
+            - {name: grafana, mountPath: /var/lib/grafana}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: config
+          configMap: {name: agentlab-traces}
+        - name: tempo
+          emptyDir: {sizeLimit: 1Gi}
+        - name: grafana
+          emptyDir: {sizeLimit: 128Mi}
+        - name: tmp
+          emptyDir: {sizeLimit: 128Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentlab-traces
+  namespace: agentlab-traces
+spec:
+  selector:
+    app: agentlab-traces
+  ports:
+    - {name: otlp-grpc, port: 4317, targetPort: otlp-grpc}
+    - {name: ui, port: 3000, targetPort: ui}
+{{- end }}
