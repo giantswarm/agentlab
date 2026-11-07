@@ -2184,6 +2184,22 @@ data the page reads — see [The muster plugin](backstage.md#the-muster-plugin).
 
 ## Platform gotchas
 
+- **Every Session through agent-manager refused: `binding session <id>'s
+  sandbox to you in muster failed … (401 Unauthorized): invalid_token`.**
+  muster 5.59.0 to 5.59.5 (mcp-oauth v1.12.0) refuses the person's forwarded
+  Dex ID token on `PUT /session-bindings`, logging `auth_failure`
+  `unknown_jwt_bearer`, while `/mcp` accepts the same token
+  ([muster#1804](https://github.com/giantswarm/muster/issues/1804)). Every
+  proof that starts a Session through `start_session` fails at its first
+  Session (`coding-test`, `signin-test`, `toolsets-test`'s turns). Until a
+  muster release fixes it, prove on muster 5.58.0 through
+  `platform.devImages` (`docker pull gsoci.azurecr.io/giantswarm/muster:5.58.0`,
+  tag it `muster:rel-5.58.0`, name that under `devImages.muster`, `agentlab
+  platform`); that `platform` ends on the consent-page probe 5.58.0 predates
+  (`expected HTTP 200 consent page with framing protection, got 302`) with
+  the platform installed. Remove the entry and run `agentlab platform` again
+  afterwards.
+
 - **A dev build that waits for a component release is refused before
   anything is applied.** A branch of agent-platform may raise a component's
   `versionRange` past every published chart; its dev build records each such
