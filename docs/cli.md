@@ -172,6 +172,15 @@ already hold one of its own (`dexPort`, `apiServerPort`, `platform.agentsPort`,
 (`https://portal.127.0.0.1.nip.io:8443`), since the loopback address per lab
 (`platform.gatewayAddress`) came later.
 
+A fresh boot of an older line installs the newest component releases its
+chart's version ranges admit today, not the ones the line shipped with, and
+the line's agentlab renders values for the components of its own time. On
+agent-platform 4.120.1, v0.84.6's boot meets an mcp-kubernetes release that
+refuses its OAuth values (`OAuth with multiple replicas requires shared Valkey
+storage`), and the install does not settle. A lab kept since its line was
+current is the one to keep running beside a new line. A fresh one may need a
+`platform.valuesFiles` overlay that pins the drifted components.
+
 The current agentlab registers the older lab on any command run in its
 directory (`agentlab pods`), which also moves its `agentlab.yaml` into the
 configuration folder and leaves a link that v0.84.6 follows. It never writes
