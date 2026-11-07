@@ -30,18 +30,29 @@ import (
 )
 
 const (
-	organizationErasurePart    = "erasure"
-	organizationErasureFixture = "agentlab-organizations-inventory"
-	organizationErasureWait    = 15 * time.Minute
-	organizationSnapshotBody   = "agentlab organization erasure control"
+	organizationCleanupPart    = "cleanup"
+	organizationCleanupFixture = "agentlab-organizations-inventory"
+	organizationCleanupWait    = 15 * time.Minute
+	organizationSnapshotBody   = "agentlab organization cleanup control"
 )
 
-func (p *organizationsProof) erasureCheck() organizationCheck {
-	return organizationCheck{surface: surfaceProfile, boundary: "the erasure of an Orphaned organization with a running session finishes", run: p.orphanErasure}
+func organizationProofPart(part string) (string, error) {
+	switch part {
+	case "":
+		return "", nil
+	case organizationCleanupPart, "erasure":
+		return organizationCleanupPart, nil
+	default:
+		return "", fmt.Errorf("unknown organizations proof part %q: use cleanup or omit --part", part)
+	}
 }
 
-func (p *organizationsProof) orphanErasure() (detail string, resultErr error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*organizationErasureWait)
+func (p *organizationsProof) cleanupCheck() organizationCheck {
+	return organizationCheck{surface: surfaceProfile, boundary: "cleanup of an Orphaned organization with a running session finishes", run: p.cleanupOrphanedOrganization}
+}
+
+func (p *organizationsProof) cleanupOrphanedOrganization() (detail string, resultErr error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*organizationCleanupWait)
 	defer cancel()
 	build, err := p.apis[0].version(ctx)
 	if err != nil {
@@ -49,13 +60,13 @@ func (p *organizationsProof) orphanErasure() (detail string, resultErr error) {
 	}
 	version, err := semver.NewVersion(build.GetKagentVersion())
 	if err != nil || version.LessThan(semver.MustParse("1.31.1-rc.3")) {
-		return "", fmt.Errorf("orphan erasure needs kagent 1.31.1-rc.3 or newer with cross-creator Session deletion, got %q (%s)", build.GetKagentVersion(), build.GetGitCommit())
+		return "", fmt.Errorf("orphan cleanup needs kagent 1.31.1-rc.3 or newer with cross-creator Session deletion, got %q (%s)", build.GetKagentVersion(), build.GetGitCommit())
 	}
 	note("kagent %s (%s) carries cross-creator Session deletion", build.GetKagentVersion(), build.GetGitCommit())
-	p.retainErasure = true
+	p.retainCleanupDiagnostics = true
 	defer func() {
 		if resultErr != nil {
-			note("erasure failed: retaining proof organizations, sessions and installation inventory for diagnosis: %v", resultErr)
+			note("cleanup failed: retaining proof organizations, sessions and installation inventory for diagnosis: %v", resultErr)
 		}
 	}()
 	organizationGVR, err := gvrFor(organizationResource)
@@ -70,7 +81,7 @@ func (p *organizationsProof) orphanErasure() (detail string, resultErr error) {
 	if err != nil {
 		return "", err
 	}
-	// The fixture and operator setting stay readable when erasure fails.
+	// The fixture and operator setting stay readable when cleanup fails.
 	defer func() {
 		if resultErr == nil {
 			resultErr = removeFixture()
@@ -85,7 +96,7 @@ func (p *organizationsProof) orphanErasure() (detail string, resultErr error) {
 		return "", err
 	}
 	defer api.Close()
-	session, err := p.apis[0].createSessionOf(ctx, &apiv1alpha1.ResourceReference{Namespace: p.namespaces[0], Name: organizationsTestAgent}, "organization-erasure-"+string(organization.GetUID()))
+	session, err := p.apis[0].createSessionOf(ctx, &apiv1alpha1.ResourceReference{Namespace: p.namespaces[0], Name: organizationsTestAgent}, "organization-cleanup-"+string(organization.GetUID()))
 	if err != nil {
 		return "", err
 	}
@@ -117,13 +128,13 @@ func (p *organizationsProof) orphanErasure() (detail string, resultErr error) {
 		return "", err
 	}
 	prefix := string(organization.GetUID()) + "/"
-	controlKey := string(control.GetUID()) + "/agentlab-erasure-control"
-	for _, key := range []string{prefix + "agentlab-erasure-snapshot", controlKey} {
+	controlKey := string(control.GetUID()) + "/agentlab-cleanup-control"
+	for _, key := range []string{prefix + "agentlab-cleanup-snapshot", controlKey} {
 		if _, err := client.PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(bucket), Key: aws.String(key), Body: strings.NewReader(organizationSnapshotBody)}); err != nil {
 			return "", fmt.Errorf("seed snapshot object %s: %w", key, err)
 		}
 	}
-	if _, err := client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(bucket), Key: aws.String(prefix + "agentlab-erasure-snapshot")}); err != nil {
+	if _, err := client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(bucket), Key: aws.String(prefix + "agentlab-cleanup-snapshot")}); err != nil {
 		return "", fmt.Errorf("seeded snapshot is not readable: %w", err)
 	}
 	if err := writeOrganizationInventory(ctx); err != nil {
@@ -133,7 +144,7 @@ func (p *organizationsProof) orphanErasure() (detail string, resultErr error) {
 		return "", err
 	}
 	note("organization %s/%s is Orphaned=True after its inventory entry was removed; session %s belongs to %s", organizationsRootNamespace, p.names[0], session.GetId(), p.members[0].Email)
-	if err := p.eraseProofOrganization(ctx, 0); err != nil {
+	if err := p.deleteProofOrganization(ctx, 0); err != nil {
 		return "", err
 	}
 	if err := wait.PollUntilContextTimeout(ctx, pollInterval, time.Minute, true, func(ctx context.Context) (bool, error) {
@@ -162,25 +173,25 @@ func (p *organizationsProof) orphanErasure() (detail string, resultErr error) {
 	}
 	removedSession, readErr := p.apis[0].getSession(ctx, session.GetId())
 	if readErr == nil && removedSession.GetState() != apiv1alpha1.RuntimeState_RUNTIME_STATE_DELETED {
-		return "", fmt.Errorf("erased organization retains session %s in state %s", session.GetId(), sessionState(removedSession))
+		return "", fmt.Errorf("deleted organization retains session %s in state %s", session.GetId(), sessionState(removedSession))
 	}
 	if readErr != nil && status.Code(readErr) != codes.NotFound && status.Code(readErr) != codes.PermissionDenied {
 		return "", readErr
 	}
 	_, resumeErr := p.apis[0].sessions.ResumeSession(p.apis[0].callCtx(ctx), &apiv1alpha1.ResumeSessionRequest{SessionId: session.GetId()})
 	if code := status.Code(resumeErr); code != codes.NotFound && code != codes.FailedPrecondition && code != codes.PermissionDenied {
-		return "", fmt.Errorf("erased session remains runnable: ResumeSession returned %v", resumeErr)
+		return "", fmt.Errorf("deleted session remains runnable: ResumeSession returned %v", resumeErr)
 	}
 	p.sessions[0] = nil
-	if err := p.eraseProofOrganization(ctx, 1); err != nil {
+	if err := p.deleteProofOrganization(ctx, 1); err != nil {
 		return "", err
 	}
 	if err := requireSnapshotCount(ctx, client, bucket, string(control.GetUID())+"/", 0); err != nil {
 		return "", err
 	}
 	p.sessions[1] = nil
-	p.retainErasure = false
-	return fmt.Sprintf("member-owned READY session %s and %d actors erased; both organizations and namespaces gone; snapshot prefix %s empty; control %s survived the first erasure and was erased with its own organization", session.GetId(), len(actors), prefix, controlKey), nil
+	p.retainCleanupDiagnostics = false
+	return fmt.Sprintf("member-owned READY session %s and %d actors removed; both organizations and namespaces gone; snapshot prefix %s empty; control %s survived the first cleanup and was deleted with its own organization", session.GetId(), len(actors), prefix, controlKey), nil
 }
 
 func organizationActors(ctx context.Context, api *ateAPI, namespace string) ([]*ateapi.Actor, error) {
@@ -216,7 +227,7 @@ func requireSnapshotCount(ctx context.Context, client *s3.Client, bucket, prefix
 	return nil
 }
 
-func (p *organizationsProof) eraseProofOrganization(ctx context.Context, index int) error {
+func (p *organizationsProof) deleteProofOrganization(ctx context.Context, index int) error {
 	organizationGVR, err := gvrFor(organizationResource)
 	if err != nil {
 		return err
@@ -226,7 +237,7 @@ func (p *organizationsProof) eraseProofOrganization(ctx context.Context, index i
 		return err
 	}
 	if organization.GetLabels()[organizationsTestLabel] != organizationsTestMark {
-		return fmt.Errorf("refusing to erase organization %s without the proof ownership label", organization.GetName())
+		return fmt.Errorf("refusing to delete organization %s without the proof ownership label", organization.GetName())
 	}
 	token, err := passwordGrant(p.cfg, config.KubernetesClientID, config.KubernetesClientSecret, p.admin.Email, p.admin.Password, loginScopes)
 	if err != nil {
@@ -245,7 +256,7 @@ func (p *organizationsProof) eraseProofOrganization(ctx context.Context, index i
 		return err
 	}
 	last := ""
-	err = wait.PollUntilContextTimeout(ctx, pollInterval, organizationErasureWait, true, func(ctx context.Context) (bool, error) {
+	err = wait.PollUntilContextTimeout(ctx, pollInterval, organizationCleanupWait, true, func(ctx context.Context) (bool, error) {
 		current, err := getObject(ctx, organizationGVR, organizationsRootNamespace, organization.GetName())
 		if apierrors.IsNotFound(err) {
 			_, err = getObject(ctx, gvrNamespaces, "", p.namespaces[index])
@@ -254,15 +265,15 @@ func (p *organizationsProof) eraseProofOrganization(ctx context.Context, index i
 		if err != nil {
 			return false, err
 		}
-		erasure, _, _ := unstructured.NestedString(current.Object, "status", "erasureStep")
-		if erasure != last {
-			note("organization %s erasure: %s", organization.GetName(), erasure)
-			last = erasure
+		step, _, _ := unstructured.NestedString(current.Object, "status", "erasureStep")
+		if step != last {
+			note("organization %s cleanup: %s", organization.GetName(), step)
+			last = step
 		}
 		return false, nil
 	})
 	if err != nil {
-		return fmt.Errorf("erasing organization %s at step %s: %w", organization.GetName(), last, err)
+		return fmt.Errorf("cleaning up organization %s at step %s: %w", organization.GetName(), last, err)
 	}
 	return nil
 }
@@ -298,7 +309,7 @@ func organizationSnapshotClient(ctx context.Context) (*s3.Client, string, func()
 	}
 	parsed, err := url.Parse(endpoint)
 	if err != nil || parsed.Scheme != "http" || bucket == "" || !pathStyle {
-		return nil, "", nil, fmt.Errorf("erasure proof needs the operator's in-cluster HTTP path-style snapshot endpoint and bucket")
+		return nil, "", nil, fmt.Errorf("cleanup proof needs the operator's in-cluster HTTP path-style snapshot endpoint and bucket")
 	}
 	host := strings.Split(parsed.Hostname(), ".")
 	if len(host) < 3 || host[2] != "svc" {

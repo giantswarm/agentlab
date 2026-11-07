@@ -33,7 +33,7 @@ func prepareOrganizationInventory(ctx context.Context, organization *unstructure
 	if err != nil {
 		return nil, err
 	}
-	argument := "--installation-kustomization=" + platformNamespace + "/" + organizationErasureFixture
+	argument := "--installation-kustomization=" + platformNamespace + "/" + organizationCleanupFixture
 	arguments := deployment.Spec.Template.Spec.Containers[0].Args
 	for _, existing := range arguments {
 		if strings.HasPrefix(existing, "--installation-kustomization=") && existing != argument {
@@ -55,19 +55,19 @@ func prepareOrganizationInventory(ctx context.Context, organization *unstructure
 		return nil, err
 	}
 	resource := k.resource(kustomizationGVR, platformNamespace)
-	fixture, err := resource.Get(ctx, organizationErasureFixture, metav1.GetOptions{})
+	fixture, err := resource.Get(ctx, organizationCleanupFixture, metav1.GetOptions{})
 	if err == nil && fixture.GetLabels()[organizationsTestLabel] != organizationsTestMark {
-		return nil, fmt.Errorf("inventory fixture %s is not proof-owned", organizationErasureFixture)
+		return nil, fmt.Errorf("inventory fixture %s is not proof-owned", organizationCleanupFixture)
 	}
 	if err != nil && !apierrors.IsNotFound(err) {
 		return nil, err
 	}
-	manifest := strings.ReplaceAll(string(gitopsFixtureKustomization()), gitopsFluxFixture, organizationErasureFixture)
+	manifest := strings.ReplaceAll(string(gitopsFixtureKustomization()), gitopsFluxFixture, organizationCleanupFixture)
 	if _, err := applyManifests(ctx, []byte(manifest)); err != nil {
 		return nil, err
 	}
 	labelPatch, _ := json.Marshal(map[string]any{crMetadata: map[string]any{organizationInventoryLabelsKey: map[string]string{organizationsTestLabel: organizationsTestMark}}})
-	if _, err := resource.Patch(ctx, organizationErasureFixture, types.MergePatchType, labelPatch, metav1.PatchOptions{}); err != nil {
+	if _, err := resource.Patch(ctx, organizationCleanupFixture, types.MergePatchType, labelPatch, metav1.PatchOptions{}); err != nil {
 		return nil, err
 	}
 	if err := writeOrganizationInventory(ctx, organization); err != nil {
@@ -77,7 +77,7 @@ func prepareOrganizationInventory(ctx context.Context, organization *unstructure
 	if err != nil {
 		return nil, err
 	}
-	provenance, _ := json.Marshal(map[string]any{crMetadata: map[string]any{organizationInventoryLabelsKey: map[string]string{"kustomize.toolkit.fluxcd.io/name": organizationErasureFixture, "kustomize.toolkit.fluxcd.io/namespace": platformNamespace}}})
+	provenance, _ := json.Marshal(map[string]any{crMetadata: map[string]any{organizationInventoryLabelsKey: map[string]string{"kustomize.toolkit.fluxcd.io/name": organizationCleanupFixture, "kustomize.toolkit.fluxcd.io/namespace": platformNamespace}}})
 	if _, err := k.resource(organizationGVR, organizationsRootNamespace).Patch(ctx, organization.GetName(), types.MergePatchType, provenance, metav1.PatchOptions{}); err != nil {
 		return nil, err
 	}
@@ -112,13 +112,13 @@ func prepareOrganizationInventory(ctx context.Context, organization *unstructure
 				return err
 			}
 		}
-		if err := deleteObject(cleanup, kustomizationGVR, platformNamespace, organizationErasureFixture, gitopsFixtureWait); err != nil {
+		if err := deleteObject(cleanup, kustomizationGVR, platformNamespace, organizationCleanupFixture, gitopsFixtureWait); err != nil {
 			return err
 		}
-		if err := k.clientset.RbacV1().RoleBindings(platformNamespace).Delete(cleanup, organizationErasureFixture, metav1.DeleteOptions{}); err != nil {
+		if err := k.clientset.RbacV1().RoleBindings(platformNamespace).Delete(cleanup, organizationCleanupFixture, metav1.DeleteOptions{}); err != nil {
 			return err
 		}
-		if err := k.clientset.RbacV1().Roles(platformNamespace).Delete(cleanup, organizationErasureFixture, metav1.DeleteOptions{}); err != nil {
+		if err := k.clientset.RbacV1().Roles(platformNamespace).Delete(cleanup, organizationCleanupFixture, metav1.DeleteOptions{}); err != nil {
 			return err
 		}
 		if ownAPI {
@@ -156,7 +156,7 @@ func writeOrganizationInventory(ctx context.Context, organizations ...*unstructu
 		return err
 	}
 	resource := k.resource(kustomizationGVR, platformNamespace)
-	fixture, err := resource.Get(ctx, organizationErasureFixture, metav1.GetOptions{})
+	fixture, err := resource.Get(ctx, organizationCleanupFixture, metav1.GetOptions{})
 	if err != nil {
 		return err
 	}
@@ -236,27 +236,27 @@ func organizationInventoryAccess(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	role, err := clients.clientset.RbacV1().Roles(platformNamespace).Get(ctx, organizationErasureFixture, metav1.GetOptions{})
+	role, err := clients.clientset.RbacV1().Roles(platformNamespace).Get(ctx, organizationCleanupFixture, metav1.GetOptions{})
 	if err != nil && !apierrors.IsNotFound(err) {
 		return err
 	}
 	if err == nil && role.Labels[organizationsTestLabel] != organizationsTestMark {
 		return fmt.Errorf("inventory Role is not proof-owned")
 	}
-	binding, err := clients.clientset.RbacV1().RoleBindings(platformNamespace).Get(ctx, organizationErasureFixture, metav1.GetOptions{})
+	binding, err := clients.clientset.RbacV1().RoleBindings(platformNamespace).Get(ctx, organizationCleanupFixture, metav1.GetOptions{})
 	if err != nil && !apierrors.IsNotFound(err) {
 		return err
 	}
 	if err == nil && binding.Labels[organizationsTestLabel] != organizationsTestMark {
 		return fmt.Errorf("inventory RoleBinding is not proof-owned")
 	}
-	metadata := metav1.ObjectMeta{Name: organizationErasureFixture, Namespace: platformNamespace, Labels: map[string]string{organizationsTestLabel: organizationsTestMark}}
+	metadata := metav1.ObjectMeta{Name: organizationCleanupFixture, Namespace: platformNamespace, Labels: map[string]string{organizationsTestLabel: organizationsTestMark}}
 	if _, err := applyTyped(ctx, &rbacv1.Role{TypeMeta: metav1.TypeMeta{APIVersion: rbacv1.SchemeGroupVersion.String(), Kind: organizationInventoryRoleKind}, ObjectMeta: metadata,
 		Rules: []rbacv1.PolicyRule{{APIGroups: []string{kustomizationGVR.Group}, Resources: []string{kustomizationGVR.Resource}, Verbs: []string{"get", "watch"}}}}); err != nil {
 		return err
 	}
 	_, err = applyTyped(ctx, &rbacv1.RoleBinding{TypeMeta: metav1.TypeMeta{APIVersion: rbacv1.SchemeGroupVersion.String(), Kind: organizationInventoryBindingKind}, ObjectMeta: metadata,
-		RoleRef:  rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: organizationInventoryRoleKind, Name: organizationErasureFixture},
+		RoleRef:  rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: organizationInventoryRoleKind, Name: organizationCleanupFixture},
 		Subjects: []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Namespace: platformNamespace, Name: "agent-platform-operator"}}})
 	return err
 }

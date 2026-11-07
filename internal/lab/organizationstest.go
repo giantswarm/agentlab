@@ -49,10 +49,10 @@ import (
 //     gateway;
 //   - the management-cluster profile tests that fit the lab: the
 //     object-count ResourceQuota, a Kyverno PolicyException that does not
-//     lift the sandbox admission policies, the erasure of an Orphaned
+//     lift the sandbox admission policies, cleanup of an Orphaned
 //     organization with a member-owned running session.
 //
-// Successful runs erase both proof organizations. Failed erasure retains
+// Successful runs delete both proof organizations. Failed cleanup retains
 // its fixtures for diagnosis.
 const (
 	// organizationsTestNames are the proof's two organizations.
@@ -212,17 +212,19 @@ type organizationsProof struct {
 	admin   *config.User
 	// adminAPI is the admin's (cluster-admin) kagent API client.
 	adminAPI *kagentAPI
-	// sessions are the member-owned Sessions the erasure must remove.
-	sessions      [2][]string
-	verdicts      []organizationVerdict
-	retainErasure bool
+	// sessions are the member-owned Sessions cleanup must remove.
+	sessions                 [2][]string
+	verdicts                 []organizationVerdict
+	retainCleanupDiagnostics bool
 }
 
 // OrganizationsTest is the organizations proof (the steps above).
 func OrganizationsTest(cfg *config.Config, opts OrganizationsTestOptions) error {
-	if opts.Part != "" && opts.Part != organizationErasurePart {
-		return fmt.Errorf("unknown organizations proof part %q: use erasure or omit --part", opts.Part)
+	part, err := organizationProofPart(opts.Part)
+	if err != nil {
+		return err
 	}
+	opts.Part = part
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
 	}
@@ -278,7 +280,7 @@ func (p *organizationsProof) run() error {
 			return err
 		}
 		note("Ready in %s", boot.Round(time.Second))
-		if p.opts.Part == organizationErasurePart {
+		if p.opts.Part == organizationCleanupPart {
 			continue
 		}
 		since := time.Now()
@@ -298,8 +300,8 @@ func (p *organizationsProof) run() error {
 			return fmt.Errorf("the credential provider read %v for atespace %s during the turn, want %s and nothing else", read, ns, ns)
 		}
 	}
-	if p.opts.Part == organizationErasurePart {
-		verdict, err := p.erasureCheck().verdict()
+	if p.opts.Part == organizationCleanupPart {
+		verdict, err := p.cleanupCheck().verdict()
 		if err != nil {
 			return err
 		}
@@ -1074,7 +1076,7 @@ func (p *organizationsProof) profileChecks() []organizationCheck {
 			run: func() (string, error) { return secretBoundariesHold(a) }},
 		{surface: surfaceProfile, boundary: "the connectivity install hooks read only the Secrets they write",
 			run: func() (string, error) { return hookSecretsHold(a) }},
-		p.erasureCheck(),
+		p.cleanupCheck(),
 	}
 }
 
@@ -1452,11 +1454,11 @@ func (p *organizationsProof) cleanupAgents() {
 	}
 }
 
-// cleanup closes clients and removes transient resources unless erasure
-// diagnostics need them.
+// cleanup closes clients and removes transient resources unless a failed
+// organization cleanup needs them for diagnosis.
 func (p *organizationsProof) cleanup() {
-	if p.retainErasure {
-		note("retaining erasure fixtures and proof organizations for diagnostics")
+	if p.retainCleanupDiagnostics {
+		note("retaining cleanup fixtures and proof organizations for diagnostics")
 		for _, api := range append(p.apis[:], p.adminAPI) {
 			if api != nil {
 				api.close()

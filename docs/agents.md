@@ -376,16 +376,16 @@ the namespace's atespace from that namespace only. Then:
   and a list; the connectivity install hooks, whose identity exists only
   during a hook event, get it from the release's own hook manifests for the
   check (removed afterwards) and read the pool only. A get the authorizer
-  allows may answer NotFound; a refusal must be 403. The erasure check starts a member-owned READY session, records its organization in a suspended installation Kustomization's settled inventory, then removes that inventory entry and waits for the operator to report `Orphaned=True`. Administrative deletion must remove the organization, namespace, actors and snapshot prefix, and refuse another resume of the session. A seeded control object under the second organization's UID must survive that erasure. The check requires kagent 1.31.1-rc.3 or newer and an operator that supports the configured path-style store; it preserves the five-minute snapshot-erasure delay.
+  allows may answer NotFound; a refusal must be 403. The cleanup check starts a member-owned READY session, records its organization in a suspended installation Kustomization's settled inventory, then removes that inventory entry and waits for the operator to report `Orphaned=True`. Administrative deletion must remove the organization, namespace, actors and snapshot prefix, and refuse another resume of the session. A seeded control object under the second organization's UID must survive that cleanup. The check requires kagent 1.31.1-rc.3 or newer and an operator that supports the configured path-style store; it preserves the five-minute snapshot cleanup delay.
 
-`organizations-test --part erasure` runs the orphan-erasure check alone, creating the proof agents and a member-owned session directly through kagent without a model turn. The default run includes this check after all other organization checks.
+`organizations-test --part cleanup` runs the orphan cleanup check alone, creating the proof agents and a member-owned session directly through kagent without a model turn. The default run includes this check after all other organization checks. The former `--part erasure` spelling remains an alias. See the operator's [glossary](https://github.com/giantswarm/agent-platform-operator/blob/main/GLOSSARY.md) for the distinction between organization deletion and cleanup.
 
 The report prints one `PASS` or `SKIP` line per verdict, `[surface]
 boundary — what was seen`; a failure stops the run as `FAIL [surface]
 boundary: ...`. `--skip-slack` leaves klaus-gateway out (its lines read
 `SKIP`); `--gateway-image` and `--gateway-binary` pick the gateway as for
 `klaus-gateway-test` (on macOS the image runs on the `kind` network, HACKS.md
-U35). Successful runs erase both proof organizations and remove the installation inventory fixture and its temporary operator setting. Failed erasure retains the organizations and fixtures for diagnosis and reports the failing step. Other failures remove the transient agents, Sessions, PolicyException and quota ServiceAccounts.
+U35). Successful runs delete both proof organizations and remove the installation inventory fixture and its temporary operator setting. Failed cleanup retains the organizations and fixtures for diagnosis and reports the failing step. Other failures remove the transient agents, Sessions, PolicyException and quota ServiceAccounts.
 
 The proof leaves out muster's per-organization sign-in: a server of an
 organization namespace that signs in needs muster to read its client Secret
