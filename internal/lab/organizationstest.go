@@ -50,11 +50,10 @@ import (
 //   - the management-cluster profile tests that fit the lab: the
 //     object-count ResourceQuota, a Kyverno PolicyException that does not
 //     lift the sandbox admission policies, the erasure of an Orphaned
-//     organization (skipped with its reason).
+//     organization with a member-owned running session.
 //
-// The two organizations stay for the next run (their erasure on the lab is
-// skipped, see organizationErasureSkip); everything else the run creates
-// goes on every exit path. docs/agents.md "The organizations proof".
+// Successful runs erase both proof organizations. Failed erasure retains
+// its fixtures for diagnosis.
 const (
 	// organizationsTestNames are the proof's two organizations.
 	organizationsTestA = "agentlab-a"
@@ -195,6 +194,7 @@ func (c organizationCheck) verdict() (organizationVerdict, error) {
 // GatewayBinary), or none.
 type OrganizationsTestOptions struct {
 	GatewayImage, GatewayBinary string
+	Part                        string
 	SkipSlack                   bool
 }
 
@@ -212,14 +212,17 @@ type organizationsProof struct {
 	admin   *config.User
 	// adminAPI is the admin's (cluster-admin) kagent API client.
 	adminAPI *kagentAPI
-	// sessions are the Sessions each member's turns made, removed at the
-	// end as their creator, so no erasure of the organization waits on one.
-	sessions [2][]string
-	verdicts []organizationVerdict
+	// sessions are the member-owned Sessions the erasure must remove.
+	sessions      [2][]string
+	verdicts      []organizationVerdict
+	retainErasure bool
 }
 
 // OrganizationsTest is the organizations proof (the steps above).
 func OrganizationsTest(cfg *config.Config, opts OrganizationsTestOptions) error {
+	if opts.Part != "" && opts.Part != organizationErasurePart {
+		return fmt.Errorf("unknown organizations proof part %q: use erasure or omit --part", opts.Part)
+	}
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
 	}
@@ -275,6 +278,9 @@ func (p *organizationsProof) run() error {
 			return err
 		}
 		note("Ready in %s", boot.Round(time.Second))
+		if p.opts.Part == organizationErasurePart {
+			continue
+		}
 		since := time.Now()
 		reply, session, err := agentSessionTurnOf(p.cfg, &apiv1alpha1.ResourceReference{Namespace: ns, Name: organizationsTestAgent}, p.tokens[i], organizationsTestPrompt)
 		if session != "" {
@@ -291,6 +297,14 @@ func (p *organizationsProof) run() error {
 		if len(read) == 0 || slices.ContainsFunc(read, func(r string) bool { return r != ns }) {
 			return fmt.Errorf("the credential provider read %v for atespace %s during the turn, want %s and nothing else", read, ns, ns)
 		}
+	}
+	if p.opts.Part == organizationErasurePart {
+		verdict, err := p.erasureCheck().verdict()
+		if err != nil {
+			return err
+		}
+		p.add(verdict)
+		return nil
 	}
 	p.add(organizationVerdict{surface: surfaceKagent, boundary: "each member runs an agent in their own organization",
 		detail: fmt.Sprintf("%s and %s each created %s in their own organization as themselves, it became Ready and a turn as its member answered on credentials read from its own namespace only", p.members[0].Email, p.members[1].Email, organizationsTestAgent)})
@@ -373,12 +387,18 @@ func (p *organizationsProof) preconditions() error {
 // an editor of their own, gives each the lab's model, and logs everyone in.
 func (p *organizationsProof) setUp() error {
 	for i, name := range p.names {
+		if err := checkProofOrganization(name); err != nil {
+			return err
+		}
 		step("Organization %s/%s Ready; group %s bound to %s there; its model %s", organizationsRootNamespace, name, p.members[i].Groups[0], organizationEditorRole, organizationModel)
 		ns, err := ensureOrganization(organizationsRootNamespace, name, name)
 		if err != nil {
 			return err
 		}
 		p.namespaces[i] = ns
+		if err := markProofOrganization(name); err != nil {
+			return err
+		}
 		if err := bindOrganizationRole(ns, organizationAdminsBinding, organizationAdminRole, []rbacv1.Subject{groupSubject(platformAdminsGroup)}); err != nil {
 			return err
 		}
@@ -1039,10 +1059,6 @@ func inClusterVerdict(record egressGatewayRecord, target, line string) (string, 
 	return fmt.Sprintf("%s: held before any connection, no request of actor %s recorded (the probe's line: %s)", target, record.actor, excerpt(line, 120)), nil
 }
 
-// organizationErasureSkip is why the erasure of an Orphaned organization
-// with a running session is skipped on the lab.
-const organizationErasureSkip = "the erasure of an organization that holds a person's session stalls at the Sessions step until the lab's kagent line carries giantswarm/kagent-extensions#27 (kagent-upstream#957 is open); the lab also runs apply mode, with no installation Kustomization that makes an organization Orphaned, and the operator's S3 client addresses the lab's in-cluster store virtual-hosted, which it does not serve"
-
 // profileChecks are the management-cluster profile tests that fit the lab,
 // Secret access per component among them (giantswarm/agent-platform#1269).
 func (p *organizationsProof) profileChecks() []organizationCheck {
@@ -1058,8 +1074,7 @@ func (p *organizationsProof) profileChecks() []organizationCheck {
 			run: func() (string, error) { return secretBoundariesHold(a) }},
 		{surface: surfaceProfile, boundary: "the connectivity install hooks read only the Secrets they write",
 			run: func() (string, error) { return hookSecretsHold(a) }},
-		{surface: surfaceProfile, boundary: "the erasure of an Orphaned organization with a running session finishes",
-			skip: organizationErasureSkip},
+		p.erasureCheck(),
 	}
 }
 
@@ -1437,9 +1452,18 @@ func (p *organizationsProof) cleanupAgents() {
 	}
 }
 
-// cleanup removes the Sessions as their creators, the agents, the
-// PolicyException, and closes the clients. The organizations stay.
+// cleanup closes clients and removes transient resources unless erasure
+// diagnostics need them.
 func (p *organizationsProof) cleanup() {
+	if p.retainErasure {
+		note("retaining erasure fixtures and proof organizations for diagnostics")
+		for _, api := range append(p.apis[:], p.adminAPI) {
+			if api != nil {
+				api.close()
+			}
+		}
+		return
+	}
 	for i, ids := range p.sessions {
 		for _, id := range ids {
 			if p.apis[i] != nil {
@@ -1458,8 +1482,5 @@ func (p *organizationsProof) cleanup() {
 		if api != nil {
 			api.close()
 		}
-	}
-	if p.namespaces[0] != "" {
-		note("the organizations %s and %s stay in %s for the next run: their erasure on the lab is skipped (%s)", p.names[0], p.names[1], organizationsRootNamespace, "see the erasure verdict")
 	}
 }
