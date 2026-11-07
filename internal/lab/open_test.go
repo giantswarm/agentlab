@@ -70,7 +70,7 @@ func (s *openStubs) install(t *testing.T) *openStubs {
 
 func TestOpenTargetsFeedValidArgs(t *testing.T) {
 	got := OpenTargets()
-	if want := []string{openTargetAgents, openTargetPortal, openTargetPrometheus}; !slices.Equal(got, want) {
+	if want := []string{openTargetAgents, openTargetPortal, openTargetPrometheus, openTargetTraces}; !slices.Equal(got, want) {
 		t.Fatalf("OpenTargets() = %v, want %v", got, want)
 	}
 	if _, ok := openTargets[openTargetPortal]; !ok {

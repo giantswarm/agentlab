@@ -164,6 +164,9 @@ func PlatformDown(cfg *config.Config) error {
 		// Best-effort, unwaited: the namespace delete below takes the rest.
 		_ = helmUninstall(observabilityNamespace, kpsRelease, false, kpsUninstallTimeout)
 	}
+	if err := deleteNamespace(ctx, tracesNamespace); err != nil {
+		return err
+	}
 	_ = deleteNamespace(ctx, observabilityNamespace)
 	if err := deleteNamespace(ctx, platformNamespace); err != nil {
 		return err

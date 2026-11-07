@@ -455,6 +455,11 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 			return err
 		}
 	}
+	if cfg.TracesEnabled() {
+		if err := tracesUp(cfg); err != nil {
+			return err
+		}
+	}
 	// Model serving (serving.go): cert-manager before the platform too —
 	// the llm-d controller's webhook certificate is a cert-manager
 	// Certificate and its webhook configurations take their CA from the
@@ -916,6 +921,10 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 			return err
 		}
 	} else if err := observabilityDown(ctx); err != nil {
+		return err
+	}
+
+	if err := reconcileTracesAfterPlatform(ctx, cfg); err != nil {
 		return err
 	}
 

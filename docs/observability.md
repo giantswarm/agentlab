@@ -137,3 +137,39 @@ runs the Deployments page's exact workload query against the edge
 observability endpoint — proving Dex → muster → mcp-prometheus → Prometheus
 and the Backstage metrics path end to end. Logs:
 `agentlab logs prometheus`, `agentlab logs mcp-prometheus`.
+
+## Local traces
+
+Tracing is **off by default**, independently of the Prometheus switch. Enable
+it with `agentlab configure --defaults --traces`, then `agentlab platform`.
+`platform.traces: true` preserves the existing boolean `platform.observability`
+setting. `agentlab open traces` opens the local Grafana UI; select **Explore →
+Lab traces** to search spans by trace ID or service. The install prints its URL.
+Like the lab Prometheus UI, this is an anonymous read-only UI on the localhost
+lab edge, for throwaway lab data only. The OTLP receiver is cluster-internal.
+
+The optional sink runs Tempo single-binary and Grafana in one pod, from images
+on gsoci. It requests **200m CPU and 192 MiB memory** in total, with hard limits
+of **2 CPUs and 768 MiB memory** (Tempo 512 MiB, Grafana 256 MiB). Tempo's Go
+memory target is 400 MiB; ingestion is capped at 1 MiB/s, 1,000 live traces and
+1 MiB per trace. Retention is one hour; storage is an ephemeral 1 GiB volume.
+Traces are discarded on pod replacement or when the option is disabled.
+Neither a database nor an object store is needed. These are resource budgets;
+actual working-set measurements depend on the trace volume.
+
+The sink supplies `global.observability.traces.otlp` to the platform chart, so
+its gateway, runtimes and MCP services share one receiver. The separate models
+Gateway gets its own tracing policy, and the lab's CPU serving preset enables
+vLLM's OTLP exporter. `agentlab serving-test` with tracing on sends a uniquely
+identified sampled request and requires gateway and vLLM spans linked in the
+same stored trace through Grafana's datasource proxy (the UI's access to the
+store). The proof prints the trace ID to inspect in the UI.
+
+Disable with `agentlab configure --defaults --traces=false`, then `agentlab
+platform`. The platform's automatic exporters reconcile to an empty endpoint
+before the sink is removed; the lab-only models tracing policy is removed too.
+The lab preset loses its exporter argument for subsequent loads. Unload any
+models loaded with tracing enabled before switching it off: a running model's
+launch arguments belong to its existing LLMInferenceService. With tracing off,
+no trace pod, Service, route or store is installed. `platform-down` removes it
+as well.

@@ -72,12 +72,13 @@ global:
       serviceMonitor:
         enabled: {{ .Platform.Observability }}
     traces:
-      # No OTLP gateway in kind, with or without platform.observability (the
-      # Prometheus stack): the empty endpoint turns every `auto` exporter off
-      # (Substrate's, kagent's, muster's), where the chart's default
-      # kube-system otlp-gateway would only log resolver errors.
+      # One local receiver for every platform exporter. An empty endpoint
+      # disables the chart's auto exporters when the trace sink is off.
       otlp:
-        endpoint: ""
+        endpoint: {{ if .TracesEnabled }}"http://agentlab-traces.agentlab-traces.svc:4317"{{ else }}""{{ end }}
+        protocol: grpc
+        tenant: ""
+        headers: {}
 
 gitops:
   # Self-management OFF — the lab shape (see the header). Never drop this on
@@ -578,6 +579,9 @@ postgres:
 # RustFS — what kagent.harness.snapshotLocation below names. An installation
 # brings its own bucket instead.
 substrate:
+  otel:
+    logs:
+      enabled: false
   rustfs:
     enabled: true
   # The lab registry a `harness` dev image is served from
@@ -936,10 +940,16 @@ kagent:
       apiFormat: responses
 {{- end }}
 {{- end }}
-  # No OTLP gateway in kind; the exporters would only log dial errors.
+  # The local receiver stores traces only.
   otel:
     tracing:
+      enabled: {{ .TracesEnabled }}
+{{- if .TracesEnabled }}
+    traces:
+      enabled: true
+    logs:
       enabled: false
+{{- end }}
     logging:
       enabled: false
 
@@ -1105,9 +1115,18 @@ modelServing:
         args:
           - --max-model-len=32768
           - --enforce-eager
+{{- if .TracesEnabled }}
+          - --otlp-traces-endpoint=http://agentlab-traces.agentlab-traces.svc:4317
+{{- end }}
           - --enable-auto-tool-choice
           - --tool-call-parser=hermes
         env:
+{{- if .TracesEnabled }}
+          - name: OTEL_SERVICE_NAME
+            value: vllm
+          - name: OTEL_EXPORTER_OTLP_TRACES_INSECURE
+            value: "true"
+{{- end }}
           # The KV cache the CPU backend reserves, in GiB: ~12 KiB per token
           # of this model, a full 32k context is ~384 MiB of it.
           - name: VLLM_CPU_KVCACHE_SPACE
