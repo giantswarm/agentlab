@@ -122,11 +122,18 @@ of this agentlab recorded, what the chart pin alone says — a 4.x pin up to
 4.120.1 is `a line before 1.3`. A lab on a line another agentlab drives is
 marked `driven by agentlab v0.84.6, not this binary`.
 
-This agentlab leaves such a lab to its own: `configure` does not save a pin
-on a line before 1.3 (the file it writes is one v0.84.6 no longer reads), `up`
-and `platform` refuse it before their first step, again once the chart is
-loaded (an overlay can move the line), and `turn` and the proofs refuse a lab
-recorded or pinned there, each naming the release that drives it. The
+This agentlab leaves such a lab to its own, and every refusal names the
+release that drives it:
+
+- `configure` does not save a pin on a line before 1.3, since the file it
+  writes is one v0.84.6 no longer reads.
+- `portal dev` and `portal build` refuse before they record anything in
+  `agentlab.yaml`, build or apply Dex.
+- `reload`, `test` and `platform-down` refuse before they render into the
+  lab.
+- `up` and `platform` refuse before their first step, and again once the
+  chart is loaded, since an overlay can move the line.
+- `turn` and the proofs refuse a lab recorded or pinned there. The
 exception is an upgrade proof's seed (`platform.upgradeSeed`), which installs
 an older line on purpose for this agentlab to upgrade.
 

@@ -339,9 +339,11 @@ The lab's own e2e checks are the `*-test` subcommands, not `go test`.
   4.121.0 on) and the 3.x chart; the 4.x lines before 1.3 are agentlab
   v0.84.6's. `up`/`platform` record the line in `state/kagent-line.json` as
   the install starts and `list` shows it (the chart pin when no record:
-  4.x up to 4.120.1 is `a line before 1.3`); `configure`, `up`,
-  `platform`, `turn` and the proofs refuse such a lab, naming v0.84.6, except
-  an upgrade seed. Never write a lab on another line's `agentlab.yaml` with
+  4.x up to 4.120.1 is `a line before 1.3`); every command that writes
+  `agentlab.yaml` or renders into the lab (`configure`, `up`, `platform`,
+  `portal dev|build`, `reload`, `test`, `platform-down`), `turn` and the
+  proofs refuse such a lab before their first step, naming v0.84.6, except
+  an upgrade seed (`TestUndrivenLabIsLeftAlone`). Never write a lab on another line's `agentlab.yaml` with
   this release: the line's binary refuses the newer fields. Two labs on two
   lines: docs/cli.md "One binary per kagent line".
 - `internal/telemetry` — anonymous usage signals to TelemetryDeck

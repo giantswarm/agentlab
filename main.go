@@ -290,6 +290,12 @@ func labCmd(use, short string, run func(*config.Config) error) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// test, platform-down and reload act on the lab with this
+			// release's renders: a lab another agentlab drives is left to
+			// it (kagentline.go).
+			if err := lab.RefuseUndrivenPin(cfg); err != nil {
+				return err
+			}
 			return run(cfg)
 		},
 	}
@@ -2485,6 +2491,11 @@ func portalDevCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// It records backstage.localDevPort and applies this release's
+			// Dex: never into a lab another agentlab drives.
+			if err := lab.RefuseUndrivenPin(cfg); err != nil {
+				return err
+			}
 			return lab.BackstageDev(cfg, checkout, port)
 		},
 	}
@@ -2507,6 +2518,11 @@ func portalBuildCmd() *cobra.Command {
 			}
 			cfg, err := loadConfig()
 			if err != nil {
+				return err
+			}
+			// Before the build and its record in agentlab.yaml: a lab
+			// another agentlab drives is left to it.
+			if err := lab.RefuseUndrivenPin(cfg); err != nil {
 				return err
 			}
 			if err := lab.RequireLabCerts(cfg); err != nil {
