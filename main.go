@@ -1429,6 +1429,15 @@ func configureCmd() *cobra.Command {
 			if cmd.Flags().Changed("github-app-client-secret-source") {
 				cfg.GitHubApp.ClientSecretSource = gitHubAppClientSecretSource
 			}
+			// With --defaults the pin is final here: a lab on a kagent line
+			// another agentlab drives is refused before this machine is even
+			// probed for it (the form, which can still move the pin, is
+			// judged before the save below).
+			if defaults {
+				if err := lab.RefuseUndrivenPin(cfg); err != nil {
+					return err
+				}
+			}
 			// Every run discovers the machine — an existing agentlab.yaml
 			// follows the host too: a server that appeared is added, one that
 			// is gone drops out, ports move while no cluster holds them.
