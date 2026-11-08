@@ -611,6 +611,31 @@ it by its pod labels, and a policy does not select a host-network pod.
 | The data plane → the kagent controller on 8083 (patch 10, [HACKS.md](../HACKS.md) U44) | The chart's kubernetes flavour does not declare that egress, the cilium flavour does; without it every call on the controller route times out at the edge. Goes when the chart declares it. |
 | No `<release>-kagent-controller-to-workspace-manager` policy with the workspaces on (patch 10, [HACKS.md](../HACKS.md) U45) | In the chart's kubernetes flavour that Egress policy is the only one on the kagent controller, so it isolates the controller from DNS, its Postgres, the apiserver and Substrate. Goes when the chart renders the controller's full egress in that flavour. |
 
+**The Valkey store's policy, a Cilium stand-in.** The store muster and
+klaus-gateway read (`muster-valkey`) has one policy, and the valkey wrapper
+ships it only as a `CiliumNetworkPolicy` admitting the chart's clients —
+muster and klaus-gateway by their pod labels — on the Valkey port, its
+metrics collectors on the exporter's and the kubelet's probes (the `host`
+entity). kind serves that kind (the lab provides the CRDs) and nothing
+enforces it, since kind runs kindnetd, not Cilium. With the switch on the
+lab's values turn the wrapper's policy on (`valkey.ciliumNetworkPolicy.enabled`;
+with `platform.observability` the lab Prometheus joins `alloy-metrics` as a
+metrics collector), and `agentlab platform`, before the install, applies
+`muster-valkey-cilium-stand-in`: a plain `NetworkPolicy` translated from the
+valkey release's render (`internal/lab/ciliumstandin.go`), which kindnetd
+enforces. The chart's own peers, not the lab's copy of them: a renamed label
+or a dropped client fails in the lab as on an installation. The translation
+carries the policy's ingress — each `fromEndpoints` selector as a pod selector
+in its namespace, the `host` entity as the nodes' addresses, the ports — and
+names, at install and in the proof, what it cannot carry, which the lab
+therefore does not prove: the policy's egress (DNS only; the stand-in isolates
+ingress), Cilium's mutual authentication, an L7 rule, an entity other than the
+nodes. What it cannot carry is left out, so the stand-in refuses more than the
+Cilium policy, never admits more. With the switch off the stand-ins are
+removed. The in-cluster klaus-gateway (`platform.klausGateway`) keeps its
+threads in the same store (`klausGateway.routing.store: valkey`, the store an
+installation runs), so its routing goes through the policy too.
+
 `agentlab platform-test` adds its `network policy denial` stage with the switch
 on: a probe pod in `default`, a namespace outside muster's, reaches muster's
 Service (the control: muster's own policy admits every namespace on its port)
@@ -619,10 +644,22 @@ data plane only; then muster's own call to agent-manager
 (`x_agent-manager_list_model_configs` as the caller) answers. With the switch
 off the stage is skipped.
 
+Its `Valkey store policy` stage proves the store's: the stand-in is the live
+`CiliumNetworkPolicy`'s translation; probe pods in `agent-platform` send
+`PING` to `muster-valkey:6379` — one labelled as muster, one as klaus-gateway,
+each answered by the server (`-NOAUTH`, no password needed), and a third pod
+of the same namespace without either label refused (no answer within 5s);
+then muster serves a session and a tool call from its Valkey stores and, with
+`platform.klausGateway`, the gateway is Ready, its readiness probe a read of
+the routing store. `agentlab klaus-gateway-test`'s step 9 routes a Slack turn
+through the component on that store. A probe whose labels a Service or
+Deployment of the namespace would select is refused before it starts.
+
 ```bash
 agentlab configure --defaults --network-policy   # muster moves onto the pod network with it
 agentlab platform
-agentlab platform-test                           # the network policy denial stage
+agentlab platform-test                           # the network policy denial and Valkey store policy stages
+agentlab klaus-gateway-test                      # with platform.klausGateway: a turn routed through the store
 agentlab backstage-test                          # the portal signed in through the policies
 ```
 
