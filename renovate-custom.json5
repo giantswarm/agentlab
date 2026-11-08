@@ -41,21 +41,21 @@
         'Before merging: a fresh default lab on this version (`agentlab configure --defaults && agentlab up` in an empty directory) and `agentlab platform-test` pass.',
       ],
     },
-    // certificate-transparency-go stays on a master pseudo-version until the
-    // release after v1.3.3 (HACKS.md U29). gomod disables indirect modules and
-    // turns a pseudo-version into a digest pin; enabled here, Renovate's loose
-    // versioning ranks the next tag (v1.3.4) above v1.3.4-0.<date>-<sha>, so
-    // that tag is proposed as a version update in place of the digest. Digest
-    // updates stay off: the pin only moves to a release, never to a newer
-    // master commit. The go.mod line keeps a bare `// indirect`, since
-    // Renovate skips a require line whose comment is more than one word.
+    // certificate-transparency-go's next release (HACKS.md U29): v1.4.0 is cut
+    // from a branch of v1.3.3 and still pulls etcd/v3 v3.6.8 and prometheus
+    // v0.51.0 into the graph, so `.nancy-ignore` carries their findings until a
+    // release carries master's Trillian v1.8.0 bump. gomod disables indirect
+    // modules; enabled here, every new tag is proposed as a version update.
+    // Digest updates stay off: the pin moves to a release, never to a master
+    // commit. The go.mod line keeps a bare `// indirect`, since Renovate skips
+    // a require line whose comment is more than one word.
     {
       matchManagers: ['gomod'],
       matchPackageNames: ['github.com/google/certificate-transparency-go'],
       enabled: true,
       automerge: false,
       prBodyNotes: [
-        'With this bump: remove HACKS.md U29, keep `gomod_test.go` green, and after the release `go install github.com/giantswarm/agentlab@<version>` works.',
+        'With this bump: if `go mod graph` no longer has go.etcd.io/etcd/v3 v3.6.8 or github.com/prometheus/prometheus v0.51.0, drop their `.nancy-ignore` entries and HACKS.md U29; keep `gomod_test.go` green, and after the release `go install github.com/giantswarm/agentlab@<version>` works.',
       ],
     },
     {

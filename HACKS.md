@@ -669,21 +669,22 @@ covers no in-cluster name, so the agentgateway JWKS sources dial the issuer's
 host too, and the `dex-localhost` sidecar (U13) is not patched. Inherent to
 one issuer URL on a single-node kind cluster; nothing upstream to wait for.
 
-### U29. `go.mod`: certificate-transparency-go pinned to a master pseudo-version — BLOCKED UPSTREAM
+### U29. `.nancy-ignore`: etcd/v3 v3.6.8 and prometheus/prometheus v0.51.0 from certificate-transparency-go v1.4.0 — BLOCKED UPSTREAM
 `go install github.com/giantswarm/agentlab@latest` refuses a module whose
-go.mod carries a `replace` or `exclude` directive, and the weekly nancy
-remediation moved two modules nobody compiles in with exactly that
-(giantswarm/agentlab#388; the class #36 fixed before): certificate-transparency-go
-v1.3.3, the newest release, requires prometheus/prometheus v0.51.0 and
-etcd/v3 v3.6.8, which nancy flags from the module graph. A plain `require`
-of the fixed versions does not stick — neither module provides a package the
-build imports, so `go mod tidy` prunes it again. **Fix:** the dependency is
-bumped to the master commit that drops both (the Trillian v1.8.0 bump,
-2026-09-21), the one upstream version without them, so the graph is clean
-with no `.nancy-ignore`; `gomod_test.go` fails on any replace/exclude in
-go.mod, so the next remediation of that shape goes red instead of merging.
-Unblocks when certificate-transparency-go releases after v1.3.3: a rule in
-`renovate-custom.json5` proposes that tag as the bump PR, which removes this
+go.mod carries a `replace` or `exclude` directive (giantswarm/agentlab#388;
+`gomod_test.go` fails on either), and a plain `require` of a fixed etcd or
+prometheus does not stick: neither module provides a package the build
+imports, so `go mod tidy` prunes it again. certificate-transparency-go, which
+sigstore-go compiles in, is the module that pulls both into the graph.
+v1.4.0, its release after v1.3.3, is cut from a branch of v1.3.3 (two
+intermediate-blocking commits), not from master: its go.mod still requires
+etcd/v3 v3.6.8 and prometheus v0.51.0. Only master carries the Trillian
+v1.8.0 / etcd v3.7 bump that drops both. **Fix:** go.mod requires the v1.4.0
+tag, a reviewed release, rather than a master pseudo-version, and the
+graph's etcd/v3 and prometheus findings sit in `.nancy-ignore`, each
+time-boxed with an `until=` date. Unblocks when a certificate-transparency-go
+release carries master's Trillian v1.8.0 bump: the `renovate-custom.json5`
+rule proposes that tag, and the bump PR drops their ignores with this
 entry.
 
 ### U30. `workspaces.go`: the lab applies Substrate's `CSIDriverConfig` itself — BLOCKED UPSTREAM

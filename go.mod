@@ -12,14 +12,14 @@ require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/a2aproject/a2a-go/v2 v2.8.0
 	github.com/aws/aws-sdk-go-v2 v1.47.8
-	github.com/aws/aws-sdk-go-v2/credentials v1.20.3
+	github.com/aws/aws-sdk-go-v2/credentials v1.20.16
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.9
 	github.com/charmbracelet/x/ansi v0.11.9
 	github.com/giantswarm/go-selfupdate v1.7.6
 	github.com/giantswarm/klaus-gateway v1.21.0
 	github.com/giantswarm/pagekit v0.3.7
-	github.com/giantswarm/selfupdate-cosign v0.3.25
-	github.com/giantswarm/telemetrydeck-go v0.3.16
+	github.com/giantswarm/selfupdate-cosign v0.3.26
+	github.com/giantswarm/telemetrydeck-go v0.3.17
 	github.com/giantswarm/vm-manager v0.25.31
 	github.com/google/go-github/v93 v93.0.0
 	github.com/google/uuid v1.6.0
