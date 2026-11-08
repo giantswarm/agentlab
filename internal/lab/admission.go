@@ -32,7 +32,8 @@ import (
 // (templates/flux-multi-tenancy.yaml, the ClusterPolicy and the aggregated
 // ClusterRole its rules read with), in Enforce, on the fleet's Kyverno charts
 // from gsoci (kyverno-crds and the kyverno app, the pair security-bundle
-// installs) reduced to the admission controller (templates/kyverno-values.yaml)
+// installs) with its admission and reports controllers
+// (templates/kyverno-values.yaml)
 // — with one lab addition made here: the platform namespace joins each
 // rule's exclude list, standing in for flux-giantswarm. On an installation
 // the platform's child HelmReleases live there, exempt; in the lab they live
@@ -56,10 +57,13 @@ import (
 // the policy's own webhook is registered only once the policy exists, so the
 // first denial is also the readiness gate.
 //
-// What the lab does not carry: the fleet's Pod Security Standards policies
-// and the chart's own Kyverno objects (kyvernoPolicies.enabled: false in the
-// values template — PolicyExceptions to policies that are not here and
-// mutate policies the lab never ran). The chart's PolicyExceptions are
+// The fleet's Pod policies follow, in Audit, with the reports controller
+// writing their verdicts into PolicyReports (reports.go).
+//
+// What the lab does not carry: the chart's own Kyverno objects
+// (kyvernoPolicies.enabled: false in the values template — PolicyExceptions
+// that would excuse platform Pods from Pod Security Standards the lab only
+// audits, and mutate policies the lab never ran). The chart's PolicyExceptions are
 // judged without installing them: polextest.go dry-runs them against this
 // Kyverno. The Flux kinds the policy also names —
 // Kustomization, Alert, Receiver, ImagePolicy — are not served in the lab:
@@ -123,7 +127,7 @@ const clusterPolicyResource = "clusterpolicies.kyverno.io"
 
 // fleetAdmissionUp installs the fleet's admission after the platform: the
 // Kyverno engine, the org fixture, the policy with the platform namespace
-// exempt, and the proof that it enforces. After the platform because the
+// exempt, the proof that it enforces, and the fleet's Pod policies. After the platform because the
 // policy names Flux kinds, which the platform's bundled engine brings.
 func fleetAdmissionUp(cfg *config.Config) error {
 	ctx := context.Background()
@@ -186,7 +190,7 @@ func fleetAdmissionUp(cfg *config.Config) error {
 	for _, r := range results {
 		note("%s", r)
 	}
-	return nil
+	return fleetPodPoliciesUp(cfg)
 }
 
 // kyvernoAppHome is the home of the fleet's kyverno app chart; the upstream
