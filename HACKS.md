@@ -910,6 +910,16 @@ renders `kagent.providers` and the kagent chart's `default-model-config`.
   for the sake of policies the lab never tests; the CRDs alone let the charts
   install and validate their policies against the real schema, and enforce
   nothing. Named as a lab-only difference in docs/platform.md.
+- **Flux's Kustomization CRD served without kustomize-controller**
+  (`kustomize.toolkit.fluxcd.io/v1`,
+  `internal/lab/templates/flux-kustomization-crd.yaml`, verbatim from the
+  Flux release the chart's flux-engine pins, applied by `up` with the other
+  provided APIs; `providedapis.go`) — model-manager and the agent-platform
+  operator read a Kustomization's inventory, so the proofs of those paths
+  need the API; running kustomize-controller would add a controller nothing
+  in the lab applies from git with. The proofs apply their Kustomizations
+  suspended and write the inventory themselves. Named as a lab-only
+  difference in docs/platform.md.
 - **The fleet's `flux-multi-tenancy` policy on the fleet's Kyverno charts
   reduced to the admission controller, the platform namespace exempt in
   code** (`internal/lab/admission.go`,

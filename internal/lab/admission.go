@@ -61,13 +61,14 @@ import (
 // values template — PolicyExceptions to policies that are not here and
 // mutate policies the lab never ran). The chart's PolicyExceptions are
 // judged without installing them: polextest.go dry-runs them against this
-// Kyverno. The Flux kinds the policy also names —
-// Kustomization, Alert, Receiver, ImagePolicy — are not served in the lab:
-// the platform's engine runs source-controller and helm-controller only, so
-// those rules match nothing here and the HelmRelease rules are the ones the
-// lab exercises. Kyverno accepts the policy with a warning on apply
-// ("unable to convert GVK to GVR for kinds Kustomization", the first kind
-// it cannot resolve) — a warning, not a refusal, and the boot log shows it.
+// Kyverno. Kustomization is served (providedapis.go: the CRD, no
+// controller), so its rules hold as on an installation. The other Flux kinds
+// the policy names — Alert, Receiver, ImagePolicy — are not served in the
+// lab: the platform's engine runs source-controller and helm-controller
+// only, so those rules match nothing here. Kyverno accepts the policy with a
+// warning on apply ("unable to convert GVK to GVR for kinds …", the first
+// kind it cannot resolve) — a warning, not a refusal, and the boot log shows
+// it.
 
 const (
 	// kyvernoNamespace and kyvernoRelease: the engine's Helm release,

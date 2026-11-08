@@ -21,6 +21,37 @@ var (
 	ciliumPolicies = []string{"CiliumNetworkPolicy", "CiliumClusterwideNetworkPolicy"}
 )
 
+// TestProvidedFluxKustomizationAPI: the Flux bundle is Flux's Kustomization
+// CRD alone, named as the fixtures look it up, serving exactly the version
+// model-manager reads, with the status subresource a proof writes the
+// inventory through.
+func TestProvidedFluxKustomizationAPI(t *testing.T) {
+	objs, err := decodeManifests(fluxKustomizationCRD)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(objs) != 1 || objs[0].GroupVersionKind() != gvkCRD || objs[0].GetName() != kustomizationCRDName {
+		t.Fatalf("the Flux bundle is %d objects, want the CustomResourceDefinition %s alone", len(objs), kustomizationCRDName)
+	}
+	crd := objs[0]
+	if gvks := crdServedGVKs(crd); len(gvks) != 1 || gvks[0] != kustomizationGVR.GroupVersion().WithKind("Kustomization") {
+		t.Fatalf("the CRD serves %v, want %s Kustomization", gvks, kustomizationGVR.GroupVersion())
+	}
+	versions, _, _ := unstructured.NestedSlice(crd.Object, "spec", "versions")
+	for _, v := range versions {
+		m := v.(map[string]any)
+		if name, _, _ := unstructured.NestedString(m, "name"); name != kustomizationGVR.Version {
+			continue
+		}
+		if _, ok, _ := unstructured.NestedMap(m, "subresources", "status"); !ok {
+			t.Fatal("the CRD has no status subresource")
+		}
+	}
+	if !slices.ContainsFunc(providedAPIs, func(api providedAPI) bool { return &api.manifests[0] == &fluxKustomizationCRD[0] }) {
+		t.Fatal("up does not apply the Flux bundle")
+	}
+}
+
 func servedFor(t *testing.T, served []servedKinds, gv schema.GroupVersion) servedKinds {
 	t.Helper()
 	i := slices.IndexFunc(served, func(s servedKinds) bool { return s.gv == gv })
