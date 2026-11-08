@@ -1268,6 +1268,17 @@ backstage:
     - page:gs/installations
     - nav-item:gs/installations
 {{- end }}
+{{- if .Backstage.Hive }}
+    # backstage.hive: Hive and the pages it replaced, for the portal's Hive
+    # e2e spec (AGENTLAB_HIVE=1); its roadmap-backend reads the board of the
+    # muster server pro (backstage-catalog.yaml.tmpl, `agentlab roadmap-test`).
+    - page:plans
+    - api:plans
+    - page:roadmap
+    - api:roadmap
+    - page:plans/plans-redirect
+    - page:plans/magazine
+{{- end }}
   backstage:
     # Helm replaces lists rather than merging them, so the chart's own
     # entries are restated here next to the lab's additions (the catalog

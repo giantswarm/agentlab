@@ -81,6 +81,9 @@ type tmplData struct {
 	OAuthFixtureServer string
 	// OAuthSubjectFixtureServer is the fixture's subject-scoped twin.
 	OAuthSubjectFixtureServer string
+	// The fake pro's MCPServer, the board it serves and that board's default
+	// team (profake.go): the portal's roadmap block under backstage.hive.
+	ProFakeServer, ProFakeBoard, ProFakeTeam string
 	// KlausGatewayLanding is the connector landing of the host-mode
 	// klaus-gateway the proofs start, on muster's post-login redirect
 	// allowlist so a completed sign-in returns there as on an installation.
@@ -335,6 +338,9 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		ExtraModels:                  cfg.Platform.ExtraModels,
 		OAuthFixtureServer:           oauthFixtureServer,
 		OAuthSubjectFixtureServer:    oauthSubjectFixtureServer,
+		ProFakeServer:                proFakeServer,
+		ProFakeBoard:                 proFakeBoard,
+		ProFakeTeam:                  proFakeTeam,
 		KlausGatewayLanding:          klausGatewayLanding(gatewayTestPort(cfg)),
 		GitHubMCPServer:              gitHubMCPServer,
 		GitHubMCPClientSecret:        cfg.Platform.GitHub.ClientSecret(),

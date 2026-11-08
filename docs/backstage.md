@@ -99,6 +99,7 @@ skips with the reason, and a skipped spec is unproven.
 | `AGENTLAB_KUBECONFIG=<lab>/state/kubeconfig` | any lab: the specs that read or stage objects with kubectl |
 | `AGENTLAB_BACKSTAGE_URL`, `AGENTLAB_CLUSTER` | a lab other than the default edge on `:443` |
 | `AGENTLAB_INSTALLATIONS_PAGE=1` | `backstage.installationsPage: true`: the installations specs (`installations-versions`, `installations-session-expiry`, the Installations link in `agents-list-states`) |
+| `AGENTLAB_HIVE=1` | `backstage.hive: true`: `hive.spec.ts`; its Roadmap tab reads the real roadmap-backend routes while `agentlab roadmap-test --keep` left the fake pro in place ([The roadmap board fixture](#the-roadmap-board-fixture)) |
 | `AGENTLAB_TENANTS=1` | the tenants mode of an agent-platform chart before 4.175.0 (which removed it; the lab no longer turns it on, giantswarm/backstage#3363 moves the portal to the organizations): `tenants.spec.ts`, agents per tenant in an organization namespace it labels and binds (with `AGENTLAB_KUBECONFIG`; run it first or alone, its empty state needs a platform tenant with no agent) |
 
 The agent-platform chart lists `page:gs/installations` in
@@ -114,6 +115,50 @@ overlay is needed. `--installations-page=false` takes the page away again.
 agentlab configure --installations-page && agentlab platform
 AGENTLAB_PORTAL_MODE=shell AGENTLAB_KUBECONFIG=<lab>/state/kubeconfig \
   AGENTLAB_INSTALLATIONS_PAGE=1 yarn test:e2e:agentlab -g installations
+```
+
+## The roadmap board fixture
+
+The portal's Hive (`/hive`) shows the roadmap board through its
+roadmap-backend, which calls pro's board tools through muster as the signed-in
+person (`x_pro_list_issues`, `x_pro_get_board_schema`, …); on an installation
+pro reads GitHub with the person's own grant. The lab has no pro and no GitHub
+board, so it brings a fake: agentlab's hidden `pro-fake` command, a
+pro-compatible MCP server answering pro's board reads with pro's shapes from a
+fixed board `roadmap` (an epic in progress with two sub-issues, one up next and
+one done, an item without a status, and another team's item). It refuses every
+write and every other board, requires a bearer (a token-less request is
+muster's probe, answered 401), and records each call with the e-mail of the
+bearer muster forwarded; it reads that bearer, muster verified it.
+
+`agentlab configure --hive` sets `backstage.hive: true`; the next `agentlab
+platform` enables Hive's extensions and renders the portal's `roadmap` block:
+board `roadmap`, default team `Bumblebee🐝`, the muster installation
+`agent-platform` and server `pro`. `agentlab roadmap-test` starts the fake as a
+container on the kind network (the agentlab binary in the lab's probe image,
+fakecontainer.go), points the Service `agent-platform/agentlab-pro` at it,
+registers it with muster as the MCPServer `pro` (`auth.forwardToken: true`, as
+a per-person server) and proves the chain:
+
+1. `x_pro_list_issues` through muster as the person: the whole board, and one
+   team's items without the other team's.
+2. With `backstage.hive` on, the roadmap-backend routes as the person:
+   `/connection` connected, `/schema` the fixture's board and fields, `/items`
+   of the team, `/items?empty=status` the item without a status, `/overview`
+   counting the team's items by status.
+3. The fake's record: each call came with the person's own token, the
+   backend's own reads among them.
+
+The run removes the fake, its Service and the MCPServer; `--keep` leaves them
+in place after a passing run, so the Hive board in the portal renders the
+fixture and the portal's Hive spec reads the real routes. While no fake runs,
+Hive's Roadmap tab shows muster's refusal.
+
+```bash
+agentlab configure --hive && agentlab platform
+agentlab roadmap-test --keep
+AGENTLAB_PORTAL_MODE=shell AGENTLAB_HIVE=1 yarn test:e2e:agentlab -g Hive
+agentlab roadmap-test        # removes the fixture again
 ```
 
 ## Users need no catalog entity
