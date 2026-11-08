@@ -605,7 +605,7 @@ func agentValues(spec agentSpec) map[string]any {
 
 // skillsGitAuthSecretRefKey is the chart value naming the Secret every git
 // skill is fetched with.
-const skillsGitAuthSecretRefKey = "skillsGitAuthSecretRef"
+const skillsGitAuthSecretRefKey = "skillsGitAuthSecretRef" // #nosec G101 -- a chart value NAME, not a credential
 
 // agentRelease is the part of an agent's HelmRelease the proofs read.
 type agentRelease struct {

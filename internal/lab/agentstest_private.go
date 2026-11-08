@@ -136,7 +136,7 @@ func harnessRuntimeImage() (string, error) {
 	}
 	image := nestedString(h.Object, "spec", "workload", "image")
 	if image == "" {
-		return "", fmt.Errorf("Harness %s names no spec.workload.image", kagentHarness)
+		return "", fmt.Errorf("the Harness %s names no spec.workload.image", kagentHarness)
 	}
 	return image, nil
 }
