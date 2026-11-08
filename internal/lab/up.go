@@ -265,7 +265,7 @@ func tryItBlock(cfg *config.Config) string {
 		cmds = append(cmds, [2]string{"agentlab vm-manager-test", "vm-manager (the VM provisioner as a pod of the node) as the person: 401 anonymous -> get_host -> create_vm -> ready -> delete_vm, through muster"})
 	}
 	if cfg.Platform.Enabled && cfg.Platform.Agents {
-		cmds = append(cmds, [2]string{"agentlab agents-test", "agent-manager as the caller: create -> ready -> update -> delete, a viewer refused, the ServiceAccount without RBAC"})
+		cmds = append(cmds, [2]string{"agentlab agents-test", "agent-manager as the caller: create -> ready -> update -> delete, a viewer refused, the ServiceAccount without RBAC, and a golden whose skill comes from a private repository"})
 	}
 	if cfg.WorkspacesEnabled() {
 		cmds = append(cmds, [2]string{"agentlab workspaces-test", "a read-write-many claim, a shared clone per session sub-path, the sessions isolated, the read-only mounts refusing writes, the controller endpoint refused without Substrate's certificate, a claude Session admitted on the volume with a workspace grant"})

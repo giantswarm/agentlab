@@ -56,7 +56,9 @@ const baselineServiceAccount = "system:serviceaccount:" + platformNamespace + ":
 
 // AgentsTest is the headless proof that agent-manager acts as the signed-in
 // user and writes the Generic chart 1.x contract, through the platform path
-// only (Dex id_token -> muster -> call_tool x_agent-manager_*): get_info
+// only (Dex id_token -> muster -> call_tool x_agent-manager_*). First, a
+// golden whose skill comes from a private repository boots with the skill
+// host fixture's credential (proveAgentsTestPrivateSkill). Then get_info
 // reports identity caller on the 1.x chart and the platform Harness; the
 // admin's create -> ready -> turn -> update -> refreshSkills -> plugins -> delete round
 // trip succeeds with requestedBy set — the HelmRelease written by
