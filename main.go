@@ -2098,7 +2098,7 @@ func organizationsTestCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "organizations-test",
 		Aliases: []string{"tenants-test"},
-		Short:   "Headless Agent Platform organizations proof (platform.organizations): two AgentPlatformOrganizations in the lab's root namespace, one member each (alice and bob, bound by group as editors): each creates and runs an agent in their own organization and every surface (the Kubernetes API, the kagent API through the edge, Slack; the Dev Portal skipped until backstage#3363) lists the same agents -> the negative cross-organization tests, each naming its surface and boundary: Kubernetes (agents, sessions, connectors, models, Secrets, HelmReleases), the kagent API and A2A, muster's listing, the other organization's model, in-cluster endpoints on 443 through the egress gateway -> the management-cluster profile: the object-count ResourceQuota, a Kyverno PolicyException for agents-* that does not lift the sandbox admission policies, the erasure of an Orphaned organization (skipped with its reason)",
+		Short:   "Headless Agent Platform organizations proof (platform.organizations): two AgentPlatformOrganizations in the lab's root namespace, one member each (alice and bob, bound by group as editors): each creates and runs an agent in their own organization and every surface (the Kubernetes API, the kagent API through the edge, Slack; the Dev Portal skipped until backstage#3363) lists the same agents -> the negative cross-organization tests, each naming its surface and boundary: Kubernetes (agents, sessions, connectors, models, Secrets, HelmReleases), the kagent API and A2A, muster's listing, the other organization's model, in-cluster endpoints on 443 through the egress gateway -> the management-cluster profile: the object-count ResourceQuota, a Kyverno PolicyException for agents-* that does not lift the sandbox admission policies, cleanup of an Orphaned organization with a member-owned running session, snapshot-prefix isolation and both proof organizations deleted at completion",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadProofLab()
@@ -2111,6 +2111,7 @@ func organizationsTestCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.GatewayImage, "gateway-image", "", "the klaus-gateway image the Slack steps run on the host network (on macOS the kind network, HACKS.md U35; default: the release the lab's meta chart runs as its klaus-gateway component); the steps need one with giantswarm/klaus-gateway#486, 4.10.0 or later")
 	cmd.Flags().StringVar(&opts.GatewayBinary, "gateway-binary", "", "a local klaus-gateway build to run instead of the image")
 	cmd.Flags().BoolVar(&opts.SkipSlack, "skip-slack", false, "leave out the Slack surface (klaus-gateway on the host): its lines read SKIP")
+	cmd.Flags().StringVar(&opts.Part, "part", "", "run one part: cleanup (erasure is an alias); empty runs every organization check")
 	return cmd
 }
 
