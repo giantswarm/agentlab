@@ -15,7 +15,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.3
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.9
 	github.com/charmbracelet/x/ansi v0.11.9
-	github.com/giantswarm/go-selfupdate v1.7.5
+	github.com/giantswarm/go-selfupdate v1.7.6
 	github.com/giantswarm/klaus-gateway v1.21.0
 	github.com/giantswarm/pagekit v0.3.7
 	github.com/giantswarm/selfupdate-cosign v0.3.24
