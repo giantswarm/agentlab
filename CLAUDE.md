@@ -74,6 +74,10 @@ with Dex doing the logins.
   for the alert tools (docs/observability.md "Alertmanager"). Off, `platform`
   removes what an earlier run installed (`observabilityDown`; the operator
   CRDs stay) and `status` names a leftover on its `prometheus` line.
+- `platform.traces` (off by default) adds a bounded local Tempo/Grafana trace
+  sink independently of Prometheus. `agentlab open traces` opens its read-only
+  UI; `serving-test` requires linked gateway and vLLM spans for its sampled
+  completion while tracing is on. See docs/observability.md "Local traces".
 - The agents runtime (kagent) installs with the platform by default but is
   optional (`platform.agents` in `agentlab.yaml`). Agents are Flux
   HelmReleases of the Generic agent chart (1.x) on every installation:

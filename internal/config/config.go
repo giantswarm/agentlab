@@ -457,6 +457,9 @@ type Platform struct {
 	// BOM (yet) — the lab pins the two charts itself (observability.go).
 	// Inert when the platform itself is disabled.
 	Observability bool `yaml:"observability"`
+	// Traces installs a bounded local OTLP trace store and its UI. Independent
+	// of the Prometheus switch; off by default.
+	Traces bool `yaml:"traces,omitempty"`
 	// Alertmanager adds the kube-prometheus-stack Alertmanager to the
 	// observability stack, a Prometheus alerting rule that always fires
 	// (AgentlabWatchdog) and ALERTMANAGER_URL on mcp-prometheus, so its alert
@@ -2427,6 +2430,9 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("platform.mcpPrometheusChartVersion %q: must be an exact version (e.g. 0.8.1-rc.1), not a range — the lab never floats", v)
 		}
 	}
+	if c.Platform.Traces && c.LegacyChart() {
+		return fmt.Errorf("platform.traces requires the agent-platform 4.x line (the shared OTLP endpoint)")
+	}
 	if c.Platform.Alertmanager && !c.Platform.Observability {
 		return fmt.Errorf("platform.alertmanager requires platform.observability (the Alertmanager is part of the lab's kube-prometheus-stack)")
 	}
@@ -3216,3 +3222,9 @@ func validatePort(s string, lo, hi int, rangeMsg string) error {
 	}
 	return nil
 }
+
+// TracesEnabled reports whether the optional local trace sink runs.
+func (c *Config) TracesEnabled() bool { return c.Platform.Enabled && c.Platform.Traces }
+
+// TracesBaseURL is the trace UI through the lab edge.
+func (c *Config) TracesBaseURL() string { return c.gatewayURL("traces") }

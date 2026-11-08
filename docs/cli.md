@@ -354,3 +354,10 @@ the call was anonymous and which variable to set.
 
 `AGENTLAB_NO_UPDATE_CHECK=1` silences the hint (`self-update` itself always
 works); `dev` builds never check.
+
+### Trace UI
+
+`agentlab configure --defaults --traces` enables the optional local OTLP sink;
+run `agentlab platform` to install it. `agentlab open traces` opens its Grafana
+UI. `--traces=false` disables it on the next platform reconcile. See
+[Local traces](observability.md#local-traces) for budgets and the serving proof.

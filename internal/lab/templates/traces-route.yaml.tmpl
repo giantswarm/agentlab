@@ -1,0 +1,41 @@
+{{- if .TracesEnabled }}
+# Only the read-only UI is on the localhost lab edge; OTLP stays in-cluster.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: agentlab-traces
+  namespace: agentlab-traces
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: agentgateway
+      namespace: agent-platform
+      sectionName: https
+  hostnames:
+    - traces.{{ .Platform.Domain }}
+  rules:
+    - backendRefs:
+        - name: agentlab-traces
+          port: 3000
+{{- if .ServingEnabled }}
+---
+# The models Gateway is a separate data plane. Its tracing policy must name it
+# explicitly; the platform's agentgateway policy targets the main edge only.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: agentlab-models-tracing
+  namespace: agent-platform
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: models
+  frontend:
+    tracing:
+      url: http://agentlab-traces.agentlab-traces.svc:4317
+      protocol: GRPC
+      randomSampling: "1.0"
+{{- end }}
+{{- end }}

@@ -588,6 +588,10 @@ func completionThroughModelsGateway(ctx context.Context, cfg *config.Config, k *
 		"messages":   []map[string]string{{"role": chatRoleUser, "content": servingPongPrompt}},
 		"max_tokens": 16,
 	})
+	traceID, err := newServingTraceID()
+	if err != nil {
+		return "", err
+	}
 	do := func(bearer string) (int, []byte, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint+completionsPath, strings.NewReader(string(payload)))
 		if err != nil {
@@ -596,6 +600,9 @@ func completionThroughModelsGateway(ctx context.Context, cfg *config.Config, k *
 		req.Header.Set("Content-Type", "application/json")
 		if bearer != "" {
 			req.Header.Set("Authorization", "Bearer "+bearer)
+			if cfg.TracesEnabled() {
+				req.Header.Set("traceparent", "00-"+traceID+"-0102030405060708-01")
+			}
 		}
 		resp, err := client.Do(req)
 		if err != nil {
@@ -637,6 +644,11 @@ func completionThroughModelsGateway(ctx context.Context, cfg *config.Config, k *
 		return "", fmt.Errorf("the completion carries no text: %.300s", body)
 	}
 	note("200 with the token: model %s answered through %s", completion.Model, dataPlane.Name)
+	if cfg.TracesEnabled() {
+		if err := proveServingTrace(ctx, cfg, traceID); err != nil {
+			return "", err
+		}
+	}
 	return completion.Choices[0].Message.Content, nil
 }
 

@@ -540,6 +540,8 @@ var manifests = map[string]struct {
 	"kube-prometheus-stack-values.yaml.tmpl": {out: "kube-prometheus-stack-values.yaml"},
 	certManagerValuesTemplate:                {out: "cert-manager-values.yaml"},
 	mcpPrometheusTemplate:                    {out: "mcp-prometheus.yaml"},
+	"traces.yaml.tmpl":                       {out: "traces.yaml"},
+	"traces-route.yaml.tmpl":                 {out: "traces-route.yaml"},
 	"observability-route.yaml.tmpl":          {out: "observability-route.yaml"},
 	"demo-workflow.yaml.tmpl":                {out: "demo-workflow.yaml"},
 	"oauth-fixture.yaml.tmpl":                {out: "oauth-fixture.yaml"},

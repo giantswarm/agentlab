@@ -74,6 +74,11 @@ second what the containers' memory working sets summed to):
 | the fleet's admission: Kyverno's admission controller alone, with the `flux-multi-tenancy` policy (installed with the platform) | 100m | 128 MiB | 66 MiB |
 | **total** | **≈ 3.4 CPU** | **≈ 4.6 GiB** | **≈ 4.6 GiB** |
 
+The optional local trace sink (`configure --traces`, off by default) adds
+200m CPU and 192 MiB of memory requests. Its two containers have a combined
+768 MiB hard memory limit; the boot's memory budget conservatively uses that
+limit until measured under the proof. See [Local traces](observability.md#local-traces).
+
 On a chart without Agent Substrate and the platform Postgres — the 0.10
 product's 3.x line — kagent's bundled PostgreSQL (250m / 256 MiB) takes the
 place of the two chart-shipped rows, and every agent is a pod of its own.

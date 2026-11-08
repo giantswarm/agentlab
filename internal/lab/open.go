@@ -39,6 +39,7 @@ const (
 	openTargetPortal     = "portal"
 	openTargetAgents     = "agents"
 	openTargetPrometheus = "prometheus"
+	openTargetTraces     = "traces"
 )
 
 // openTargets maps each target name to how it is opened; the table also feeds
@@ -46,6 +47,18 @@ const (
 // The names say what the thing is to the person opening it, not which chart
 // serves it: the portal is Backstage, the agents UI is kagent's.
 var openTargets = map[string]openTarget{
+	openTargetTraces: {
+		what: "the lab trace UI (Grafana)",
+		url:  (*config.Config).TracesBaseURL,
+		tls:  true,
+		enabled: func(c *config.Config) error {
+			if !c.TracesEnabled() {
+				return fmt.Errorf("platform.traces is off — enable it with `agentlab configure --traces` and run `agentlab platform`")
+			}
+			return nil
+		},
+		hint: "check `agentlab pods -n agentlab-traces`",
+	},
 	openTargetPortal: {
 		what: "the portal (Backstage)",
 		url:  (*config.Config).BackstageBaseURL,
