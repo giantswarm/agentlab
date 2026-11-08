@@ -68,6 +68,10 @@ const legacyLinkPrefix = "agentlab-klaus-gateway-test-"
 // minutes when the node was gone; the Secret needs none of it.
 const klausGatewayReplaceWait = 60 * time.Second
 
+// klausGatewayMemoryStoreWarning is what the gateway logs at start when its
+// routing store is memory, which loses every thread on a restart.
+const klausGatewayMemoryStoreWarning = "the routing store is memory"
+
 // The gateway's records and the Deployment's shape the proof reads.
 const (
 	// storeReadyRecord is logged once the Secret store is read at start;
@@ -265,6 +269,14 @@ func klausGatewayComponentProof(cfg *config.Config, token string, identity linke
 	}
 	out.answer = turn.answer
 	note("answered %q in thread %s as %q; turn_dispatch under %s", excerpt(turn.answer, 60), thread.ts, turn.stream.Username, user.Email)
+	gatewayLog, err := p.logs()
+	if err != nil {
+		return nil, fmt.Errorf("the component's log: %w", err)
+	}
+	if strings.Contains(gatewayLog, klausGatewayMemoryStoreWarning) {
+		return nil, fmt.Errorf("pod %s routes on the memory store (%q in its log): the lab's values set routing.store: valkey, the store an installation runs", pod, klausGatewayMemoryStoreWarning)
+	}
+	note("the turn's thread is routed through the Valkey store (%s): the pod logs no memory-store warning", valkeyService)
 
 	for _, id := range slices.Sorted(maps.Keys(seeded)) {
 		if err := store.Delete(id); err != nil {

@@ -33,6 +33,7 @@ const (
 	stageControllerIdentity   = "controller identity"
 	stageAgentManagerIdentity = "agent-manager identity"
 	stageNetworkPolicy        = "network policy denial"
+	stageValkeyStorePolicy    = "Valkey store policy"
 	stageAteletPolicy         = "atelet image-cache policy"
 	stageSubstrateLine        = "Substrate line"
 	stageWorkerPools          = "WorkerPool workers"
@@ -410,6 +411,20 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 			}
 			verdict += "\nPASS: the platform's network policies — " + denial
 		}
+		// The Valkey store's policy, the chart's CiliumNetworkPolicy enforced
+		// through the lab's NetworkPolicy stand-in (ciliumstandin.go).
+		p.begin(stageValkeyStorePolicy, "The Valkey store's policy: muster's and klaus-gateway's pods admitted, a third pod in the namespace refused")
+		if !cfg.Platform.NetworkPolicy {
+			p.skip("platform.networkPolicy is off: the lab runs no policy of the platform's")
+		} else {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*probePodTimeout+kubeReadTimeout)
+			store, err := proveValkeyStorePolicy(ctx, cfg, token)
+			cancel()
+			if err != nil {
+				return "", err
+			}
+			verdict += "\nPASS: the Valkey store's policy — " + store
+		}
 		// Agent Substrate, the component the 4.x line added: the chart in
 		// place renders its HelmRelease or has none to prove.
 		substrateCtx, cancelSubstrate := context.WithTimeout(context.Background(), kubeReadTimeout)
@@ -470,7 +485,7 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 			}
 		}
 	} else {
-		p.leaveOut("platform.agents is off in "+config.File, stageControllerIdentity, stageAgentManagerIdentity, stageNetworkPolicy, stageAteletPolicy, stageSubstrateLine, stageWorkerPools)
+		p.leaveOut("platform.agents is off in "+config.File, stageControllerIdentity, stageAgentManagerIdentity, stageNetworkPolicy, stageValkeyStorePolicy, stageAteletPolicy, stageSubstrateLine, stageWorkerPools)
 	}
 
 	// The workspace-manager (workspacemanagertest.go): registered with muster

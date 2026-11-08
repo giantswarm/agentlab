@@ -780,6 +780,13 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	if res := sideloadImages(cfg, hostPullImages([]string{dexLocalhostImage})); res.n > 0 {
 		note("side-loaded the dex-localhost sidecar image (%s)", res.d)
 	}
+	// platform.networkPolicy: the policies the platform ships only as
+	// CiliumNetworkPolicies (the Valkey store's) get their NetworkPolicy
+	// stand-in before the install, so every client connects under it
+	// (ciliumstandin.go); off, the earlier ones go.
+	if err := ensureCiliumStandIns(ctx, cfg, renders); err != nil {
+		return err
+	}
 
 	step("Installing %s (this waits for every component HelmRelease)", chart)
 	// One writer, one operation: the plain idempotent upgrade-or-install

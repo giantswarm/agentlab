@@ -455,8 +455,11 @@ Load-bearing invariants (details in docs/):
   connectivity chart's and muster's on in the kubernetes flavour and needs
   muster on the pod network (a host-network pod carries no pod labels on the
   wire); the lab's peers are values and post-renderer patches 10 and 11,
-  proven by `platform-test`'s `network policy denial` stage — docs/platform.md
-  "Network policies".
+  proven by `platform-test`'s `network policy denial` stage. The Valkey
+  store's policy is Cilium-only in the chart: `agentlab platform` applies a
+  NetworkPolicy stand-in translated from the valkey render
+  (ciliumstandin.go; what it cannot carry is named, never opened), proven by
+  the `Valkey store policy` stage — docs/platform.md "Network policies".
 - **The lab shape of the agent-platform chart**: the bundled Flux engine ON
   (`components.flux.enabled: true` — the lab has no Flux of its own, and the
   chart refuses a second one) and self-management OFF (`gitops.self.enabled:
