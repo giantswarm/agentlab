@@ -580,6 +580,8 @@ postgres:
 substrate:
   rustfs:
     enabled: true
+    accessKey: rustfsadmin
+    secretKey: rustfsadmin
   # The lab registry a `harness` dev image is served from
   # (platform.devImages.harness, devimages.go). The Harness's workload image
   # is pulled by Substrate's atelet into its own layer cache, never through

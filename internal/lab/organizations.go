@@ -135,7 +135,7 @@ func (s organizationState) ready() (bool, string) {
 	c, ok := s.condition(organizationConditionTypeReady)
 	switch {
 	case s.deleting:
-		return false, fmt.Sprintf("being deleted (erasure step %q)", s.erasureStep)
+		return false, fmt.Sprintf("being deleted (cleanup step %q)", s.erasureStep)
 	case !ok:
 		return false, "no Ready condition yet: is agent-platform-operator running?"
 	case c.ObservedGeneration < s.generation:

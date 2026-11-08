@@ -64,7 +64,7 @@ func TestOrganizationCheckVerdict(t *testing.T) {
 		t.Errorf("a failing check: %v", err)
 	}
 	ran := false
-	skipped := organizationCheck{surface: surfaceProfile, boundary: "the erasure", skip: organizationErasureSkip, run: func() (string, error) { ran = true; return "x", nil }}
+	skipped := organizationCheck{surface: surfaceProfile, boundary: "the cleanup", skip: "fixture unavailable", run: func() (string, error) { ran = true; return "x", nil }}
 	v, err := skipped.verdict()
 	if err != nil || ran || v.skip == "" {
 		t.Errorf("a skipped check: %+v, %v, ran=%v", v, err, ran)
@@ -79,7 +79,7 @@ func TestOrganizationCheckVerdict(t *testing.T) {
 }
 
 // The organization's state: Ready only for its current generation with a
-// namespace; a deleted one names its erasure step.
+// namespace; a deleted one names its cleanup step.
 func TestOrganizationReady(t *testing.T) {
 	org := func(generation int64, status map[string]any, deleting bool) *unstructured.Unstructured {
 		u := &unstructured.Unstructured{Object: map[string]any{}}
