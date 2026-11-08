@@ -2022,7 +2022,7 @@ func workspacesTestCmd() *cobra.Command {
 func agentsGitOpsTestCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "agents-gitops-test [email]",
-		Short: "Headless proof of an agent applied from git, as the portal sees it: managed gitops, validate_agent refuses mode apply (gitops_owned) and mode commit (unsupported on the platform's agent-manager, which no GitHub App pins), update_agent refused, the live release untouched",
+		Short: "Headless proof of an agent applied from git, as the portal sees it: managed gitops, validate_agent refuses mode apply (gitops_owned) (mode commit unsupported while agent-manager offers no commit mode), update_agent refused, the live release untouched",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()

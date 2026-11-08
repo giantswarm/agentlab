@@ -148,6 +148,10 @@ type tmplData struct {
 	// of each, side by side, with the registration pinned to none
 	// (workspaceProviderAppsFor), nil otherwise.
 	WorkspaceProviderApps []string
+	// AgentManagerCommit is agent-manager's commit mode on the person's
+	// grant of the github instance's App, released by muster's broker
+	// (agentmanagercommit.go), nil while it is off.
+	AgentManagerCommit *agentManagerCommitValues
 	// WorkspaceReleasable is the instance muster's credential provider
 	// releases while no instance renders (workspaceReleasableFor), nil with
 	// workspaces off.
@@ -357,6 +361,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		WorkspaceProviders:           workspaceProviders,
 		WorkspaceGrant:               workspaceGrantFor(cfg, workspaceProviders),
 		WorkspaceProviderApps:        workspaceProviderAppsFor(cfg, workspaceProviders),
+		AgentManagerCommit:           agentManagerCommitFor(cfg, workspaceProviders, workspaceGrantFor(cfg, workspaceProviders), workspaceProviderAppsFor(cfg, workspaceProviders)),
 		WorkspaceReleasable:          workspaceReleasableFor(cfg),
 		WorkspaceAdmission:           workspaceAdmissionValuesFor(cfg, workspacesChart.Carries),
 		OrganizationsEnabled:         cfg.OrganizationsEnabled(),

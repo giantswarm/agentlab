@@ -587,6 +587,14 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	if err := ensureWorkspaceGrantClientIDs(ctx, signIns, workspaceProviders); err != nil {
 		return err
 	}
+	// agent-manager's commit mode (agentmanagercommit.go): the broker
+	// client's Secret placed ahead of the install that names it.
+	agentManagerCommit := agentManagerCommitFor(cfg, workspaceProviders, workspaceGrant, workspaceApps)
+	if agentManagerCommit != nil {
+		if err := agentManagerCommitUp(); err != nil {
+			return err
+		}
+	}
 	// The dev images a Harness runs (`harness`, `<runtime>-harness`), in the
 	// lab registry and pinned by digest before the first render, so the
 	// preload renders the components with the values the install carries.
@@ -599,6 +607,7 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 		t.WorkspaceProviders = workspaceProviders
 		t.WorkspaceGrant = workspaceGrant
 		t.WorkspaceProviderApps = workspaceApps
+		t.AgentManagerCommit = agentManagerCommit
 		registryImages.pin(cfg, t)
 	}
 
@@ -1102,6 +1111,7 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	}
 	if cfg.Platform.Agents {
 		agentsHint += "\n" + organizationsHint(cfg, orgNamespace)
+		agentsHint += "\n" + agentManagerCommitHint(agentManagerCommit)
 	}
 	fmt.Printf(`
 %s
