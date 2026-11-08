@@ -172,6 +172,13 @@ func AgentsTest(cfg *config.Config, email string, opts AgentsTestOptions) error 
 	cleanup()
 	defer cleanup()
 
+	// A golden whose skill comes from a private repository needs no turn and
+	// no agent-manager write: it goes first, so a later step cannot hide it.
+	privateVerdict, err := proveAgentsTestPrivateSkill(cfg, modelConfig, opts)
+	if err != nil {
+		return err
+	}
+
 	step("%slist_skills — the head commit of %s (the commit refreshSkills re-pins to)", agentManagerToolPrefix, fixture.Repo)
 	// agent-manager reads GitHub for this and for the create_agent pin
 	// below; its window is this machine's (githubwindow.go) — printed, and
@@ -479,11 +486,6 @@ func AgentsTest(cfg *config.Config, email string, opts AgentsTestOptions) error 
 		source = "OCIRepository " + agentChartOCIRepository + " kept (" + deleted.OCIRepositoryKept + ")"
 	}
 	note("HelmRelease, AgentTemplate and RemoteMCPServer %s are gone, %s, requestedBy=%s; list_agents agrees", agentsTestAgent, source, deleted.RequestedBy)
-
-	privateVerdict, err := proveAgentsTestPrivateSkill(cfg, modelConfig, opts)
-	if err != nil {
-		return err
-	}
 
 	fmt.Println()
 	fmt.Printf("PASS: muster aggregates %s* and agent-manager reports identity caller on the agent chart %s (Harness %s)\n", agentManagerToolPrefix, chartLine, kagentHarness)

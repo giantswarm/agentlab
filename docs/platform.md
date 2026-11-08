@@ -956,7 +956,7 @@ the verdict `--skill-secret` reaches from the exit codes next to the
 record's. No person's GitHub token enters the lab for it.
 
 `agentlab agents-test` runs the same fixture through the agent chart, the
-way a private skill reaches production: after its agent-manager round trip
+way a private skill reaches production: before its agent-manager round trip
 it applies a HelmRelease `agentlab-agents-test-private` directly (agent-manager
 pins github.com skills only, against the caller's GitHub login) whose skill
 comes from the fixture with `skillsGitAuthSecretRef.name` naming the
