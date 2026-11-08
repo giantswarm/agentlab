@@ -77,8 +77,12 @@ type templateSkill struct {
 	Name   string `json:"name"`
 	Source struct {
 		Git *struct {
-			URL    string `json:"url"`
-			Commit string `json:"commit"`
+			URL           string `json:"url"`
+			Commit        string `json:"commit"`
+			CredentialRef *struct {
+				Name string `json:"name"`
+				Key  string `json:"key"`
+			} `json:"credentialRef"`
 		} `json:"git"`
 		OCI  string `json:"oci"`
 		Path string `json:"path"`

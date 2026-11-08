@@ -72,7 +72,7 @@ const baselineServiceAccount = "system:serviceaccount:" + platformNamespace + ":
 // User "oidc:viewer@lab.local" (the view role writes no HelmReleases); and the
 // agent-manager ServiceAccount holds nothing beyond API discovery. Leaves
 // nothing behind.
-func AgentsTest(cfg *config.Config, email string) error {
+func AgentsTest(cfg *config.Config, email string, opts AgentsTestOptions) error {
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
 	}
@@ -159,7 +159,7 @@ func AgentsTest(cfg *config.Config, email string) error {
 	// Leftovers of an aborted run first, and everything this run creates on
 	// every exit path.
 	cleanup := func() {
-		for _, name := range []string{agentsTestAgent, agentsTestUnadmitted, agentsTestViewer} {
+		for _, name := range []string{agentsTestAgent, agentsTestUnadmitted, agentsTestViewer, agentsTestPrivate} {
 			if !agentExists(name) {
 				continue
 			}
@@ -480,6 +480,11 @@ func AgentsTest(cfg *config.Config, email string) error {
 	}
 	note("HelmRelease, AgentTemplate and RemoteMCPServer %s are gone, %s, requestedBy=%s; list_agents agrees", agentsTestAgent, source, deleted.RequestedBy)
 
+	privateVerdict, err := proveAgentsTestPrivateSkill(cfg, modelConfig, opts)
+	if err != nil {
+		return err
+	}
+
 	fmt.Println()
 	fmt.Printf("PASS: muster aggregates %s* and agent-manager reports identity caller on the agent chart %s (Harness %s)\n", agentManagerToolPrefix, chartLine, kagentHarness)
 	fmt.Printf("PASS: create_agent without a toolset is refused naming the presets; with [%s] %s created -> Ready on Harness %s -> a turn as the person -> updated -> deleted %s through call_tool, every write requestedBy=%s and logged with caller=\n", agentsTestToolset, user.Email, kagentHarness, agentsTestAgent, user.Email)
@@ -492,6 +497,7 @@ func AgentsTest(cfg *config.Config, email string) error {
 		fmt.Printf("PASS: %s's create is Forbidden by the apiserver as User \"oidc:%s\" (user RBAC, not the ServiceAccount's)\n", viewer.Email, viewer.Email)
 	}
 	fmt.Printf("PASS: %s holds no permissions beyond discovery%s\n", agentManagerServiceAccount, grantsClause(grants))
+	fmt.Println(privateVerdict)
 	return nil
 }
 

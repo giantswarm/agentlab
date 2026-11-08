@@ -170,6 +170,21 @@ func TestAgentManifests(t *testing.T) {
 	if _, hasSkills := unscoped[skillsKey]; hasSkills {
 		t.Errorf("a spec without skills renders some: %v", unscoped)
 	}
+	if _, hasAuth := unscoped[skillsGitAuthSecretRefKey]; hasAuth {
+		t.Errorf("a spec without a GitAuthSecret renders %s: %v", skillsGitAuthSecretRefKey, unscoped)
+	}
+}
+
+// TestAgentValuesGitAuthSecret: a spec's GitAuthSecret is the chart's
+// skillsGitAuthSecretRef.name, which the chart renders as every git
+// source's credentialRef.
+func TestAgentValuesGitAuthSecret(t *testing.T) {
+	spec := testSpec()
+	spec.GitAuthSecret = skillHostSecret
+	values := jsonRoundTrip(agentValues(spec)).(map[string]any)
+	if got, _, _ := unstructured.NestedString(values, skillsGitAuthSecretRefKey, nameKey); got != skillHostSecret {
+		t.Errorf("%s.name = %q, want %s (values %v)", skillsGitAuthSecretRefKey, got, skillHostSecret, values)
+	}
 }
 
 // helmRelease seeds an agent's HelmRelease with values (as the apiserver

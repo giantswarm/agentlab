@@ -955,6 +955,19 @@ generates: the template names the proof's Secret as the source's
 the verdict `--skill-secret` reaches from the exit codes next to the
 record's. No person's GitHub token enters the lab for it.
 
+`agentlab agents-test` runs the same fixture through the agent chart, the
+way a private skill reaches production: after its agent-manager round trip
+it applies a HelmRelease `agentlab-agents-test-private` directly (agent-manager
+pins github.com skills only, against the caller's GitHub login) whose skill
+comes from the fixture with `skillsGitAuthSecretRef.name` naming the
+fixture's Secret. It asserts the render's skill carries `credentialRef
+{name, key: token}`, the golden boots (Ready on the platform Harness) and the
+fixture's `golden fetch: credential sent`. A materializer that sends no
+`Authorization` for the egress gateway to replace (Substrate 1.5 replaces a
+header and never adds one) never boots: git's `could not read Username`,
+and the run fails with the fixture's record. `--skill-host-binary` names the
+static Linux agentlab the fixture's container runs.
+
 On the public default and with `--skill-secret` the fixture is not in the
 path, and the second turn probes the source's own host (GitHub). Its status
 line reports both exit codes and git's error line of the placeholder
