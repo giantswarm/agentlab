@@ -61,6 +61,14 @@ type tmplData struct {
 	// network does not exist yet.
 	LabHostName string
 	LabHostIP   string
+	// NodeIP is the control-plane node's address on the kind network, the
+	// apiserver as a pod's connection reaches it after the kubernetes
+	// Service's DNAT: the policies' apiServerCIDR under
+	// platform.networkPolicy (agent-platform-values.yaml.tmpl). Empty, and
+	// the chart's default left, while the node does not exist yet or the
+	// policies are off; `agentlab platform` resolves it strictly before the
+	// install (platformUp).
+	NodeIP string
 	// LegacyChart mirrors cfg.LegacyChart(): the lab installs a released
 	// 3.x meta chart, and agent-platform-values.yaml.tmpl renders the 3.x
 	// lab shape (kagent 0.10 with its bundled Postgres, no Substrate, no
@@ -278,6 +286,10 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 	if cfg.ModelManagerEnabled() || len(cfg.Platform.ExtraModels) > 0 {
 		labHostIP, _ = kindGatewayIPFn(cfg.ControlPlaneNode())
 	}
+	var nodeIP string
+	if cfg.Platform.NetworkPolicy {
+		nodeIP, _ = kindNodeIPFn(cfg.ControlPlaneNode())
+	}
 	endpoints := map[string]string{}
 	if cfg.ModelManagerEnabled() {
 		if endpoints, err = resolveBackendEndpoints(cfg); err != nil {
@@ -290,7 +302,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 	// and no agentgateway IPv4 bind. `agentlab platform` re-renders with what
 	// the component renders say — the names (devimages.go), the sidecar's
 	// and the IPv4 binds' targets (postrenderers.go).
-	postRenderers, err := componentPostRenderers(cfg, defaultDevImageNames(cfg), nil, nil)
+	postRenderers, err := componentPostRenderers(cfg, defaultDevImageNames(cfg), nil, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -374,6 +386,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		DomainRegex:                  strings.ReplaceAll(cfg.Platform.Domain, ".", `\.`),
 		LabHostName:                  labHostName,
 		LabHostIP:                    labHostIP,
+		NodeIP:                       nodeIP,
 		AllGroups:                    config.Groups,
 		KubernetesClientID:           config.KubernetesClientID,
 		KubernetesClientSecret:       config.KubernetesClientSecret,

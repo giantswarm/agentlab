@@ -127,6 +127,34 @@ import (
 //     what a pod without an IPv6 route can use anyway. Which objects get it
 //     is a rule over the renders (agentgatewayIPv4Targets). Lab only.
 //
+// 10. The lab's peers of the agentgateway data plane while
+//     platform.networkPolicy is on: two egress rules appended to the
+//     connectivity chart's kubernetes-flavour data-plane policy (JSON 6902,
+//     its egress is a list without merge keys). One to the lab Prometheus
+//     on 9090, the backend of the lab's own edge route
+//     (observability-route.yaml.tmpl), which an installation does not run
+//     (lab only). One to the kagent controller on its API port, the
+//     backend of the chart's controller route: the chart's cilium flavour
+//     declares that egress (<release>-dataplane-to-kagent) and its
+//     kubernetes flavour does not, so without it every call on the
+//     controller route times out at the edge (HACKS.md U44). Each only
+//     while its backend runs (observability, agents). And, with the
+//     workspaces on, the chart's kubernetes-flavour Egress policy
+//     <release>-kagent-controller-to-workspace-manager deleted ($patch:
+//     delete): a plain Egress policy isolates the controller, and that
+//     flavour declares none of the controller's other egress — DNS, its
+//     Postgres, the apiserver, Substrate (HACKS.md U45).
+//
+// 11. The lab Dex as a peer of every egress policy, while
+//     platform.networkPolicy is on: the pods that validate people's tokens
+//     dial the issuer inside the cluster (the dex-localhost sidecar, or
+//     cluster DNS under platform.tls), on a private address an
+//     installation's policies never name — its issuer is reached through
+//     the world rule. Every NetworkPolicy of the component renders that
+//     isolates such a pod's egress gains one rule to the dex namespace on
+//     Dex's port (JSON 6902). Which policies is a rule over the renders
+//     (dexEgressPolicies, networkpolicy.go). Lab only.
+//
 // The values-side shape is Flux's: `postRenderers: [{kustomize: {patches:
 // [{target, patch}], images: [{name, newName, newTag}]}}]`.
 
@@ -191,7 +219,27 @@ const (
 	kindConfigMap              = "ConfigMap"
 	kindHTTPRoute              = "HTTPRoute"
 	kindAgentgatewayParameters = "AgentgatewayParameters"
+	kindNetworkPolicy          = "NetworkPolicy"
 )
+
+// dataplanePolicy is the connectivity chart's kubernetes-flavour policy of
+// the agentgateway data plane, the object patch 10 appends to.
+const dataplanePolicy = config.ConnectivityChartName + "-dataplane"
+
+// kagentControllerPort is the kagent controller's API port, the backend of
+// the connectivity chart's controller route.
+const kagentControllerPort = 8083
+
+// kagentControllerSelector is the kagent controller's pods as the
+// connectivity chart's policies select them.
+var kagentControllerSelector = map[string]string{"app.kubernetes.io/name": componentKagent, "app.kubernetes.io/component": controllerName}
+
+// controllerName is what the kagent and agentgateway charts call their
+// controllers: the container's name, and the kagent pods' component label.
+const controllerName = "controller"
+
+// prometheusPort is the lab Prometheus's port behind prometheus-operated.
+const prometheusPort = 9090
 
 // agentgatewayImage is the last path segment of the agentgateway data-plane
 // image (gsoci.azurecr.io/giantswarm/agentgateway-upstream/agentgateway);
@@ -279,7 +327,7 @@ func (t devImageTarget) releaseOf(target string) string {
 var devImageTargets = map[string]devImageTarget{
 	componentMuster:        {deployment: componentMuster, container: componentMuster, image: "gsoci.azurecr.io/giantswarm/muster"},
 	componentBackstage:     {deployment: componentBackstage, container: componentBackstage, image: "gsoci.azurecr.io/giantswarm/backstage"},
-	componentKagent:        {deployment: "kagent-controller", container: "controller", image: "gsoci.azurecr.io/giantswarm/kagent-controller"},
+	componentKagent:        {deployment: "kagent-controller", container: controllerName, image: "gsoci.azurecr.io/giantswarm/kagent-controller"},
 	componentMCPKubernetes: {deployment: componentMCPKubernetes, container: componentMCPKubernetes, image: "gsoci.azurecr.io/giantswarm/mcp-kubernetes"},
 	modelManagerMCPServer:  {deployment: modelManagerMCPServer, container: modelManagerMCPServer, image: "gsoci.azurecr.io/giantswarm/model-manager"},
 	agentManagerMCPServer:  {deployment: agentManagerMCPServer, container: agentManagerMCPServer, image: "gsoci.azurecr.io/giantswarm/agent-manager"},
@@ -289,7 +337,7 @@ var devImageTargets = map[string]devImageTarget{
 	workspaceManager:       {deployment: workspaceManager, container: workspaceManager, image: "gsoci.azurecr.io/giantswarm/workspace-manager"},
 	// The agentgateway controller is the one Deployment its component's
 	// chart renders; the proxy is the controller's (agentgateway.go).
-	config.DevImageAgentgatewayController: {deployment: config.DevImageAgentgatewayController, container: "controller", image: "gsoci.azurecr.io/giantswarm/agentgateway-upstream/controller", release: agentgatewayComponent},
+	config.DevImageAgentgatewayController: {deployment: config.DevImageAgentgatewayController, container: controllerName, image: "gsoci.azurecr.io/giantswarm/agentgateway-upstream/controller", release: agentgatewayComponent},
 	// Substrate's API server, where the ActorTemplate reconciler takes the
 	// golden snapshots, rides the substrate component's postRenderers.
 	config.DevImageSubstrateAPI: {deployment: substrateAPIDeployment, container: substrateAPIDeployment, image: "gsoci.azurecr.io/giantswarm/substrate/ateapi", release: substrateRelease},
@@ -593,6 +641,76 @@ func noHSTSPatch() kustomizePatch {
 	}
 }
 
+// dataplanePeersPatch is patch 10: the lab's egress peers of the data plane
+// under platform.networkPolicy, nil when it has none.
+func dataplanePeersPatch(cfg *config.Config) *kustomizePatch {
+	var rules []string
+	if cfg.Platform.Observability {
+		rules = append(rules, egressRulePatch(observabilityNamespace, map[string]string{"app.kubernetes.io/name": "prometheus"}, prometheusPort))
+	}
+	if cfg.Platform.Agents {
+		rules = append(rules, egressRulePatch(componentKagent, kagentControllerSelector, kagentControllerPort))
+	}
+	if !cfg.Platform.NetworkPolicy || len(rules) == 0 {
+		return nil
+	}
+	return &kustomizePatch{
+		Target: map[string]string{kindKey: kindNetworkPolicy, nameKey: dataplanePolicy},
+		Patch:  literalYAML(strings.Join(rules, "")),
+	}
+}
+
+// controllerToWorkspaceManagerPolicy is the connectivity chart's
+// kubernetes-flavour Egress policy on the kagent controller that patch 10
+// deletes (HACKS.md U45).
+const controllerToWorkspaceManagerPolicy = config.ConnectivityChartName + "-kagent-controller-to-workspace-manager"
+
+// networkPolicyStandIns is patch 10 on the connectivity render: the data
+// plane's lab peers (dataplanePeersPatch) and, with the workspaces on, the
+// deletion of the Egress policy that would isolate the kagent controller.
+// None with platform.networkPolicy off.
+func networkPolicyStandIns(cfg *config.Config) []kustomizePatch {
+	var out []kustomizePatch
+	if p := dataplanePeersPatch(cfg); p != nil {
+		out = append(out, *p)
+	}
+	if cfg.Platform.NetworkPolicy && cfg.Platform.Agents && cfg.WorkspacesEnabled() {
+		out = append(out, kustomizePatch{
+			Target: map[string]string{kindKey: kindNetworkPolicy, nameKey: controllerToWorkspaceManagerPolicy},
+			Patch: literalYAML(fmt.Sprintf(`apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: %s
+  namespace: %s
+$patch: delete
+`, controllerToWorkspaceManagerPolicy, componentKagent)),
+		})
+	}
+	return out
+}
+
+// egressRulePatch is one JSON 6902 operation appending an egress rule to
+// the pods matchLabels selects in namespace on port.
+func egressRulePatch(namespace string, matchLabels map[string]string, port int) string {
+	var labels strings.Builder
+	for _, k := range slices.Sorted(maps.Keys(matchLabels)) {
+		fmt.Fprintf(&labels, "\n              %s: %s", k, matchLabels[k])
+	}
+	return fmt.Sprintf(`- op: add
+  path: /spec/egress/-
+  value:
+    to:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: %s
+        podSelector:
+          matchLabels:%s
+    ports:
+      - port: %d
+        protocol: TCP
+`, namespace, labels.String(), port)
+}
+
 // mcpPrometheusPostRenderers is the postRenderers list of the release the lab
 // renders itself (mcp-prometheus.yaml.tmpl): the dex-localhost sidecar while
 // the issuer is spelled localhost, and the platform.devImages.mcp-prometheus
@@ -659,11 +777,20 @@ func dexLocalhostBridged(cfg *config.Config) bool { return !cfg.Platform.TLS.Set
 // component without a target is absent. An annotation the rule cannot read
 // is the error.
 func dexLocalhostTargets(cfg *config.Config, renders map[string]string) (map[string][]dexLocalhostTarget, error) {
+	if !dexLocalhostBridged(cfg) {
+		return map[string][]dexLocalhostTarget{}, nil
+	}
+	return dexDialers(cfg, renders)
+}
+
+// dexDialers is the rule of dexLocalhostTargets whatever the issuer's
+// spelling: the Deployments of the renders that dial the lab Dex — through
+// the sidecar while it is spelled localhost, through cluster DNS under
+// platform.tls. The network policies' Dex peer (networkpolicy.go) is theirs
+// in both.
+func dexDialers(cfg *config.Config, renders map[string]string) (map[string][]dexLocalhostTarget, error) {
 	addr := dexLocalhostAddr(cfg)
 	targets := map[string][]dexLocalhostTarget{}
-	if !dexLocalhostBridged(cfg) {
-		return targets, nil
-	}
 	for _, component := range slices.Sorted(maps.Keys(renders)) {
 		if slices.Contains(hostNetworkComponents(cfg), component) {
 			continue
@@ -768,8 +895,8 @@ func (w renderedWorkload) told() iter.Seq2[string, string] {
 // (`agentlab render`, the values the roster is rendered from), which patches
 // no sidecar: `agentlab platform` renders the values once more with them.
 // gateways is patch 9's targets per component (agentgatewayIPv4Targets),
-// nil in the same renders.
-func componentPostRenderers(cfg *config.Config, imageNames map[string]string, sidecars map[string][]dexLocalhostTarget, gateways map[string][]agentgatewayTarget) (map[string]string, error) {
+// dexPolicies patch 11's (dexEgressPolicies), both nil in the same renders.
+func componentPostRenderers(cfg *config.Config, imageNames map[string]string, sidecars map[string][]dexLocalhostTarget, gateways map[string][]agentgatewayTarget, dexPolicies map[string][]dexEgressPolicy) (map[string]string, error) {
 	patches := map[string][]kustomizePatch{
 		componentKagent: {kagentUINodePortPatch()},
 	}
@@ -785,9 +912,17 @@ func componentPostRenderers(cfg *config.Config, imageNames map[string]string, si
 	if cfg.Backstage.Enabled {
 		patches[config.ConnectivityChartName] = []kustomizePatch{noHSTSPatch()}
 	}
+	if standIns := networkPolicyStandIns(cfg); len(standIns) > 0 {
+		patches[config.ConnectivityChartName] = append(patches[config.ConnectivityChartName], standIns...)
+	}
 	for _, component := range slices.Sorted(maps.Keys(sidecars)) {
 		for _, target := range sidecars[component] {
 			patches[component] = append(patches[component], dexLocalhostPatch(target.deployment, cfg.DexPort))
+		}
+	}
+	for _, component := range slices.Sorted(maps.Keys(dexPolicies)) {
+		for _, policy := range dexPolicies[component] {
+			patches[component] = append(patches[component], dexEgressPatch(policy))
 		}
 	}
 	for _, component := range slices.Sorted(maps.Keys(gateways)) {

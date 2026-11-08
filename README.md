@@ -91,6 +91,16 @@ trusting the same issuer.
 - **Identity you can reason about.** Three throwaway users, a fixed group
   vocabulary, one issuer URL valid from the host, the node and every
   hostNetwork pod, and a lab CA you trust explicitly.
+- **Network policies, as an installation runs them.** With
+  `platform.networkPolicy` the platform's own policies enforce (the plain
+  NetworkPolicy flavour kind's kindnetd enforces). muster leaves the host
+  network for it: the policies admit muster by its pod labels, and a
+  host-network pod's traffic carries the node's address instead, so a
+  host-network muster would be cut off from every backend. The lab adds only
+  what its shape needs — the node as the apiserver, its in-cluster Dex and
+  Prometheus as peers, and two stand-ins for gaps of the chart's kubernetes
+  flavour ([Network policies](docs/platform.md#network-policies)) — and
+  `platform-test` proves the denial.
 - **The fleet's admission.** Kyverno with the `flux-multi-tenancy` policy
   every Giant Swarm management cluster enforces, verbatim and in Enforce, and
   an org namespace with the fleet's tenant ServiceAccount — a release that an

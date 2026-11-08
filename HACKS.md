@@ -838,6 +838,39 @@ and drops `allowPrivateIPRedirectURIs`. `klaus-gateway-test --part refresh` comp
 them. The OAuth fixture's pin (U18) is unchanged: muster's own CIMD host is not
 listed.
 
+### U44. `postRenderers` patch: the data plane reaches the kagent controller under plain NetworkPolicy — BLOCKED UPSTREAM
+With `platform.networkPolicy` the lab runs the connectivity chart's
+kubernetes-flavour policies. The data plane's egress policy
+(`templates/agentgateway/networkpolicy-dataplane-kubernetes.yaml`) declares
+muster, mcp-kubernetes, the agentgateway controller and Dex, but not the kagent
+controller on 8083, the backend of the chart's controller route; the cilium
+flavour declares it (`templates/kagent/netpol.yaml`,
+`<release>-dataplane-to-kagent`). Without it every call on the route times out
+at the edge (`upstream call failed: Connect: deadline has elapsed`;
+`platform-test`'s controller identity stage, muster's `kagent` MCPServer
+answering its initialize with 503). **Fix in the lab:** patch 10 of
+`postrenderers.go` appends that egress rule to the chart's data-plane policy
+(JSON 6902), next to the lab's own peer, the Prometheus behind the lab's
+observability route. **Unblocked by** the kubernetes flavour of the data-plane
+policy declaring the kagent controller in giantswarm/agent-platform; the
+kagent rule then goes from patch 10.
+
+### U45. `postRenderers` patch: the kagent controller's egress is not isolated by the workspaces' policy — BLOCKED UPSTREAM
+With `platform.networkPolicy` and the workspaces on, the connectivity chart's
+kubernetes flavour renders `<release>-kagent-controller-to-workspace-manager`
+(`templates/workspace-manager/netpol.yaml`), an Egress NetworkPolicy on the
+kagent controller that names the workspace-manager only. In the cilium flavour
+it is additive to the controller's own egress policy
+(`<release>-kagent-controller-egress`); the kubernetes flavour has no such
+policy, and a plain Egress policy isolates the pod: the controller loses DNS,
+its Postgres, the apiserver and Substrate (`lookup kagent-pg-rw.kagent …: i/o
+timeout`, every agent `RuntimePreparationFailed`). **Fix in the lab:** patch 10
+of `postrenderers.go` deletes that one policy (`$patch: delete`), so the
+controller's egress stays undeclared in that flavour, as it is without the
+workspaces. **Unblocked by** the kubernetes flavour rendering the controller's
+full egress, or no isolating policy, in giantswarm/agent-platform; the
+deletion then goes from patch 10.
+
 ### U38. `postRenderers` patch: agentgateway binds IPv4 — BLOCKED UPSTREAM
 agentgateway binds its readiness (15021) and stats (15020) servers and its
 listeners on the IPv6 wildcard unless IPv6 is switched off
