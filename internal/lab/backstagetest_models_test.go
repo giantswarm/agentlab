@@ -117,31 +117,53 @@ func TestBackstageModelPlanBeforeProof(t *testing.T) {
 	stubKindKubeconfig(t)
 	resetKindKubeconfigCache(t)
 	t.Cleanup(resetLabKube)
-	prev := apiserverAcceptsDex
-	apiserverAcceptsDex = func(context.Context, *config.Config) error { return nil }
-	t.Cleanup(func() { apiserverAcceptsDex = prev })
-	for _, planOnly := range []bool{true, false} {
-		original := os.Stdout
-		r, w, err := os.Pipe()
-		if err != nil {
-			t.Fatal(err)
-		}
-		os.Stdout = w
-		t.Cleanup(func() { os.Stdout = original })
-		stopped := errors.New("stop before proof")
-		err = BackstageTest(config.Default(), nil, BackstageTestOptions{
-			Plan: planOnly, SkipModelWrite: true,
-			BeforeProof: func() error { step("first proof step"); return stopped },
-		})
-		os.Stdout = original
-		_ = w.Close()
-		out, readErr := io.ReadAll(r)
-		_ = r.Close()
-		if readErr != nil || (planOnly && err != nil) || (!planOnly && !errors.Is(err, stopped)) {
-			t.Fatalf("plan: %v; output: %v", err, readErr)
-		}
-		if !strings.HasPrefix(string(out), "Host model plan: no host model:") || strings.Contains(string(out), "==>") == planOnly {
-			t.Errorf("plan-only %v output = %s", planOnly, out)
+	prev := readApiserverOIDC
+	t.Cleanup(func() { readApiserverOIDC = prev })
+	for _, staleKeys := range []bool{false, true} {
+		for _, planOnly := range []bool{true, false} {
+			calls := 0
+			readApiserverOIDC = func(context.Context, *config.Config, config.User) (oidcVerdict, string, error) {
+				calls++
+				if staleKeys && calls == 1 {
+					return oidcStaleKeys, "Dex's new key is published", nil
+				}
+				return oidcAccepted, testPortalUser, nil
+			}
+			original := os.Stdout
+			r, w, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			os.Stdout = w
+			t.Cleanup(func() { os.Stdout = original })
+			stopped := errors.New("stop before proof")
+			err = BackstageTest(config.Default(), nil, BackstageTestOptions{
+				Plan: planOnly, SkipModelWrite: true,
+				BeforeProof: func() error { step("first proof step"); return stopped },
+			})
+			os.Stdout = original
+			_ = w.Close()
+			out, readErr := io.ReadAll(r)
+			_ = r.Close()
+			if readErr != nil || (planOnly && err != nil) || (!planOnly && !errors.Is(err, stopped)) {
+				t.Fatalf("plan: %v; output: %v", err, readErr)
+			}
+			output := string(out)
+			announcement := strings.Index(output, "Host model plan: no host model:")
+			firstStep := strings.Index(output, "==>")
+			if announcement < 0 || (planOnly && firstStep >= 0) || (!planOnly && firstStep <= announcement) {
+				t.Errorf("stale keys %v, plan-only %v output = %s", staleKeys, planOnly, out)
+			}
+			if got := strings.Contains(output, "The apiserver refuses Dex tokens signed with a key Dex publishes"); got != (staleKeys && !planOnly) {
+				t.Errorf("stale keys %v, plan-only %v recovery step = %v: %s", staleKeys, planOnly, got, out)
+			}
+			wantCalls := 1
+			if staleKeys {
+				wantCalls = 2
+			}
+			if calls != wantCalls {
+				t.Errorf("readiness checks = %d, want %d", calls, wantCalls)
+			}
 		}
 	}
 }

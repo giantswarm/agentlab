@@ -41,8 +41,12 @@ func BackstageTest(cfg *config.Config, emails []string, opts BackstageTestOption
 		}
 	}
 	// Resolve the read-only resource plan before the first proof step. Keep
-	// the OIDC readiness gate before presenting a token through the portal.
-	if err := apiserverAcceptsDex(context.Background(), cfg); err != nil {
+	// the OIDC readiness gate before presenting a token through the portal,
+	// but defer its recovery steps too (a stale JWKS can trigger one).
+	var readinessSteps []string
+	if err := apiserverAcceptsDex(context.Background(), cfg, func(format string, args ...any) {
+		readinessSteps = append(readinessSteps, fmt.Sprintf(format, args...))
+	}); err != nil {
 		return err
 	}
 	modelPlan, err := backstageModelPlan(cfg, emails, opts)
@@ -52,6 +56,9 @@ func BackstageTest(cfg *config.Config, emails []string, opts BackstageTestOption
 	fmt.Printf("Host model plan: %s\n", modelPlan)
 	if opts.Plan {
 		return nil
+	}
+	for _, message := range readinessSteps {
+		step("%s", message)
 	}
 	if opts.BeforeProof != nil {
 		if err := opts.BeforeProof(); err != nil {
@@ -107,7 +114,7 @@ type BackstageTestOptions struct {
 	// Plan prints the host model inventory selection without running the proof.
 	Plan bool
 	// BeforeProof announces the installed chart and holds its component ranges.
-	// The CLI defers this until after the model plan, before any proof step.
+	// The CLI defers this until after the model plan, before the portal proof.
 	BeforeProof func() error
 }
 
