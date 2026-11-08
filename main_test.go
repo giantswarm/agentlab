@@ -205,6 +205,18 @@ func TestBackstageTestHelpDocumentsAgent(t *testing.T) {
 	}
 }
 
+func TestBackstageTestModelPlanFlags(t *testing.T) {
+	cmd := find(rootCmd(), "backstage-test")
+	for _, flag := range []string{"plan", "skip-model-write"} {
+		if cmd.Flags().Lookup(flag) == nil {
+			t.Fatalf("backstage-test has no --%s", flag)
+		}
+		if !strings.Contains(cmd.Long, "--"+flag) {
+			t.Errorf("help omits --%s", flag)
+		}
+	}
+}
+
 // Without a terminal `configure` refuses before its form starts, and the
 // message names --defaults, the way without one.
 func TestConfigureWithoutATerminalNamesDefaults(t *testing.T) {

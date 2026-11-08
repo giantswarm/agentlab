@@ -450,18 +450,25 @@ func loadProofLab() (*config.Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := prepareProofLab(cfg); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+func prepareProofLab(cfg *config.Config) error {
 	installed, err := lab.NoteChartUnderTest(cfg)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	// The proof runs against the components in place: their version ranges
 	// are held until main releases the hold, once the command is done.
 	if installed != nil {
 		if proofHold, err = lab.HoldComponentRanges(context.Background()); err != nil {
-			return nil, err
+			return err
 		}
 	}
-	return cfg, nil
+	return nil
 }
 
 // proofHold is the hold loadProofLab took on the platform's version ranges.
@@ -2423,16 +2430,24 @@ edit path and the delete. Everything it creates is removed on every path.
 already exists instead: the create path, the HITL fixture, the edits and every
 delete are skipped, the agent is waited for until Ready, listed on every
 user's roster and chatted with, and left in place. Use it where the create
-step fails or is not wanted, or to repeat only the chat steps.`,
+step fails or is not wanted, or to repeat only the chat steps.
+
+Before the proof steps, the host model plan names the backend, model and size
+reported by list_models. --plan prints this read-only plan and exits so host
+memory can be reserved first. --skip-model-write skips loading and unloading
+the host model while keeping the Models page read.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadProofLab()
+			cfg, err := loadConfig()
 			if err != nil {
 				return err
 			}
+			opts.BeforeProof = func() error { return prepareProofLab(cfg) }
 			return lab.BackstageTest(cfg, args, opts)
 		},
 	}
 	cmd.Flags().StringVar(&opts.Agent, "agent", "", "an existing agent as <namespace>/<name> (namespace kagent): skip the create and teardown steps and prove the roster and the chat on it, leaving it in place")
+	cmd.Flags().BoolVar(&opts.SkipModelWrite, "skip-model-write", false, "skip the Models page host-model load and unload")
+	cmd.Flags().BoolVar(&opts.Plan, "plan", false, "print the read-only host model plan and exit before the proof steps")
 	return cmd
 }
 

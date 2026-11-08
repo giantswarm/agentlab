@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -39,9 +40,25 @@ func BackstageTest(cfg *config.Config, emails []string, opts BackstageTestOption
 			emails = append(emails, u.Email)
 		}
 	}
-	if err := checkApiserverOIDC(cfg); err != nil {
+	// Resolve the read-only resource plan before the first proof step. Keep
+	// the OIDC readiness gate before presenting a token through the portal.
+	if err := apiserverAcceptsDex(context.Background(), cfg); err != nil {
 		return err
 	}
+	modelPlan, err := backstageModelPlan(cfg, emails, opts)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Host model plan: %s\n", modelPlan)
+	if opts.Plan {
+		return nil
+	}
+	if opts.BeforeProof != nil {
+		if err := opts.BeforeProof(); err != nil {
+			return err
+		}
+	}
+	step("%s: the apiserver accepts a fresh Dex token", stageApiserverOIDC)
 	if err := proveServedPortal(cfg); err != nil {
 		return err
 	}
@@ -77,7 +94,7 @@ func BackstageTest(cfg *config.Config, emails []string, opts BackstageTestOption
 		fmt.Println("agent platform pages skipped (platform.agents off)")
 		return nil
 	}
-	return proveAgentPlatform(cfg, sessions, existing)
+	return proveAgentPlatform(cfg, sessions, existing, modelPlan)
 }
 
 // BackstageTestOptions are the flags of `agentlab backstage-test`.
@@ -85,6 +102,13 @@ type BackstageTestOptions struct {
 	// Agent is an existing agent as <namespace>/<name>: the run creates and
 	// deletes no agent of its own and proves the roster and the chat on it.
 	Agent string
+	// SkipModelWrite leaves the Models page read in the proof, without loading a host model.
+	SkipModelWrite bool
+	// Plan prints the host model inventory selection without running the proof.
+	Plan bool
+	// BeforeProof announces the installed chart and holds its component ranges.
+	// The CLI defers this until after the model plan, before any proof step.
+	BeforeProof func() error
 }
 
 // parseExistingAgent reads --agent: "" is the default run (nil), otherwise

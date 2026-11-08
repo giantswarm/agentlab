@@ -43,10 +43,93 @@ type portalModelInfo struct {
 	} `json:"modelConfig"`
 }
 
+// portalModelPlan pins the inventory selection announced before the proof.
+// Loaded state is read again at the write, so the model is still left as found.
+type portalModelPlan struct {
+	backend string
+	model   portalModelInfo
+	skip    string
+}
+
+func (p portalModelPlan) String() string {
+	if p.skip != "" {
+		return "no host model: the Models write is skipped (" + p.skip + ")"
+	}
+	return fmt.Sprintf("%s on %s, %s (%d bytes from list_models); load + unload; skip with --skip-model-write (inspect only with --plan)",
+		p.model.Name, p.backend, humanBytes(p.model.SizeBytes), p.model.SizeBytes)
+}
+
+// backstageModelPlan only signs in and reads inventory; it never loads a model.
+func backstageModelPlan(cfg *config.Config, emails []string, opts BackstageTestOptions) (portalModelPlan, error) {
+	if opts.SkipModelWrite {
+		return portalModelPlan{skip: "--skip-model-write"}, nil
+	}
+	if !cfg.ModelManagerEnabled() {
+		return portalModelPlan{skip: "model-manager is off"}, nil
+	}
+	backend := hostBackend(cfg.ChartBackends())
+	if backend == "" {
+		return portalModelPlan{skip: "the lab runs no host model server"}, nil
+	}
+	for _, email := range emails {
+		user := cfg.FindUser(email)
+		if user == nil {
+			return portalModelPlan{}, fmt.Errorf("no user %q in %s", email, config.File)
+		}
+		if !user.HasGroup(platformAdminsGroup) {
+			continue
+		}
+		ps, err := backstageLogin(cfg, user)
+		if err != nil {
+			return portalModelPlan{}, fmt.Errorf("host model plan: %w", err)
+		}
+		return readPortalModelPlan(ps, backend)
+	}
+	return portalModelPlan{skip: "no platform-admins user selected"}, nil
+}
+
+func readPortalModels(ps *portalSession, backend string) ([]portalModelInfo, error) {
+	var inventory struct {
+		Models []portalModelInfo `json:"models"`
+	}
+	if err := portalMusterCall(ps, modelManagerToolPrefix+"list_models", map[string]any{backendField: backend}, &inventory); err != nil {
+		return nil, err
+	}
+	return inventory.Models, nil
+}
+
+func readPortalModelPlan(ps *portalSession, backend string) (portalModelPlan, error) {
+	models, err := readPortalModels(ps, backend)
+	if err != nil {
+		return portalModelPlan{}, fmt.Errorf("host model plan: %w", err)
+	}
+	spec, _ := backendSpec(backend)
+	model, ok := proofModelOf(models, spec.proofModel)
+	if !ok {
+		return portalModelPlan{skip: backend + " holds no downloaded model"}, nil
+	}
+	return portalModelPlan{backend: backend, model: model}, nil
+}
+
+// currentModel refuses a changed inventory rather than silently loading a
+// different model. Its current loaded state determines the restoration order.
+func (p portalModelPlan) currentModel(ps *portalSession) (portalModelInfo, error) {
+	models, err := readPortalModels(ps, p.backend)
+	if err != nil {
+		return portalModelInfo{}, err
+	}
+	for _, model := range models {
+		if model.Name == p.model.Name && model.SizeBytes == p.model.SizeBytes {
+			return model, nil
+		}
+	}
+	return portalModelInfo{}, fmt.Errorf("host model inventory changed since the plan; rerun backstage-test --plan before loading a model")
+}
+
 // proveModelsPage drives the Models page's calls through the portal as the
 // primary user, the viewer's write as the boundary. Returns the verdict
 // lines.
-func proveModelsPage(cfg *config.Config, primary, viewer *portalSession) ([]string, error) {
+func proveModelsPage(cfg *config.Config, primary, viewer *portalSession, plan portalModelPlan) ([]string, error) {
 	var verdicts []string
 	email := primary.user.Email
 	subject := stringAt(primary.claims, claimSubject)
@@ -76,23 +159,13 @@ func proveModelsPage(cfg *config.Config, primary, viewer *portalSession) ([]stri
 	verdicts = append(verdicts, fmt.Sprintf("PASS: the Serving page's read (POST /api/muster/call %slist_backends as %s) lists %v, attributed at muster to %s",
 		modelManagerToolPrefix, email, names, email))
 
-	backend := hostBackend(cfg.ChartBackends())
-	if backend == "" {
-		verdicts = append(verdicts, "SKIP: the Models page's write — the lab runs no host model server")
-		return verdicts, nil
+	if plan.skip != "" {
+		return append(verdicts, "SKIP: "+plan.String()), nil
 	}
-	onBackend := map[string]any{backendField: backend}
-	var inventory struct {
-		Models []portalModelInfo `json:"models"`
-	}
-	if err := portalMusterCall(primary, modelManagerToolPrefix+"list_models", onBackend, &inventory); err != nil {
+	backend := plan.backend
+	model, err := plan.currentModel(primary)
+	if err != nil {
 		return verdicts, err
-	}
-	spec, _ := backendSpec(backend)
-	model, ok := proofModelOf(inventory.Models, spec.proofModel)
-	if !ok {
-		verdicts = append(verdicts, fmt.Sprintf("SKIP: the Models page's write — %s holds no downloaded model", backend))
-		return verdicts, nil
 	}
 
 	order := writeTools(model.Loaded)
@@ -119,14 +192,14 @@ func proveModelsPage(cfg *config.Config, primary, viewer *portalSession) ([]stri
 		return verdicts, err
 	}
 	note("muster attributes the calls to %s; model-manager logged the load and the unload with caller=%s", email, email)
-	verdicts = append(verdicts, fmt.Sprintf("PASS: the Models page's write (POST /api/muster/call %s of %s on %s as %s) answers, attributed at muster and in model-manager's log (caller=%s); the model is left %s",
-		strings.Join(order, " + "), model.Name, backend, email, email, loadedWord(model.Loaded)))
+	verdicts = append(verdicts, fmt.Sprintf("PASS: the Models page's write (POST /api/muster/call %s of %s (%s) on %s as %s) answers, attributed at muster and in model-manager's log (caller=%s); the model is left %s",
+		strings.Join(order, " + "), model.Name, humanBytes(model.SizeBytes), backend, email, email, loadedWord(model.Loaded)))
 
 	if viewer == nil {
 		return verdicts, nil
 	}
 	step("%s's write refused: %swire_model of %s on %s through the portal", viewer.user.Email, modelManagerToolPrefix, model.Name, backend)
-	err := portalMusterCall(viewer, modelManagerToolPrefix+"wire_model", args, nil)
+	err = portalMusterCall(viewer, modelManagerToolPrefix+"wire_model", args, nil)
 	switch {
 	case err == nil:
 		return verdicts, fmt.Errorf("%s wired %s through the portal although the view role writes no ModelConfigs — model-manager is not writing as the caller", viewer.user.Email, model.Name)

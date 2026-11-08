@@ -1,12 +1,150 @@
 package lab
 
 import (
+	"context"
+	"errors"
+	"io"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
+
+const portalEmptyModels = `{"models":[]}`
+
+func TestReadPortalModelPlan(t *testing.T) {
+	for _, tc := range []struct {
+		name, answer, want string
+		toolError          bool
+	}{
+		{"preferred", `{"models":[{"name":"large","sizeBytes":9000000000},{"name":"smollm2:135m","sizeBytes":475000000}]}`, "475000000 bytes from list_models", false},
+		{"fallback", `{"models":[{"name":"large","sizeBytes":9000000000},{"name":"tiny","sizeBytes":1000}]}`, "tiny on ollama", false},
+		{"inventory empty", portalEmptyModels, "no host model: the Models write is skipped (ollama holds no downloaded model)", false},
+		{"inventory refused", "inventory unavailable", "inventory unavailable", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fp := newFakePortal(t)
+			list := modelManagerToolPrefix + "list_models"
+			fp.tools[list] = func(args map[string]any) (string, bool) {
+				if args[backendField] != config.ModelManagerBackendOllama {
+					t.Errorf("backend: %v", args)
+				}
+				return tc.answer, tc.toolError
+			}
+			plan, err := readPortalModelPlan(fp.session(testPortalUser, platformAdminsGroup), config.ModelManagerBackendOllama)
+			if tc.toolError {
+				if err == nil || !strings.Contains(err.Error(), tc.want) {
+					t.Fatalf("err = %v", err)
+				}
+			} else {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !strings.Contains(plan.String(), tc.want) {
+					t.Errorf("plan = %s", plan)
+				}
+				if plan.skip == "" && !strings.Contains(plan.String(), "--skip-model-write") {
+					t.Error("no skip instruction")
+				}
+			}
+			if len(fp.captured) != 1 || len(fp.captured[list]) != 1 {
+				t.Errorf("preflight called tools: %v", fp.captured)
+			}
+		})
+	}
+}
+
+func TestBackstageModelPlanSkips(t *testing.T) {
+	cfg := config.Default()
+	cfg.Platform.Enabled, cfg.Platform.Agents, cfg.Platform.ModelManager.Enabled = true, true, true
+	cfg.Platform.ModelManager.Backends = []string{config.ModelManagerBackendOllama}
+	for _, tc := range []struct {
+		name   string
+		opts   BackstageTestOptions
+		emails []string
+		want   string
+	}{
+		{"flag", BackstageTestOptions{SkipModelWrite: true}, []string{testPortalUser}, "--skip-model-write"},
+		{"no admin", BackstageTestOptions{}, []string{testPortalViewer}, "no platform-admins user selected"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			plan, err := backstageModelPlan(cfg, tc.emails, tc.opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(plan.String(), tc.want) {
+				t.Errorf("plan = %s", plan)
+			}
+		})
+	}
+}
+
+func TestPortalModelPlanInventoryChanges(t *testing.T) {
+	for _, tc := range []struct {
+		name, answer string
+		wantError    bool
+	}{
+		{"removed", portalEmptyModels, true},
+		{"resized", `{"models":[{"name":"tiny","sizeBytes":2000}]}`, true},
+		{"replaced", `{"models":[{"name":"other","sizeBytes":1000}]}`, true},
+		{"loaded since plan", `{"models":[{"name":"tiny","sizeBytes":1000,"loaded":true}]}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fp := newFakePortal(t)
+			fp.tools[modelManagerToolPrefix+"list_models"] = func(map[string]any) (string, bool) { return tc.answer, false }
+			plan := portalModelPlan{backend: config.ModelManagerBackendOllama, model: portalModelInfo{Name: "tiny", SizeBytes: 1000}}
+			model, err := plan.currentModel(fp.session(testPortalUser, platformAdminsGroup))
+			if tc.wantError {
+				if err == nil || !strings.Contains(err.Error(), "inventory changed") {
+					t.Fatalf("err = %v", err)
+				}
+			} else if err != nil || !model.Loaded {
+				t.Fatalf("current model = %+v, err = %v", model, err)
+			}
+			if len(fp.captured) != 1 {
+				t.Errorf("unexpected calls: %v", fp.captured)
+			}
+		})
+	}
+}
+
+// --plan exits after the announcement, without entering any proof step.
+func TestBackstageModelPlanBeforeProof(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("KUBECONFIG", "/elsewhere/config")
+	stubKindKubeconfig(t)
+	resetKindKubeconfigCache(t)
+	t.Cleanup(resetLabKube)
+	prev := apiserverAcceptsDex
+	apiserverAcceptsDex = func(context.Context, *config.Config) error { return nil }
+	t.Cleanup(func() { apiserverAcceptsDex = prev })
+	for _, planOnly := range []bool{true, false} {
+		original := os.Stdout
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		os.Stdout = w
+		t.Cleanup(func() { os.Stdout = original })
+		stopped := errors.New("stop before proof")
+		err = BackstageTest(config.Default(), nil, BackstageTestOptions{
+			Plan: planOnly, SkipModelWrite: true,
+			BeforeProof: func() error { step("first proof step"); return stopped },
+		})
+		os.Stdout = original
+		_ = w.Close()
+		out, readErr := io.ReadAll(r)
+		_ = r.Close()
+		if readErr != nil || (planOnly && err != nil) || (!planOnly && !errors.Is(err, stopped)) {
+			t.Fatalf("plan: %v; output: %v", err, readErr)
+		}
+		if !strings.HasPrefix(string(out), "Host model plan: no host model:") || strings.Contains(string(out), "==>") == planOnly {
+			t.Errorf("plan-only %v output = %s", planOnly, out)
+		}
+	}
+}
 
 // TestPortalMusterCallModelManager: a model-manager tool goes over the same
 // route as agent-manager's, named in full, its arguments carried; a refusal
