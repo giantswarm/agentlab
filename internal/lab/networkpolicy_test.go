@@ -206,17 +206,31 @@ func TestDataplanePeersPatch(t *testing.T) {
 	}
 }
 
-// TestNetpolProbeVerdict pins the denial judgement: the control must answer,
-// the backend must not.
+// TestNetpolProbeVerdict pins the denial judgement: the control must
+// answer, and the backend must end in wget's own timeout with a failed exit;
+// a backend that answers, does not resolve, refuses or resets the
+// connection, prints nothing, exits 0 or fails some other way does not prove
+// a policy and fails.
 func TestNetpolProbeVerdict(t *testing.T) {
 	const answered = "  HTTP/1.1 200 OK\n"
-	const timedOut = "wget: download timed out\n"
+	const unrecognised = "unrecognised failure"
+	const timedOut = "Connecting to agent-manager.agent-platform.svc.cluster.local (10.96.1.2:8080)\nwget: download timed out\n"
+	backend := func(out, exit string) string {
+		return "--- control\n" + answered + "--- backend\n" + out + netpolExitMarker + exit + "\n"
+	}
 	for _, tc := range []struct {
 		name, out, wantErr string
 	}{
-		{name: "denied", out: "--- control\n" + answered + "--- backend\n" + timedOut},
-		{name: "backend reached", out: "--- control\n" + answered + "--- backend\n  HTTP/1.1 404 Not Found\n", wantErr: "the policy is not enforced"},
-		{name: "control unreachable", out: "--- control\n" + timedOut + "--- backend\n" + timedOut, wantErr: "the probe's own network is broken"},
+		{name: "denied", out: backend(timedOut, "1")},
+		{name: "backend reached", out: backend("  HTTP/1.1 404 Not Found\n", "1"), wantErr: "the policy is not enforced"},
+		{name: "name does not resolve", out: backend("wget: bad address 'agent-manager.agent-platform.svc.cluster.local:8080'\n", "1"), wantErr: "does not resolve"},
+		{name: "connection refused", out: backend("wget: can't connect to remote host (10.96.1.2): Connection refused\n", "1"), wantErr: "nothing listens"},
+		{name: "connection reset", out: backend("wget: error getting response: Connection reset by peer\n", "1"), wantErr: "reset, not dropped"},
+		{name: "empty backend", out: backend("", "1"), wantErr: unrecognised},
+		{name: "unrecognised failure", out: backend("wget: something else\n", "1"), wantErr: unrecognised},
+		{name: "exit 0 without a status", out: backend("", "0"), wantErr: "neither an answer nor a timeout"},
+		{name: "no exit status", out: "--- control\n" + answered + "--- backend\n" + timedOut, wantErr: "no exit status"},
+		{name: "control unreachable", out: "--- control\n" + timedOut + "--- backend\n" + timedOut + netpolExitMarker + "1\n", wantErr: "the probe's own network is broken"},
 		{name: "no output", out: "sh: wget: not found\n", wantErr: "no control section"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

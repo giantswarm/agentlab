@@ -39,19 +39,42 @@ var (
 )
 
 // netpolProbeScript connects to both targets from the probe pod, each answer
-// under its own marker line.
+// under its own marker line, the backend's followed by wget's exit status so
+// the verdict reads how the connection ended, not only what it printed.
 func netpolProbeScript() string {
 	return fmt.Sprintf(`sleep %d
 echo '--- control'
 wget -S -T %d -O /dev/null %s 2>&1
 echo '--- backend'
 wget -S -T %d -O /dev/null %s 2>&1
-true`, netpolSettle, netpolProbeTimeout, netpolControlURL, netpolProbeTimeout, netpolBackendURL)
+echo "%s$?"`, netpolSettle, netpolProbeTimeout, netpolControlURL, netpolProbeTimeout, netpolBackendURL, netpolExitMarker)
+}
+
+// netpolExitMarker prefixes the backend wget's exit status in the probe's
+// output.
+const netpolExitMarker = "--- backend exit "
+
+// netpolTimedOut is busybox wget's message when -T expires before the
+// connection answers: what a NetworkPolicy's dropped packets look like.
+const netpolTimedOut = "download timed out"
+
+// netpolOtherFailures are the backend answers that are not a policy's drop —
+// a name that does not resolve, a port nothing listens on, a reset — each
+// with what it says about the probe.
+var netpolOtherFailures = []struct{ text, means string }{
+	{"bad address", "the Service name does not resolve"},
+	{"Connection refused", "nothing listens on the Service's port, or it has no endpoints"},
+	{"Connection reset", "the connection was reset, not dropped"},
+	{"Network is unreachable", "the pod has no route"},
+	{"No route to host", "the pod has no route"},
 }
 
 // netpolProbeVerdict judges the probe's output: the control must answer with
-// an HTTP status, the backend with none. It returns the two answers' last
-// lines for the note.
+// an HTTP status; the backend must end in wget's own connection timeout with
+// a failed exit and no HTTP status — a NetworkPolicy drops packets, so a
+// name that does not resolve, a refused or reset connection, no output or
+// anything unrecognised is no proof of the policy and fails. It returns the
+// two answers for the note.
 func netpolProbeVerdict(out string) (control, backend string, err error) {
 	_, rest, ok := strings.Cut(out, "--- control\n")
 	if !ok {
@@ -61,12 +84,27 @@ func netpolProbeVerdict(out string) (control, backend string, err error) {
 	if !ok {
 		return "", "", fmt.Errorf("the probe pod printed no backend section: %.300s", strings.TrimSpace(out))
 	}
+	backend, exitText, ok := strings.Cut(backend, netpolExitMarker)
+	if !ok {
+		return "", "", fmt.Errorf("the probe pod printed no exit status for the backend: %.300s", strings.TrimSpace(out))
+	}
 	control, backend = strings.TrimSpace(control), strings.TrimSpace(backend)
 	if !httpStatusRe.MatchString(control) {
 		return control, backend, fmt.Errorf("the probe pod in %s did not reach muster's Service (%s), whose policy admits every namespace — the probe's own network is broken, so a refusal below would prove nothing: %.300s", netpolProbeNamespace, netpolControlURL, control)
 	}
 	if httpStatusRe.MatchString(backend) {
 		return control, backend, fmt.Errorf("a pod in %s reached agent-manager's Service (%s) although its ingress policy admits muster and the data plane only — the policy is not enforced: %.300s", netpolProbeNamespace, netpolBackendURL, backend)
+	}
+	for _, f := range netpolOtherFailures {
+		if strings.Contains(backend, f.text) {
+			return control, backend, fmt.Errorf("agent-manager's Service (%s) answered %q from %s: %s — no proof that a policy dropped the connection: %.300s", netpolBackendURL, f.text, netpolProbeNamespace, f.means, backend)
+		}
+	}
+	if exit := strings.TrimSpace(exitText); exit == "0" || exit == "" {
+		return control, backend, fmt.Errorf("wget on agent-manager's Service (%s) exited %q without an HTTP status — neither an answer nor a timeout: %.300s", netpolBackendURL, exit, backend)
+	}
+	if !strings.Contains(backend, netpolTimedOut) {
+		return control, backend, fmt.Errorf("agent-manager's Service (%s) did not time out from %s (wget %q): unrecognised failure, no proof that a policy dropped the connection: %.300s", netpolBackendURL, netpolProbeNamespace, netpolTimedOut, backend)
 	}
 	return control, backend, nil
 }
