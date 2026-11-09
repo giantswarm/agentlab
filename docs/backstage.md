@@ -301,8 +301,41 @@ is Ready after; a viewer's
 `update_agent`/`delete_agent` are `forbidden: …`; `delete_agent` of the agent
 while the fixture still needs the chart keeps `OCIRepository/agent` and says
 which release for; `delete_agent` of the fixture, the last release the proof
-holds, records the source's fate. A GitOps-owned release (refused as
-`conflict: …`) has no fixture in the lab and is not asserted.
+holds, records the source's fate.
+
+**The commit path** (as the admin, while `get_info` reports
+`capabilities.commit`; [Commit mode](agents.md#commit-mode)): the GitOps
+fixture makes the first `platform.workspaces.github.proofRepositories` entry
+the repository that owns the lab's agents — a suspended `GitRepository` on its
+default branch, the `Kustomization` `agentlab-gitops-fixture` at
+`clusters/agentlab/kagent`, and one agent applied from git (`agentlab-commit-seed`,
+composed by agent-manager and applied with the Kustomization's labels). The
+admin's grant of the `github` instance's App comes first: held already, or
+granted once in a browser signed in to GitHub through muster's sign-in link,
+which the stage prints and waits for, as the workspaces proofs do.
+The grant is dropped when the stage ends, including a failed sign-in.
+
+- C1 `create_agent` in mode commit, as the create dialog sends it (no target):
+  a pull request on that repository from `agent-manager/create-kagent-agentlab-commit`
+  against the default branch, adding `clusters/agentlab/kagent/agent-manager/agentlab-commit.yaml`,
+  opened as the person's GitHub login, landed by the fixture's Kustomization;
+  nothing applied;
+- C2/C3 the Edit page's GitOps-owned mode: the created agent applied from git,
+  the GitRepository following the create's branch (where its file is);
+  `get_agent` says `managed: gitops`, `validate_agent` (`update`) in mode apply
+  is `gitops_owned`, the commit's dry run names that repository and branch
+  and opens nothing, `update_agent` in mode commit opens the pull request; the
+  live release keeps its generation (helm-controller's status writes move only its resourceVersion);
+- C4 `delete_agent` in mode commit opens the pull request removing the file;
+  the release stays.
+
+Each pull request's branch is read back on GitHub with the person's own git
+credentials on this host and deleted at the end, which closes the pull
+request; the agents, the Kustomization and the GitRepository go too, on every
+path, leftovers of an aborted run first. Without commit mode the stage is
+skipped with its reason; with agent-manager wired for it (its Deployment
+carries `--github-token-exchange-endpoint`) and no capability reported, it
+fails.
 
 **The Models page** (with `platform.modelManager` or `platform.serving`, as
 the admin, a viewer as the boundary; first, as it needs no agent): the portal reaches model-manager through

@@ -592,6 +592,32 @@ muster:
           type: valkey
           valkey:
             url: muster-valkey:6379
+{{- with .AgentManagerCommit }}
+        # agent-manager's commit mode (agentmanagercommit.go): muster as the
+        # RFC 8693 broker that releases a person's own grant of the
+        # workspaces' {{ .Instance }} instance App ({{ .GrantIssuer }}) to
+        # the confidential client {{ .ClientID }}, for that person's ID token
+        # from the lab Dex, and to nothing else. The client is seeded from its
+        # Secret on every start.
+        trustedIssuers:
+          - issuer: "{{ .SubjectIssuer }}"
+            jwksUrl: "{{ .JWKSURL }}"
+            # The audiences muster accepts the lab's person tokens with
+            # (trustedAudiences above): the password grant's and the portal's.
+            allowedAudiences: [agent-platform, dex-k8s-authenticator]
+            acceptedTypHeaders: [""]
+            allowPrivateIPJWKSHosts: ["{{ .JWKSHost }}"]
+        tokenExchangeBroker:
+          clientAudiences:
+            {{ .ClientID }}: [{{ .Audience }}]
+          targets:
+            {{ .Audience }}:
+              grantIssuer: "{{ .GrantIssuer }}"
+          brokerClients:
+            {{ .ClientID }}:
+              clientCredentialsSecretRef:
+                name: {{ .Secret }}
+{{- end }}
 {{- if and .WorkspacesEnabled .WorkspacesChart (not .WorkspaceProviders) }}
 {{- with .WorkspaceReleasable }}
     # No provider instance renders yet (the configured one lacks its ids or
@@ -1037,6 +1063,20 @@ agent-manager:
       auth:
         requiredAudiences:
           - kubernetes
+{{- with .AgentManagerCommit }}
+  # Commit mode (agentmanagercommit.go): a commit's pull request opens as
+  # the person with their grant of the workspaces' {{ .Instance }} instance
+  # App, which muster's broker below releases to this confidential client
+  # for the person's forwarded ID token. muster's public token endpoint,
+  # reached through the edge (the CoreDNS rewrite) under the lab CA. The MCP
+  # registration keeps the ID token: apply mode and reads are unchanged.
+  githubTokenExchange:
+    endpoint: {{ .Endpoint }}
+    clientID: {{ .ClientID }}
+    audience: {{ .Audience }}
+    secretName: {{ .Secret }}
+    caSecretName: {{ .CASecret }}
+{{- end }}
 {{- end }}
 
 {{- if .ModelManagerEnabled }}
