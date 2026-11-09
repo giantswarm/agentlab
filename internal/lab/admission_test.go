@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	chartv2 "helm.sh/helm/v4/pkg/chart/v2"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -226,6 +227,26 @@ func TestInstalledFromUpstreamKyverno(t *testing.T) {
 	for _, c := range cases {
 		if got := installedFromUpstreamKyverno(c.meta); got != c.want {
 			t.Errorf("%s: installedFromUpstreamKyverno = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// TestPredates: Kyverno restarts only when a pod started before an API the
+// lab provides was created.
+func TestPredates(t *testing.T) {
+	t0 := time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		name             string
+		started, created []time.Time
+		want             bool
+	}{
+		{"APIs before Kyverno", []time.Time{t0.Add(time.Hour)}, []time.Time{t0, t0.Add(time.Minute)}, false},
+		{"an API after Kyverno", []time.Time{t0.Add(time.Hour)}, []time.Time{t0, t0.Add(2 * time.Hour)}, true},
+		{"one pod older than the API", []time.Time{t0.Add(3 * time.Hour), t0}, []time.Time{t0.Add(time.Hour)}, true},
+		{"no pod start known", nil, []time.Time{t0}, false},
+	} {
+		if got := predates(c.started, c.created); got != c.want {
+			t.Errorf("%s: predates = %v, want %v", c.name, got, c.want)
 		}
 	}
 }

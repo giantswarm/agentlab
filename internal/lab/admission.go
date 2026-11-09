@@ -62,7 +62,9 @@ import (
 // mutate policies the lab never ran). The chart's PolicyExceptions are
 // judged without installing them: polextest.go dry-runs them against this
 // Kyverno. Kustomization is served (providedapis.go: the CRD, no
-// controller), so its rules hold as on an installation. The other Flux kinds
+// controller), so its rules hold as on an installation; a Kyverno that
+// started before the CRD existed is restarted to load them
+// (reloadKyvernoForProvidedAPIs). The other Flux kinds
 // the policy names — Alert, Receiver, ImagePolicy — are not served in the
 // lab: the platform's engine runs source-controller and helm-controller
 // only, so those rules match nothing here. Kyverno accepts the policy with a
@@ -142,6 +144,9 @@ func fleetAdmissionUp(cfg *config.Config) error {
 	if err := installOCIChart(cfg, kyvernoNamespace, kyvernoRelease, kyvernoChartRef, kyvernoChartVersion, values, kyvernoInstallTimeout); err != nil {
 		return err
 	}
+	if err := reloadKyvernoForProvidedAPIs(ctx); err != nil {
+		return err
+	}
 
 	note("the org namespace %s with the tenant ServiceAccount %s (%s -> cluster-admin)", orgNamespace, tenantServiceAccount, tenantRoleBinding)
 	if _, err := applyManifests(ctx, orgFixture); err != nil {
@@ -188,6 +193,83 @@ func fleetAdmissionUp(cfg *config.Config) error {
 		note("%s", r)
 	}
 	return nil
+}
+
+// kyvernoAdmissionDeployment is the kyverno app's admission controller, the
+// one controller the lab runs.
+const kyvernoAdmissionDeployment = "kyverno-admission-controller"
+
+// reloadKyvernoForProvidedAPIs restarts Kyverno's admission controller when
+// it started before one of the lab's provided APIs was created. Kyverno
+// resolves a policy's kinds when it loads the policy: a kind served only
+// afterwards — the Kustomization API, provided after a lab was first up —
+// is in its webhook but not in its policy cache, so the policy's rules for
+// it admit everything until the controller restarts. A lab whose APIs
+// predate Kyverno restarts nothing.
+func reloadKyvernoForProvidedAPIs(ctx context.Context) error {
+	k, err := labKube()
+	if err != nil {
+		return err
+	}
+	d, err := k.clientset.AppsV1().Deployments(kyvernoNamespace).Get(ctx, kyvernoAdmissionDeployment, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", describe(gvrDeployments, kyvernoNamespace, kyvernoAdmissionDeployment), err)
+	}
+	pods, err := deploymentPods(ctx, k, d)
+	if err != nil {
+		return err
+	}
+	var started []time.Time
+	for _, pod := range pods {
+		if pod.Status.StartTime != nil {
+			started = append(started, pod.Status.StartTime.Time)
+		}
+	}
+	created, err := providedCRDsCreated(ctx)
+	if err != nil {
+		return err
+	}
+	if !predates(started, created) {
+		return nil
+	}
+	note("restarting %s: it started before an API the lab provides, whose policy rules it has not loaded", kyvernoAdmissionDeployment)
+	if err := restartDeployment(ctx, kyvernoNamespace, kyvernoAdmissionDeployment); err != nil {
+		return err
+	}
+	return waitDeploymentRolledOut(ctx, kyvernoNamespace, kyvernoAdmissionDeployment, kyvernoInstallTimeout)
+}
+
+// providedCRDsCreated reads when each CustomResourceDefinition the lab
+// provides (providedapis.go) was created.
+func providedCRDsCreated(ctx context.Context) ([]time.Time, error) {
+	var out []time.Time
+	for _, api := range providedAPIs {
+		objs, err := decodeManifests(api.manifests)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", api.what, err)
+		}
+		for _, obj := range objs {
+			if obj.GroupVersionKind() != gvkCRD {
+				continue
+			}
+			crd, err := getObject(ctx, gvrCRDs, "", obj.GetName())
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, crd.GetCreationTimestamp().Time)
+		}
+	}
+	return out, nil
+}
+
+// predates is true when a pod started before an API was created: the
+// earliest start against the latest creation. No pod start known restarts
+// nothing.
+func predates(started, created []time.Time) bool {
+	if len(started) == 0 || len(created) == 0 {
+		return false
+	}
+	return slices.MinFunc(started, time.Time.Compare).Before(slices.MaxFunc(created, time.Time.Compare))
 }
 
 // kyvernoAppHome is the home of the fleet's kyverno app chart; the upstream
