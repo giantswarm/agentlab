@@ -406,12 +406,12 @@ func (f *proFake) call(tool string, args map[string]any) (any, error) {
 				// as an array rather than list_issues' field map.
 				fields := make([]map[string]string, 0, len(item.Fields))
 				for _, name := range slices.Sorted(maps.Keys(item.Fields)) {
-					fields = append(fields, map[string]string{"name": name, "value": item.Fields[name]})
+					fields = append(fields, map[string]string{nameKey: name, "value": item.Fields[name]})
 				}
 				return map[string]any{
-					"number": item.Number, "title": item.Title, "url": item.URL,
-					"repository": map[string]any{"nameWithOwner": item.Repo, "isPrivate": item.Private, "url": "https://github.com/" + item.Repo},
-					"body":       item.Body, "author": "", "assignees": item.Assignees,
+					"number": item.Number, "title": item.Title, urlKey: item.URL,
+					argRepository: map[string]any{"nameWithOwner": item.Repo, "isPrivate": item.Private, urlKey: "https://github.com/" + item.Repo},
+					"body":        item.Body, "author": "", "assignees": item.Assignees,
 					"comments": []any{}, "labels": item.Labels, "projects": []string{proFakeBoard},
 					"fields": fields, "createdAt": item.CreatedAt, "updatedAt": item.UpdatedAt, "closedAt": nil,
 				}, nil
