@@ -268,7 +268,11 @@ func (p *credentialsProof) readPrerequisites() error {
 		return err
 	}
 	p.pre.musterModern = modern.protocol() == mcp.ProtocolVersion20260728
+	p.pre.outputSchema, err = modern.declaresOutputSchema(ctx, agentManagerToolPrefix+"set_organization_model")
 	modern.close()
+	if err != nil {
+		return err
+	}
 	if p.pre.kustomizeController, err = kustomizeControllerReady(ctx); err != nil {
 		return err
 	}
@@ -478,16 +482,8 @@ func (p *credentialsProof) plainGeneration() (string, error) {
 // client's answer, skipped on an agent-manager that predates them.
 func (p *credentialsProof) resourceLinkCheck(uiSkip string) organizationCheck {
 	c := organizationCheck{surface: surfaceAgentManager, boundary: "a client without URL elicitation gets structuredContent and a resource_link to the form", skip: uiSkip}
-	if c.skip == "" {
-		ctx, cancel := context.WithTimeout(context.Background(), musterMCPTimeout)
-		declared, err := p.plain.declaresOutputSchema(ctx, agentManagerToolPrefix+"set_organization_model")
-		cancel()
-		switch {
-		case err != nil:
-			c.skip = "describe_tool set_organization_model: " + err.Error()
-		case !declared:
-			c.skip = fmt.Sprintf("agent-manager %s declares no outputSchema on set_organization_model: it predates structuredContent and the resource_link on credential writes (giantswarm/agent-manager#329)", p.agentManagerVersion)
-		}
+	if c.skip == "" && !p.pre.outputSchema {
+		c.skip = fmt.Sprintf("agent-manager %s declares no outputSchema on set_organization_model: it predates structuredContent and the resource_link on credential writes (giantswarm/agent-manager#329)", p.agentManagerVersion)
 	}
 	c.run = func() (string, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), musterMCPTimeout)
