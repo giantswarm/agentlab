@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"testing"
 
+	"filippo.io/age"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -199,12 +200,31 @@ func TestOrganizationBindingLeftovers(t *testing.T) {
 	require.Empty(t, organizationBindingLeftovers(bindings[:1], org))
 }
 
-func TestAgentManagerAtLeast(t *testing.T) {
-	require.True(t, agentManagerAtLeast("2.22.0", credentialLinkFloor))
-	require.True(t, agentManagerAtLeast("v2.23.1", credentialLinkFloor))
-	require.False(t, agentManagerAtLeast("2.22.0-rc.13", credentialLinkFloor))
-	require.False(t, agentManagerAtLeast("2.21.1", credentialLinkFloor))
-	require.False(t, agentManagerAtLeast("dev", credentialLinkFloor))
+func TestParseAgeIdentityTakesAgeKeygenFiles(t *testing.T) {
+	identity, err := age.GenerateX25519Identity()
+	require.NoError(t, err)
+	file := "# created: 2026-11-09T14:00:00Z\n# public key: " + identity.Recipient().String() + "\n" + identity.String() + "\n"
+	parsed, err := parseAgeIdentity([]byte(file))
+	require.NoError(t, err)
+	require.Equal(t, identity.Recipient().String(), parsed.Recipient().String())
+
+	other, err := age.GenerateX25519Identity()
+	require.NoError(t, err)
+	_, err = parseAgeIdentity([]byte(identity.String() + "\n" + other.String() + "\n"))
+	require.Error(t, err)
+	_, err = parseAgeIdentity([]byte("# nothing\n"))
+	require.Error(t, err)
+}
+
+func TestDescribesOutputSchema(t *testing.T) {
+	declared, err := describesOutputSchema(`{"name":"x_agent-manager_set_organization_model","outputSchema":{"type":"object","properties":{"credentials":{}}}}`)
+	require.NoError(t, err)
+	require.True(t, declared)
+	declared, err = describesOutputSchema(`{"name":"x_agent-manager_set_organization_model","inputSchema":{"type":"object"}}`)
+	require.NoError(t, err)
+	require.False(t, declared)
+	_, err = describesOutputSchema("not json")
+	require.Error(t, err)
 }
 
 func TestCredentialsSignInManifest(t *testing.T) {

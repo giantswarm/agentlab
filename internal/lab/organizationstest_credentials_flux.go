@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -60,11 +61,28 @@ func ensureCredentialsAgeIdentity() (*age.X25519Identity, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	identity, err := age.ParseX25519Identity(strings.TrimSpace(string(raw)))
+	identity, err := parseAgeIdentity(raw)
 	if err != nil {
 		return nil, "", fmt.Errorf("%s: %w", path, err)
 	}
 	return identity, path, nil
+}
+
+// parseAgeIdentity reads one X25519 identity from an age key file, comment
+// lines included, as age-keygen writes it.
+func parseAgeIdentity(raw []byte) (*age.X25519Identity, error) {
+	identities, err := age.ParseIdentities(bytes.NewReader(raw))
+	if err != nil {
+		return nil, err
+	}
+	if len(identities) != 1 {
+		return nil, errors.New("want one X25519 identity, as age-keygen writes")
+	}
+	identity, ok := identities[0].(*age.X25519Identity)
+	if !ok {
+		return nil, errors.New("want one X25519 identity, as age-keygen writes")
+	}
+	return identity, nil
 }
 
 // placeCredentialsAgeSecret writes the age identity into the Secret the

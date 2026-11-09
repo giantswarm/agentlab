@@ -429,8 +429,9 @@ printed only as its SHA-256. Each verdict:
   message prefixed `[agent-manager]` by muster (giantswarm/muster#1812); a
   2025-11-25 client that declared it at initialize gets `-32042` with the
   form's URL; a client without it gets a result whose `credentials[].next`
-  carries the link, and from agent-manager 2.22.0 (giantswarm/agent-manager#329)
-  `structuredContent` and a `resource_link` (skipped on an older one).
+  carries the link, and `structuredContent` with a `resource_link` once
+  `set_organization_model` declares an `outputSchema` through muster's
+  `describe_tool` (giantswarm/agent-manager#329; skipped while it declares none).
 - The form's save, the way the portal's form posts it
   (giantswarm/backstage#3364): `GET /api/v1/credential-operations/{operation}`
   with the person's token answers the confirmation with a strong `ETag` and

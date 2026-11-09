@@ -15,7 +15,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Masterminds/semver/v3"
 	"github.com/mark3labs/mcp-go/mcp"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -56,10 +55,6 @@ const (
 	// and MCP, one port.
 	credentialsRESTPort      = 8080
 	credentialOperationsPath = "/api/v1/credential-operations/" // #nosec G101 -- a path, not a credential
-	// credentialLinkFloor is the first agent-manager release whose credential
-	// writes answer structuredContent and a resource_link
-	// (giantswarm/agent-manager#329).
-	credentialLinkFloor = "2.22.0"
 	// credentialStateCommitted is a credential whose pull request exists.
 	credentialStateCommitted = "committed"
 	credentialStatePresent   = "present"
@@ -483,8 +478,16 @@ func (p *credentialsProof) plainGeneration() (string, error) {
 // client's answer, skipped on an agent-manager that predates them.
 func (p *credentialsProof) resourceLinkCheck(uiSkip string) organizationCheck {
 	c := organizationCheck{surface: surfaceAgentManager, boundary: "a client without URL elicitation gets structuredContent and a resource_link to the form", skip: uiSkip}
-	if c.skip == "" && !agentManagerAtLeast(p.agentManagerVersion, credentialLinkFloor) {
-		c.skip = fmt.Sprintf("agent-manager %s predates structuredContent and the resource_link on credential writes (giantswarm/agent-manager#329, %s)", p.agentManagerVersion, credentialLinkFloor)
+	if c.skip == "" {
+		ctx, cancel := context.WithTimeout(context.Background(), musterMCPTimeout)
+		declared, err := p.plain.declaresOutputSchema(ctx, agentManagerToolPrefix+"set_organization_model")
+		cancel()
+		switch {
+		case err != nil:
+			c.skip = "describe_tool set_organization_model: " + err.Error()
+		case !declared:
+			c.skip = fmt.Sprintf("agent-manager %s declares no outputSchema on set_organization_model: it predates structuredContent and the resource_link on credential writes (giantswarm/agent-manager#329)", p.agentManagerVersion)
+		}
 	}
 	c.run = func() (string, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), musterMCPTimeout)
@@ -509,13 +512,6 @@ func (p *credentialsProof) resourceLinkCheck(uiSkip string) organizationCheck {
 		return "structuredContent names the pending credential; a resource_link block carries " + p.formURL, nil
 	}
 	return c
-}
-
-// agentManagerAtLeast compares a reported version with a floor; an
-// unreadable version is below every floor.
-func agentManagerAtLeast(version, floor string) bool {
-	v, err := semver.NewVersion(version)
-	return err == nil && !v.LessThan(semver.MustParse(floor))
 }
 
 // credentialREST is agent-manager's REST API on a port-forward to its pod:
