@@ -18,6 +18,8 @@ import (
 // secondEdgeAddress is a second lab's loopback address.
 const secondEdgeAddress = "127.0.0.2"
 
+const alternateDexLocalhost = "localhost:32003"
+
 // The lab's own clients dial its hostnames on the address the edge is
 // published on; anything else is dialed as asked.
 func TestDialLabAddr(t *testing.T) {
@@ -30,7 +32,7 @@ func TestDialLabAddr(t *testing.T) {
 		"muster.lab2.127.0.0.2.nip.io:443": secondEdgeAddress + ":443",
 		"lab2.127.0.0.2.nip.io:443":        secondEdgeAddress + ":443",
 		"muster.127.0.0.1.nip.io:443":      "muster.127.0.0.1.nip.io:443",
-		"localhost:32003":                  "localhost:32003",
+		alternateDexLocalhost:              alternateDexLocalhost,
 		"localhost:32000":                  "127.0.0.1:32000",
 		"[::1]:32000":                      "[::1]:32000",
 		"localhost.example.org:32000":      "localhost.example.org:32000",
@@ -89,7 +91,7 @@ func TestLabDexTLSOnIPv4(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusNoContent {
 		t.Errorf("Dex status = %d", resp.StatusCode)
 	}
@@ -100,14 +102,14 @@ func TestDialLabDexPort(t *testing.T) {
 	cfg.DexPort = 32003
 	SetPlatform(cfg)
 	t.Cleanup(func() { SetPlatform(&config.Config{}) })
-	if got := dialLabAddr("localhost:32003"); got != "127.0.0.1:32003" {
+	if got := dialLabAddr(alternateDexLocalhost); got != "127.0.0.1:32003" {
 		t.Errorf("custom Dex port dialed as %q", got)
 	}
 	if got := dialLabAddr("localhost:32000"); got != "localhost:32000" {
 		t.Errorf("another localhost port rewritten to %q", got)
 	}
 	SetPlatform(&config.Config{})
-	if got := dialLabAddr("localhost:32003"); got != "localhost:32003" {
+	if got := dialLabAddr(alternateDexLocalhost); got != alternateDexLocalhost {
 		t.Errorf("outside a lab, localhost rewritten to %q", got)
 	}
 }
