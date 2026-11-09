@@ -150,6 +150,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		inGroup(groupTesting, beekeeperCentralTestCmd()),
 		inGroup(groupTesting, beekeeperSubscriptionsTestCmd()),
 		inGroup(groupTesting, backstageTestCmd()),
+		inGroup(groupTesting, roadmapTestCmd()),
 
 		inGroup(groupCleanup, downCmd()),
 		inGroup(groupCleanup, readOnlyLabCmd("untrust", "Remove the lab CA from the system and browser trust stores", lab.Untrust)),
@@ -163,6 +164,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 
 		browserCmd(),
 		slackFakeCmd(),
+		proFakeCmd(),
 		mockLLMCmd(),
 		skillHostCmd(),
 	)
@@ -189,6 +191,25 @@ func slackFakeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&listen, "listen", "0.0.0.0:8080", "address to serve the fake Slack Web API on")
 	cmd.Flags().StringArrayVar(&emails, "email", nil, "a person users.info answers for, as <slack user id>=<e-mail> (repeatable)")
 	cmd.Flags().StringArrayVar(&groups, "group", nil, "a user group usergroups.list answers, as <handle>=<slack user id>,… (repeatable)")
+	return cmd
+}
+
+// proFakeCmd is the fake pro roadmap-test runs in a container on the kind
+// network, where muster reaches it: plumbing, hidden, never typed by a person.
+func proFakeCmd() *cobra.Command {
+	var listen string
+	cmd := &cobra.Command{
+		Use:    "pro-fake",
+		Short:  "Serve roadmap-test's fake pro, a fixture board over MCP (run by the proof, in a container)",
+		Args:   cobra.NoArgs,
+		Hidden: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			return lab.ServeFakePro(ctx, listen)
+		},
+	}
+	cmd.Flags().StringVar(&listen, "listen", "0.0.0.0:8080", "address to serve the fake pro on")
 	return cmd
 }
 
@@ -1164,7 +1185,7 @@ var formTerminal = func() bool {
 
 func configureCmd() *cobra.Command {
 	var defaults, accessible bool
-	var platform, agents, observability, backstage, modelManager, vmManager, klausGateway, devctl, musterPodNetwork, networkPolicy, alertmanager, installationsPage bool
+	var platform, agents, observability, backstage, modelManager, vmManager, klausGateway, devctl, musterPodNetwork, networkPolicy, alertmanager, installationsPage, hive bool
 	var devctlVersion string
 	var serving, workspaces, workspacesCSICompanion, coding, organizations, github, githubSignIn, chatgptSubscription bool
 	var chatgptSubscriptionModel string
@@ -1243,6 +1264,9 @@ func configureCmd() *cobra.Command {
 			}
 			if cmd.Flags().Changed("installations-page") {
 				cfg.Backstage.InstallationsPage = installationsPage
+			}
+			if cmd.Flags().Changed("hive") {
+				cfg.Backstage.Hive = hive
 			}
 			if cmd.Flags().Changed("chart-version") {
 				cfg.Platform.ChartVersion = chartVersion
@@ -1504,6 +1528,7 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&backstage, "backstage", false, "enable/disable Backstage (implies the platform)")
 	cmd.Flags().BoolVar(&usageData, "telemetry", false, "enable/disable the anonymous usage data this lab and its portal send to TelemetryDeck (docs/telemetry.md)")
 	cmd.Flags().BoolVar(&installationsPage, "installations-page", false, "enable the portal's Installations page (page:gs/installations and its nav item, off in the agent-platform chart) for the portal's installations e2e specs, run with AGENTLAB_INSTALLATIONS_PAGE=1; the next agentlab platform rolls Backstage onto it; --installations-page=false turns it off again")
+	cmd.Flags().BoolVar(&hive, "hive", false, "enable the portal's Hive (/hive and the pages it replaced, off in the Backstage app) with its roadmap-backend on the muster server pro, the fake board `agentlab roadmap-test` registers, for the portal's Hive e2e spec, run with AGENTLAB_HIVE=1; the next agentlab platform rolls Backstage onto it; --hive=false turns it off again")
 	cmd.Flags().StringVar(&portal, "portal", "", fmt.Sprintf("the Backstage portal `mode` (%s): %s serves the Agent Platform shell (app.portals.agentPlatform), %s the classic Platform Portal alone; the next agentlab platform rolls Backstage onto it", strings.Join(config.PortalModes, ", "), config.PortalAgentPlatform, config.PortalClassic))
 	cmd.Flags().BoolVar(&modelManager, "model-manager", false, "pin managed models on/off (needs agents); without it a first configure follows the host model servers the discovery finds and a later one keeps the recorded choice")
 	cmd.Flags().StringVar(&chartVersion, "chart-version", "", "the agent-platform chart release to install (an exact version; default "+config.DefaultChartVersion+")")
@@ -1581,6 +1606,9 @@ func printSaved(cfg *config.Config, disc *lab.Discovery) {
 		page := ""
 		if cfg.Backstage.InstallationsPage {
 			page = ", installations page"
+		}
+		if cfg.Backstage.Hive {
+			page += ", Hive"
 		}
 		fmt.Printf("  backstage  true (portal %s%s)\n", cfg.Backstage.Portal, page)
 	} else {
@@ -2452,6 +2480,37 @@ func beekeeperSubscriptionsTestCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.Binary, "beekeeper-binary", "", "a local static linux beekeeper build for serve instead of the release's binary")
 	cmd.Flags().IntVar(&opts.Port, "port", 18095, "beekeeper serve's port in the node's network; the next one takes its Postgres")
 	cmd.Flags().StringVar(&opts.RunDir, "run-dir", "", "directory for serve's configuration and log, kept afterwards (default: a temporary directory, removed)")
+	return cmd
+}
+
+func roadmapTestCmd() *cobra.Command {
+	var opts lab.RoadmapTestOptions
+	cmd := &cobra.Command{
+		Use:   "roadmap-test [email]",
+		Short: "Headless roadmap board proof: a fake pro serving a fixture board, registered with muster as pro -> x_pro_list_issues as [email] (default the admin) -> with backstage.hive the portal's roadmap-backend routes reading it, every call with the person's own token",
+		Long: `Starts agentlab's fake pro (a pro-compatible MCP server serving a fixed board)
+on the kind network, registers it with muster as the MCPServer pro with the
+person's token forwarded, reads the board through muster's x_pro_list_issues,
+and, with backstage.hive on (agentlab configure --hive), through the portal's
+roadmap-backend routes (/connection, /schema, /items, /overview). The fake's
+record of its calls proves each came with the person's own token.
+
+--keep leaves the fake, its Service and the MCPServer in place after a passing
+run: the portal's Hive board then renders the fixture, and its Hive e2e spec
+reads the real roadmap routes. The next run without --keep removes them.`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadProofLab()
+			if err != nil {
+				return err
+			}
+			if len(args) == 1 {
+				opts.Email = args[0]
+			}
+			return lab.RoadmapTest(cfg, opts)
+		},
+	}
+	cmd.Flags().BoolVar(&opts.Keep, "keep", false, "leave the fake pro, its Service and the MCPServer pro in place after a passing run, for the portal's Hive spec and the board in the portal")
 	return cmd
 }
 
