@@ -235,8 +235,8 @@ github.com/giantswarm/klaus-gateway v1.21.0 h1:sIdKo97SBYCavdAf2jyMpTTtOmep/b6ot
 github.com/giantswarm/klaus-gateway v1.21.0/go.mod h1:aloyluB8BZMszj7iQ1Ku6YZBZA+lQC6CerEJvzYIHtE=
 github.com/giantswarm/pagekit v0.3.8 h1:vmCbZ0KjQSgQnv9LEI6DRx2WU1BKvFCsOXEJQOUEVNE=
 github.com/giantswarm/pagekit v0.3.8/go.mod h1:bXMRzjARa/TewLywz4naTh8YsGzbfSLUoGlEfM92oPQ=
-github.com/giantswarm/selfupdate-cosign v0.3.26 h1:KzD/NvfHwwnidA4F1tLHbznyOA12r1Eg6oqmSFL1pGw=
-github.com/giantswarm/selfupdate-cosign v0.3.26/go.mod h1:iYm/MPqu01/vLvGB6EaJd6IURTOPNJw/zpvLD9A7Dsg=
+github.com/giantswarm/selfupdate-cosign v0.3.27 h1:Nn40qckVXy7aE5gliTPspYe3ooiMKhLOXBsUTDtyfPI=
+github.com/giantswarm/selfupdate-cosign v0.3.27/go.mod h1:iYm/MPqu01/vLvGB6EaJd6IURTOPNJw/zpvLD9A7Dsg=
 github.com/giantswarm/telemetrydeck-go v0.3.17 h1:X97PaGnatc272roJlsSB/FgIaO4k2D25zEWPRUbTLvY=
 github.com/giantswarm/telemetrydeck-go v0.3.17/go.mod h1:BitlH7nTrQmWvVEtnAa8pNM+FjI0+9S7JA9tl1PVvzo=
 github.com/giantswarm/vm-manager v0.25.31 h1:hAujf6b8eVSWnNg5BNuv1UnoUW7lYKhaTuAA23zlVpY=
