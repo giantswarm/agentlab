@@ -182,7 +182,7 @@ func TestWithoutUnservedKinds(t *testing.T) {
 func TestDiscoverKindNames(t *testing.T) {
 	resources := []*metav1.APIResourceList{{
 		GroupVersion: "v1",
-		APIResources: []metav1.APIResource{{Name: "pods", Kind: kindPod}},
+		APIResources: []metav1.APIResource{{Name: gvrPods.Resource, Kind: kindPod}},
 	}}
 	discoveryErr := errors.New("kustomize.toolkit.fluxcd.io/v1 discovery unavailable")
 	for _, readErr := range []error{nil, discoveryErr} {

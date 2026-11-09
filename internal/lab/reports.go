@@ -246,11 +246,7 @@ func provePolicyReports(ctx context.Context) ([]reportVerdict, error) {
 // platformPodVerdicts reads reportProbePolicy's verdict for every Running
 // Pod in the platform namespace.
 func platformPodVerdicts(ctx context.Context) ([]reportVerdict, error) {
-	podGVR, err := gvrFor("pods")
-	if err != nil {
-		return nil, err
-	}
-	pods, err := listObjects(ctx, podGVR, platformNamespace, "")
+	pods, err := listObjects(ctx, gvrPods, platformNamespace, "")
 	if err != nil {
 		return nil, err
 	}
