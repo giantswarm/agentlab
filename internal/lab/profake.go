@@ -402,7 +402,19 @@ func (f *proFake) call(tool string, args map[string]any) (any, error) {
 		id, _ := args["itemId"].(string)
 		for _, item := range f.items {
 			if item.ID == id {
-				return map[string]any{resultItem: item, "body": item.Body}, nil
+				// pro returns its detail object directly, with field values
+				// as an array rather than list_issues' field map.
+				fields := make([]map[string]string, 0, len(item.Fields))
+				for _, name := range slices.Sorted(maps.Keys(item.Fields)) {
+					fields = append(fields, map[string]string{"name": name, "value": item.Fields[name]})
+				}
+				return map[string]any{
+					"number": item.Number, "title": item.Title, "url": item.URL,
+					"repository": map[string]any{"nameWithOwner": item.Repo, "isPrivate": item.Private, "url": "https://github.com/" + item.Repo},
+					"body":       item.Body, "author": "", "assignees": item.Assignees,
+					"comments": []any{}, "labels": item.Labels, "projects": []string{proFakeBoard},
+					"fields": fields, "createdAt": item.CreatedAt, "updatedAt": item.UpdatedAt, "closedAt": nil,
+				}, nil
 			}
 		}
 		return nil, fmt.Errorf("item %q not found on board %s", id, proFakeBoard)

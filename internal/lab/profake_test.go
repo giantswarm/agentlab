@@ -198,8 +198,22 @@ func TestProFakeReads(t *testing.T) {
 		t.Errorf("get_item_by_issue #1 = %+v", byIssue.Item)
 	}
 	details := payload[map[string]any](t, c.callTool("get_issue_details", map[string]any{"itemId": byIssue.Item.ID}))
-	if details["body"] == "" {
-		t.Errorf("get_issue_details answered no body: %v", details)
+	if details["body"] == "" || details["title"] != proFakeEpic || details[resultItem] != nil {
+		t.Errorf("get_issue_details must return pro's flat detail object: %v", details)
+	}
+	fields, ok := details["fields"].([]any)
+	if !ok || len(fields) != len(byIssue.Item.Fields) {
+		t.Fatalf("get_issue_details fields = %v, want pro's field-value array", details["fields"])
+	}
+	for _, field := range fields {
+		value := field.(map[string]any)
+		if byIssue.Item.Fields[value["name"].(string)] != value["value"] {
+			t.Errorf("get_issue_details field differs from the board item: %v", value)
+		}
+	}
+	repository, ok := details["repository"].(map[string]any)
+	if !ok || repository["nameWithOwner"] != proFakeRoadmapRepo {
+		t.Errorf("get_issue_details repository = %v, want pro's repository metadata", details["repository"])
 	}
 	subs := payload[struct {
 		Subs []proCompactIssue `json:"sub_issues"`
