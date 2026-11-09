@@ -134,6 +134,14 @@ Backstage's app-config drifted from the render, and
 `agentlab pods` a lab's pods, from any directory (`--lab <name>` picks one
 of several).
 
+One binary drives one kagent line: this agentlab drives the labs whose chart
+installs kagent 1.3 or later (agent-platform 4.121.0 and later, kagent's
+Session API); a lab on an earlier 4.x chart is driven by agentlab v0.84.6,
+kept beside this one. `agentlab list` shows each lab's line, and this agentlab
+refuses to configure, boot, `turn` or prove a lab on a line it does not drive.
+Two labs on two lines, each with its binary, side by side on one machine:
+[One binary per kagent line](docs/cli.md#one-binary-per-kagent-line).
+
 Then point Claude Code at the platform:
 
 ```bash

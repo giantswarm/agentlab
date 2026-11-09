@@ -290,6 +290,12 @@ func labCmd(use, short string, run func(*config.Config) error) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// test, platform-down and reload act on the lab with this
+			// release's renders: a lab another agentlab drives is left to
+			// it (kagentline.go).
+			if err := lab.RefuseUndrivenPin(cfg); err != nil {
+				return err
+			}
 			return run(cfg)
 		},
 	}
@@ -448,6 +454,9 @@ func readOnlyLabCmd(use, short string, run func(*config.Config) error) *cobra.Co
 func loadProofLab() (*config.Config, error) {
 	cfg, err := loadConfig()
 	if err != nil {
+		return nil, err
+	}
+	if err := lab.RefuseUndrivenLab(cfg); err != nil {
 		return nil, err
 	}
 	installed, err := lab.NoteChartUnderTest(cfg)
@@ -906,6 +915,11 @@ func upCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// A lab another agentlab drives is left as it is: nothing below
+			// may write into it (kagentline.go).
+			if err := lab.RefuseUndrivenPin(cfg); err != nil {
+				return err
+			}
 			// A lab from before the registry registers on its next boot. A
 			// convenience: it never fails the boot.
 			if err := labs.Register(cfg.ClusterName, "."); err != nil {
@@ -1059,6 +1073,9 @@ func turnCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
 			if err != nil {
+				return err
+			}
+			if err := lab.RefuseUndrivenLab(cfg); err != nil {
 				return err
 			}
 			if user == "" {
@@ -1412,6 +1429,15 @@ func configureCmd() *cobra.Command {
 			if cmd.Flags().Changed("github-app-client-secret-source") {
 				cfg.GitHubApp.ClientSecretSource = gitHubAppClientSecretSource
 			}
+			// With --defaults the pin is final here: a lab on a kagent line
+			// another agentlab drives is refused before this machine is even
+			// probed for it (the form, which can still move the pin, is
+			// judged before the save below).
+			if defaults {
+				if err := lab.RefuseUndrivenPin(cfg); err != nil {
+					return err
+				}
+			}
 			// Every run discovers the machine — an existing agentlab.yaml
 			// follows the host too: a server that appeared is added, one that
 			// is gone drops out, ports move while no cluster holds them.
@@ -1443,6 +1469,11 @@ func configureCmd() *cobra.Command {
 			// chartVersion now, so the file says what `up` will install and
 			// a branch without builds is refused here, not after a boot.
 			if _, err := lab.ResolveChartVersion(cfg); err != nil {
+				return err
+			}
+			// A pin on a kagent line another agentlab drives is that
+			// agentlab's to write: this release's file would lock it out.
+			if err := lab.RefuseUndrivenPin(cfg); err != nil {
 				return err
 			}
 			if err := saveLab(cfg); err != nil {
@@ -1645,6 +1676,11 @@ func platformCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
 			if err != nil {
+				return err
+			}
+			// A lab another agentlab drives is left as it is: not even its
+			// Dex is applied (kagentline.go).
+			if err := lab.RefuseUndrivenPin(cfg); err != nil {
 				return err
 			}
 			if err := lab.RequireLabCerts(cfg); err != nil {
@@ -2466,6 +2502,11 @@ func portalDevCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// It records backstage.localDevPort and applies this release's
+			// Dex: never into a lab another agentlab drives.
+			if err := lab.RefuseUndrivenPin(cfg); err != nil {
+				return err
+			}
 			return lab.BackstageDev(cfg, checkout, port)
 		},
 	}
@@ -2488,6 +2529,11 @@ func portalBuildCmd() *cobra.Command {
 			}
 			cfg, err := loadConfig()
 			if err != nil {
+				return err
+			}
+			// Before the build and its record in agentlab.yaml: a lab
+			// another agentlab drives is left to it.
+			if err := lab.RefuseUndrivenPin(cfg); err != nil {
 				return err
 			}
 			if err := lab.RequireLabCerts(cfg); err != nil {

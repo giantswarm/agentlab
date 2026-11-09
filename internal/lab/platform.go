@@ -169,6 +169,9 @@ func platformTopologyFor(cfg *config.Config) (platformTopology, error) {
 				if err := refuseUnreleasedComponents(chart, values); err != nil {
 					return platformTopology{}, err
 				}
+				if _, err := refuseUndrivenLine(cfg, chart, values); err != nil {
+					return platformTopology{}, err
+				}
 				roster, err = renderPlatformRoster(chart, values)
 			}
 		}
@@ -275,6 +278,11 @@ func platformChartFor(cfg *config.Config) platformChart {
 // user reads a single "what to do next" block once everything is verified,
 // the standalone `agentlab platform` entry point passes "Platform is up.".
 func platformUp(cfg *config.Config, header string, offers Offers) error {
+	// A lab another agentlab drives is left as it is, before anything here
+	// touches its directory (kagentline.go).
+	if err := RefuseUndrivenPin(cfg); err != nil {
+		return err
+	}
 	// The working-directory leftovers go first: nothing reads them, and the
 	// refusal below is exactly the moment a user of an earlier agentlab meets.
 	removeLegacyArtifacts()
@@ -302,11 +310,16 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	// A dev build that waits for a component release is refused before the
 	// first object is applied (unreleased.go): `up` judged it before the
 	// cluster already, `agentlab platform` judges it here.
+	// So is a chart on a kagent line this agentlab does not drive
+	// (kagentline.go): its turns and proofs belong to another release.
+	var line KagentLine
 	if _, valuesPath, err := renderManifest(cfg, platformValuesTemplate); err != nil {
 		return err
 	} else if values, err := helmValuesFiles(append([]string{valuesPath}, cfg.Platform.ValuesFiles...)...); err != nil {
 		return err
 	} else if err := refuseUnreleasedComponents(chart, values); err != nil {
+		return err
+	} else if line, err = refuseUndrivenLine(cfg, chart, values); err != nil {
 		return err
 	}
 	ctx := context.Background()
@@ -315,6 +328,11 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	// install, so a run that fails to install still says which line it was
 	// about to — the way the command signal counts failed runs.
 	telemetry.Platform(ctx, cfg, chart.installedVersion())
+	// The line is recorded as the install starts: from here the cluster is
+	// on its way to it, and `list` names it without asking the cluster.
+	if err := recordKagentLine(".", line); err != nil {
+		return err
+	}
 	step("Installing %s in the lab shape (bundled Flux engine on, self-management off)", chart)
 	// An install decides what runs: a proof's hold on the version ranges
 	// (rangehold.go) is lifted for it, and the proof in this process holds
