@@ -27,6 +27,12 @@ type ListedLab struct {
 	Components []string `json:"components"`
 	// URLs are the lab's entry points by name: portal, muster.
 	URLs map[string]string `json:"urls,omitempty"`
+	// KagentLine is the kagent line the lab's last install put in place
+	// (kagentline.go), nil before an install recorded one or without agents.
+	KagentLine *KagentLine `json:"kagentLine,omitempty"`
+	// Driven is false for a lab on a kagent line this agentlab does not
+	// drive: another release runs its turns and proofs.
+	Driven bool `json:"driven"`
 	// CA is trusted, untrusted, or none (no lab CA minted yet).
 	CA string `json:"ca"`
 	// Error is set when the lab's agentlab.yaml cannot be read; the other
@@ -42,6 +48,9 @@ const (
 	stateNotCreated = "not created"
 	stateUnknown    = "unknown"
 )
+
+// componentAgents is the agents runtime in the components column.
+const componentAgents = "agents"
 
 // The CA column's values.
 const (
@@ -108,6 +117,8 @@ func ListLabs(registered []labs.Lab, here string) []ListedLab {
 		ll.State = labClusterState(cfg.ClusterName)
 		ll.Components = listComponents(cfg)
 		ll.URLs = listURLs(cfg)
+		ll.KagentLine = labKagentLine(l.Dir, cfg)
+		ll.Driven = ll.KagentLine == nil || drivenHere(ll.KagentLine.Line, cfg.LegacyChart())
 		ll.CA = labCAState(l.Dir)
 		out = append(out, ll)
 	}
@@ -134,7 +145,7 @@ func listComponents(cfg *config.Config) []string {
 	}
 	out := []string{"platform (" + chart + ")"}
 	if cfg.Platform.Agents {
-		out = append(out, "agents")
+		out = append(out, componentAgents)
 	}
 	if cfg.Platform.Observability {
 		out = append(out, "observability")
@@ -189,6 +200,9 @@ func PrintLabs(w io.Writer, listed []ListedLab, asJSON bool) error {
 		}
 		fmt.Fprintf(&b, "%s %s  %s  %s\n", mark, l.Name, l.State, l.Dir)
 		fmt.Fprintf(&b, "    components  %s\n", strings.Join(l.Components, ", "))
+		if slices.Contains(l.Components, componentAgents) {
+			fmt.Fprintf(&b, "    kagent      %s\n", lineNote(l.KagentLine, l.Driven))
+		}
 		for _, name := range []string{"portal", "muster"} {
 			if u, ok := l.URLs[name]; ok {
 				fmt.Fprintf(&b, "    %-11s %s\n", name, u)

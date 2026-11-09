@@ -2,7 +2,6 @@ package lab
 
 import (
 	"context"
-	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
@@ -78,14 +77,14 @@ func gitHubSignInFor(cfg *config.Config) (*gitHubSignInValues, error) {
 	var missing []string
 	switch {
 	case apierrors.IsNotFound(err):
-		missing = []string{"the Secret itself"}
+		missing = []string{secretAbsent}
 	case err != nil:
 		return nil, err
 	default:
 		missing = missingSecretKeys(obj, config.GitHubClientSecretKey)
 	}
 	if len(missing) > 0 {
-		warn("platform.githubSignIn is on but Secret %s/%s lacks %s -- Dex keeps its local users; the GitHub connector follows on the next up, platform or reload", ref.Namespace, ref.Name, strings.Join(missing, " and "))
+		warn("platform.githubSignIn is on but %s -- Dex keeps its local users; the GitHub connector follows on the next up, platform or reload", secretGap(ref.Namespace, ref.Name, missing))
 		warn("  register (or reuse) a GitHub App with the callback URL %s and place its client secret, which agentlab never reads:", values.RedirectURI)
 		warn("  beekeeper secret copy <ref to the client secret> --to-secret kind-%s/%s/%s/%s", cfg.ClusterName, ref.Namespace, ref.Name, config.GitHubClientSecretKey)
 		return nil, nil

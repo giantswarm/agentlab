@@ -239,11 +239,10 @@ func startBeekeeperHost(cfg *config.Config, opts BeekeeperCentralTestOptions, im
 	}
 	servePort, pgPort := opts.Port, opts.Port+1
 	node := cfg.ControlPlaneNode()
-	nodeIP, err := outputQuiet(dockerBin, "inspect", "-f", `{{with index .NetworkSettings.Networks "`+kindDockerNetwork+`"}}{{.IPAddress}}{{end}}`, node)
-	if err != nil || strings.TrimSpace(nodeIP) == "" {
+	nodeIP, err := kindNodeIP(node)
+	if err != nil {
 		return fail(fmt.Errorf("the address of node %s on network %s: %v", node, kindDockerNetwork, err))
 	}
-	nodeIP = strings.TrimSpace(nodeIP)
 	inNode := "container:" + node
 	run := strings.ToUpper(randomSuffix())
 

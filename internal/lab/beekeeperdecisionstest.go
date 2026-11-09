@@ -166,11 +166,10 @@ func BeekeeperDecisionsTest(cfg *config.Config, opts BeekeeperDecisionsTestOptio
 	}
 
 	node := cfg.ControlPlaneNode()
-	nodeIP, err := outputQuiet(dockerBin, "inspect", "-f", `{{with index .NetworkSettings.Networks "`+kindDockerNetwork+`"}}{{.IPAddress}}{{end}}`, node)
-	if err != nil || strings.TrimSpace(nodeIP) == "" {
+	nodeIP, err := kindNodeIP(node)
+	if err != nil {
 		return fmt.Errorf("the address of node %s on network %s: %v", node, kindDockerNetwork, err)
 	}
-	nodeIP = strings.TrimSpace(nodeIP)
 	// Everything beekeeper talks to and everything that talks to it runs in
 	// the node's network namespace, where muster listens (hostNetwork):
 	// the host's firewall may drop what pods send to the host.

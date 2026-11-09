@@ -284,6 +284,12 @@ func proveAgentPlatform(cfg *config.Config, sessions []*portalSession, existing 
 		return err
 	}
 
+	committed, err := proveCommitPath(cfg, primary, spec, info)
+	verdicts = append(verdicts, committed...)
+	if err != nil {
+		return err
+	}
+
 	// Last: session-usage caches the person's summary, which the chat read.
 	costed, err := proveReportedCost(cfg, primary, spec.ModelConfig, keepCostFixture)
 	verdicts = append(verdicts, costed...)
