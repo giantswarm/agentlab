@@ -536,11 +536,10 @@ func (p *slackProof) collaboratorRefused(t *slackThread, collaborator, text stri
 // and the fake Slack Web API on this host is host.docker.internal.
 func (s *organizationsSlack) bridged(gw *gatewayProcess, edge, slackAPI string) error {
 	node := s.cfg.ControlPlaneNode()
-	nodeIP, err := outputQuiet(dockerBin, "inspect", "-f", `{{with index .NetworkSettings.Networks "`+kindDockerNetwork+`"}}{{.IPAddress}}{{end}}`, node)
-	if err != nil || strings.TrimSpace(nodeIP) == "" {
+	nodeIP, err := kindNodeIP(node)
+	if err != nil {
 		return fmt.Errorf("the address of node %s on network %s: %v", node, kindDockerNetwork, err)
 	}
-	nodeIP = strings.TrimSpace(nodeIP)
 	edgeHost, _, _ := net.SplitHostPort(edge)
 	muster, err := url.Parse(s.cfg.MusterBaseURL())
 	if err != nil {

@@ -281,6 +281,12 @@ func proveAgentPlatform(cfg *config.Config, sessions []*portalSession, existing 
 		return err
 	}
 
+	committed, err := proveCommitPath(cfg, primary, spec, info)
+	verdicts = append(verdicts, committed...)
+	if err != nil {
+		return err
+	}
+
 	printVerdicts(verdicts)
 	return nil
 }

@@ -200,39 +200,44 @@ func rangeFloorAdmits(versionRange string, floor *semver.Version) bool {
 	return len(alternatives) > 0
 }
 
-// workspaceManagerSource is components.workspace-manager as the install
-// reads it: the chart's defaults, platform.valuesFiles over them.
-type workspaceManagerSource struct {
+// componentSource is one components.<name> entry of the meta chart as the
+// install reads it: the chart's defaults, platform.valuesFiles over them.
+type componentSource struct {
 	repository, chart, versionRange, filter string
 	insecure                                bool
 }
 
-// workspaceManagerVersion resolves the workspace-manager's chart version the
-// way source-controller resolves the component's OCIRepository: the highest
-// tag the range (and the semverFilter) admits; "" for a chart that names no
-// such component; floor itself for a range whose floor is at or above it,
-// without listing tags. Memoized per source.
+// workspaceManagerVersion is componentVersion for the workspace-manager.
 func workspaceManagerVersion(cfg *config.Config, floor *semver.Version) (string, error) {
-	src := workspacesChartFor(cfg).Manager
+	return componentVersion(cfg, workspaceManagerMCPServer, workspacesChartFor(cfg).Manager, floor)
+}
+
+// componentVersion resolves a component's chart version the way
+// source-controller resolves its OCIRepository: the highest tag the range
+// (and the semverFilter) admits; "" for a chart that names no such
+// component; floor itself for a range whose floor is at or above it,
+// without listing tags. Memoized per component and source.
+func componentVersion(cfg *config.Config, component string, src componentSource, floor *semver.Version) (string, error) {
 	if len(cfg.Platform.ValuesFiles) > 0 {
 		overlay, err := helmValuesFiles(cfg.Platform.ValuesFiles...)
 		if err != nil {
 			return "", err
 		}
-		src = src.over(overlay)
+		src = src.over(component, overlay)
 	}
 	if src.repository == "" || src.versionRange == "" {
-		return "", nil // a chart without the component: no manager to pin
+		return "", nil // a chart without the component: nothing to resolve
 	}
 	if rangeFloorAdmits(src.versionRange, floor) {
 		return floor.Original(), nil // no tag below the floor can resolve
 	}
-	workspaceManagerVersionMu.Lock()
-	defer workspaceManagerVersionMu.Unlock()
-	if v, ok := workspaceManagerVersionCache[src]; ok {
+	key := componentVersionKey{component, src}
+	componentVersionMu.Lock()
+	defer componentVersionMu.Unlock()
+	if v, ok := componentVersionCache[key]; ok {
 		return v, nil
 	}
-	tags, err := listChartTags(strings.TrimSuffix(src.repository, "/")+"/"+cmp.Or(src.chart, workspaceManagerMCPServer), src.insecure)
+	tags, err := listChartTags(strings.TrimSuffix(src.repository, "/")+"/"+cmp.Or(src.chart, component), src.insecure)
 	if err != nil {
 		return "", err
 	}
@@ -240,29 +245,34 @@ func workspaceManagerVersion(cfg *config.Config, floor *semver.Version) (string,
 	if err != nil {
 		return "", err
 	}
-	workspaceManagerVersionCache[src] = v
+	componentVersionCache[key] = v
 	return v, nil
 }
 
-var (
-	workspaceManagerVersionMu    sync.Mutex
-	workspaceManagerVersionCache = map[workspaceManagerSource]string{}
-)
-
-// workspaceManagerSourceOf reads components.workspace-manager from values.
-func workspaceManagerSourceOf(values map[string]any) workspaceManagerSource {
-	return workspaceManagerSource{}.over(values)
+type componentVersionKey struct {
+	component string
+	src       componentSource
 }
 
-// over is the source with what values set of components.workspace-manager.
-func (s workspaceManagerSource) over(values map[string]any) workspaceManagerSource {
+var (
+	componentVersionMu    sync.Mutex
+	componentVersionCache = map[componentVersionKey]string{}
+)
+
+// componentSourceOf reads components.<component> from values.
+func componentSourceOf(component string, values map[string]any) componentSource {
+	return componentSource{}.over(component, values)
+}
+
+// over is s with components.<component> of values laid over it.
+func (s componentSource) over(component string, values map[string]any) componentSource {
 	components, _ := values[valuesComponents].(map[string]any)
-	wm, _ := components[workspaceManagerMCPServer].(map[string]any)
-	s.repository = cmp.Or(stringValue(wm, "repository"), s.repository)
-	s.chart = cmp.Or(stringValue(wm, "chart"), s.chart)
-	s.versionRange = cmp.Or(stringValue(wm, valuesVersionRange), s.versionRange)
-	s.filter = cmp.Or(stringValue(wm, valuesSemverFilter), s.filter)
-	if insecure, ok := wm["insecure"].(bool); ok {
+	c, _ := components[component].(map[string]any)
+	s.repository = cmp.Or(stringValue(c, "repository"), s.repository)
+	s.chart = cmp.Or(stringValue(c, "chart"), s.chart)
+	s.versionRange = cmp.Or(stringValue(c, valuesVersionRange), s.versionRange)
+	s.filter = cmp.Or(stringValue(c, valuesSemverFilter), s.filter)
+	if insecure, ok := c["insecure"].(bool); ok {
 		s.insecure = insecure
 	}
 	return s

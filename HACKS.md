@@ -839,6 +839,39 @@ and drops `allowPrivateIPRedirectURIs`. `klaus-gateway-test --part refresh` comp
 them. The OAuth fixture's pin (U18) is unchanged: muster's own CIMD host is not
 listed.
 
+### U44. `postRenderers` patch: the data plane reaches the kagent controller under plain NetworkPolicy — BLOCKED UPSTREAM
+With `platform.networkPolicy` the lab runs the connectivity chart's
+kubernetes-flavour policies. The data plane's egress policy
+(`templates/agentgateway/networkpolicy-dataplane-kubernetes.yaml`) declares
+muster, mcp-kubernetes, the agentgateway controller and Dex, but not the kagent
+controller on 8083, the backend of the chart's controller route; the cilium
+flavour declares it (`templates/kagent/netpol.yaml`,
+`<release>-dataplane-to-kagent`). Without it every call on the route times out
+at the edge (`upstream call failed: Connect: deadline has elapsed`;
+`platform-test`'s controller identity stage, muster's `kagent` MCPServer
+answering its initialize with 503). **Fix in the lab:** patch 10 of
+`postrenderers.go` appends that egress rule to the chart's data-plane policy
+(JSON 6902), next to the lab's own peer, the Prometheus behind the lab's
+observability route. **Unblocked by** the kubernetes flavour of the data-plane
+policy declaring the kagent controller in giantswarm/agent-platform; the
+kagent rule then goes from patch 10.
+
+### U45. `postRenderers` patch: the kagent controller's egress is not isolated by the workspaces' policy — BLOCKED UPSTREAM
+With `platform.networkPolicy` and the workspaces on, the connectivity chart's
+kubernetes flavour renders `<release>-kagent-controller-to-workspace-manager`
+(`templates/workspace-manager/netpol.yaml`), an Egress NetworkPolicy on the
+kagent controller that names the workspace-manager only. In the cilium flavour
+it is additive to the controller's own egress policy
+(`<release>-kagent-controller-egress`); the kubernetes flavour has no such
+policy, and a plain Egress policy isolates the pod: the controller loses DNS,
+its Postgres, the apiserver and Substrate (`lookup kagent-pg-rw.kagent …: i/o
+timeout`, every agent `RuntimePreparationFailed`). **Fix in the lab:** patch 10
+of `postrenderers.go` deletes that one policy (`$patch: delete`), so the
+controller's egress stays undeclared in that flavour, as it is without the
+workspaces. **Unblocked by** the kubernetes flavour rendering the controller's
+full egress, or no isolating policy, in giantswarm/agent-platform; the
+deletion then goes from patch 10.
+
 ### U38. `postRenderers` patch: agentgateway binds IPv4 — BLOCKED UPSTREAM
 agentgateway binds its readiness (15021) and stats (15020) servers and its
 listeners on the IPv6 wildcard unless IPv6 is switched off
@@ -923,18 +956,31 @@ renders `kagent.providers` and the kagent chart's `default-model-config`.
   `reloadKyvernoForProvidedAPIs`): Kyverno resolves a policy's kinds when it
   loads it and otherwise admits every Kustomization. Named as a lab-only
   difference in docs/platform.md.
-- **The fleet's `flux-multi-tenancy` policy on the fleet's Kyverno charts
-  reduced to the admission controller, the platform namespace exempt in
-  code** (`internal/lab/admission.go`,
+- **The fleet's `flux-multi-tenancy` policy and Pod policies on the fleet's
+  Kyverno charts, the platform namespace exempt in code, the Pod policies in
+  Audit** (`internal/lab/admission.go`,
   `templates/flux-multi-tenancy.yaml` byte-identical to
   management-cluster-bases, `templates/kyverno-values.yaml`,
-  `templates/org-fixture.yaml`) — the lab installs what security-bundle
-  installs, `kyverno-crds` 1.17.0 and the kyverno app 0.24.2 (the upstream
-  chart 3.7.2 = v1.17.2 and policy-reporter) from
-  `gsoci.azurecr.io/charts/giantswarm`, with values that turn off what a
-  one-node kind cluster has no API or use for (CiliumNetworkPolicy,
-  VerticalPodAutoscalers, PodLogs, ServiceMonitor, HPA, the app's own
-  policies and PolicyExceptions, every controller but admission).
+  `templates/org-fixture.yaml`, `internal/lab/reports.go`) — the lab
+  installs what security-bundle installs, `kyverno-crds` 1.17.0, the kyverno
+  app 0.24.2 (the upstream chart 3.7.2 = v1.17.2 and policy-reporter) and
+  `kyverno-policies` 0.27.1 from `gsoci.azurecr.io/charts/giantswarm`, with
+  values that turn off what a one-node kind cluster has no API or use for
+  (CiliumNetworkPolicy, VerticalPodAutoscalers, PodLogs, ServiceMonitors,
+  HPA, PodDisruptionBudgets, the app's own policies and PolicyExceptions, the
+  background and cleanup controllers); the admission and reports
+  controllers run as on an installation, so PolicyReports list the fleet's
+  verdicts. The Pod policies keep the chart's Audit where security-bundle
+  sets Enforce: the platform installs without its PolicyExceptions
+  (`kyvernoPolicies.enabled: false`), and an enforced standard would refuse
+  Pods an installation's exceptions admit. The lab's copy of
+  `flux-multi-tenancy` also leaves out, at apply time, the Flux kinds the
+  lab does not serve (Alert, Receiver, ImagePolicy; Kustomization is served,
+  previous entry) and the
+  rules left matching nothing: for a kind no API serves, Kyverno refetches
+  its whole discovery about once a second, which slowed every policy
+  validation past the webhook's deadline. Unblocks: serving every Flux kind
+  the policy names in the lab.
   policy-reporter is a dependency without a condition, so its one
   Deployment runs too. The exemption of `agent-platform` is the lab's one deviation
   from the policy text: on an installation the platform's child HelmReleases
