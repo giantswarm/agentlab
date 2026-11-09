@@ -18,7 +18,7 @@ require (
 	github.com/giantswarm/go-selfupdate v1.7.6
 	github.com/giantswarm/klaus-gateway v1.21.0
 	github.com/giantswarm/pagekit v0.3.8
-	github.com/giantswarm/selfupdate-cosign v0.3.26
+	github.com/giantswarm/selfupdate-cosign v0.3.27
 	github.com/giantswarm/telemetrydeck-go v0.3.17
 	github.com/giantswarm/vm-manager v0.25.31
 	github.com/google/go-github/v93 v93.0.0
