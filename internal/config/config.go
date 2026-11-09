@@ -1601,6 +1601,14 @@ type Backstage struct {
 	// the agent-platform chart turns off and the Backstage app ships off: the
 	// portal's installations e2e specs drive it (AGENTLAB_INSTALLATIONS_PAGE=1).
 	InstallationsPage bool `yaml:"installationsPage,omitempty"`
+	// Hive enables the portal's Hive (/hive: page:plans, api:plans,
+	// page:roadmap, api:roadmap and the plans redirect and magazine pages,
+	// which the Backstage app ships off) and wires its roadmap-backend to the
+	// board of the muster server `pro` as the signed-in person; the lab's pro
+	// is the fake `agentlab roadmap-test` registers (docs/backstage.md "The
+	// roadmap board fixture"). The portal's Hive e2e spec drives it
+	// (AGENTLAB_HIVE=1).
+	Hive bool `yaml:"hive,omitempty"`
 	// LocalDevPort is the backend port of a Backstage run with hot reload
 	// from a checkout on this machine against the lab (`agentlab portal
 	// dev`), 0 for none. It registers that backend's sign-in callback on
