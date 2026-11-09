@@ -435,7 +435,10 @@ printed only as its SHA-256. Each verdict:
 - The form's save, the way the portal's form posts it
   (giantswarm/backstage#3364): `GET /api/v1/credential-operations/{operation}`
   with the person's token answers the confirmation with a strong `ETag` and
-  `Cache-Control: no-store`; another lab user's read is refused (404); `POST`
+  `Cache-Control: no-store`; another lab user's read is refused (404 or
+  403), that user bound as an admin of the organization too, so the refusal
+  is the operation's binding to its preparer and not the membership check;
+  `POST`
   with `If-Match` and only the requested Secret/key returns the receipt, and
   the original call retried returns it too. The lab's portal reaches
   agent-manager through muster only, so the part calls the agent-manager
@@ -445,28 +448,37 @@ printed only as its SHA-256. Each verdict:
 - In commit mode, the receipt's pull request is read back with your `gh`
   login: opened by the person, its commit authored by them, the Secret file
   `<contentPrefix>/<parent>/<name>/<secret>-secret.enc.yaml` SOPS-encrypted
-  and no file carrying the value.
+  and no file carrying the value. Before the merge the cluster holds no
+  value of the Secret and no ModelConfig, so the Flux verdict is Flux's.
 - Flux: the person merges the pull request, and the organization's own
   Kustomization, which agent-platform-operator keeps in commit mode
   (`--flux-namespace`, `--flux-source-name`) with `decryption.provider: sops`
   and `--flux-decryption-secret`, applies and decrypts it: the Secret's
   SHA-256 matches and the ModelConfig exists. The age identity is the lab's,
-  generated once into `certs/organization-credentials-sops/` and placed as
-  that Secret (an existing Secret the lab did not write is left alone). The
+  generated once into `certs/organization-credentials-sops/` (a key file
+  its group or others can reach is refused) and placed as that Secret (an existing Secret the lab did not write is left alone). The
   repository's `.sops.yaml` must encrypt the content path for its recipient;
   the part prints the rule to commit when it does not. After a merge, the
   run removes the organization's content path from the base branch with
-  your git credentials.
+  your git credentials; a failed run after the merge keeps it, since Flux
+  would prune the retained organization, and prints the commands that
+  remove it by hand. A pull request nothing merged is closed and its branch
+  deleted.
 - A sign-in a server of the organization's namespace needs: an OAuth
   `MCPServer` there, modelled on `lab-oauth-fixture` without a pinned
   client, reads `Auth Required`, and `core_auth_login` for
-  `<namespace>/<name>` is a URL elicitation whose message names that key.
+  `<namespace>/<name>` is a URL elicitation whose message names that key,
+  either in muster's own sentence (`Sign in to <namespace>/<name> to
+  continue`) or as the `[<namespace>/<name>]` prefix muster puts on a
+  backend's elicitation.
 - `delete_organization` erases the organization: without `confirm` it says
   what goes, the confirmed dry run deletes nothing, the confirmed call
   deletes it; the namespace goes and no RoleBinding anywhere refers to it.
 
 What the part stands on is read from the live lab and never configured
-by it; each missing piece is a `SKIP` naming its fix: agent-manager's
+by it, except the SOPS age Secret the organizations' Kustomizations decrypt
+with: the lab places its own only where none exists or agentlab wrote it.
+Each missing piece is a `SKIP` naming its fix: agent-manager's
 `credentials.uiURL` (its `--credential-ui-url`), muster speaking MCP
 2026-07-28, commit mode (`githubTokenExchange`, `tenants.commit.repository`)
 and the person's grant of the workspaces' `github` App, a Ready
