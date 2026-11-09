@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -32,7 +33,8 @@ import (
 // (templates/flux-multi-tenancy.yaml, the ClusterPolicy and the aggregated
 // ClusterRole its rules read with), in Enforce, on the fleet's Kyverno charts
 // from gsoci (kyverno-crds and the kyverno app, the pair security-bundle
-// installs) reduced to the admission controller (templates/kyverno-values.yaml)
+// installs) with its admission and reports controllers
+// (templates/kyverno-values.yaml)
 // — with one lab addition made here: the platform namespace joins each
 // rule's exclude list, standing in for flux-giantswarm. On an installation
 // the platform's child HelmReleases live there, exempt; in the lab they live
@@ -56,18 +58,21 @@ import (
 // the policy's own webhook is registered only once the policy exists, so the
 // first denial is also the readiness gate.
 //
-// What the lab does not carry: the fleet's Pod Security Standards policies
-// and the chart's own Kyverno objects (kyvernoPolicies.enabled: false in the
-// values template — PolicyExceptions to policies that are not here and
-// mutate policies the lab never ran). The chart's PolicyExceptions are
+// The fleet's Pod policies follow, in Audit, with the reports controller
+// writing their verdicts into PolicyReports (reports.go).
+//
+// What the lab does not carry: the chart's own Kyverno objects
+// (kyvernoPolicies.enabled: false in the values template — PolicyExceptions
+// that would excuse platform Pods from Pod Security Standards the lab only
+// audits, and mutate policies the lab never ran). The chart's PolicyExceptions are
 // judged without installing them: polextest.go dry-runs them against this
-// Kyverno. The Flux kinds the policy also names —
-// Kustomization, Alert, Receiver, ImagePolicy — are not served in the lab:
-// the platform's engine runs source-controller and helm-controller only, so
-// those rules match nothing here and the HelmRelease rules are the ones the
-// lab exercises. Kyverno accepts the policy with a warning on apply
-// ("unable to convert GVK to GVR for kinds Kustomization", the first kind
-// it cannot resolve) — a warning, not a refusal, and the boot log shows it.
+// Kyverno. The Flux kinds the policy also names and the lab does not serve
+// — Kustomization, Alert, Receiver, ImagePolicy: the platform's engine runs
+// source-controller and helm-controller only — are left out of the lab's
+// copy at apply time (withoutUnservedKinds), with the rules that match
+// nothing else: such a rule matches nothing here either way, and a kind no
+// API serves keeps Kyverno refetching discovery. The HelmRelease rules are
+// the ones the lab exercises.
 
 const (
 	// kyvernoNamespace and kyvernoRelease: the engine's Helm release,
@@ -123,7 +128,7 @@ const clusterPolicyResource = "clusterpolicies.kyverno.io"
 
 // fleetAdmissionUp installs the fleet's admission after the platform: the
 // Kyverno engine, the org fixture, the policy with the platform namespace
-// exempt, and the proof that it enforces. After the platform because the
+// exempt, the proof that it enforces, and the fleet's Pod policies. After the platform because the
 // policy names Flux kinds, which the platform's bundled engine brings.
 func fleetAdmissionUp(cfg *config.Config) error {
 	ctx := context.Background()
@@ -141,6 +146,9 @@ func fleetAdmissionUp(cfg *config.Config) error {
 	if err := installOCIChart(cfg, kyvernoNamespace, kyvernoRelease, kyvernoChartRef, kyvernoChartVersion, values, kyvernoInstallTimeout); err != nil {
 		return err
 	}
+	if err := waitKyvernoServes(ctx); err != nil {
+		return err
+	}
 
 	note("the org namespace %s with the tenant ServiceAccount %s (%s -> cluster-admin)", orgNamespace, tenantServiceAccount, tenantRoleBinding)
 	if _, err := applyManifests(ctx, orgFixture); err != nil {
@@ -151,8 +159,15 @@ func fleetAdmissionUp(cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
-	// Kyverno validates policies through its own webhook, registered as the
-	// controller starts; the Deployment is Ready a moment before it answers.
+	served, err := servedKindNames()
+	if err != nil {
+		return err
+	}
+	if dropped := withoutUnservedKinds(objs, served); len(dropped) > 0 {
+		note("the %s rules leave out the kinds the lab does not serve: %s", fleetPolicyName, strings.Join(dropped, ", "))
+	}
+	// waitKyvernoServes proved the policy webhook answers; the retry covers
+	// an apiserver that still routes a call to the pod it just replaced.
 	var applyErr error
 	applied := waitFor(30, 2*time.Second, func() bool {
 		applyErr = applyObjects(ctx, objs)
@@ -186,7 +201,7 @@ func fleetAdmissionUp(cfg *config.Config) error {
 	for _, r := range results {
 		note("%s", r)
 	}
-	return nil
+	return fleetPodPoliciesUp(cfg)
 }
 
 // kyvernoAppHome is the home of the fleet's kyverno app chart; the upstream
@@ -223,7 +238,7 @@ func labFleetPolicy(exemptNamespaces ...string) ([]*unstructured.Unstructured, e
 		return nil, fmt.Errorf("flux-multi-tenancy.yaml: %w", err)
 	}
 	for _, obj := range objs {
-		if obj.GetKind() != "ClusterPolicy" {
+		if obj.GetKind() != kindClusterPolicy {
 			continue
 		}
 		rules, found, err := unstructured.NestedSlice(obj.Object, "spec", "rules")
@@ -251,6 +266,82 @@ func labFleetPolicy(exemptNamespaces ...string) ([]*unstructured.Unstructured, e
 		}
 	}
 	return objs, nil
+}
+
+// servedKindNames is every kind the apiserver serves, by its bare name as a
+// Kyverno rule names it.
+func servedKindNames() (map[string]bool, error) {
+	k, err := labKube()
+	if err != nil {
+		return nil, err
+	}
+	return discoverKindNames(k.clientset.Discovery().ServerPreferredResources)
+}
+
+// discoverKindNames refuses partial discovery: a failed API group is not
+// evidence that its kinds are absent. Otherwise withoutUnservedKinds could
+// remove enforcement rules for a kind the lab actually serves.
+func discoverKindNames(discover func() ([]*metav1.APIResourceList, error)) (map[string]bool, error) {
+	lists, err := discover()
+	if err != nil {
+		return nil, fmt.Errorf("discovering the served kinds: %w", err)
+	}
+	served := map[string]bool{}
+	for _, l := range lists {
+		for _, r := range l.APIResources {
+			served[r.Kind] = true
+		}
+	}
+	return served, nil
+}
+
+// withoutUnservedKinds takes the kinds the lab does not serve out of every
+// ClusterPolicy rule's match, and a rule left matching nothing out of the
+// policy, and returns the kinds it took out, sorted. Kyverno resolves a
+// policy's kinds through discovery and, for a kind no API serves, throws its
+// whole discovery cache away and fetches it again — on every reconcile of
+// the policy, about once a second. With the fleet's Flux kinds the lab's
+// engine does not run (Alert, Receiver, ImagePolicy) that keeps every
+// Kyverno controller refetching discovery: validating one policy takes
+// seconds, a policy install meets the webhook's 10 s deadline, and the
+// resource webhook falls minutes behind a policy. A rule of an unserved
+// kind matches nothing in the lab either way.
+func withoutUnservedKinds(objs []*unstructured.Unstructured, served map[string]bool) []string {
+	dropped := map[string]bool{}
+	for _, obj := range objs {
+		if obj.GetKind() != kindClusterPolicy {
+			continue
+		}
+		rules, _, _ := unstructured.NestedSlice(obj.Object, "spec", "rules")
+		kept := make([]any, 0, len(rules))
+		for _, r := range rules {
+			rule, ok := r.(map[string]any)
+			if !ok {
+				kept = append(kept, r)
+				continue
+			}
+			kinds, found, _ := unstructured.NestedStringSlice(rule, "match", "resources", "kinds")
+			if !found {
+				kept = append(kept, rule)
+				continue
+			}
+			var servedOnes []string
+			for _, kind := range kinds {
+				if served[kind] {
+					servedOnes = append(servedOnes, kind)
+				} else {
+					dropped[kind] = true
+				}
+			}
+			if len(servedOnes) == 0 {
+				continue
+			}
+			_ = unstructured.SetNestedStringSlice(rule, servedOnes, "match", "resources", "kinds")
+			kept = append(kept, rule)
+		}
+		_ = unstructured.SetNestedSlice(obj.Object, kept, "spec", "rules")
+	}
+	return slices.Sorted(maps.Keys(dropped))
 }
 
 // applyObjects server-side applies decoded objects in order.

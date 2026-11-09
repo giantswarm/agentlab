@@ -943,18 +943,30 @@ renders `kagent.providers` and the kagent chart's `default-model-config`.
   for the sake of policies the lab never tests; the CRDs alone let the charts
   install and validate their policies against the real schema, and enforce
   nothing. Named as a lab-only difference in docs/platform.md.
-- **The fleet's `flux-multi-tenancy` policy on the fleet's Kyverno charts
-  reduced to the admission controller, the platform namespace exempt in
-  code** (`internal/lab/admission.go`,
+- **The fleet's `flux-multi-tenancy` policy and Pod policies on the fleet's
+  Kyverno charts, the platform namespace exempt in code, the Pod policies in
+  Audit** (`internal/lab/admission.go`,
   `templates/flux-multi-tenancy.yaml` byte-identical to
   management-cluster-bases, `templates/kyverno-values.yaml`,
-  `templates/org-fixture.yaml`) — the lab installs what security-bundle
-  installs, `kyverno-crds` 1.17.0 and the kyverno app 0.24.2 (the upstream
-  chart 3.7.2 = v1.17.2 and policy-reporter) from
-  `gsoci.azurecr.io/charts/giantswarm`, with values that turn off what a
-  one-node kind cluster has no API or use for (CiliumNetworkPolicy,
-  VerticalPodAutoscalers, PodLogs, ServiceMonitor, HPA, the app's own
-  policies and PolicyExceptions, every controller but admission).
+  `templates/org-fixture.yaml`, `internal/lab/reports.go`) — the lab
+  installs what security-bundle installs, `kyverno-crds` 1.17.0, the kyverno
+  app 0.24.2 (the upstream chart 3.7.2 = v1.17.2 and policy-reporter) and
+  `kyverno-policies` 0.27.1 from `gsoci.azurecr.io/charts/giantswarm`, with
+  values that turn off what a one-node kind cluster has no API or use for
+  (CiliumNetworkPolicy, VerticalPodAutoscalers, PodLogs, ServiceMonitors,
+  HPA, PodDisruptionBudgets, the app's own policies and PolicyExceptions, the
+  background and cleanup controllers); the admission and reports
+  controllers run as on an installation, so PolicyReports list the fleet's
+  verdicts. The Pod policies keep the chart's Audit where security-bundle
+  sets Enforce: the platform installs without its PolicyExceptions
+  (`kyvernoPolicies.enabled: false`), and an enforced standard would refuse
+  Pods an installation's exceptions admit. The lab's copy of
+  `flux-multi-tenancy` also leaves out, at apply time, the Flux kinds the
+  lab does not serve (Kustomization, Alert, Receiver, ImagePolicy) and the
+  rules left matching nothing: for a kind no API serves, Kyverno refetches
+  its whole discovery about once a second, which slowed every policy
+  validation past the webhook's deadline. Unblocks: serving every Flux kind
+  the policy names in the lab.
   policy-reporter is a dependency without a condition, so its one
   Deployment runs too. The exemption of `agent-platform` is the lab's one deviation
   from the policy text: on an installation the platform's child HelmReleases
