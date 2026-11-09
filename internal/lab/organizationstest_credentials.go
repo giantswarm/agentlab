@@ -35,9 +35,12 @@ import (
 // answers each MCP client generation for that missing key, and a tenant
 // namespace's MCP server sign-in attributed to its key.
 //
-// Every prerequisite is read from the live lab and never configured here;
-// a missing one is a SKIP that names its fix. The key typed is a random
-// value generated in this process, printed only as its SHA-256.
+// Every prerequisite is read from the live lab and never configured here,
+// except the SOPS age Secret the organizations' Kustomizations decrypt with:
+// the lab places its own where none exists or agentlab wrote it. A missing
+// prerequisite is a SKIP that names its fix. The key typed is a random value
+// generated in this process, printed only as its SHA-256, and redacted with
+// its base64 from every answer an error quotes.
 
 const (
 	organizationCredentialsPart = "credentials"
@@ -71,7 +74,8 @@ const (
 // credentialsProof is one run of the part.
 type credentialsProof struct {
 	cfg *config.Config
-	// admin is the organization's admin, other a lab user who is not.
+	// admin and other are both admins of the organization: other is a lab
+	// user outside platform-admins, bound by name.
 	admin, other *config.User
 	adminToken   string
 	otherToken   string
@@ -165,7 +169,7 @@ func (p *credentialsProof) checks() []organizationCheck {
 }
 
 // setUp keeps the part's organization Ready from scratch, its admins the
-// platform admins, and signs both people in.
+// platform admins and the other person, and signs both people in.
 func (p *credentialsProof) setUp() error {
 	if err := checkProofOrganization(credentialsOrganization); err != nil {
 		return err
@@ -173,7 +177,7 @@ func (p *credentialsProof) setUp() error {
 	if err := p.removeLeftover(); err != nil {
 		return err
 	}
-	step("Organization %s/%s Ready; group %s bound to %s there", organizationsRootNamespace, credentialsOrganization, platformAdminsGroup, organizationAdminRole)
+	step("Organization %s/%s Ready; group %s and %s bound to %s there", organizationsRootNamespace, credentialsOrganization, platformAdminsGroup, p.other.Email, organizationAdminRole)
 	ns, err := ensureOrganization(organizationsRootNamespace, credentialsOrganization, "Credentials proof")
 	if err != nil {
 		return err
@@ -182,7 +186,7 @@ func (p *credentialsProof) setUp() error {
 	if err := markProofOrganization(credentialsOrganization); err != nil {
 		return err
 	}
-	if err := bindOrganizationRole(ns, organizationAdminsBinding, organizationAdminRole, []rbacv1.Subject{groupSubject(platformAdminsGroup)}); err != nil {
+	if err := bindOrganizationRole(ns, organizationAdminsBinding, organizationAdminRole, []rbacv1.Subject{groupSubject(platformAdminsGroup), userSubject(p.other)}); err != nil {
 		return err
 	}
 	gvr, err := gvrFor(organizationResource)
@@ -405,6 +409,9 @@ func (p *credentialsProof) modernGeneration() (string, error) {
 	if answer.input == nil {
 		return "", fmt.Errorf("an MCP %s client declaring URL elicitation got no input_required result", m.protocol())
 	}
+	if answer.requestState == "" {
+		return "", fmt.Errorf("the input_required result on %s carries no requestState", m.protocol())
+	}
 	e, err := oneURLElicitation(answer)
 	if err != nil {
 		return "", err
@@ -559,9 +566,11 @@ func (r *credentialREST) do(ctx context.Context, method, operation, token string
 	return resp, raw, err
 }
 
-// otherPersonRefused: another lab user's read of the admin's operation is
+// otherPersonRefused: another admin's read of the admin's operation is
 // refused, as the phishing rule of agent-manager's credential operations
 // requires (the operation is bound to its preparer's issuer and subject).
+// Both are admins of the organization, so the refusal is the per-person
+// binding's, not the membership check's.
 func (p *credentialsProof) otherPersonRefused() (string, error) {
 	if p.operation == "" {
 		return "", errors.New("no pending operation to read")
@@ -578,7 +587,7 @@ func (p *credentialsProof) otherPersonRefused() (string, error) {
 		return "", err
 	}
 	if resp.StatusCode != http.StatusNotFound && resp.StatusCode != http.StatusForbidden {
-		return "", fmt.Errorf("%s's GET of %s's operation answered %d, want 404 or 403: %s", p.other.Email, p.admin.Email, resp.StatusCode, excerpt(string(raw), 200))
+		return "", fmt.Errorf("%s's GET of %s's operation answered %d, want 404 or 403: %s", p.other.Email, p.admin.Email, resp.StatusCode, excerpt(redactValue(string(raw), p.value), 200))
 	}
 	if bytes.Contains(raw, []byte(p.namespace)) || resp.Header.Get("ETag") != "" {
 		return "", fmt.Errorf("%s's refused GET still carries the operation's organization or an ETag", p.other.Email)
@@ -591,7 +600,8 @@ func (p *credentialsProof) otherPersonRefused() (string, error) {
 	if own.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("the twin: %s's own GET answered %d", p.admin.Email, own.StatusCode)
 	}
-	return fmt.Sprintf("%s's GET answered %d; %s's own GET 200", p.other.Email, resp.StatusCode, p.admin.Email), nil
+	return fmt.Sprintf("%s and %s both %s of %s; %s's GET answered %d, %s's own GET 200",
+		p.other.Email, p.admin.Email, organizationAdminRole, credentialsOrganization, p.other.Email, resp.StatusCode, p.admin.Email), nil
 }
 
 // confirmation is the part of the credential API's confirmation the proof
@@ -628,7 +638,7 @@ func (p *credentialsProof) save() (string, error) {
 		return "", err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("GET %s answered %d: %s", p.operation, resp.StatusCode, excerpt(string(raw), 300))
+		return "", fmt.Errorf("GET %s answered %d: %s", p.operation, resp.StatusCode, excerpt(redactValue(string(raw), p.value), 300))
 	}
 	etag, err := strongETag(resp.Header.Get("ETag"))
 	if err != nil {
@@ -657,7 +667,7 @@ func (p *credentialsProof) save() (string, error) {
 		return "", err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("POST %s answered %d: %s", p.operation, resp.StatusCode, excerpt(string(raw), 300))
+		return "", fmt.Errorf("POST %s answered %d: %s", p.operation, resp.StatusCode, excerpt(redactValue(string(raw), p.value), 300))
 	}
 	var receipt credentialAnswer
 	if err := json.Unmarshal(raw, &receipt); err != nil {
@@ -671,19 +681,25 @@ func (p *credentialsProof) save() (string, error) {
 			return "", errors.New("the receipt in mode commit names no pull request")
 		}
 	}
-	if receipt.Pending || len(receipt.Credentials) == 0 || receipt.Credentials[0].State != want {
-		return "", fmt.Errorf("the receipt is pending=%v with credentials %+v, want %s", receipt.Pending, receipt.Credentials, want)
+	if err := receiptNames(receipt, p.operation, credentialsModelSecret, credentialsModelKey, want); err != nil {
+		return "", fmt.Errorf("the receipt: %w", err)
 	}
 	retried, result, err := p.setModel(ctx, p.plain)
 	if err != nil {
 		return "", err
 	}
-	if retried.result == nil || result.Pending || result.CredentialOperation != "" && result.CredentialOperation != p.operation {
-		return "", errors.New("the original call retried does not return the receipt")
+	if retried.result == nil {
+		return "", errors.New("the original call retried does not return the receipt: it was answered with elicitations")
+	}
+	if err := receiptNames(*result, p.operation, credentialsModelSecret, credentialsModelKey, want); err != nil {
+		return "", fmt.Errorf("the original call retried: %w", err)
 	}
 	detail := fmt.Sprintf("ETag %s, Cache-Control no-store; POST with If-Match saved %s/%s (%s) as %s; the original call retried returns the receipt", etag, credentialsModelSecret, credentialsModelKey, shortSum(p.valueSum), want)
 	if p.mode == modeCommit {
-		return detail + "; pull request " + receipt.Commit.PullRequest, nil
+		if err := p.nothingLiveBeforeMerge(ctx); err != nil {
+			return "", err
+		}
+		return detail + "; pull request " + receipt.Commit.PullRequest + "; before its merge no live Secret value and no ModelConfig", nil
 	}
 	sum, found, err := secretValueSum(ctx, p.namespace, credentialsModelSecret, credentialsModelKey)
 	if err != nil {
@@ -693,6 +709,27 @@ func (p *credentialsProof) save() (string, error) {
 		return "", fmt.Errorf("mode apply: Secret %s/%s holds %s, want %s", p.namespace, credentialsModelSecret, shortSum(sum), shortSum(p.valueSum))
 	}
 	return detail + "; mode apply: the live Secret's SHA-256 matches", nil
+}
+
+// nothingLiveBeforeMerge checks a commit-mode save wrote nothing to the
+// cluster: the Secret holds no value and the ModelConfig does not exist, so
+// what the Flux verdict sees is Flux's.
+func (p *credentialsProof) nothingLiveBeforeMerge(ctx context.Context) error {
+	_, found, err := secretValueSum(ctx, p.namespace, credentialsModelSecret, credentialsModelKey)
+	if err != nil {
+		return err
+	}
+	if found {
+		return fmt.Errorf("mode commit: Secret %s/%s holds a value before the pull request is merged", p.namespace, credentialsModelSecret)
+	}
+	mc, err := modelConfigGVR()
+	if err != nil {
+		return err
+	}
+	if exists, err := objectExists(ctx, mc, p.namespace, credentialsModel); err != nil || exists {
+		return fmt.Errorf("mode commit: ModelConfig %s/%s exists before the pull request is merged (err %v)", p.namespace, credentialsModel, err)
+	}
+	return nil
 }
 
 // pullRequest reads the receipt's pull request back on GitHub with the
@@ -1047,9 +1084,12 @@ func withArgs(base, more map[string]any) map[string]any {
 	return out
 }
 
-// cleanup closes the client and, after a merge, removes the organization's
-// content path from the organizations repository's base, so the next run's
-// create finds no file. A failed run keeps the organization for diagnosis.
+// cleanup closes the client, closes a pull request nothing merged with its
+// branch, and after a merge removes the organization's content path from the
+// organizations repository's base, so the next run's create finds no file. A
+// failed run keeps the organization for diagnosis, and after a merge its
+// content path too: Flux would prune what is kept, so the run prints the
+// removal instead.
 func (p *credentialsProof) cleanup() {
 	if p.plain != nil {
 		p.plain.close()
@@ -1060,18 +1100,45 @@ func (p *credentialsProof) cleanup() {
 	if p.retainForDiagnostics && p.namespace != "" {
 		note("retaining organization %s/%s (namespace %s) for diagnosis", organizationsRootNamespace, credentialsOrganization, p.namespace)
 	}
-	if p.merged {
-		if err := p.removeContentPath(); err != nil {
-			note("cleanup: %v", err)
+	if p.receipt != nil && p.receipt.Commit != nil && !p.merged {
+		c := p.receipt.Commit
+		if _, err := personGH("pr", "close", strconv.Itoa(c.Number), "--repo", c.Repository, "--delete-branch"); err != nil {
+			note("cleanup: closing %s: %v", c.PullRequest, err)
+		} else {
+			note("cleanup: closed %s and deleted its branch", c.PullRequest)
 		}
+	}
+	if !p.merged {
+		return
+	}
+	repo, base, path := p.pre.agentManager[flagOrgsRepository], p.pre.orgsBranch(), credentialsContentPath(p.pre.orgsContentPrefix())
+	if p.retainForDiagnostics {
+		note("retaining %s on %s@%s, which Flux keeps applied; remove it by hand before the next run:\n%s", path, repo, base, contentPathRemovalCommand(repo, base, path))
+		return
+	}
+	if err := removeContentPath(repo, base, path); err != nil {
+		note("cleanup: %v", err)
 	}
 }
 
-// removeContentPath commits the removal of the organization's content path
-// to the organizations repository's base with the person's git credentials.
-func (p *credentialsProof) removeContentPath() error {
-	repo, base := p.pre.agentManager[flagOrgsRepository], p.pre.orgsBranch()
-	path := strings.Join([]string{p.pre.orgsContentPrefix(), organizationsRootNamespace, credentialsOrganization}, "/")
+// credentialsContentPath is the part's organization's directory in the
+// organizations repository.
+func credentialsContentPath(prefix string) string {
+	return strings.Join([]string{prefix, organizationsRootNamespace, credentialsOrganization}, "/")
+}
+
+// contentPathRemovalCommand is the shell a person runs to remove path from
+// repo's base branch by hand.
+func contentPathRemovalCommand(repo, base, path string) string {
+	return fmt.Sprintf("  git clone -q --depth 1 --branch %[2]s %[4]s/%[1]s.git agentlab-credentials-cleanup && \\\n"+
+		"  git -C agentlab-credentials-cleanup rm -r -q %[3]s && \\\n"+
+		"  git -C agentlab-credentials-cleanup commit -q -m 'chore: remove the agentlab credentials proof organization content' && \\\n"+
+		"  git -C agentlab-credentials-cleanup push -q origin HEAD:%[2]s", repo, base, path, measureGitURL)
+}
+
+// removeContentPath commits the removal of path to repo's base with the
+// person's git credentials.
+func removeContentPath(repo, base, path string) error {
 	dir, err := os.MkdirTemp(StateDir, "credentials-cleanup-")
 	if err != nil {
 		return err
@@ -1081,7 +1148,7 @@ func (p *credentialsProof) removeContentPath() error {
 	steps := [][]string{
 		{"clone", "-q", "--depth", "1", "--branch", base, measureGitURL + "/" + repo + ".git", clone},
 		{"-C", clone, "rm", "-r", "-q", "--ignore-unmatch", path},
-		{"-C", clone, "commit", "-q", "-m", "chore: remove the agentlab credentials proof's organization content"},
+		{"-C", clone, "commit", "-q", "-m", "chore: remove the agentlab credentials proof organization content"},
 		{"-C", clone, gitPush, "-q", "origin", "HEAD:" + base},
 	}
 	for _, args := range steps {

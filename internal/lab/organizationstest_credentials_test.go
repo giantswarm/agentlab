@@ -294,3 +294,63 @@ func TestEnsureCredentialsAgeIdentity(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, first.Recipient().String(), second.Recipient().String(), "the identity is generated once and kept")
 }
+
+func TestUserSubject(t *testing.T) {
+	require.Equal(t, rbacv1.Subject{APIGroup: rbacv1.GroupName, Kind: rbacv1.UserKind, Name: "oidc:carol@lab.test"}, userSubject(&config.User{Email: "carol@lab.test"}))
+}
+
+func TestRedactValue(t *testing.T) {
+	value := "s3cr3t-value"
+	encoded := base64.StdEncoding.EncodeToString([]byte(value))
+	got := redactValue(`{"value":"`+value+`","data":"`+encoded+`"}`, value)
+	require.Equal(t, `{"value":"<redacted>","data":"<redacted>"}`, got)
+	require.NotContains(t, got, value)
+	require.NotContains(t, got, encoded)
+	require.Equal(t, "unchanged", redactValue("unchanged", ""))
+}
+
+func TestReceiptNames(t *testing.T) {
+	var a credentialAnswer
+	require.NoError(t, json.Unmarshal([]byte(`{"credentialOperation":"op1","credentials":[
+		{"secret":"tenant-credential-o","key":"apiKey","state":"missing"},
+		{"secret":"tenant-credential-m","key":"apiKey","state":"committed"}]}`), &a))
+	require.NoError(t, receiptNames(a, "op1", "tenant-credential-m", "apiKey", credentialStateCommitted))
+	require.ErrorContains(t, receiptNames(a, "op1", "tenant-credential-m", "apiKey", credentialStatePresent), `is "committed", want present`)
+	require.ErrorContains(t, receiptNames(a, "op1", "tenant-credential-x", "apiKey", credentialStateCommitted), "do not name tenant-credential-x/apiKey")
+	require.ErrorContains(t, receiptNames(a, "op2", "tenant-credential-m", "apiKey", credentialStateCommitted), `names operation "op1"`)
+
+	a.CredentialOperation = ""
+	require.NoError(t, receiptNames(a, "op1", "tenant-credential-m", "apiKey", credentialStateCommitted))
+	a.Pending = true
+	require.ErrorContains(t, receiptNames(a, "op1", "tenant-credential-m", "apiKey", credentialStateCommitted), "still pending")
+	require.ErrorContains(t, receiptNames(credentialAnswer{}, "op1", "tenant-credential-m", "apiKey", credentialStateCommitted), "do not name")
+}
+
+func TestAgeKeyFileMode(t *testing.T) {
+	require.NoError(t, ageKeyFileMode(0o600))
+	require.NoError(t, ageKeyFileMode(0o400))
+	require.ErrorContains(t, ageKeyFileMode(0o640), "mode 0640")
+	require.Error(t, ageKeyFileMode(0o604))
+	require.Error(t, ageKeyFileMode(0o602))
+}
+
+func TestEnsureCredentialsAgeIdentityRefusesAReadableKey(t *testing.T) {
+	t.Chdir(t.TempDir())
+	_, path, err := ensureCredentialsAgeIdentity()
+	require.NoError(t, err)
+	require.NoError(t, os.Chmod(path, 0o644)) // #nosec G302 -- the refused mode under test
+	_, _, err = ensureCredentialsAgeIdentity()
+	require.ErrorContains(t, err, "chmod 600")
+}
+
+func TestCredentialsContentPath(t *testing.T) {
+	require.Equal(t, "organizations/"+organizationsRootNamespace+"/"+credentialsOrganization, credentialsContentPath("organizations"))
+}
+
+func TestContentPathRemovalCommand(t *testing.T) {
+	got := contentPathRemovalCommand("acme/orgs", "main", "organizations/p/o")
+	require.Contains(t, got, "git clone -q --depth 1 --branch main "+measureGitURL+"/acme/orgs.git agentlab-credentials-cleanup")
+	require.Contains(t, got, "rm -r -q organizations/p/o")
+	require.Contains(t, got, "push -q origin HEAD:main")
+	require.NotContains(t, got, "%!")
+}

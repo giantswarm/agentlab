@@ -293,6 +293,38 @@ func valueInPatch(patch, value string) error {
 	return nil
 }
 
+// redactedValue stands in for the typed value in an answer an error quotes.
+const redactedValue = "<redacted>"
+
+// redactValue replaces the value and its base64 in s.
+func redactValue(s, value string) string {
+	if value == "" {
+		return s
+	}
+	s = strings.ReplaceAll(s, value, redactedValue)
+	return strings.ReplaceAll(s, base64.StdEncoding.EncodeToString([]byte(value)), redactedValue)
+}
+
+// receiptNames checks a credential write's answer is the receipt of
+// operation: not pending, no other operation, and secret/key in state want.
+func receiptNames(a credentialAnswer, operation, secret, key, want string) error {
+	switch {
+	case a.Pending:
+		return errors.New("still pending")
+	case a.CredentialOperation != "" && a.CredentialOperation != operation:
+		return fmt.Errorf("names operation %q, want %s", a.CredentialOperation, operation)
+	}
+	for _, c := range a.Credentials {
+		if c.Secret == secret && c.Key == key {
+			if c.State != want {
+				return fmt.Errorf("credential %s/%s is %q, want %s", secret, key, c.State, want)
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("the credentials %+v do not name %s/%s", a.Credentials, secret, key)
+}
+
 // sopsConfig is the part of a repository's .sops.yaml the proof reads.
 type sopsConfig struct {
 	CreationRules []struct {

@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,11 +62,27 @@ func ensureCredentialsAgeIdentity() (*age.X25519Identity, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, "", err
+	}
+	if err := ageKeyFileMode(info.Mode()); err != nil {
+		return nil, "", fmt.Errorf("%s: %w", path, err)
+	}
 	identity, err := parseAgeIdentity(raw)
 	if err != nil {
 		return nil, "", fmt.Errorf("%s: %w", path, err)
 	}
 	return identity, path, nil
+}
+
+// ageKeyFileMode refuses an age key file its group or others may read or
+// write.
+func ageKeyFileMode(mode fs.FileMode) error {
+	if perm := mode.Perm(); perm&0o077 != 0 {
+		return fmt.Errorf("mode %04o lets its group or others reach the key: chmod 600 it", perm)
+	}
+	return nil
 }
 
 // parseAgeIdentity reads one X25519 identity from an age key file, comment
