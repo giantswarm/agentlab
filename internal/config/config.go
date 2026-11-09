@@ -638,6 +638,16 @@ type Platform struct {
 	// needs; with it on that port answers nothing. --muster-pod-network turns
 	// it on. See docs/platform.md "muster on the pod network".
 	MusterPodNetwork bool `yaml:"musterPodNetwork,omitempty"`
+	// NetworkPolicy turns the platform's own network policies on, in the
+	// plain NetworkPolicy flavour kindnetd enforces: the connectivity
+	// chart's (networkPolicy.enabled) and muster's chart's
+	// (muster.networkPolicy.enabled), with the selectors an installation
+	// runs. A policy admits muster by its pod labels, which a host-network
+	// pod does not carry — its traffic leaves with the node's address — so
+	// it needs muster on the pod network (MusterPodNetwork). Off (the
+	// default), the lab runs no policy of the platform's.
+	// --network-policy turns it on. See docs/platform.md "Network policies".
+	NetworkPolicy bool `yaml:"networkPolicy,omitempty"`
 	// GitHub registers GitHub's hosted MCP server with muster, signed in to
 	// as the person through an OAuth client (internal/lab/githubmcp.go).
 	GitHub GitHub `yaml:"github"`
@@ -2426,6 +2436,14 @@ func (c *Config) Validate() error {
 		if !exactVersionRe.MatchString(v) {
 			return fmt.Errorf("platform.mcpPrometheusChartVersion %q: must be an exact version (e.g. 0.8.1-rc.1), not a range — the lab never floats", v)
 		}
+	}
+	if c.Platform.NetworkPolicy && c.Platform.Enabled && c.LegacyChart() {
+		return fmt.Errorf("platform.networkPolicy is refused on the 3.x line: its charts render no kubernetes-flavour policies of the shape the lab's peers patch")
+	}
+	// A pod-label policy never matches a host-network muster: its calls
+	// leave with the node's address and every backend refuses them.
+	if c.Platform.NetworkPolicy && c.Platform.Enabled && !c.Platform.MusterPodNetwork {
+		return fmt.Errorf("platform.networkPolicy requires platform.musterPodNetwork: the policies admit muster by its pod labels, and a host-network muster's calls leave with the node's address, so every backend would refuse them (`agentlab configure --network-policy --muster-pod-network`)")
 	}
 	if c.Platform.Alertmanager && !c.Platform.Observability {
 		return fmt.Errorf("platform.alertmanager requires platform.observability (the Alertmanager is part of the lab's kube-prometheus-stack)")

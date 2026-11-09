@@ -90,11 +90,10 @@ func BeekeeperSubscriptionsTest(cfg *config.Config, opts BeekeeperSubscriptionsT
 	}
 
 	node := cfg.ControlPlaneNode()
-	nodeIP, err := outputQuiet(dockerBin, "inspect", "-f", `{{with index .NetworkSettings.Networks "`+kindDockerNetwork+`"}}{{.IPAddress}}{{end}}`, node)
-	if err != nil || strings.TrimSpace(nodeIP) == "" {
+	nodeIP, err := kindNodeIP(node)
+	if err != nil {
 		return fmt.Errorf("the address of node %s on network %s: %v", node, kindDockerNetwork, err)
 	}
-	nodeIP = strings.TrimSpace(nodeIP)
 	inNode := "container:" + node
 	run := strings.ToUpper(randomSuffix())
 

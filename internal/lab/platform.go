@@ -512,6 +512,15 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 			return err
 		}
 	}
+	// platform.networkPolicy: the policies' apiServerCIDR is the node's
+	// address (render.go NodeIP), which a render left empty while the node
+	// did not exist; here it must resolve, or the chart's 0.0.0.0/0 would
+	// stand in for it.
+	if cfg.Platform.NetworkPolicy {
+		if _, err := kindNodeIPFn(cfg.ControlPlaneNode()); err != nil {
+			return fmt.Errorf("platform.networkPolicy: the apiserver's address for the policies: %w", err)
+		}
+	}
 	// Managed models: every host model server's endpoint is detected from
 	// the kind docker network and proven reachable from inside the cluster
 	// BEFORE the install, so a host-side misconfiguration (bind address,
@@ -741,7 +750,24 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	}
 	gateways := agentgatewayIPv4Targets(renders)
 	noteAgentgatewayIPv4Targets(gateways)
-	postRenderers, err := componentPostRenderers(cfg, imageNames, sidecars, gateways)
+	// platform.networkPolicy: every egress policy of the renders that
+	// isolates a pod dialing the lab Dex gains the Dex peer (patch 11).
+	var dexPolicies map[string][]dexEgressPolicy
+	if cfg.Platform.NetworkPolicy {
+		dialers, err := dexDialers(cfg, renders)
+		if err != nil {
+			return err
+		}
+		if dexPolicies, err = dexEgressPolicies(renders, dialers); err != nil {
+			return err
+		}
+		for _, component := range slices.Sorted(maps.Keys(dexPolicies)) {
+			for _, p := range dexPolicies[component] {
+				note("network policy %s (%s): the lab Dex peer for the pods that dial the issuer", p.name, component)
+			}
+		}
+	}
+	postRenderers, err := componentPostRenderers(cfg, imageNames, sidecars, gateways, dexPolicies)
 	if err != nil {
 		return err
 	}

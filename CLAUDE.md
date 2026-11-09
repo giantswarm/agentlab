@@ -464,6 +464,13 @@ Load-bearing invariants (details in docs/):
   issuer bridged by the `dex-localhost` sidecar, proven by `platform-test`'s
   `muster replicas` stage (one pod deleted mid-session) — docs/platform.md
   "muster on the pod network".
+- **The platform's network policies are off** by default.
+  `platform.networkPolicy` (`configure --network-policy`) turns the
+  connectivity chart's and muster's on in the kubernetes flavour and needs
+  muster on the pod network (a host-network pod carries no pod labels on the
+  wire); the lab's peers are values and post-renderer patches 10 and 11,
+  proven by `platform-test`'s `network policy denial` stage — docs/platform.md
+  "Network policies".
 - **The lab shape of the agent-platform chart**: the bundled Flux engine ON
   (`components.flux.enabled: true` — the lab has no Flux of its own, and the
   chart refuses a second one) and self-management OFF (`gitops.self.enabled:

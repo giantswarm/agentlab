@@ -101,7 +101,7 @@ func TestComponentPostRenderers(t *testing.T) {
 		agentManagerMCPServer:  {{agentManagerMCPServer, dexIssuerURLFlag}},
 		clusterManager:         {{clusterManager, dexIssuerURLFlag}},
 	}
-	rendered, err := componentPostRenderers(cfg, names, sidecars, nil)
+	rendered, err := componentPostRenderers(cfg, names, sidecars, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +160,7 @@ func TestComponentPostRenderers(t *testing.T) {
 		t.Errorf("connectivity: want the HSTS-dropping filter on the backstage route, got %q", got)
 	}
 	cfg.Backstage.Enabled = false
-	if off, err := componentPostRenderers(cfg, names, sidecars, nil); err != nil {
+	if off, err := componentPostRenderers(cfg, names, sidecars, nil, nil); err != nil {
 		t.Fatal(err)
 	} else if raw, ok := off[config.ConnectivityChartName]; ok {
 		t.Errorf("connectivity: without Backstage the lab patches nothing on the wiring chart, got postRenderers:\n%s", raw)
@@ -215,7 +215,7 @@ func TestComponentPostRenderers(t *testing.T) {
 	// (resolveDevImageNames refuses that case before the render; here the
 	// table simply has no entry).
 	delete(names, componentMuster)
-	rendered, err = componentPostRenderers(cfg, names, sidecars, nil)
+	rendered, err = componentPostRenderers(cfg, names, sidecars, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,7 +226,7 @@ func TestComponentPostRenderers(t *testing.T) {
 	// Without the renders (a plain `agentlab render`) no sidecar is patched
 	// — the rule has nothing to read — and no dev image, no override.
 	cfg.Platform.Agents, cfg.Platform.ModelManager.Enabled, cfg.Platform.DevImages = false, false, nil
-	rendered, err = componentPostRenderers(cfg, nil, nil, nil)
+	rendered, err = componentPostRenderers(cfg, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -654,7 +654,7 @@ func TestAgentgatewayIPv4Patches(t *testing.T) {
 		config.ConnectivityChartName: connectivityGatewayRender,
 		substrateComponent:           substrateGatewayRender,
 	})
-	rendered, err := componentPostRenderers(config.Default(), nil, nil, gateways)
+	rendered, err := componentPostRenderers(config.Default(), nil, nil, gateways, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

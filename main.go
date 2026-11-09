@@ -1164,7 +1164,7 @@ var formTerminal = func() bool {
 
 func configureCmd() *cobra.Command {
 	var defaults, accessible bool
-	var platform, agents, observability, backstage, modelManager, vmManager, klausGateway, devctl, musterPodNetwork, alertmanager, installationsPage bool
+	var platform, agents, observability, backstage, modelManager, vmManager, klausGateway, devctl, musterPodNetwork, networkPolicy, alertmanager, installationsPage bool
 	var devctlVersion string
 	var serving, workspaces, workspacesCSICompanion, coding, organizations, github, githubSignIn, chatgptSubscription bool
 	var chatgptSubscriptionModel string
@@ -1322,6 +1322,15 @@ func configureCmd() *cobra.Command {
 			}
 			if cmd.Flags().Changed("muster-pod-network") {
 				cfg.Platform.MusterPodNetwork = musterPodNetwork
+			}
+			if cmd.Flags().Changed("network-policy") {
+				cfg.Platform.NetworkPolicy = networkPolicy
+				// The policies admit muster by its pod labels: muster
+				// moves onto the pod network with them unless the same
+				// call says otherwise (which the validation refuses).
+				if networkPolicy && !cmd.Flags().Changed("muster-pod-network") {
+					cfg.Platform.MusterPodNetwork = true
+				}
 			}
 			if cmd.Flags().Changed("alertmanager") {
 				cfg.Platform.Alertmanager = alertmanager
@@ -1510,6 +1519,7 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&devctl, "devctl", false, "run devctl's MCP server from its released chart, registered with muster (x_devctl_*), acting on GitHub as the person with their grant of the workspaces' github instance App (needs agents and that instance); `agentlab coding-test --part devctl` proves it; --devctl=false uninstalls it")
 	cmd.Flags().StringVar(&devctlVersion, "devctl-version", "", "the devctl release --devctl installs (default "+config.DefaultDevctlVersion+"); \"\" returns to the default")
 	cmd.Flags().BoolVar(&musterPodNetwork, "muster-pod-network", false, "run muster as an installation does: on the pod network at two replicas behind the edge with a PodDisruptionBudget of minAvailable 1, the issuer reached through the dex-localhost sidecar (muster's direct debug port answers nothing then); --muster-pod-network=false returns it to the host network at one replica")
+	cmd.Flags().BoolVar(&networkPolicy, "network-policy", false, "turn the platform's network policies on in the plain NetworkPolicy flavour kindnetd enforces (the connectivity chart's and muster's), with the selectors an installation runs; moves muster onto the pod network (--muster-pod-network), which the policies' pod-label selectors need; --network-policy=false turns them off")
 	cmd.Flags().BoolVar(&alertmanager, "alertmanager", false, "run an Alertmanager in the observability stack with an always-firing AgentlabWatchdog alert, and point mcp-prometheus at it (ALERTMANAGER_URL) so its alert tools have alerts to read; needs platform.observability")
 	cmd.Flags().StringVar(&mcpPrometheusChartVersion, "mcp-prometheus-chart-version", "", "install this mcp-prometheus chart release (an exact version, a release candidate included) instead of the one agentlab pins, for proving a chart change the devImages swap cannot carry; \"\" returns to the pin; needs platform.observability")
 	cmd.Flags().BoolVar(&github, "github", false, "register GitHub's hosted MCP server with muster as MCPServer github, signed in to as the person through an OAuth App or GitHub App client whose client-id and client-secret are the Secret platform.github.secret names (default agent-platform/github-oauth-client), placed with `beekeeper secret copy --to-secret`, never read by agentlab; --github=false removes the server")
