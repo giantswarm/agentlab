@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"os"
 	"slices"
 	"strings"
 
@@ -443,11 +444,24 @@ func (cp *commitProof) deleteBranches() ([]string, error) {
 	if len(branches) == 0 {
 		return nil, nil
 	}
+	// git push needs a repository to run in, even for a deletion: an empty
+	// one of its own, removed again.
+	if err := os.MkdirAll(StateDir, 0o750); err != nil {
+		return nil, err
+	}
+	dir, err := os.MkdirTemp(StateDir, "commit-proof-")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	if _, err := personGit(dir, "init", "-q"); err != nil {
+		return nil, err
+	}
 	args := []string{gitPush, "-q", cp.remote(), "--delete"}
 	for _, b := range branches {
 		args = append(args, "refs/heads/"+b)
 	}
-	if _, err := personGit(StateDir, args...); err != nil {
+	if _, err := personGit(dir, args...); err != nil {
 		return nil, err
 	}
 	return branches, nil
