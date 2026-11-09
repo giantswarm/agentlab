@@ -1,11 +1,20 @@
 package lab
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+)
+
+// seccompPolicy, resultPass and resultFail name a fleet policy and the
+// results a PolicyReport records.
+const (
+	seccompPolicy = "restrict-seccomp"
+	resultPass    = "pass"
+	resultFail    = "fail"
 )
 
 // TestKyvernoValuesRunTheReports: the lab's Kyverno writes reports as an
@@ -31,11 +40,11 @@ func TestKyvernoValuesRunTheReports(t *testing.T) {
 
 func policyWithReady(name, status string) unstructured.Unstructured {
 	obj := unstructured.Unstructured{Object: map[string]any{
-		"metadata": map[string]any{"name": name},
+		crMetadata: map[string]any{nameKey: name},
 	}}
 	if status != "" {
-		obj.Object["status"] = map[string]any{"conditions": []any{
-			map[string]any{"type": "Ready", "status": status},
+		obj.Object[crStatus] = map[string]any{crConditions: []any{
+			map[string]any{fieldType: conditionReady, crStatus: status},
 		}}
 	}
 	return obj
@@ -45,11 +54,11 @@ func policyWithReady(name, status string) unstructured.Unstructured {
 // True; one without a status yet is pending.
 func TestPolicyReadiness(t *testing.T) {
 	names, pending := policyReadiness([]unstructured.Unstructured{
-		policyWithReady("restrict-seccomp", "True"),
+		policyWithReady(seccompPolicy, conditionTrue),
 		policyWithReady("disallow-host-path", "False"),
 		policyWithReady("disallow-capabilities", ""),
 	})
-	if want := []string{"disallow-capabilities", "disallow-host-path", "restrict-seccomp"}; !slices.Equal(names, want) {
+	if want := []string{"disallow-capabilities", "disallow-host-path", seccompPolicy}; !slices.Equal(names, want) {
 		t.Errorf("names = %v, want %v", names, want)
 	}
 	if want := []string{"disallow-capabilities", "disallow-host-path"}; !slices.Equal(pending, want) {
@@ -60,14 +69,14 @@ func TestPolicyReadiness(t *testing.T) {
 func policyReport(name, kind, scope string, results ...[2]string) unstructured.Unstructured {
 	var rs []any
 	for _, r := range results {
-		rs = append(rs, map[string]any{"policy": r[0], "rule": r[0] + "-rule", "result": r[1]})
+		rs = append(rs, map[string]any{reportPolicy: r[0], "rule": r[0] + "-rule", reportResult: r[1]})
 	}
 	return unstructured.Unstructured{Object: map[string]any{
-		"apiVersion": "wgpolicyk8s.io/v1alpha2",
-		"kind":       "PolicyReport",
-		"metadata":   map[string]any{"name": name, "namespace": "agent-platform"},
-		"scope":      map[string]any{"kind": kind, "name": scope, "namespace": "agent-platform"},
-		"results":    rs,
+		fieldAPIVersion: "wgpolicyk8s.io/v1alpha2",
+		kindKey:         "PolicyReport",
+		crMetadata:      map[string]any{nameKey: name, namespaceKey: platformNamespace},
+		reportScope:     map[string]any{kindKey: kind, nameKey: scope, namespaceKey: platformNamespace},
+		reportResults:   rs,
 	}}
 }
 
@@ -76,26 +85,26 @@ func policyReport(name, kind, scope string, results ...[2]string) unstructured.U
 // an error naming what is there.
 func TestVerdictFrom(t *testing.T) {
 	reports := []unstructured.Unstructured{
-		policyReport("u1", "Deployment", "muster", [2]string{reportProbePolicy, "pass"}),
-		policyReport("u2", "Pod", "muster-abc", [2]string{"restrict-seccomp", "fail"}, [2]string{reportProbePolicy, "pass"}, [2]string{reportProbePolicy, "pass"}),
-		policyReport("u3", "Pod", "kagent-xyz", [2]string{"restrict-seccomp", "pass"}),
+		policyReport("u1", "Deployment", "muster", [2]string{reportProbePolicy, resultPass}),
+		policyReport("u2", kindPod, "muster-abc", [2]string{seccompPolicy, resultFail}, [2]string{reportProbePolicy, resultPass}, [2]string{reportProbePolicy, resultPass}),
+		policyReport("u3", kindPod, "kagent-xyz", [2]string{seccompPolicy, resultPass}),
 	}
 
-	v, err := verdictFrom(reports, "agent-platform", "Pod", "muster-abc", reportProbePolicy)
+	v, err := verdictFrom(reports, platformNamespace, kindPod, "muster-abc", reportProbePolicy)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(v.results, []string{"pass", "pass"}) {
+	if !slices.Equal(v.results, []string{resultPass, resultPass}) {
 		t.Errorf("results = %v, want [pass pass]", v.results)
 	}
 	if got, want := v.String(), "Pod agent-platform/muster-abc: "+reportProbePolicy+" pass,pass"; got != want {
 		t.Errorf("String() = %q, want %q", got, want)
 	}
 
-	if _, err := verdictFrom(reports, "agent-platform", "Pod", "kagent-xyz", reportProbePolicy); err == nil || !strings.Contains(err.Error(), "policies: restrict-seccomp") {
+	if _, err := verdictFrom(reports, platformNamespace, kindPod, "kagent-xyz", reportProbePolicy); err == nil || !strings.Contains(err.Error(), "policies: restrict-seccomp") {
 		t.Errorf("report without the policy: err = %v, want one naming the policies there", err)
 	}
-	if _, err := verdictFrom(reports, "agent-platform", "Pod", "gone", reportProbePolicy); err == nil || !strings.Contains(err.Error(), "no PolicyReport") {
+	if _, err := verdictFrom(reports, platformNamespace, kindPod, "gone", reportProbePolicy); err == nil || !strings.Contains(err.Error(), "no PolicyReport") {
 		t.Errorf("no report: err = %v, want no PolicyReport", err)
 	}
 }
@@ -103,9 +112,67 @@ func TestVerdictFrom(t *testing.T) {
 // TestVerdictTally counts verdicts by result.
 func TestVerdictTally(t *testing.T) {
 	got := verdictTally([]reportVerdict{
-		{results: []string{"pass"}}, {results: []string{"fail"}}, {results: []string{"pass"}},
+		{results: []string{resultPass}}, {results: []string{resultFail}}, {results: []string{resultPass}},
 	})
 	if want := "fail 1, pass 2"; got != want {
 		t.Errorf("verdictTally = %q, want %q", got, want)
+	}
+}
+
+// TestWebhookTimedOut: only a policy webhook's deadline counts as the
+// timeout the Pod policies' install retries on.
+func TestWebhookTimedOut(t *testing.T) {
+	timedOut := errors.New(`INSTALL FAILED: server-side apply failed for object /disallow-capabilities kyverno.io/v1, Kind=ClusterPolicy: Internal error occurred: failed calling webhook "validate-policy.kyverno.svc": failed to call webhook: Post "https://kyverno-svc.kyverno.svc:443/policyvalidate?timeout=10s": context deadline exceeded`)
+	if !webhookTimedOut(timedOut) {
+		t.Error("the policy webhook's deadline is not recognised")
+	}
+	for _, err := range []error{
+		errors.New("INSTALL FAILED: admission webhook \"validate-policy.kyverno.svc\" denied the request: invalid pattern"),
+		errors.New("pulling oci://gsoci.azurecr.io/charts/giantswarm/kyverno-policies: context deadline exceeded"),
+	} {
+		if webhookTimedOut(err) {
+			t.Errorf("%q counted as the webhook's timeout", err)
+		}
+	}
+}
+
+// TestWithoutUnservedKinds: the lab's copy of the fleet's policy keeps the
+// served kinds of every rule, drops the unserved ones, and drops a rule left
+// matching nothing.
+func TestWithoutUnservedKinds(t *testing.T) {
+	objs, err := labFleetPolicy(platformNamespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	served := map[string]bool{kindHelmRelease: true, "Kustomization": true}
+	dropped := withoutUnservedKinds(objs, served)
+	if want := []string{"Alert", "ImagePolicy", "Receiver"}; !slices.Equal(dropped, want) {
+		t.Errorf("dropped = %v, want %v", dropped, want)
+	}
+	rules, _, _ := unstructured.NestedSlice(objs[0].Object, "spec", "rules")
+	var names []string
+	for _, r := range rules {
+		rule := r.(map[string]any)
+		name, _, _ := unstructured.NestedString(rule, "name")
+		names = append(names, name)
+		kinds, _, _ := unstructured.NestedStringSlice(rule, "match", "resources", "kinds")
+		for _, k := range kinds {
+			if !served[k] {
+				t.Errorf("rule %s still matches the unserved kind %s", name, k)
+			}
+		}
+	}
+	if want := []string{"serviceAccountNameMustBeSet", "kustomizationSourceRefNamespaceIsSafe", "helmReleaseSourceRefNamespaceIsSafe", "targetNamespaceMustBeLocal", "storageNamespaceMustBeLocal"}; !slices.Equal(names, want) {
+		t.Errorf("rules = %v, want %v", names, want)
+	}
+
+	// Without the Kustomization API, the rule of Kustomization alone goes
+	// and the shared rules keep HelmRelease.
+	objs, _ = labFleetPolicy(platformNamespace)
+	withoutUnservedKinds(objs, map[string]bool{kindHelmRelease: true})
+	rules, _, _ = unstructured.NestedSlice(objs[0].Object, "spec", "rules")
+	first, _, _ := unstructured.NestedStringSlice(rules[0].(map[string]any), "match", "resources", "kinds")
+	if len(rules) != 4 || !slices.Equal(first, []string{kindHelmRelease}) {
+		t.Errorf("HelmRelease only: %d rules, the first matching %v; want 4, [HelmRelease]", len(rules), first)
 	}
 }

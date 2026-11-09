@@ -960,7 +960,13 @@ renders `kagent.providers` and the kagent chart's `default-model-config`.
   verdicts. The Pod policies keep the chart's Audit where security-bundle
   sets Enforce: the platform installs without its PolicyExceptions
   (`kyvernoPolicies.enabled: false`), and an enforced standard would refuse
-  Pods an installation's exceptions admit.
+  Pods an installation's exceptions admit. The lab's copy of
+  `flux-multi-tenancy` also leaves out, at apply time, the Flux kinds the
+  lab does not serve (Kustomization, Alert, Receiver, ImagePolicy) and the
+  rules left matching nothing: for a kind no API serves, Kyverno refetches
+  its whole discovery about once a second, which slowed every policy
+  validation past the webhook's deadline. Unblocks: serving every Flux kind
+  the policy names in the lab.
   policy-reporter is a dependency without a condition, so its one
   Deployment runs too. The exemption of `agent-platform` is the lab's one deviation
   from the policy text: on an installation the platform's child HelmReleases

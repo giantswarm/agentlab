@@ -91,10 +91,12 @@ kyverno:
       enabled: false
     podDisruptionBudget:
       enabled: false
+    # Measured on a lab: 140 MiB at the first scan of the platform's
+    # resources, 124 MiB and ~1m CPU once settled.
     resources:
       requests:
         cpu: 50m
-        memory: 128Mi
+        memory: 160Mi
       limits:
         memory: 512Mi
   features:

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/giantswarm/agentlab/internal/config"
@@ -23,7 +25,7 @@ import (
 // the kyverno app with its reports controller (templates/kyverno-values.yaml)
 // and the kyverno-policies chart security-bundle pins, so `kubectl get
 // policyreports -A` lists a result for every platform Pod and a proof asserts
-// a policy's verdict from a PolicyReport (policyReportResult) instead of the
+// a policy's verdict from a PolicyReport (verdictFrom) instead of the
 // kyverno CLI.
 //
 // One lab difference: the chart's own default, Audit, where security-bundle
@@ -42,6 +44,18 @@ const (
 	kyvernoPoliciesChartVersion = "0.27.1"
 	// kyvernoPoliciesSelector selects every ClusterPolicy of that release.
 	kyvernoPoliciesSelector = "app.kubernetes.io/instance=" + kyvernoPoliciesRelease
+
+	// kindClusterPolicy and kindPod are the kinds a policy and the reports
+	// about Pods name.
+	kindClusterPolicy = "ClusterPolicy"
+	kindPod           = "Pod"
+	// reportScope, reportResults, reportPolicy and reportResult are the
+	// PolicyReport fields a verdict reads: the resource the report is about,
+	// its results, and each result's policy and outcome.
+	reportScope   = "scope"
+	reportResults = "results"
+	reportPolicy  = "policy"
+	reportResult  = "result"
 
 	// policyReportResource is the namespaced PolicyReport the reports
 	// controller writes, one per resource it judged.
@@ -69,7 +83,14 @@ const (
 // next is judged by all of them.
 func fleetPodPoliciesUp(cfg *config.Config) error {
 	note("the fleet's Pod policies: chart %s:%s (Audit, the chart's default)", kyvernoPoliciesChartRef, kyvernoPoliciesChartVersion)
-	if err := installOCIChart(cfg, kyvernoNamespace, kyvernoPoliciesRelease, kyvernoPoliciesChartRef, kyvernoPoliciesChartVersion, nil, kyvernoInstallTimeout); err != nil {
+	// Kyverno validates each policy on apply, about 5 s apiece on the lab's
+	// node, so an unchanged release is left as it is rather than applied
+	// again (as the platform chart is).
+	if rev, err := helmDeployedRevision(kyvernoNamespace, kyvernoPoliciesRelease, kyvernoPoliciesChartVersion, nil); err != nil {
+		return err
+	} else if rev > 0 {
+		note("chart kyverno-policies %s already installed — nothing to do (Helm revision %d stays)", kyvernoPoliciesChartVersion, rev)
+	} else if err := installPodPolicies(cfg); err != nil {
 		return err
 	}
 	names, err := waitPoliciesReady(context.Background(), kyvernoPoliciesSelector)
@@ -78,6 +99,34 @@ func fleetPodPoliciesUp(cfg *config.Config) error {
 	}
 	note("%d ClusterPolicies Ready: %s", len(names), strings.Join(names, ", "))
 	return nil
+}
+
+// installPodPolicies installs the kyverno-policies release, once more when
+// Kyverno's policy webhook timed out on it. A just-started admission
+// controller can take longer than the webhook's 10 s deadline to validate a
+// Pod policy (each computes its autogen rules for every Pod controller), and
+// the chart's 22 policies queue behind each other; the second attempt, after
+// the webhook answered a Pod policy again, upgrades the failed release.
+func installPodPolicies(cfg *config.Config) error {
+	install := func() error {
+		return installOCIChart(cfg, kyvernoNamespace, kyvernoPoliciesRelease, kyvernoPoliciesChartRef, kyvernoPoliciesChartVersion, nil, kyvernoInstallTimeout)
+	}
+	err := install()
+	if err == nil || !webhookTimedOut(err) {
+		return err
+	}
+	note("Kyverno's policy webhook timed out on the Pod policies; waiting for it and installing them once more")
+	if err := waitKyvernoServes(context.Background()); err != nil {
+		return err
+	}
+	return install()
+}
+
+// webhookTimedOut reports whether an apply failed because Kyverno's policy
+// webhook did not answer in time.
+func webhookTimedOut(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "failed calling webhook") && strings.Contains(msg, "context deadline exceeded")
 }
 
 // waitPoliciesReady waits until every ClusterPolicy the selector names
@@ -117,7 +166,7 @@ func waitPoliciesReady(ctx context.Context, selector string) ([]string, error) {
 func policyReadiness(policies []unstructured.Unstructured) (names, pending []string) {
 	for _, p := range policies {
 		names = append(names, p.GetName())
-		if conditionStatus(&p, "Ready") != "True" {
+		if conditionStatus(&p, conditionReady) != conditionTrue {
 			pending = append(pending, p.GetName())
 		}
 	}
@@ -141,45 +190,29 @@ func (v reportVerdict) String() string {
 	return fmt.Sprintf("%s %s/%s: %s %s", v.kind, v.namespace, v.name, v.policy, strings.Join(v.results, ","))
 }
 
-// policyReportResult reads the PolicyReport the reports controller wrote for
-// a resource and returns the policy's verdict on it — what a proof asserts
-// instead of running the kyverno CLI. A resource without a report, or whose
-// report carries no result of the policy, is an error naming what is there.
-func policyReportResult(ctx context.Context, namespace, kind, name, policy string) (reportVerdict, error) {
-	gvr, err := gvrFor(policyReportResource)
-	if err != nil {
-		return reportVerdict{}, fmt.Errorf("%w (is the lab's Kyverno reports controller installed? run `agentlab platform`)", err)
-	}
-	reports, err := listObjects(ctx, gvr, namespace, "")
-	if err != nil {
-		return reportVerdict{}, err
-	}
-	return verdictFrom(reports, namespace, kind, name, policy)
-}
-
 // verdictFrom finds the report scoped to the resource among reports and the
 // policy's results in it.
 func verdictFrom(reports []unstructured.Unstructured, namespace, kind, name, policy string) (reportVerdict, error) {
 	v := reportVerdict{namespace: namespace, kind: kind, name: name, policy: policy}
 	for _, r := range reports {
-		scopeKind, _, _ := unstructured.NestedString(r.Object, "scope", "kind")
-		scopeName, _, _ := unstructured.NestedString(r.Object, "scope", "name")
+		scopeKind, _, _ := unstructured.NestedString(r.Object, reportScope, kindKey)
+		scopeName, _, _ := unstructured.NestedString(r.Object, reportScope, nameKey)
 		if scopeKind != kind || scopeName != name {
 			continue
 		}
-		results, _, _ := unstructured.NestedSlice(r.Object, "results")
+		results, _, _ := unstructured.NestedSlice(r.Object, reportResults)
 		var policies []string
 		for _, res := range results {
 			m, ok := res.(map[string]any)
 			if !ok {
 				continue
 			}
-			p, _ := m["policy"].(string)
+			p, _ := m[reportPolicy].(string)
 			if !slices.Contains(policies, p) {
 				policies = append(policies, p)
 			}
 			if p == policy {
-				result, _ := m["result"].(string)
+				result, _ := m[reportResult].(string)
 				v.results = append(v.results, result)
 			}
 		}
@@ -232,10 +265,10 @@ func platformPodVerdicts(ctx context.Context) ([]reportVerdict, error) {
 	var verdicts []reportVerdict
 	var errs []error
 	for _, p := range pods {
-		if phase, _, _ := unstructured.NestedString(p.Object, "status", "phase"); phase != "Running" || p.GetDeletionTimestamp() != nil {
+		if phase, _, _ := unstructured.NestedString(p.Object, crStatus, "phase"); phase != string(corev1.PodRunning) || p.GetDeletionTimestamp() != nil {
 			continue
 		}
-		v, err := verdictFrom(reports, platformNamespace, "Pod", p.GetName(), reportProbePolicy)
+		v, err := verdictFrom(reports, platformNamespace, kindPod, p.GetName(), reportProbePolicy)
 		if err != nil {
 			errs = append(errs, err)
 			continue
@@ -264,3 +297,78 @@ func verdictTally(verdicts []reportVerdict) string {
 	}
 	return strings.Join(parts, ", ")
 }
+
+// kyvernoDeployments are the controllers the lab's Kyverno runs; the
+// admission controller serves every webhook.
+var kyvernoDeployments = []string{"kyverno-admission-controller", "kyverno-reports-controller"}
+
+// kyvernoServesAttempts and kyvernoServesInterval bound the wait for the
+// policy webhook to answer from the rolled-out admission controller.
+const (
+	kyvernoServesAttempts = 45
+	kyvernoServesInterval = 2 * time.Second
+)
+
+// waitKyvernoServes waits until an upgrade of the Kyverno release has
+// settled: both controllers rolled out with no old replica left, and the
+// policy webhook admitting a policy. A values change rolls the admission
+// controller; while the old replica terminates, the policy webhook times out
+// and Kyverno's webhook controller holds back every update of the resource
+// webhook (it sees a rolling update while the Deployment counts more
+// replicas than it wants), so a policy applied then is refused, or reads
+// Ready long before admission enforces it. A policy applied after this is
+// validated at once and enforced as soon as it is Ready.
+func waitKyvernoServes(ctx context.Context) error {
+	for _, d := range kyvernoDeployments {
+		if err := waitDeploymentRolledOut(ctx, kyvernoNamespace, d, kyvernoInstallTimeout); err != nil {
+			return err
+		}
+	}
+	gvr, err := gvrFor(clusterPolicyResource)
+	if err != nil {
+		return err
+	}
+	probe, err := decodeManifests([]byte(kyvernoServesProbe))
+	if err != nil || len(probe) != 1 {
+		return fmt.Errorf("the Kyverno readiness probe policy: %d objects, %w", len(probe), err)
+	}
+	k, err := labKube()
+	if err != nil {
+		return err
+	}
+	var last error
+	served := waitFor(kyvernoServesAttempts, kyvernoServesInterval, func() bool {
+		_, last = k.resource(gvr, "").Create(ctx, probe[0], metav1.CreateOptions{DryRun: []string{metav1.DryRunAll}})
+		return last == nil
+	})
+	if !served {
+		return fmt.Errorf("the Kyverno policy webhook does not admit a policy after %s: %w\ncheck `agentlab pods -n %s`", time.Duration(kyvernoServesAttempts)*kyvernoServesInterval, last, kyvernoNamespace)
+	}
+	note("Kyverno rolled out (%s) and its policy webhook answers", strings.Join(kyvernoDeployments, ", "))
+	return nil
+}
+
+// kyvernoServesProbe is the policy the readiness check dry-runs: valid, in
+// Audit, a Pod policy like the fleet's (so the webhook computes its autogen
+// rules, the costly part of validating one), matching nothing the lab
+// creates; never stored.
+const kyvernoServesProbe = `apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: agentlab-kyverno-serves-probe
+spec:
+  validationFailureAction: Audit
+  background: false
+  rules:
+    - name: probe
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              names: [agentlab-kyverno-serves-probe]
+      validate:
+        message: probe
+        pattern:
+          metadata:
+            name: "?*"
+`
