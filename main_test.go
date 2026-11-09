@@ -318,3 +318,91 @@ func TestApplyPortsAvoidsAStoppedRegisteredLab(t *testing.T) {
 		t.Fatalf("dexPort %d, apiServerPort %d: a stopped registered lab records them", cfg.DexPort, cfg.APIServerPort)
 	}
 }
+
+// labCertsDir is the lab directory's certs/.
+const labCertsDir = "certs"
+
+// TestUndrivenLabIsLeftAlone: in a lab pinned to a kagent line another
+// agentlab drives (agent-platform 4.120.1, agentlab v0.84.6's), every command
+// that writes agentlab.yaml, renders into the lab or drives its kagent
+// refuses before its first step, naming that agentlab, and the lab's
+// directory stays as it was: no agentlab.yaml rewritten in this release's
+// schema, no certs/ or state/.
+func TestUndrivenLabIsLeftAlone(t *testing.T) {
+	t.Setenv("AGENTLAB_TELEMETRY_OPTOUT", "1")
+	t.Setenv("AGENTLAB_NO_UPDATE_CHECK", "1")
+	dir := t.TempDir()
+	t.Chdir(dir)
+	cfg := config.Default()
+	cfg.ClusterName = "line12"
+	cfg.Platform.ChartVersion = "4.120.1"
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(filepath.Join(dir, config.File)) // #nosec G304 -- the test's own lab
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A checkout the portal commands accept, so only the guard stops them.
+	checkout := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(checkout, "node_modules"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"package.json", "app-config.yaml", "packages/backend/Dockerfile"} {
+		path := filepath.Join(checkout, f)
+		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("{}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	labDir := ""
+	for _, tc := range []struct {
+		name string
+		cmd  func() *cobra.Command
+		args []string
+	}{
+		{"configure", configureCmd, []string{"--defaults"}},
+		{"up", upCmd, nil},
+		{"platform", platformCmd, nil},
+		{"portal dev", portalDevCmd, []string{"--checkout", checkout}},
+		{"portal build", portalBuildCmd, []string{"--checkout", checkout}},
+		{"reload", func() *cobra.Command { return labCmd("reload", "", lab.ApplyDex) }, nil},
+		{"test", func() *cobra.Command { return labCmd("test", "", lab.Test) }, nil},
+		{"platform-down", func() *cobra.Command { return labCmd("platform-down", "", lab.PlatformDown) }, nil},
+		{"turn", turnCmd, []string{"--list"}},
+		{"platform-test", platformTestCmd, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if labDir != "" {
+				t.Chdir(labDir)
+			}
+			cmd := tc.cmd()
+			cmd.SetArgs(tc.args)
+			cmd.SilenceUsage = true
+			cmd.SilenceErrors = true
+			err := cmd.Execute()
+			if err == nil || !strings.Contains(err.Error(), "agentlab v0.84.6") {
+				t.Errorf("%s = %v, want the refusal naming agentlab v0.84.6", tc.name, err)
+			}
+			wd, err := os.Getwd()
+			if err != nil {
+				t.Fatal(err)
+			}
+			labDir = wd
+			after, err := os.ReadFile(filepath.Join(wd, config.File)) // #nosec G304 -- the test's own lab
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(after) != string(before) {
+				t.Errorf("%s rewrote agentlab.yaml:\n%s", tc.name, after)
+			}
+			for _, d := range []string{lab.StateDir, labCertsDir} {
+				if _, err := os.Stat(filepath.Join(wd, d)); !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("%s wrote %s/ (stat: %v)", tc.name, d, err)
+				}
+			}
+		})
+	}
+}

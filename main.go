@@ -290,6 +290,12 @@ func labCmd(use, short string, run func(*config.Config) error) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// test, platform-down and reload act on the lab with this
+			// release's renders: a lab another agentlab drives is left to
+			// it (kagentline.go).
+			if err := lab.RefuseUndrivenPin(cfg); err != nil {
+				return err
+			}
 			return run(cfg)
 		},
 	}
@@ -457,6 +463,9 @@ func loadProofLab() (*config.Config, error) {
 }
 
 func prepareProofLab(cfg *config.Config) error {
+	if err := lab.RefuseUndrivenLab(cfg); err != nil {
+		return err
+	}
 	installed, err := lab.NoteChartUnderTest(cfg)
 	if err != nil {
 		return err
@@ -913,6 +922,11 @@ func upCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// A lab another agentlab drives is left as it is: nothing below
+			// may write into it (kagentline.go).
+			if err := lab.RefuseUndrivenPin(cfg); err != nil {
+				return err
+			}
 			// A lab from before the registry registers on its next boot. A
 			// convenience: it never fails the boot.
 			if err := labs.Register(cfg.ClusterName, "."); err != nil {
@@ -1068,6 +1082,9 @@ func turnCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := lab.RefuseUndrivenLab(cfg); err != nil {
+				return err
+			}
 			if user == "" {
 				user = cfg.AdminUser().Email
 			}
@@ -1154,7 +1171,7 @@ var formTerminal = func() bool {
 
 func configureCmd() *cobra.Command {
 	var defaults, accessible bool
-	var platform, agents, observability, backstage, modelManager, vmManager, klausGateway, devctl, musterPodNetwork, alertmanager, installationsPage bool
+	var platform, agents, observability, backstage, modelManager, vmManager, klausGateway, devctl, musterPodNetwork, networkPolicy, alertmanager, installationsPage bool
 	var devctlVersion string
 	var serving, workspaces, workspacesCSICompanion, coding, organizations, github, githubSignIn, chatgptSubscription bool
 	var chatgptSubscriptionModel string
@@ -1313,6 +1330,15 @@ func configureCmd() *cobra.Command {
 			if cmd.Flags().Changed("muster-pod-network") {
 				cfg.Platform.MusterPodNetwork = musterPodNetwork
 			}
+			if cmd.Flags().Changed("network-policy") {
+				cfg.Platform.NetworkPolicy = networkPolicy
+				// The policies admit muster by its pod labels: muster
+				// moves onto the pod network with them unless the same
+				// call says otherwise (which the validation refuses).
+				if networkPolicy && !cmd.Flags().Changed("muster-pod-network") {
+					cfg.Platform.MusterPodNetwork = true
+				}
+			}
 			if cmd.Flags().Changed("alertmanager") {
 				cfg.Platform.Alertmanager = alertmanager
 			}
@@ -1419,6 +1445,15 @@ func configureCmd() *cobra.Command {
 			if cmd.Flags().Changed("github-app-client-secret-source") {
 				cfg.GitHubApp.ClientSecretSource = gitHubAppClientSecretSource
 			}
+			// With --defaults the pin is final here: a lab on a kagent line
+			// another agentlab drives is refused before this machine is even
+			// probed for it (the form, which can still move the pin, is
+			// judged before the save below).
+			if defaults {
+				if err := lab.RefuseUndrivenPin(cfg); err != nil {
+					return err
+				}
+			}
 			// Every run discovers the machine — an existing agentlab.yaml
 			// follows the host too: a server that appeared is added, one that
 			// is gone drops out, ports move while no cluster holds them.
@@ -1450,6 +1485,11 @@ func configureCmd() *cobra.Command {
 			// chartVersion now, so the file says what `up` will install and
 			// a branch without builds is refused here, not after a boot.
 			if _, err := lab.ResolveChartVersion(cfg); err != nil {
+				return err
+			}
+			// A pin on a kagent line another agentlab drives is that
+			// agentlab's to write: this release's file would lock it out.
+			if err := lab.RefuseUndrivenPin(cfg); err != nil {
 				return err
 			}
 			if err := saveLab(cfg); err != nil {
@@ -1486,6 +1526,7 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&devctl, "devctl", false, "run devctl's MCP server from its released chart, registered with muster (x_devctl_*), acting on GitHub as the person with their grant of the workspaces' github instance App (needs agents and that instance); `agentlab coding-test --part devctl` proves it; --devctl=false uninstalls it")
 	cmd.Flags().StringVar(&devctlVersion, "devctl-version", "", "the devctl release --devctl installs (default "+config.DefaultDevctlVersion+"); \"\" returns to the default")
 	cmd.Flags().BoolVar(&musterPodNetwork, "muster-pod-network", false, "run muster as an installation does: on the pod network at two replicas behind the edge with a PodDisruptionBudget of minAvailable 1, the issuer reached through the dex-localhost sidecar (muster's direct debug port answers nothing then); --muster-pod-network=false returns it to the host network at one replica")
+	cmd.Flags().BoolVar(&networkPolicy, "network-policy", false, "turn the platform's network policies on in the plain NetworkPolicy flavour kindnetd enforces (the connectivity chart's and muster's), with the selectors an installation runs; moves muster onto the pod network (--muster-pod-network), which the policies' pod-label selectors need; --network-policy=false turns them off")
 	cmd.Flags().BoolVar(&alertmanager, "alertmanager", false, "run an Alertmanager in the observability stack with an always-firing AgentlabWatchdog alert, and point mcp-prometheus at it (ALERTMANAGER_URL) so its alert tools have alerts to read; needs platform.observability")
 	cmd.Flags().StringVar(&mcpPrometheusChartVersion, "mcp-prometheus-chart-version", "", "install this mcp-prometheus chart release (an exact version, a release candidate included) instead of the one agentlab pins, for proving a chart change the devImages swap cannot carry; \"\" returns to the pin; needs platform.observability")
 	cmd.Flags().BoolVar(&github, "github", false, "register GitHub's hosted MCP server with muster as MCPServer github, signed in to as the person through an OAuth App or GitHub App client whose client-id and client-secret are the Secret platform.github.secret names (default agent-platform/github-oauth-client), placed with `beekeeper secret copy --to-secret`, never read by agentlab; --github=false removes the server")
@@ -1652,6 +1693,11 @@ func platformCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
 			if err != nil {
+				return err
+			}
+			// A lab another agentlab drives is left as it is: not even its
+			// Dex is applied (kagentline.go).
+			if err := lab.RefuseUndrivenPin(cfg); err != nil {
 				return err
 			}
 			if err := lab.RequireLabCerts(cfg); err != nil {
@@ -1922,6 +1968,7 @@ func codingTestCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.Part, "part", "", "run one part instead of the proof: "+lab.CodingPartDevctl+" (platform.devctl: a claude agent opens a pull request on --repository as the person, waits for its CI with one x_devctl_pr_wait call, merges it with x_devctl_pr_merge and waits for its release with x_devctl_release_wait, beside it one pr_wait with a progressToken; with --harness codex or omp the proof opens the pull request from this host as the person and a codex (the mockllm unless --model-config) or omp agent waits for its CI with one x_devctl_pr_wait call through Substrate's egress gateway, devctl's server logging the call as the person and no muster or GitHub token in the sandbox; real GitHub and CircleCI, the person's grant of the workspaces' github instance App); "+lab.CodingPartToolchains+" (on --harness, as [email]: start_session with --toolchains mounts exactly those, pinned by digest, and one turn finds each one's tool under /opt/kagent/tools/<name> on its PATH answering its version, with go a fixture module built offline; needs agent-manager's toolchains.repository and a kagent controller that mounts session tool images and admits it)")
 	cmd.Flags().StringSliceVar(&opts.Toolchains, "toolchains", nil, "the toolchains part's toolchains, name[@version] each (default "+strings.Join(lab.DefaultCodingToolchains, ",")+"): each mounted under /opt/kagent/tools/<name>, its tool on the PATH answering its version (github: gh, gitlab: glab, lint1: golangci-lint, python: python3); with go a fixture module builds")
 	cmd.Flags().StringVar(&opts.OtherVersion, "other-version", "", "the toolchains part's name@version of one of --toolchains at another version (go@0.1.0): a second Session of the agent starts with it and mounts that digest, the first Session's actor keeping its own, and the first Session is suspended and resumed with its digests, then suspended again, the agent given a new revision (update_agent) and resumed on a new prepared revision with the same digests; each Session's actor template is read from Substrate")
+	cmd.Flags().StringVar(&opts.Step, "step", "", "run one stage of the proof and the stages it builds on (the agent, its Session, the turn it judges), the others listed as skipped; dashes for spaces (suspend-and-resume): "+lab.CodingStepHelp())
 	cmd.Flags().StringVar(&opts.Repository, "repository", "", "the devctl part's proof repository, owner/name (default "+lab.DefaultDevctlProofRepository+"): generated CI with a job that takes ten minutes on a pull request's head, Auto Release, the github instance's App installed")
 	return cmd
 }
@@ -2480,6 +2527,11 @@ func portalDevCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// It records backstage.localDevPort and applies this release's
+			// Dex: never into a lab another agentlab drives.
+			if err := lab.RefuseUndrivenPin(cfg); err != nil {
+				return err
+			}
 			return lab.BackstageDev(cfg, checkout, port)
 		},
 	}
@@ -2502,6 +2554,11 @@ func portalBuildCmd() *cobra.Command {
 			}
 			cfg, err := loadConfig()
 			if err != nil {
+				return err
+			}
+			// Before the build and its record in agentlab.yaml: a lab
+			// another agentlab drives is left to it.
+			if err := lab.RefuseUndrivenPin(cfg); err != nil {
 				return err
 			}
 			if err := lab.RequireLabCerts(cfg); err != nil {

@@ -32,6 +32,7 @@ const (
 	stageDownstreamIdentity   = "downstream identity"
 	stageControllerIdentity   = "controller identity"
 	stageAgentManagerIdentity = "agent-manager identity"
+	stageNetworkPolicy        = "network policy denial"
 	stageAteletPolicy         = "atelet image-cache policy"
 	stageSubstrateLine        = "Substrate line"
 	stageWorkerPools          = "WorkerPool workers"
@@ -393,6 +394,22 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 			return "", err
 		}
 		verdict += "\nPASS: agent-manager writes as the caller — a viewer's create_agent with a forged x-user-id is the apiserver's Forbidden for the viewer"
+		// The platform's own policies (platform.networkPolicy,
+		// platformtest_netpol.go): a backend that admits muster by its pod
+		// labels refuses a pod outside muster's namespace, and muster's
+		// call still answers.
+		p.begin(stageNetworkPolicy, "The platform's network policies: a pod outside muster's namespace refused by agent-manager, muster's call answered")
+		if !cfg.Platform.NetworkPolicy {
+			p.skip("platform.networkPolicy is off: the lab runs no policy of the platform's")
+		} else {
+			ctx, cancel := context.WithTimeout(context.Background(), probePodTimeout+kubeReadTimeout)
+			denial, err := proveNetworkPolicyDenial(ctx, cfg, token)
+			cancel()
+			if err != nil {
+				return "", err
+			}
+			verdict += "\nPASS: the platform's network policies — " + denial
+		}
 		// Agent Substrate, the component the 4.x line added: the chart in
 		// place renders its HelmRelease or has none to prove.
 		substrateCtx, cancelSubstrate := context.WithTimeout(context.Background(), kubeReadTimeout)
@@ -453,7 +470,7 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 			}
 		}
 	} else {
-		p.leaveOut("platform.agents is off in "+config.File, stageControllerIdentity, stageAgentManagerIdentity, stageAteletPolicy, stageSubstrateLine, stageWorkerPools)
+		p.leaveOut("platform.agents is off in "+config.File, stageControllerIdentity, stageAgentManagerIdentity, stageNetworkPolicy, stageAteletPolicy, stageSubstrateLine, stageWorkerPools)
 	}
 
 	// The workspace-manager (workspacemanagertest.go): registered with muster
