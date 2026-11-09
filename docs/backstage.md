@@ -99,7 +99,8 @@ skips with the reason, and a skipped spec is unproven.
 | `AGENTLAB_KUBECONFIG=<lab>/state/kubeconfig` | any lab: the specs that read or stage objects with kubectl |
 | `AGENTLAB_BACKSTAGE_URL`, `AGENTLAB_CLUSTER` | a lab other than the default edge on `:443` |
 | `AGENTLAB_INSTALLATIONS_PAGE=1` | `backstage.installationsPage: true`: the installations specs (`installations-versions`, `installations-session-expiry`, the Installations link in `agents-list-states`) |
-| `AGENTLAB_HIVE=1` | `backstage.hive: true`: `hive.spec.ts`; its Roadmap tab reads the real roadmap-backend routes while `agentlab roadmap-test --keep` left the fake pro in place ([The roadmap board fixture](#the-roadmap-board-fixture)) |
+| `AGENTLAB_HIVE=1` | `backstage.hive: true`: `hive.spec.ts`, from mocked plans- and roadmap-backend routes |
+| `AGENTLAB_ROADMAP_FIXTURE=1` | with `AGENTLAB_HIVE=1`, the fake pro `agentlab roadmap-test --keep` left in place: `hive.spec.ts` leaves the roadmap routes unmocked, and its Roadmap test reads the fixture board through the portal's roadmap-backend and muster ([The roadmap board fixture](#the-roadmap-board-fixture)) |
 | `AGENTLAB_TENANTS=1` | the tenants mode of an agent-platform chart before 4.175.0 (which removed it; the lab no longer turns it on, giantswarm/backstage#3363 moves the portal to the organizations): `tenants.spec.ts`, agents per tenant in an organization namespace it labels and binds (with `AGENTLAB_KUBECONFIG`; run it first or alone, its empty state needs a platform tenant with no agent) |
 
 The agent-platform chart lists `page:gs/installations` in
@@ -154,13 +155,18 @@ a per-person server) and proves the chain:
 
 The run removes the fake, its Service and the MCPServer; `--keep` leaves them
 in place after a passing run, so the Hive board in the portal renders the
-fixture and the portal's Hive spec reads the real routes. While no fake runs,
-Hive's Roadmap tab shows muster's refusal.
+fixture. The portal's Hive spec reads the real routes with
+`AGENTLAB_ROADMAP_FIXTURE=1` (giantswarm/backstage `e2e/agentlab/hive.spec.ts`,
+https://github.com/giantswarm/backstage/pull/3434): its Roadmap test then
+finds the fixture's items of both teams on the board, which the spec's own
+mocked board does not have; without the switch the spec mocks the roadmap
+routes. While no fake runs, Hive's Roadmap tab shows muster's refusal.
 
 ```bash
 agentlab configure --hive && agentlab platform
 agentlab roadmap-test --keep
-AGENTLAB_PORTAL_MODE=shell AGENTLAB_HIVE=1 yarn test:e2e:agentlab -g Hive
+AGENTLAB_PORTAL_MODE=shell AGENTLAB_HIVE=1 AGENTLAB_ROADMAP_FIXTURE=1 \
+  yarn test:e2e:agentlab hive.spec.ts -g Roadmap
 agentlab roadmap-test        # removes the fixture again
 ```
 
