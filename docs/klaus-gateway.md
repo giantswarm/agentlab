@@ -217,8 +217,7 @@ Agent `klaus-gateway-signin` carries muster on the OAuth fixture's toolset
 so the only pause is the sign-in: its turn asks for the fixture's
 `filter_tools`, and the runtime parks the task at `input-required` on
 muster's `url_elicitation_request`. The gateway runs on the host as in the
-proof above, with `--obo-connectors-enabled`, on the lab's own port (the part
-refuses `--gateway-port`). The prompt must show the whole link, in code, and
+proof above, with `--obo-connectors-enabled`. The prompt must show the whole link, in code, and
 its Sign in button must open muster's link unchanged, with no `redirect=`
 (MCP URL mode elicitation). The portal is signed in as the same person; its
 `POST /kagent/sessions/:id/answer` is the portal's half of each decision.
@@ -247,10 +246,15 @@ records, muster's dispatch log and the controller:
 - **Accepted**: the click on Sign in is the person's consent: the gateway
   resumes the task with accept (a resume, not a message of the person's)
   before the sign-in, and the prompt reads "Opened the sign-in link". The
-  sign-in from the link through Dex and muster then ends on muster's own
-  page; the runtime's retry waits for it, the call runs once and the answer
-  carries the fixture's tools. A runtime whose retry does not wait asks for
-  the sign-in again and fails the stage.
+  stage then waits for the task to leave `input-required` (the retry is in
+  flight, parked in muster's sign-in wait of up to five minutes) and holds
+  the sign-in back for `--hold` (default 10s), failing as soon as the task
+  ends or asks again. Only then does the sign-in from the link go through
+  Dex and muster, ending on muster's own page; the call runs once in the
+  same task and the answer carries the fixture's tools. A `--hold` longer
+  than the Harness's MCP call timeout (on `claude` the RemoteMCPServer's
+  timeout, 30s by default) proves the retry outlives it; the hold stays at
+  most 4m, inside muster's wait.
 
 The stages run on `--harness` (default the platform Harness; `omp` and
 `claude` as the lab renders them) on the Anthropic default model; codex needs

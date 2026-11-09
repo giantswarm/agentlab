@@ -42,7 +42,6 @@ const (
 
 	slackActionConnect       = "connector_connect"
 	slackActionSignInDecline = "sign_in_decline"
-	gatewayLandingPath       = "/connectors/complete"
 	gatewayContinuing        = "Opened the sign-in link"
 	gatewaySignedInLine      = " signed in."
 	gatewayNotSignedInLine   = " did not sign in."
@@ -54,13 +53,36 @@ const (
 	portalAnsweredByAnother = "already answered"
 )
 
+// The Accepted stage's hold: how long the runtime's retry stays parked in
+// muster's sign-in wait before the sign-in completes. A hold longer than the
+// MCP call timeout the Harness applies to the toolset (on claude the
+// RemoteMCPServer's timeout, 30s by default) proves the retry survives it;
+// the hold stays a minute inside muster's wait so the sign-in still lands.
+const (
+	signInDefaultHold = 10 * time.Second
+	musterSignInWait  = 5 * time.Minute
+	signInMaxHold     = musterSignInWait - time.Minute
+)
+
 // gatewayCallbackBase is the host-mode gateway's OBO callback base and its
-// public base: the sign-in links it posts return to its connector landing.
+// public base.
 func gatewayCallbackBase(port int) string { return fmt.Sprintf("http://127.0.0.1:%d", port) }
 
-// klausGatewayLanding is that gateway's connector landing, on muster's
-// post-login redirect allowlist in the lab's values.
-func klausGatewayLanding(port int) string { return gatewayCallbackBase(port) + gatewayLandingPath }
+// checkSignInHold refuses a hold outside the signin part, a negative one
+// and one that outlasts muster's sign-in wait.
+func checkSignInHold(opts KlausGatewayTestOptions) error {
+	switch {
+	case opts.Hold == 0:
+		return nil
+	case opts.Part != KlausGatewayPartSignIn:
+		return fmt.Errorf("--hold applies to --part %s alone", KlausGatewayPartSignIn)
+	case opts.Hold < 0:
+		return fmt.Errorf("--hold %s: want a positive duration", opts.Hold)
+	case opts.Hold > signInMaxHold:
+		return fmt.Errorf("--hold %s outlasts muster's %s sign-in wait less the minute the sign-in takes; at most %s", opts.Hold, musterSignInWait, signInMaxHold)
+	}
+	return nil
+}
 
 // signInSurfaces is one run of the part.
 type signInSurfaces struct {
@@ -72,17 +94,13 @@ type signInSurfaces struct {
 	slack    *slackProof
 	portal   *portalSession
 	harness  string
-	port     int
+	hold     time.Duration
 	verdicts []string
 }
 
-// klausGatewaySignInTest is the part: the fixture, the gateway on the host
-// with its connector landing, a portal session as the same person, then the
-// stages.
+// klausGatewaySignInTest is the part: the fixture, the gateway on the host,
+// a portal session as the same person, then the stages.
 func klausGatewaySignInTest(cfg *config.Config, user *config.User, opts KlausGatewayTestOptions) error {
-	if opts.Port != gatewayTestPort(cfg) {
-		return fmt.Errorf("--part %s runs the gateway on the lab's own port %d, the one muster's post-login redirect allowlist names; drop --gateway-port", KlausGatewayPartSignIn, gatewayTestPort(cfg))
-	}
 	if !cfg.Backstage.Enabled {
 		return fmt.Errorf("--part %s answers through the portal too; enable backstage in %s and run `agentlab platform` first", KlausGatewayPartSignIn, config.File)
 	}
@@ -106,7 +124,7 @@ func klausGatewaySignInTest(cfg *config.Config, user *config.User, opts KlausGat
 		return err
 	}
 	defer api.close()
-	s := &signInSurfaces{cfg: cfg, user: user, token: token, subject: identity.subject, api: api, harness: opts.Harness, port: opts.Port}
+	s := &signInSurfaces{cfg: cfg, user: user, token: token, subject: identity.subject, api: api, harness: opts.Harness, hold: opts.Hold}
 	s.cleanup()
 	defer s.cleanup()
 
@@ -508,7 +526,7 @@ func (s *signInSurfaces) slackFirst(t *slackThread) error {
 }
 
 func (s *signInSurfaces) accepted(t *slackThread) error {
-	step("Accepted: the click on Sign in is the consent and resumes the same task with accept before the person signed in; the sign-in then completes through Dex and muster on muster's own page, the runtime's retry waits for it, and the call runs once")
+	step("Accepted: the click on Sign in is the consent and resumes the same task with accept before the person signed in; the runtime's retry parks in muster's sign-in wait for %s, the sign-in then completes through Dex and muster on muster's own page, and the call runs once in the same task", s.hold)
 	paused, err := s.pause(t, signInTestPrompt)
 	if err != nil {
 		return err
@@ -520,6 +538,13 @@ func (s *signInSurfaces) accepted(t *slackThread) error {
 	if !waitFor(int(klausGatewayReplyWait/slackPoll), slackPoll, func() bool { return responded(s.slack.fake, gatewayContinuing) }) {
 		return fmt.Errorf("the clicked prompt was not rewritten to %q within %s", gatewayContinuing, klausGatewayReplyWait)
 	}
+	parked, err := s.awaitParked(paused)
+	if err != nil {
+		return err
+	}
+	if err := s.holdParked(paused, s.hold); err != nil {
+		return err
+	}
 	if err := completeSignIn(paused.link, s.user); err != nil {
 		return err
 	}
@@ -529,6 +554,9 @@ func (s *signInSurfaces) accepted(t *slackThread) error {
 	}
 	if turn.record.Outcome != outcomeCompleted {
 		return fmt.Errorf("after the sign-in the turn ended %s", turnFailure(turn))
+	}
+	if turn.record.TaskID != string(paused.task.ID) {
+		return fmt.Errorf("after the sign-in the call ran in task %s, not the paused task %s", turn.record.TaskID, paused.task.ID)
 	}
 	if !callAnswered(turn.answer) {
 		return fmt.Errorf("after the sign-in the answer does not carry the fixture's tools (%s): %s", signInTestToolProof, excerpt(turn.answer, 300))
@@ -541,7 +569,7 @@ func (s *signInSurfaces) accepted(t *slackThread) error {
 	if _, ok := findMessage(turn.msgs, "<@"+t.user+">"+gatewaySignedInLine); !ok {
 		return fmt.Errorf("the thread does not say %q: %s", "<@"+t.user+">"+gatewaySignedInLine, threadLine(turn.msgs))
 	}
-	s.pass("the click on Sign in resumed task %s with accept before the sign-in; the sign-in from the link, unchanged, ended on muster's page; the call ran once and the answer carried the fixture's tools", paused.task.ID)
+	s.pass("the click on Sign in resumed task %s with accept before the sign-in; its retry stayed %s for %s in muster's sign-in wait; the sign-in from the link, unchanged, ended on muster's page; the call ran once in the same task and the answer carried the fixture's tools", paused.task.ID, parked, s.hold)
 	s.signOut()
 	restartOAuthFixture()
 	return nil
@@ -577,6 +605,65 @@ func (s *signInSurfaces) awaitLeft(paused *signInPause) error {
 		state = last.Status.State
 	}
 	return fmt.Errorf("task %s still waits on status message %s %s after the portal's answer (%s)", paused.task.ID, paused.asked(), klausGatewayTurnTimeout, state)
+}
+
+// awaitParked waits for the accepted task to leave input-required on the
+// request it asked in: the runtime's retry is in flight, parked in muster's
+// sign-in wait. It returns the state the task waits in.
+func (s *signInSurfaces) awaitParked(paused *signInPause) (a2a.TaskState, error) {
+	var state a2a.TaskState
+	var judged error
+	if waitFor(int(klausGatewayTurnTimeout/slackPoll), slackPoll, func() bool {
+		task, err := s.task(paused.session, string(paused.task.ID))
+		if err != nil {
+			return false
+		}
+		state = task.Status.State
+		parked, err := retryParked(task, paused.asked())
+		judged = err
+		return parked || err != nil
+	}) && judged == nil {
+		return state, nil
+	}
+	if judged != nil {
+		return "", fmt.Errorf("after the click on Sign in, before the sign-in: %w", judged)
+	}
+	return "", fmt.Errorf("task %s still waits on status message %s %s after the click on Sign in (%s): the gateway did not resume it", paused.task.ID, paused.asked(), klausGatewayTurnTimeout, state)
+}
+
+// holdParked keeps the sign-in back for hold and fails as soon as the task
+// stops waiting: a runtime that does not wait in muster's sign-in wait ends
+// the turn or asks again before the sign-in.
+func (s *signInSurfaces) holdParked(paused *signInPause, hold time.Duration) error {
+	note("task %s parked; holding the sign-in back for %s", paused.task.ID, hold)
+	for end := time.Now().Add(hold); time.Now().Before(end); time.Sleep(slackPoll) {
+		task, err := s.task(paused.session, string(paused.task.ID))
+		if err != nil {
+			continue
+		}
+		if _, err := retryParked(task, paused.asked()); err != nil {
+			return fmt.Errorf("while the sign-in was held back: %w", err)
+		}
+	}
+	return nil
+}
+
+// retryParked judges a task the person accepted the sign-in of, before the
+// sign-in completes: false while it still waits on the request it asked in
+// (askedIn), true while it works on the retry, an error once it ended or
+// asked again.
+func retryParked(task *a2a.Task, askedIn string) (bool, error) {
+	switch state := task.Status.State; state {
+	case a2a.TaskStateInputRequired, a2a.TaskStateAuthRequired:
+		if task.Status.Message != nil && task.Status.Message.ID == askedIn {
+			return false, nil
+		}
+		return false, fmt.Errorf("task %s asks again (%s) instead of its retry waiting in muster's sign-in wait", task.ID, state)
+	case a2a.TaskStateSubmitted, a2a.TaskStateWorking:
+		return true, nil
+	default:
+		return false, fmt.Errorf("task %s ended %s before the sign-in: its retry did not wait in muster's sign-in wait", task.ID, state)
+	}
 }
 
 func (s *signInSurfaces) fixtureCallsSince(since time.Time) ([]string, error) {
