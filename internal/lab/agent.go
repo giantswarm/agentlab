@@ -914,7 +914,8 @@ func terminalAgentFailure(s *agentStatus) (string, bool) {
 }
 
 // readyAgent is the one helper behind every proof's agent: the spec written
-// by the writer, then waited for until it is Ready on the platform Harness.
+// by the writer, then waited for until it is Ready on its Harness
+// (spec.Harness, the platform Harness where empty).
 // The caller removes the agent (removeAgent) on every path. The error of a
 // failed or timed-out boot carries the reason and where to look; the
 // readiness carries the template and the Agent as last read.
@@ -923,7 +924,7 @@ func readyAgent(w agentWriter, spec agentSpec, timeout time.Duration) (agentRead
 	if err != nil {
 		return agentReadiness{}, nil, fmt.Errorf("creating agent %s through %s: %w", spec.Name, w, err)
 	}
-	r, err := waitAgentReady(spec.Name, timeout)
+	r, err := waitAgentReadyOn(spec.Name, firstNonEmpty(spec.Harness, kagentHarness), timeout)
 	if err != nil {
 		return r, written, err
 	}
