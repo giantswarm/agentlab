@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -174,5 +175,26 @@ func TestWithoutUnservedKinds(t *testing.T) {
 	first, _, _ := unstructured.NestedStringSlice(rules[0].(map[string]any), "match", "resources", "kinds")
 	if len(rules) != 4 || !slices.Equal(first, []string{kindHelmRelease}) {
 		t.Errorf("HelmRelease only: %d rules, the first matching %v; want 4, [HelmRelease]", len(rules), first)
+	}
+}
+
+// Partial discovery must never become a list that strips enforcement rules.
+func TestDiscoverKindNames(t *testing.T) {
+	resources := []*metav1.APIResourceList{{
+		GroupVersion: "v1",
+		APIResources: []metav1.APIResource{{Name: "pods", Kind: kindPod}},
+	}}
+	discoveryErr := errors.New("kustomize.toolkit.fluxcd.io/v1 discovery unavailable")
+	for _, readErr := range []error{nil, discoveryErr} {
+		kinds, err := discoverKindNames(func() ([]*metav1.APIResourceList, error) {
+			return resources, readErr
+		})
+		if readErr != nil {
+			if !errors.Is(err, discoveryErr) || kinds != nil {
+				t.Fatalf("partial discovery = %v, %v; want no kinds and the discovery error", kinds, err)
+			}
+		} else if err != nil || !kinds[kindPod] || len(kinds) != 1 {
+			t.Fatalf("complete discovery = %v, %v; want Pod only", kinds, err)
+		}
 	}
 }

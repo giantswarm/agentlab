@@ -490,7 +490,7 @@ Load-bearing invariants (details in docs/):
   engine on.
 - **The fleet's admission is in the lab**: `agentlab up` installs Kyverno
   (the fleet's kyverno-crds and kyverno app charts from gsoci, Kyverno
-  3.7.2, admission controller only)
+  3.7.2, admission and reports controllers)
   with the fleet's `flux-multi-tenancy` ClusterPolicy in Enforce, verbatim
   from management-cluster-bases (`internal/lab/templates/flux-multi-tenancy.yaml`),
   the platform namespace exempt in code next to the fleet's three, and the
@@ -505,6 +505,13 @@ Load-bearing invariants (details in docs/):
   renders them with `kyvernoPolicies.enabled: true` and the tenants on and
   dry-runs each against the lab's Kyverno, PolicyExceptions on as on the
   fleet (`polextest.go`).
+  At apply time, discovery removes unserved Flux kinds and their otherwise
+  empty rules from the lab's policy copy (`withoutUnservedKinds`); failed
+  discovery stops the install rather than dropping enforcement rules.
+  The fleet's Pod policies run in Audit because the platform's exceptions
+  are not installed. `platform-test` reads their verdicts from each Running
+  platform Pod's PolicyReport (`reports.go`). Both Kyverno controllers must
+  finish rolling out and the policy webhook answer before policies apply.
 - The lab's credentials are throwaway by design; plaintext passwords in
   `agentlab.yaml` are fine.
 

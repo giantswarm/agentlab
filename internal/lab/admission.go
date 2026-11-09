@@ -275,8 +275,15 @@ func servedKindNames() (map[string]bool, error) {
 	if err != nil {
 		return nil, err
 	}
-	lists, err := k.clientset.Discovery().ServerPreferredResources()
-	if err != nil && len(lists) == 0 {
+	return discoverKindNames(k.clientset.Discovery().ServerPreferredResources)
+}
+
+// discoverKindNames refuses partial discovery: a failed API group is not
+// evidence that its kinds are absent. Otherwise withoutUnservedKinds could
+// remove enforcement rules for a kind the lab actually serves.
+func discoverKindNames(discover func() ([]*metav1.APIResourceList, error)) (map[string]bool, error) {
+	lists, err := discover()
+	if err != nil {
 		return nil, fmt.Errorf("discovering the served kinds: %w", err)
 	}
 	served := map[string]bool{}
