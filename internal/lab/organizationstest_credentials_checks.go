@@ -51,6 +51,7 @@ type credentialPrerequisites struct {
 	// musterModern says muster answered an MCP 2026-07-28 client on that
 	// revision.
 	musterModern bool
+	outputSchema bool
 	// kustomizeController says a Ready kustomize-controller runs.
 	kustomizeController bool
 }
