@@ -2464,7 +2464,11 @@ func backstageTestCmd() *cobra.Command {
 the muster hop with each user's own forwarded token; with platform.agents on,
 the Dev Portal's Agent Platform pages the way a person drives them: the
 wizard's create path, the agents list per user, the chat, HITL and Stop, the
-edit path and the delete. Everything it creates is removed on every path.
+edit path and the delete, and with the claude Harness rendered one turn of a
+Claude Code agent whose reported cost (costUsd) the session-usage route, the
+Usage tab's Reported cost, carries. Everything it creates is removed on every
+path; --keep-cost-fixture leaves the reported-cost agent and its session for
+the Usage tab in a browser, and the next run removes them first.
 
 --agent <namespace>/<name> runs the Agent Platform half against an agent that
 already exists instead: the create path, the HITL fixture, the edits and every
@@ -2480,6 +2484,7 @@ step fails or is not wanted, or to repeat only the chat steps.`,
 		},
 	}
 	cmd.Flags().StringVar(&opts.Agent, "agent", "", "an existing agent as <namespace>/<name> (namespace kagent): skip the create and teardown steps and prove the roster and the chat on it, leaving it in place")
+	cmd.Flags().BoolVar(&opts.KeepCostFixture, "keep-cost-fixture", false, "leave the reported-cost fixture (agent "+lab.BackstageTestCostAgent+" on Harness claude and its session) in place for the Usage tab in a browser; the next run removes it")
 	return cmd
 }
 

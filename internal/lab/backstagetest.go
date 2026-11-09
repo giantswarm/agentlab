@@ -77,7 +77,10 @@ func BackstageTest(cfg *config.Config, emails []string, opts BackstageTestOption
 		fmt.Println("agent platform pages skipped (platform.agents off)")
 		return nil
 	}
-	return proveAgentPlatform(cfg, sessions, existing)
+	if existing != nil && opts.KeepCostFixture {
+		return fmt.Errorf("--keep-cost-fixture: --agent runs no reported-cost fixture")
+	}
+	return proveAgentPlatform(cfg, sessions, existing, opts.KeepCostFixture)
 }
 
 // BackstageTestOptions are the flags of `agentlab backstage-test`.
@@ -85,6 +88,10 @@ type BackstageTestOptions struct {
 	// Agent is an existing agent as <namespace>/<name>: the run creates and
 	// deletes no agent of its own and proves the roster and the chat on it.
 	Agent string
+	// KeepCostFixture leaves the reported-cost fixture — the agent on the
+	// claude Harness and its session — in place for the Usage tab in a
+	// browser; the next run removes it first.
+	KeepCostFixture bool
 }
 
 // parseExistingAgent reads --agent: "" is the default run (nil), otherwise

@@ -370,6 +370,21 @@ the create flow's tenants, the access reviews behind Edit and Delete) read
 removed; the organizations' portal surface is written against #3363's routes
 when it lands ([The organizations proof](agents.md#the-organizations-proof)).
 
+**The reported cost** (last, as the first `platform-admins` user), where the
+lab renders the claude Harness (`platform.coding.enabled` or
+`platform.workspaces.enabled`; otherwise `SKIP`): the fixture
+`agentlab-backstage-test-cost`, a Claude Code agent on Harness `claude` with
+the create path's ModelConfig, answers one turn started through
+`start_session`. Its task carries Claude Code's reported cost under
+`kagent.dev/a2a/usage` as a non-zero `costUsd`, and the portal's
+`/session-usage` route (the Usage tab's "Reported cost", per agent and in
+total) reports at least that cost for the agent. The route caches a person's
+summary for five minutes, so the read is repeated up to six. The Harness
+declares no turn limits: the kagent line withdrew `spec.claude.limits`, so
+the agent page's Limits group has nothing to show. `--keep-cost-fixture`
+leaves the agent and its session in place for the Usage tab in a browser;
+the next run removes both before it starts.
+
 **Against an existing agent**: `agentlab backstage-test --agent
 kagent/<name>` writes and deletes no agent. The sign-ins, the MCP servers page
 and the Models page run as above; the create path, the HITL fixture, the edit

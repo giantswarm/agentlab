@@ -118,6 +118,8 @@ type (
 		Status    a2aTaskStatus `json:"status"`
 		History   []a2aMessage  `json:"history"`
 		Artifacts []a2aArtifact `json:"artifacts"`
+		// Metadata is the task's own; a runtime's turn usage can ride here.
+		Metadata map[string]any `json:"metadata"`
 	}
 	a2aStatusUpdate struct {
 		TaskID    string        `json:"taskId"`

@@ -22,8 +22,10 @@ import (
 // muster as the person (backstagetest_create.go), the agents list through
 // the Kubernetes proxy (backstagetest_roster.go), the Sessions pages through
 // the agent-platform backend (backstagetest_chat.go), the detail page's
-// edit, skills update and delete (backstagetest_edit.go). Everything the
-// proof creates — two agents, their sessions — is removed on every path.
+// edit, skills update and delete (backstagetest_edit.go), and a claude
+// turn's reported cost (backstagetest_cost.go). Everything the proof creates
+// — three agents, their sessions — is removed on every path, the cost fixture
+// at the next run's start under --keep-cost-fixture.
 
 // backstageTestHITLAgent is the second agent the proof brings along: the
 // same shape written by the lab directly, with its muster binding requiring
@@ -176,10 +178,11 @@ func chartVersionBelow(version, floor string) bool {
 // (backstagetest_models.go), the create path as the first platform-admin
 // (the wizard needs one), the roster as every user, the chat as the admin
 // with every other user as the boundary, HITL and Stop on the fixture, the
-// edit path, and both agents deleted through agent-manager. Every verdict line is printed
+// edit path, both agents deleted through agent-manager, and the reported cost
+// of a turn on the claude Harness (backstagetest_cost.go). Every verdict line is printed
 // at the end. With an existing agent the run writes and deletes no agent:
 // proveExistingAgent replaces everything after the Models page.
-func proveAgentPlatform(cfg *config.Config, sessions []*portalSession, existing *portalAgentRef) error {
+func proveAgentPlatform(cfg *config.Config, sessions []*portalSession, existing *portalAgentRef, keepCostFixture bool) error {
 	primary := adminSession(sessions)
 	if primary == nil {
 		fmt.Printf("agent platform pages skipped: the portal's create path runs as a %s user and none is among %s\n", platformAdminsGroup, sessionEmails(sessions))
@@ -283,6 +286,13 @@ func proveAgentPlatform(cfg *config.Config, sessions []*portalSession, existing 
 
 	committed, err := proveCommitPath(cfg, primary, spec, info)
 	verdicts = append(verdicts, committed...)
+	if err != nil {
+		return err
+	}
+
+	// Last: session-usage caches the person's summary, which the chat read.
+	costed, err := proveReportedCost(cfg, primary, spec.ModelConfig, keepCostFixture)
+	verdicts = append(verdicts, costed...)
 	if err != nil {
 		return err
 	}
