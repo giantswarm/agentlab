@@ -232,6 +232,9 @@ type CodingTestOptions struct {
 	// toolchains at another version: a second Session starts with it and
 	// the first is suspended and resumed. Empty is neither.
 	OtherVersion string
+	// Step runs one stage of the proof and the stages it builds on
+	// (codingsteps.go); empty is the whole proof.
+	Step string
 }
 
 // MusterMetaTools are muster's meta-tools, the selection a platform coding
@@ -248,6 +251,9 @@ func CodingTest(cfg *config.Config, opts CodingTestOptions) error {
 	}
 	switch opts.Part {
 	case "", CodingPartToolchains:
+		if opts.Part != "" && opts.Step != "" {
+			return fmt.Errorf("--step names a stage of the coding agents proof: --part %s takes none", opts.Part)
+		}
 		if opts.Repository != "" {
 			return fmt.Errorf("--repository is the devctl part's (--part %s)", CodingPartDevctl)
 		}
@@ -259,8 +265,8 @@ func CodingTest(cfg *config.Config, opts CodingTestOptions) error {
 		switch {
 		case !ok:
 			return fmt.Errorf("--harness %q: --part %s proves %s", opts.Harness, CodingPartDevctl, strings.Join(slices.Sorted(maps.Keys(codingRuntimes)), ", "))
-		case opts.Email != "" || len(opts.MusterTools) > 0 || len(opts.Toolchains) > 0 || opts.OtherVersion != "":
-			return fmt.Errorf("--part %s runs an agent of its own as the admin: it takes no [email], --muster-tools, --toolchains or --other-version", CodingPartDevctl)
+		case opts.Email != "" || len(opts.MusterTools) > 0 || len(opts.Toolchains) > 0 || opts.OtherVersion != "" || opts.Step != "":
+			return fmt.Errorf("--part %s runs an agent of its own as the admin: it takes no [email], --muster-tools, --toolchains, --other-version or --step", CodingPartDevctl)
 		case rt.claude && opts.ModelConfig != "":
 			return fmt.Errorf("--part %s on claude runs on agent-manager's default model: --model-config is codex's and omp's", CodingPartDevctl)
 		}
@@ -285,7 +291,11 @@ func CodingTest(cfg *config.Config, opts CodingTestOptions) error {
 	if user == nil {
 		return fmt.Errorf("no lab user %q in %s", opts.Email, config.File)
 	}
-	p := &codingProof{cfg: cfg, rt: rt, modelConfig: opts.ModelConfig, user: user, timeout: opts.ReadyTimeout, turnTimeout: opts.TurnTimeout, musterTools: opts.MusterTools, stages: newProofStages(), toolchains: opts.Toolchains, otherVersion: opts.OtherVersion}
+	plan, err := codingStepPlan(opts.Step, rt)
+	if err != nil {
+		return err
+	}
+	p := &codingProof{cfg: cfg, rt: rt, modelConfig: opts.ModelConfig, user: user, timeout: opts.ReadyTimeout, turnTimeout: opts.TurnTimeout, musterTools: opts.MusterTools, stages: newProofStages(), toolchains: opts.Toolchains, otherVersion: opts.OtherVersion, step: opts.Step, plan: plan}
 	if len(p.toolchains) == 0 {
 		p.toolchains = DefaultCodingToolchains
 	}
@@ -304,7 +314,7 @@ func CodingTest(cfg *config.Config, opts CodingTestOptions) error {
 	if opts.Part == CodingPartToolchains {
 		run = p.runToolchains
 	}
-	err := run()
+	err = run()
 	if err != nil && p.mock != nil {
 		err = fmt.Errorf("%w\nthe mockllm's requests, the tools and the last input item of each:\n%s", err, p.mock.logTail())
 	}
@@ -338,9 +348,15 @@ type codingProof struct {
 	turnTimeout time.Duration
 	turnBudget  string
 	stages      *proofStages
-	muster      *musterSession
-	api         *kagentAPI
-	sessions    *sessionSet
+	// step is the --step the run was given; plan the stages it runs, nil
+	// for the whole proof (codingsteps.go).
+	step string
+	plan map[string]bool
+	// session is the proof's Session of its agent, once a stage started it.
+	session  *apiv1alpha1.Session
+	muster   *musterSession
+	api      *kagentAPI
+	sessions *sessionSet
 	// line names the releases the proof ran on, for every verdict.
 	line string
 	// anyToolset is whether the line's agent-manager writes a claude
@@ -374,10 +390,13 @@ type codingProof struct {
 func (p *codingProof) run() error {
 	ctx := context.Background()
 	harness := p.rt.name
+	if p.plan != nil {
+		note("--step %s: runs %s; the other stages are left out", p.step, p.planWords())
+	}
 	if p.rt.claude {
-		p.stages.begin("harnesses", "The coding Harness %s Ready from the platform values, no limits on it", harness)
+		p.stages.begin(codingStageHarnesses, "The coding Harness %s Ready from the platform values, no limits on it", harness)
 	} else {
-		p.stages.begin("harnesses", "The coding Harness %s Ready from the platform values", harness)
+		p.stages.begin(codingStageHarnesses, "The coding Harness %s Ready from the platform values", harness)
 	}
 	if err := waitHarnessReady(ctx, harness, p.timeout); err != nil {
 		return err
@@ -416,163 +435,217 @@ func (p *codingProof) run() error {
 		}
 	}
 
-	verdict := "accepted"
-	if !p.anyToolset {
-		verdict = "refused"
-	}
-	p.stages.begin("write-time checks", "%svalidate_agent on Harness %s as %s: a toolset with %s %s, an origin outside the Harness's list refused", agentManagerToolPrefix, harness, p.user.Email, codingTestGrantedTool, verdict)
 	spec := agentSpec{
 		Name: codingTestAgent, ModelConfig: modelConfig, Harness: harness, SystemMessage: codingTestSystemPrompt,
 		Description: "Throwaway coding agent of `agentlab coding-test`; deleted by the same run.",
 	}
-	if err := p.proveGuards(spec); err != nil {
-		return err
-	}
-
-	p.stages.begin("plugins accepted", "%svalidate_agent on every Harness of the namespace (%s): %s @ %.12s with skill %s selected, no plugin refused", agentManagerToolPrefix, strings.Join(p.harnesses, ", "), pluginExampleURL, pluginExampleCommit, pluginExampleSkill)
-	if err := p.provePluginsAccepted(spec); err != nil {
-		return err
-	}
-	p.stages.begin("claude-format refused on codex", "%s %s (Claude-format) on Harness codex: validate_agent and create_agent refuse it, naming the root plugin.json, and write nothing", claudePluginURL, claudePluginPath)
-	if !codex {
-		p.stages.skip("the lab renders no Harness codex: add it to platform.coding.harnesses in %s (`agentlab configure --coding-harnesses %s`), then `agentlab platform`", config.File, strings.Join(append(slices.Clone(p.cfg.CodingHarnesses()), config.CodingRuntimeCodex), ","))
-	} else if skip, err := p.proveClaudeFormatRefused(spec, config.CodingRuntimeCodex, p.codexModel); err != nil {
-		return err
-	} else if skip != "" {
-		p.stages.skip("%s", skip)
-	}
-	p.stages.begin("claude-format refused on kagent", "The Claude-format package on Harness %s: validate_agent and create_agent refuse it, naming the root plugin.json", kagentHarness)
-	if p.kagentRefusalSkip, err = p.proveClaudeFormatRefused(spec, kagentHarness, spec.ModelConfig); err != nil {
-		return err
-	} else if p.kagentRefusalSkip != "" {
-		p.stages.skip("%s (%s)", p.kagentRefusalSkip, p.line)
-	}
-	p.stages.begin("claude-format refused on omp", "The Claude-format package on Harness %s: validate_agent and create_agent refuse it, naming the root plugin.json", config.CodingRuntimeOmp)
-	switch {
-	case !slices.Contains(p.harnesses, config.CodingRuntimeOmp):
-		p.ompRefusalSkip = fmt.Sprintf("the lab renders no Harness omp: add it to platform.coding.harnesses in %s, then `agentlab platform`", config.File)
-	case harness == config.CodingRuntimeCodex:
-		p.ompRefusalSkip = "omp runs Anthropic models and this run's ModelConfig is codex's: run `agentlab coding-test --harness claude` or `--harness omp`"
-	default:
-		if p.ompRefusalSkip, err = p.proveClaudeFormatRefused(spec, config.CodingRuntimeOmp, spec.ModelConfig); err != nil {
-			return err
+	if p.runs("write-time checks") {
+		verdict := "accepted"
+		if !p.anyToolset {
+			verdict = "refused"
 		}
-	}
-	if p.ompRefusalSkip != "" {
-		p.stages.skip("%s (%s)", p.ompRefusalSkip, p.line)
-	}
-
-	spec.Toolset, spec.Plugins = p.toolset(), p.codingPlugins([]string{pluginExampleSkill})
-	p.stages.begin("create", "%screate_agent %s on Harness %s, toolset %v, plugins %s: Ready, its RemoteMCPServer Accepted with the toolset, the Agent's egress the Harness's origins", agentManagerToolPrefix, codingTestAgent, harness, spec.Toolset, p.pluginsWords())
-	egress, err := p.createReady(spec)
-	if err != nil {
-		return err
-	}
-	if err := p.selectMusterTools(); err != nil {
-		return err
-	}
-	if err := p.proveBinding(spec.Toolset); err != nil {
-		return err
-	}
-	note("Agent %s Ready on %s, egress [%s]", codingTestAgent, harness, strings.Join(egress, " "))
-	if p.mockBinary != "" {
-		if err := p.startMock(); err != nil {
+		p.stages.begin("write-time checks", "%svalidate_agent on Harness %s as %s: a toolset with %s %s, an origin outside the Harness's list refused", agentManagerToolPrefix, harness, p.user.Email, codingTestGrantedTool, verdict)
+		if err := p.proveGuards(spec); err != nil {
 			return err
 		}
 	}
 
-	if p.rt.claude {
-		// The write tool the sandbox calls must exist for the person: its
-		// refusal through the agent's endpoint is then the toolset's.
-		tools, err := p.muster.listTools()
-		if err != nil {
+	if p.runs("plugins accepted") {
+		p.stages.begin("plugins accepted", "%svalidate_agent on every Harness of the namespace (%s): %s @ %.12s with skill %s selected, no plugin refused", agentManagerToolPrefix, strings.Join(p.harnesses, ", "), pluginExampleURL, pluginExampleCommit, pluginExampleSkill)
+		if err := p.provePluginsAccepted(spec); err != nil {
 			return err
 		}
-		if !slices.Contains(tools, codingTestWriteTool) {
-			return fmt.Errorf("%s is not in %s's muster catalogue: the sandbox's write-tool refusal would prove nothing", codingTestWriteTool, p.user.Email)
-		}
 	}
-
-	p.stages.begin("sandbox turn", "A Session of %s as %s, one turn whose %s probes the sandbox", codingTestAgent, p.user.Email, p.rt.shellTool)
-	session, err := p.createSession(ctx, codingTestAgent)
-	if err != nil {
-		return err
-	}
-	sandbox, err := p.turn(ctx, session, codingSandboxPrompt(p.rt))
-	if err != nil {
-		return err
-	}
-	reply, probe := sandbox.reply, sandbox.probe
-	if probe["uid"] == "" {
-		return fmt.Errorf("the reply carries no %s lines (did the agent run its %s?): %s", probeMarker, p.rt.shellTool, excerpt(reply, 400))
-	}
-	note("Session %s: %d probe lines", session.GetId(), len(probe))
-
-	for _, judged := range p.judgedStages() {
-		p.stages.begin(judged.name, "%s", judged.title)
-		verdict, err := judged.verdict(probe, egress)
-		if err != nil {
-			return fmt.Errorf("%s: %w; the reply: %q", p.line, err, excerpt(reply, 1200))
-		}
-		note("%s", verdict)
-	}
-
-	p.stages.begin("plugin skills", "The agent on %s has the plugin skills selected and no other: %v", harness, p.pluginSkillsKnown())
-	listing, err := p.provePluginSkills(ctx, session, true, 0, p.rt.claude)
-	if err != nil {
-		return err
-	}
-	if p.rt.claude {
-		p.stages.begin("plugin hook", "The Claude-format package loaded whole: its SessionStart hook added its context to the Session")
-		verdict, err := judgeClaudePluginHook(listing)
-		if err != nil {
-			return fmt.Errorf("on Harness %s: %w (%s)", harness, err, p.line)
-		}
-		note("%s", verdict)
-		p.stages.begin("harness change refused", "%supdate_agent moving %s, which binds the Claude-format package, to Harness codex refused as Claude-format: the HelmRelease not written, the Agent still on %s", agentManagerToolPrefix, codingTestAgent, harness)
+	if p.runs("claude-format refused on codex") {
+		p.stages.begin("claude-format refused on codex", "%s %s (Claude-format) on Harness codex: validate_agent and create_agent refuse it, naming the root plugin.json, and write nothing", claudePluginURL, claudePluginPath)
 		if !codex {
-			p.stages.skip("the lab renders no Harness codex: add it to platform.coding.harnesses in %s, then `agentlab platform`", config.File)
-		} else if err := p.proveHarnessChangeRefused(config.CodingRuntimeCodex, p.codexModel); err != nil {
+			p.stages.skip("the lab renders no Harness codex: add it to platform.coding.harnesses in %s (`agentlab configure --coding-harnesses %s`), then `agentlab platform`", config.File, strings.Join(append(slices.Clone(p.cfg.CodingHarnesses()), config.CodingRuntimeCodex), ","))
+		} else if skip, err := p.proveClaudeFormatRefused(spec, config.CodingRuntimeCodex, p.codexModel); err != nil {
 			return err
+		} else if skip != "" {
+			p.stages.skip("%s", skip)
 		}
-		p.stages.begin("harness change to kagent refused", "%supdate_agent moving %s, which binds the Claude-format package, to Harness %s refused as Claude-format", agentManagerToolPrefix, codingTestAgent, kagentHarness)
-		if p.kagentRefusalSkip != "" {
-			p.stages.skip("%s (%s): the move is not attempted, since it would write a revision that never boots", p.kagentRefusalSkip, p.line)
-		} else if err := p.proveHarnessChangeRefused(kagentHarness, spec.ModelConfig); err != nil {
+	}
+	if p.runs("claude-format refused on kagent") {
+		p.stages.begin("claude-format refused on kagent", "The Claude-format package on Harness %s: validate_agent and create_agent refuse it, naming the root plugin.json", kagentHarness)
+		if p.kagentRefusalSkip, err = p.proveClaudeFormatRefused(spec, kagentHarness, spec.ModelConfig); err != nil {
 			return err
+		} else if p.kagentRefusalSkip != "" {
+			p.stages.skip("%s (%s)", p.kagentRefusalSkip, p.line)
 		}
-		p.stages.begin("harness change to omp refused", "%supdate_agent moving %s, which binds the Claude-format package, to Harness %s refused as Claude-format", agentManagerToolPrefix, codingTestAgent, config.CodingRuntimeOmp)
+	}
+	if p.runs("claude-format refused on omp") {
+		p.stages.begin("claude-format refused on omp", "The Claude-format package on Harness %s: validate_agent and create_agent refuse it, naming the root plugin.json", config.CodingRuntimeOmp)
+		switch {
+		case !slices.Contains(p.harnesses, config.CodingRuntimeOmp):
+			p.ompRefusalSkip = fmt.Sprintf("the lab renders no Harness omp: add it to platform.coding.harnesses in %s, then `agentlab platform`", config.File)
+		case harness == config.CodingRuntimeCodex:
+			p.ompRefusalSkip = "omp runs Anthropic models and this run's ModelConfig is codex's: run `agentlab coding-test --harness claude` or `--harness omp`"
+		default:
+			if p.ompRefusalSkip, err = p.proveClaudeFormatRefused(spec, config.CodingRuntimeOmp, spec.ModelConfig); err != nil {
+				return err
+			}
+		}
 		if p.ompRefusalSkip != "" {
-			p.stages.skip("%s (%s): the move is not attempted, since it would write a revision that never boots", p.ompRefusalSkip, p.line)
-		} else if err := p.proveHarnessChangeRefused(config.CodingRuntimeOmp, spec.ModelConfig); err != nil {
+			p.stages.skip("%s (%s)", p.ompRefusalSkip, p.line)
+		}
+	}
+
+	var egress []string
+	if p.runs(codingStageCreate) {
+		spec.Toolset, spec.Plugins = p.toolset(), p.codingPlugins([]string{pluginExampleSkill})
+		p.stages.begin(codingStageCreate, "%screate_agent %s on Harness %s, toolset %v, plugins %s: Ready, its RemoteMCPServer Accepted with the toolset, the Agent's egress the Harness's origins", agentManagerToolPrefix, codingTestAgent, harness, spec.Toolset, p.pluginsWords())
+		if egress, err = p.createReady(spec); err != nil {
+			return err
+		}
+		if err := p.selectMusterTools(); err != nil {
+			return err
+		}
+		if err := p.proveBinding(spec.Toolset); err != nil {
+			return err
+		}
+		note("Agent %s Ready on %s, egress [%s]", codingTestAgent, harness, strings.Join(egress, " "))
+		if p.mockBinary != "" {
+			if err := p.startMock(); err != nil {
+				return err
+			}
+		}
+	}
+
+	if p.runs(codingStageSandbox) {
+		if p.rt.claude {
+			// The write tool the sandbox calls must exist for the person: its
+			// refusal through the agent's endpoint is then the toolset's.
+			tools, err := p.muster.listTools()
+			if err != nil {
+				return err
+			}
+			if !slices.Contains(tools, codingTestWriteTool) {
+				return fmt.Errorf("%s is not in %s's muster catalogue: the sandbox's write-tool refusal would prove nothing", codingTestWriteTool, p.user.Email)
+			}
+		}
+
+		p.stages.begin(codingStageSandbox, "A Session of %s as %s, one turn whose %s probes the sandbox", codingTestAgent, p.user.Email, p.rt.shellTool)
+		session, err := p.proofSession(ctx)
+		if err != nil {
+			return err
+		}
+		sandbox, err := p.turn(ctx, session, codingSandboxPrompt(p.rt))
+		if err != nil {
+			return err
+		}
+		reply, probe := sandbox.reply, sandbox.probe
+		if probe["uid"] == "" {
+			return fmt.Errorf("the reply carries no %s lines (did the agent run its %s?): %s", probeMarker, p.rt.shellTool, excerpt(reply, 400))
+		}
+		note("Session %s: %d probe lines", session.GetId(), len(probe))
+
+		for _, judged := range p.judgedStages() {
+			if !p.runs(judged.name) {
+				continue
+			}
+			p.stages.begin(judged.name, "%s", judged.title)
+			verdict, err := judged.verdict(probe, egress)
+			if err != nil {
+				return fmt.Errorf("%s: %w; the reply: %q", p.line, err, excerpt(reply, 1200))
+			}
+			note("%s", verdict)
+		}
+	} else {
+		for _, judged := range p.judgedStages() {
+			p.runs(judged.name)
+		}
+	}
+
+	if p.runs("plugin skills") {
+		p.stages.begin("plugin skills", "The agent on %s has the plugin skills selected and no other: %v", harness, p.pluginSkillsKnown())
+		session, err := p.proofSession(ctx)
+		if err != nil {
+			return err
+		}
+		listing, err := p.provePluginSkills(ctx, session, true, 0, p.rt.claude)
+		if err != nil {
+			return err
+		}
+		if p.rt.claude && p.runs("plugin hook") {
+			p.stages.begin("plugin hook", "The Claude-format package loaded whole: its SessionStart hook added its context to the Session")
+			verdict, err := judgeClaudePluginHook(listing)
+			if err != nil {
+				return fmt.Errorf("on Harness %s: %w (%s)", harness, err, p.line)
+			}
+			note("%s", verdict)
+		}
+	} else if p.rt.claude {
+		p.runs("plugin hook")
+	}
+	if p.rt.claude {
+		if p.runs("harness change refused") {
+			p.stages.begin("harness change refused", "%supdate_agent moving %s, which binds the Claude-format package, to Harness codex refused as Claude-format: the HelmRelease not written, the Agent still on %s", agentManagerToolPrefix, codingTestAgent, harness)
+			if !codex {
+				p.stages.skip("the lab renders no Harness codex: add it to platform.coding.harnesses in %s, then `agentlab platform`", config.File)
+			} else if err := p.proveHarnessChangeRefused(config.CodingRuntimeCodex, p.codexModel); err != nil {
+				return err
+			}
+		}
+		if p.runs("harness change to kagent refused") {
+			p.stages.begin("harness change to kagent refused", "%supdate_agent moving %s, which binds the Claude-format package, to Harness %s refused as Claude-format", agentManagerToolPrefix, codingTestAgent, kagentHarness)
+			if p.kagentRefusalSkip != "" {
+				p.stages.skip("%s (%s): the move is not attempted, since it would write a revision that never boots", p.kagentRefusalSkip, p.line)
+			} else if err := p.proveHarnessChangeRefused(kagentHarness, spec.ModelConfig); err != nil {
+				return err
+			}
+		}
+		if p.runs("harness change to omp refused") {
+			p.stages.begin("harness change to omp refused", "%supdate_agent moving %s, which binds the Claude-format package, to Harness %s refused as Claude-format", agentManagerToolPrefix, codingTestAgent, config.CodingRuntimeOmp)
+			if p.ompRefusalSkip != "" {
+				p.stages.skip("%s (%s): the move is not attempted, since it would write a revision that never boots", p.ompRefusalSkip, p.line)
+			} else if err := p.proveHarnessChangeRefused(config.CodingRuntimeOmp, spec.ModelConfig); err != nil {
+				return err
+			}
+		}
+	}
+
+	if p.runs("mcp call") {
+		p.stages.begin("mcp call", "The agent calls %s through its MCP binding and finds itself listed", codingTestReadTool)
+		session, err := p.proofSession(ctx)
+		if err != nil {
+			return err
+		}
+		mcpTurn, err := p.turn(ctx, session, codingMCPCallPrompt())
+		if err != nil {
+			return err
+		}
+		called := firstNonEmpty(mcpTurn.probe["mcp-call"], mcpTurn.toolOutput(codingTestReadTool), mcpTurn.toolOutput(musterCallTool))
+		if !strings.Contains(called, codingTestAgent) {
+			return fmt.Errorf("%s through the agent's binding on Harness %s answered %q, wanted a list naming %s; the reply: %q (%s)", codingTestReadTool, harness, called, codingTestAgent, excerpt(mcpTurn.reply, 400), p.line)
+		}
+		note("%s listed: %s", codingTestReadTool, excerpt(called, 240))
+	}
+
+	if p.runs("turn gap") {
+		p.stages.begin("turn gap", "A heartbeat the turn starts in the sandbox does not run in the %s without a turn and runs again in the next", codingTurnGap)
+		session, err := p.proofSession(ctx)
+		if err != nil {
+			return err
+		}
+		if err := p.proveTurnGap(ctx, session); err != nil {
 			return err
 		}
 	}
 
-	p.stages.begin("mcp call", "The agent calls %s through its MCP binding and finds itself listed", codingTestReadTool)
-	mcpTurn, err := p.turn(ctx, session, codingMCPCallPrompt())
-	if err != nil {
-		return err
-	}
-	reply = mcpTurn.reply
-	called := firstNonEmpty(mcpTurn.probe["mcp-call"], mcpTurn.toolOutput(codingTestReadTool), mcpTurn.toolOutput(musterCallTool))
-	switch {
-	case strings.Contains(called, codingTestAgent):
-		note("%s listed: %s", codingTestReadTool, excerpt(called, 240))
-	default:
-		return fmt.Errorf("%s through the agent's binding on Harness %s answered %q, wanted a list naming %s; the reply: %q (%s)", codingTestReadTool, harness, called, codingTestAgent, excerpt(reply, 400), p.line)
-	}
-
-	p.stages.begin("turn gap", "A heartbeat the turn starts in the sandbox does not run in the %s without a turn and runs again in the next", codingTurnGap)
-	if err := p.proveTurnGap(ctx, session); err != nil {
-		return err
-	}
-
-	if p.rt.claude {
+	// codeWordWritten says a turn wrote the code word and its file, which
+	// the resume reads back: the instruction fixture's first turn does.
+	codeWordWritten := false
+	if p.rt.claude && p.runs("instruction fixture") {
 		p.stages.begin("instruction fixture", "A repository's instruction sources written into the Session's directory, the next turn records what Claude Code loaded")
+		session, err := p.proofSession(ctx)
+		if err != nil {
+			return err
+		}
 		if _, err := p.turn(ctx, session, codingFixturePrompt()); err != nil {
 			return err
 		}
+		codeWordWritten = true
 		read, err := p.turn(ctx, session, codingFixtureReadPrompt())
 		if err != nil {
 			return err
@@ -582,38 +655,78 @@ func (p *codingProof) run() error {
 			return err
 		}
 		note("on %s: %s", p.line, loaded)
-	} else if _, err := p.turn(ctx, session, codingCodeWordPrompt(p.rt)); err != nil {
-		return err
 	}
 
-	p.stages.begin("suspend and resume", "The Session suspended to the snapshot store and resumed: the first turn's file and code word are still there")
-	meta, err := p.suspendResume(ctx, session)
-	if err != nil {
-		return err
+	if p.runs(codingStageResume) {
+		p.stages.begin(codingStageResume, "The Session suspended to the snapshot store and resumed: the first turn's file and code word are still there")
+		session, err := p.proofSession(ctx)
+		if err != nil {
+			return err
+		}
+		if !codeWordWritten {
+			if _, err := p.turn(ctx, session, codingCodeWordPrompt(p.rt)); err != nil {
+				return err
+			}
+		}
+		meta, err := p.suspendResume(ctx, session)
+		if err != nil {
+			return err
+		}
+
+		if p.runs(codingStageUsage) {
+			p.stages.begin(codingStageUsage, "The resumed turn's task status carries its usage")
+			usage, _ := meta[usageMetadataKey].(map[string]any)
+			if len(usage) == 0 {
+				return fmt.Errorf("the turn on Harness %s completed without %s (status metadata %v; %s)", harness, usageMetadataKey, meta, p.line)
+			}
+			note("usage %v", usage)
+		}
+	} else {
+		p.runs(codingStageUsage)
 	}
 
-	p.stages.begin("usage", "The resumed turn's task status carries its usage")
-	usage, _ := meta[usageMetadataKey].(map[string]any)
-	if len(usage) == 0 {
-		return fmt.Errorf("the turn on Harness %s completed without %s (status metadata %v; %s)", harness, usageMetadataKey, meta, p.line)
+	if p.runs("share refused") {
+		p.stages.begin("share refused", "A read-write share of the %s Session refused: a collaborator's turn would run under what the first sender's turns left", harness)
+		session, err := p.proofSession(ctx)
+		if err != nil {
+			return err
+		}
+		if err := p.shareRefused(ctx, session); err != nil {
+			return err
+		}
 	}
-	note("usage %v", usage)
 
-	p.stages.begin("share refused", "A read-write share of the %s Session refused: a collaborator's turn would run under what the first sender's turns left", harness)
-	if err := p.shareRefused(ctx, session); err != nil {
-		return err
+	if p.runs("empty selection") {
+		p.stages.begin("empty selection", "%supdate_agent with %s's skill selection empty: the agent Ready on the new revision, a new Session's agent has none of its skills", agentManagerToolPrefix, pluginExampleURL)
+		if err := p.proveEmptySelection(ctx); err != nil {
+			return err
+		}
 	}
+	return p.closeOnModel()
+}
 
-	p.stages.begin("empty selection", "%supdate_agent with %s's skill selection empty: the agent Ready on the new revision, a new Session's agent has none of its skills", agentManagerToolPrefix, pluginExampleURL)
-	if err := p.proveEmptySelection(ctx); err != nil {
-		return err
-	}
+// closeOnModel is the model stage on the mockllm, which judges every model
+// call the run made; without the mockllm there is none.
+func (p *codingProof) closeOnModel() error {
 	if p.mock == nil {
 		return nil
 	}
-
-	p.stages.begin("model", "The %s turns ran on the in-cluster mockllm: every model call answered by its script", harness)
+	p.stages.begin("model", "The %s turns ran on the in-cluster mockllm: every model call answered by its script", p.rt.name)
 	return p.mockAnswered()
+}
+
+// proofSession is the proof's one Session of its agent, started by the first
+// stage that turns in it.
+func (p *codingProof) proofSession(ctx context.Context) (*apiv1alpha1.Session, error) {
+	if p.session != nil {
+		return p.session, nil
+	}
+	session, err := p.createSession(ctx, codingTestAgent)
+	if err != nil {
+		return nil, err
+	}
+	p.session = session
+	return session, nil
 }
 
 // connect signs the person in to muster and kagent and reads the line.
@@ -703,7 +816,7 @@ func (p *codingProof) judgedStages() []judgedStage {
 	return append(stages,
 		judgedStage{"credentials", "No forge token or bearer in the environment or /data; the model key and the MCP credentials placeholders", codingProbe.credentials},
 		judgedStage{"dns canary", "A lookup of " + codingTestDNSCanary + ", outside the allowlist, recorded", codingProbe.dnsCanary},
-		judgedStage{"egress", "A host outside the Agent's origins denied at the egress gate, an origin of its list reached", codingProbe.egress},
+		judgedStage{codingStageEgress, "A host outside the Agent's origins denied at the egress gate, an origin of its list reached", codingProbe.egress},
 	)
 }
 

@@ -150,6 +150,41 @@ The portal (<https://portal.127.0.0.1.nip.io>) signs in the default users
 The full walkthrough, including what `configure` discovers about your
 machine, is in [Getting started](docs/getting-started.md).
 
+## Proofs
+
+Every chain the lab stands up has a headless `*-test` command that drives it
+end to end, prints a PASS, SKIP or FAIL per stage with the reason, and exits
+non-zero on a failure. The [command reference](docs/cli.md#testing) has every
+flag and stage.
+
+| Command | What it proves |
+|---|---|
+| `platform-test` | Dex → muster → mcp-kubernetes → apiserver, the fleet's admission, per-server sign-in, the infrastructure families |
+| `oauth-consent-test` | CIMD, consent, resource access tokens, and the replacement of both replicas |
+| `polex-test` | The chart's Kyverno PolicyExceptions against the fleet's Kyverno |
+| `agents-test` | agent-manager through muster as the person: create, Ready on the Harness, a turn, update, delete, its RBAC |
+| `agents-gitops-test` | Editing an agent applied from git, as the portal does it |
+| `organizations-test` | Two Agent Platform organizations and the boundary between them on every surface |
+| `toolsets-test` | Declared toolsets from agent-manager to muster's per-request refusal |
+| `signin-test` | An agent's MCP call pausing on the person's sign-in and resuming after it |
+| `egress-test` | An agent's declared origin reached, an undeclared one denied at the egress gate |
+| `skills-test` | The golden boot of an agent with a git skill under Substrate's egress gate |
+| `a2a-test` | Turns over native gRPC through the edge, with human-in-the-loop approval and cancel |
+| `coding-test` | Coding agents on the claude, codex or omp Harness: the security floor, suspend and resume, egress denial, usage; `--step <stage>` reruns one stage; `--part devctl` opens, waits for and merges a pull request through devctl; `--part toolchains` mounts toolchains into a Session |
+| `chatgpt-test` | Codex on a person's own ChatGPT subscription |
+| `harness-matrix-test` | What each Harness does with Shared subagents and Claude-format plugin parts |
+| `models-test` | Managed models through model-manager's tools |
+| `serving-test` | Model serving on llm-d |
+| `vm-manager-test` | vm-manager as the person, and a VM booted to ready |
+| `workspaces-test` | Workspace storage, Sessions' sub-path mounts and the provider instances |
+| `substrate-step-test` | Conversations and durable volumes across a Substrate release |
+| `kagent-step-test` | Conversations and durable volumes across a kagent step |
+| `substrate-tunnel-test` | gRPC to an HTTP/1.1-only actor failing at once |
+| `klaus-gateway-test` | Swarmgeist through its Slack adapter, the OBO link store |
+| `decisions-test` | klaus-gateway's decisions |
+| `beekeeper-decisions-test`, `beekeeper-central-test`, `beekeeper-subscriptions-test` | beekeeper's decisions in Slack, its central resources, resource subscriptions through muster |
+| `backstage-test` | The headless Backstage sign-in and the muster hop with the person's token |
+
 ## Verify a downloaded release
 
 Every release asset `agentlab-<os>-<arch>` (`.exe` on Windows) ships next to its
