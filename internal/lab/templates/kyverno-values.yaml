@@ -1,15 +1,20 @@
 # The lab's Kyverno: the fleet's kyverno app (gsoci.azurecr.io/charts/
 # giantswarm/kyverno 0.24.2, the chart security-bundle installs on every
 # installation; it wraps the upstream kyverno chart 3.7.2, appVersion
-# v1.17.2, and policy-reporter) reduced to the admission controller in the
-# shape a kind cluster can carry. admission.go pins the chart and the
-# kyverno-crds chart beside it, this file the values. The app's defaults
-# are an installation's: its images on gsoci, so the node pulls what an
-# installation runs. Turned off here what a one-node lab has no API or use
-# for: the CiliumNetworkPolicy, the VerticalPodAutoscalers, the PodLogs, the
-# app's PolicyExceptions and policies for the fleet's own components, the
-# HPA, the ServiceMonitor, API priority and fairness, the installation's
-# PriorityClass giantswarm-critical, and every controller but admission.
+# v1.17.2, and policy-reporter) in the shape a kind cluster can carry.
+# admission.go pins the chart and the kyverno-crds chart beside it, this
+# file the values. The app's defaults are an installation's: its images on
+# gsoci, so the node pulls what an installation runs. The admission and
+# reports controllers run as on an installation, admission reports, policy
+# reports and the background scan on, so `kubectl get policyreports -A`
+# lists the fleet's policies' results (reports.go). Turned off here what a
+# one-node lab has no API or use for: the CiliumNetworkPolicy, the
+# VerticalPodAutoscalers, the PodLogs, the app's PolicyExceptions and
+# policies for the fleet's own components, the HPA, the ServiceMonitors,
+# API priority and fairness, the PodDisruptionBudgets, the installation's
+# PriorityClass giantswarm-critical, and the background and cleanup
+# controllers (generate, mutate-existing and cleanup policies the lab does
+# not run).
 # PolicyExceptions stay as the app ships them, on for every namespace
 # (features.policyExceptions), the fleet's setting: the exception webhook
 # validates a chart's exceptions either way, and with it on the engine
@@ -76,19 +81,35 @@ kyverno:
   cleanupController:
     enabled: false
   reportsController:
-    enabled: false
+    enabled: true
+    replicas: 1
+    priorityClassName: ""
     apiPriorityAndFairness: false
+    antiAffinity:
+      enabled: false
+    serviceMonitor:
+      enabled: false
+    podDisruptionBudget:
+      enabled: false
+    # Measured on a lab: 140 MiB at the first scan of the platform's
+    # resources, 124 MiB and ~1m CPU once settled.
+    resources:
+      requests:
+        cpu: 50m
+        memory: 160Mi
+      limits:
+        memory: 512Mi
   features:
     admissionReports:
-      enabled: false
+      enabled: true
     aggregateReports:
-      enabled: false
+      enabled: true
     policyReports:
-      enabled: false
+      enabled: true
     validatingAdmissionPolicyReports:
-      enabled: false
+      enabled: true
     backgroundScan:
-      enabled: false
+      enabled: true
     generateValidatingAdmissionPolicy:
       enabled: false
   crds:

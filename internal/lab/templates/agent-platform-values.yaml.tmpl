@@ -111,11 +111,32 @@ ingress:
       request: "0s"
 
 # The connectivity chart's network policies. No Cilium in kind, and kind's
-# kindnetd DOES enforce plain NetworkPolicy — the lab keeps every component's
-# traffic open instead of describing it (the host model servers, the lab Dex,
-# the edge).
+# kindnetd DOES enforce plain NetworkPolicy. Off by default — the lab keeps
+# every component's traffic open instead of describing it (the host model
+# servers, the lab Dex, the edge). platform.networkPolicy turns them on in
+# the kubernetes flavour with the selectors an installation runs (muster on
+# the pod network, which its pod-label peers need); the apiserver is the
+# control-plane node's address, where the kubernetes Service lands after
+# its DNAT. The lab's own peers on top are post-renderer patches 10 and 11
+# (postrenderers.go, networkpolicy.go) and muster's additionalEgress below.
 networkPolicy:
+{{- if .Platform.NetworkPolicy }}
+  enabled: true
+  flavor: kubernetes
+  kubernetes:
+{{- with .NodeIP }}
+    apiServerCIDR: {{ . }}/32
+{{- end }}
+    # The world without the cluster's own subnets, 10.0.0.0/8 otherwise
+    # admitted: a registry this machine resolves to a private endpoint
+    # (labWorldExcludedCIDRs, networkpolicy.go).
+    worldExcludedCIDRs:
+{{- range .WorldExcludedCIDRs }}
+      - {{ . }}
+{{- end }}
+{{- else }}
   enabled: false
+{{- end }}
 
 # The chart's own kyverno.io objects — PolicyExceptions to the fleet's Pod
 # Security Standards policies and the mutate policies of agent-sandbox and
@@ -130,8 +151,8 @@ kyvernoPolicies:
 
 gateway:
   # The JWT policy on the kagent controller route makes the data plane fetch
-  # Dex's JWKS on 5556; the chart guards that this egress is declared (it
-  # only renders a network-policy rule, and the lab runs no policies).
+  # Dex's JWKS on 5556; the chart guards that this egress is declared (a
+  # network-policy rule, rendered while platform.networkPolicy is on).
   jwksEgress:
     enabled: true
     namespace: dex
@@ -393,7 +414,42 @@ mcp-kubernetes:
 
 muster:
   networkPolicy:
+{{- if .Platform.NetworkPolicy }}
+    # platform.networkPolicy: muster's own policy, the plain NetworkPolicy
+    # flavour, next to the connectivity chart's muster egress. Two lab
+    # peers on top of an installation's rules: the lab Dex, which muster's
+    # dex-localhost sidecar dials for the issuer spelled localhost (an
+    # installation reaches its issuer through the world rule), and muster
+    # itself on its own port, the target of the lab's OAuth sign-in
+    # fixture (oauth-fixture.yaml.tmpl).
+    enabled: true
+    flavor: kubernetes
+    kubernetes:
+{{- with .NodeIP }}
+      apiServerCIDR: {{ . }}/32
+{{- end }}
+      worldExcludedCIDRs:
+{{- range .WorldExcludedCIDRs }}
+        - {{ . }}
+{{- end }}
+      additionalEgress:
+        - to:
+            - namespaceSelector:
+                matchLabels:
+                  kubernetes.io/metadata.name: dex
+          ports:
+            - port: 5556
+              protocol: TCP
+        - to:
+            - podSelector:
+                matchLabels:
+                  app.kubernetes.io/name: muster
+          ports:
+            - port: 8090
+              protocol: TCP
+{{- else }}
     enabled: false
+{{- end }}
 {{- if .Platform.MusterPodNetwork }}
   # platform.musterPodNetwork: muster on the pod network in an installation's
   # HA shape — two replicas sharing the Valkey stores, a budget that keeps one
@@ -536,6 +592,32 @@ muster:
           type: valkey
           valkey:
             url: muster-valkey:6379
+{{- with .AgentManagerCommit }}
+        # agent-manager's commit mode (agentmanagercommit.go): muster as the
+        # RFC 8693 broker that releases a person's own grant of the
+        # workspaces' {{ .Instance }} instance App ({{ .GrantIssuer }}) to
+        # the confidential client {{ .ClientID }}, for that person's ID token
+        # from the lab Dex, and to nothing else. The client is seeded from its
+        # Secret on every start.
+        trustedIssuers:
+          - issuer: "{{ .SubjectIssuer }}"
+            jwksUrl: "{{ .JWKSURL }}"
+            # The audiences muster accepts the lab's person tokens with
+            # (trustedAudiences above): the password grant's and the portal's.
+            allowedAudiences: [agent-platform, dex-k8s-authenticator]
+            acceptedTypHeaders: [""]
+            allowPrivateIPJWKSHosts: ["{{ .JWKSHost }}"]
+        tokenExchangeBroker:
+          clientAudiences:
+            {{ .ClientID }}: [{{ .Audience }}]
+          targets:
+            {{ .Audience }}:
+              grantIssuer: "{{ .GrantIssuer }}"
+          brokerClients:
+            {{ .ClientID }}:
+              clientCredentialsSecretRef:
+                name: {{ .Secret }}
+{{- end }}
 {{- if and .WorkspacesEnabled .WorkspacesChart (not .WorkspaceProviders) }}
 {{- with .WorkspaceReleasable }}
     # No provider instance renders yet (the configured one lacks its ids or
@@ -981,6 +1063,20 @@ agent-manager:
       auth:
         requiredAudiences:
           - kubernetes
+{{- with .AgentManagerCommit }}
+  # Commit mode (agentmanagercommit.go): a commit's pull request opens as
+  # the person with their grant of the workspaces' {{ .Instance }} instance
+  # App, which muster's broker below releases to this confidential client
+  # for the person's forwarded ID token. muster's public token endpoint,
+  # reached through the edge (the CoreDNS rewrite) under the lab CA. The MCP
+  # registration keeps the ID token: apply mode and reads are unchanged.
+  githubTokenExchange:
+    endpoint: {{ .Endpoint }}
+    clientID: {{ .ClientID }}
+    audience: {{ .Audience }}
+    secretName: {{ .Secret }}
+    caSecretName: {{ .CASecret }}
+{{- end }}
 {{- end }}
 
 {{- if .ModelManagerEnabled }}
@@ -1267,6 +1363,17 @@ backstage:
     # installations e2e specs drive (AGENTLAB_INSTALLATIONS_PAGE=1).
     - page:gs/installations
     - nav-item:gs/installations
+{{- end }}
+{{- if .Backstage.Hive }}
+    # backstage.hive: Hive and the pages it replaced, for the portal's Hive
+    # e2e spec (AGENTLAB_HIVE=1); its roadmap-backend reads the board of the
+    # muster server pro (backstage-catalog.yaml.tmpl, `agentlab roadmap-test`).
+    - page:plans
+    - api:plans
+    - page:roadmap
+    - api:roadmap
+    - page:plans/plans-redirect
+    - page:plans/magazine
 {{- end }}
   backstage:
     # Helm replaces lists rather than merging them, so the chart's own

@@ -138,7 +138,7 @@ func TestPlatformValuesLabShape(t *testing.T) {
 		clusterManager:         {{clusterManager, dexIssuerURLFlag}},
 	}
 	gateways := labAgentgatewayTargets
-	postRenderers, err := componentPostRenderers(cfg, defaultDevImageNames(cfg), sidecars, gateways)
+	postRenderers, err := componentPostRenderers(cfg, defaultDevImageNames(cfg), sidecars, gateways, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,7 +286,7 @@ func TestPlatformValuesExtraPostRenderers(t *testing.T) {
 		connectivityCheckout: config.Default(),
 	} {
 		t.Run(name, func(t *testing.T) {
-			postRenderers, err := componentPostRenderers(cfg, defaultDevImageNames(cfg), sidecars, gateways)
+			postRenderers, err := componentPostRenderers(cfg, defaultDevImageNames(cfg), sidecars, gateways, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -369,7 +369,7 @@ func TestPlatformValuesDevImageTargets(t *testing.T) {
 		componentMCPKubernetes: {{componentMCPKubernetes, dexIssuerURLVar}},
 		clusterManager:         {{clusterManager, dexIssuerURLFlag}},
 	}
-	postRenderers, err := componentPostRenderers(cfg, defaultDevImageNames(cfg), sidecars, nil)
+	postRenderers, err := componentPostRenderers(cfg, defaultDevImageNames(cfg), sidecars, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -578,7 +578,7 @@ func TestMCPPrometheusDevImage(t *testing.T) {
 			t.Errorf("mcp-prometheus.yaml lacks %q:\n%s", want, s)
 		}
 	}
-	renderers, err := componentPostRenderers(cfg, defaultDevImageNames(cfg), nil, nil)
+	renderers, err := componentPostRenderers(cfg, defaultDevImageNames(cfg), nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1440,7 +1440,7 @@ func TestPlatformValuesWorkspaceManagerDevImage(t *testing.T) {
 	cfg := config.Default()
 	cfg.Platform.Workspaces.Enabled = true
 	cfg.Platform.DevImages = map[string]string{workspaceManager: "workspace-manager:dev-5a6b"}
-	postRenderers, err := componentPostRenderers(cfg, defaultDevImageNames(cfg), nil, nil)
+	postRenderers, err := componentPostRenderers(cfg, defaultDevImageNames(cfg), nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1481,7 +1481,7 @@ func TestPlatformValuesWorkspaceManagerSyncImageChartDefault(t *testing.T) {
 	cfg := config.Default()
 	cfg.Platform.Workspaces.Enabled = true
 	cfg.Platform.DevImages = map[string]string{"muster": "muster:dev-1a2b"}
-	postRenderers, err := componentPostRenderers(cfg, defaultDevImageNames(cfg), nil, nil)
+	postRenderers, err := componentPostRenderers(cfg, defaultDevImageNames(cfg), nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

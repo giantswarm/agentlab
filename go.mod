@@ -17,9 +17,9 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.9
 	github.com/giantswarm/go-selfupdate v1.7.6
 	github.com/giantswarm/klaus-gateway v1.21.0
-	github.com/giantswarm/pagekit v0.3.7
-	github.com/giantswarm/selfupdate-cosign v0.3.25
-	github.com/giantswarm/telemetrydeck-go v0.3.17
+	github.com/giantswarm/pagekit v0.3.8
+	github.com/giantswarm/selfupdate-cosign v0.3.27
+	github.com/giantswarm/telemetrydeck-go v0.3.18
 	github.com/giantswarm/vm-manager v0.25.31
 	github.com/google/go-github/v93 v93.0.0
 	github.com/google/uuid v1.6.0

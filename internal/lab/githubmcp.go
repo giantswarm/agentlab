@@ -2,6 +2,7 @@ package lab
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -43,7 +44,7 @@ func ensureGitHubMCP(cfg *config.Config) error {
 		return err
 	}
 	if len(missing) > 0 {
-		warn("platform.github is on but Secret %s/%s lacks %s -- skipping MCPServer %s", ref.Namespace, ref.Name, strings.Join(missing, " and "), gitHubMCPServer)
+		warn("platform.github is on but %s -- skipping MCPServer %s", secretGap(ref.Namespace, ref.Name, missing), gitHubMCPServer)
 		warn("  register an OAuth App (or GitHub App) with callback URL %s%s and place its client, one key per call:", cfg.MusterBaseURL(), oauthProxyCallbackPath)
 		for _, key := range gitHubMCPClientKeys {
 			warn("  beekeeper secret copy <ref to the %s> --to-secret kind-%s/%s/%s/%s", key, cfg.ClusterName, ref.Namespace, ref.Name, key)
@@ -69,12 +70,25 @@ func ensureGitHubMCP(cfg *config.Config) error {
 func gitHubMCPClientMissing(ctx context.Context, ns, name string) ([]string, error) {
 	obj, err := getObject(ctx, gvrSecrets, ns, name)
 	if apierrors.IsNotFound(err) {
-		return []string{"the Secret itself"}, nil
+		return []string{secretAbsent}, nil
 	}
 	if err != nil {
 		return nil, err
 	}
 	return missingSecretKeys(obj, gitHubMCPClientKeys...), nil
+}
+
+// secretAbsent stands for a Secret that does not exist in the list of what it
+// lacks; secretGap words it.
+const secretAbsent = "the Secret itself"
+
+// secretGap words what a Secret lacks for a warning: that it does not exist,
+// or the keys without a value.
+func secretGap(ns, name string, missing []string) string {
+	if len(missing) == 1 && missing[0] == secretAbsent {
+		return fmt.Sprintf("Secret %s/%s does not exist", ns, name)
+	}
+	return fmt.Sprintf("Secret %s/%s lacks %s", ns, name, strings.Join(missing, " and "))
 }
 
 // missingSecretKeys lists the keys of a Secret that are absent or empty, by

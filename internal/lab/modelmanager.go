@@ -156,6 +156,21 @@ func kindGatewayIP(node string) (string, error) {
 	return "", fmt.Errorf("docker network %q has no IPv4 gateway", kindDockerNetwork)
 }
 
+// kindNodeIPFn is kindNodeIP; a variable so render tests need no docker.
+var kindNodeIPFn = kindNodeIP
+
+// kindNodeIP is the node container's IPv4 address on the kind network.
+func kindNodeIP(node string) (string, error) {
+	out, err := outputQuiet(dockerBin, "inspect", "-f", `{{with index .NetworkSettings.Networks "`+kindDockerNetwork+`"}}{{.IPAddress}}{{end}}`, node)
+	if err != nil {
+		return "", fmt.Errorf("node %q not found (the kind cluster creates it): %w", node, err)
+	}
+	if ip := firstIPv4(out); ip != "" {
+		return ip, nil
+	}
+	return "", fmt.Errorf("node %q has no IPv4 address on the %s network", node, kindDockerNetwork)
+}
+
 // firstIPv4 returns the first IPv4 address leading a line of out.
 func firstIPv4(out string) string {
 	for _, line := range strings.Split(out, "\n") {

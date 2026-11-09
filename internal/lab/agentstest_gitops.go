@@ -19,10 +19,11 @@ import (
 // write with gitops_owned. The proof applies a release agent-manager composed
 // with those labels and asserts, through muster as the person, that the
 // platform's agent-manager reports it managed: gitops and answers the edit's
-// dry run with gitops_owned in mode apply and unsupported in mode commit —
-// the platform's agent-manager is pinned to no GitHub App, so it offers no
-// commit mode. The pull request a pinned agent-manager opens needs a real
-// GitHub App sign-in and is not part of the headless proof.
+// dry run with gitops_owned in mode apply. Without commit mode (get_info's
+// capabilities.commit false) the dry run in mode commit is unsupported; with
+// it, the pull requests commit mode opens are `agentlab backstage-test`'s
+// commit stage (backstagetest_commit.go), which brings the Kustomization and
+// repository a commit resolves to.
 
 const (
 	// agentsGitOpsAgent is the throwaway agent applied from git: a release
@@ -38,8 +39,9 @@ const (
 // GitOps-owned, as the portal sees it: the platform's agent-manager composes
 // the release, the proof applies it with the Flux labels and agent-manager
 // reports it managed: gitops; validate_agent of a change refuses mode apply
-// with gitops_owned and mode commit as unsupported, update_agent with
-// gitops_owned, the live release untouched. Leaves nothing behind.
+// with gitops_owned (and mode commit as unsupported while agent-manager
+// offers no commit mode), update_agent with gitops_owned, the live release
+// untouched. Leaves nothing behind.
 func AgentsGitOpsTest(cfg *config.Config, email string) error {
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
@@ -92,75 +94,91 @@ func AgentsGitOpsTest(cfg *config.Config, email string) error {
 	note("valid: HelmRelease %s/%s on ModelConfig %s, next to the chart source", kagentNamespace, agentsGitOpsAgent, modelConfig)
 
 	step("Applying it with the provenance a Flux Kustomization stamps (%s=%s): an agent applied from git", gitopsFluxName, gitopsFluxFixture)
-	if err := applyGitOpsAgent(composed.Manifests.HelmRelease); err != nil {
+	if err := applyGitOpsRelease(agentsGitOpsAgent, composed.Manifests.HelmRelease); err != nil {
 		return err
 	}
 	if err := expectManaged(platform, gitOpsManaged); err != nil {
 		return err
 	}
 
-	live, err := readGitOpsAgentRelease()
+	live, err := readHelmReleaseObject(agentsGitOpsAgent)
 	if err != nil {
 		return err
 	}
 	edit := map[string]any{nameKey: agentsGitOpsAgent, validateModeUpdate: true, descriptionKey: agentsGitOpsDescription}
 	withCommit := maps.Clone(edit)
 	withCommit[modeArg] = modeCommit
-	step("%s of the change on the platform's agent-manager, which offers no commit mode: gitops_owned in mode apply, unsupported in mode commit — as its writes answer", platform.toolName("validate_agent"))
+	info, err := readAgentManagerInfo(session)
+	if err != nil {
+		return err
+	}
+	commit := info.Capabilities[modeCommit]
+	if commit {
+		step("%s of the change: gitops_owned in mode apply; agent-manager offers commit mode, whose pull requests `agentlab backstage-test` proves", platform.toolName("validate_agent"))
+	} else {
+		step("%s of the change on the platform's agent-manager, which offers no commit mode: gitops_owned in mode apply, unsupported in mode commit — as its writes answer", platform.toolName("validate_agent"))
+	}
 	if err := expectRefusal(platform, "validate_agent", edit, "gitops_owned", "mode commit"); err != nil {
 		return err
 	}
-	if err := expectRefusal(platform, "validate_agent", withCommit, "unsupported", "capabilities.commit"); err != nil {
-		return err
+	if !commit {
+		if err := expectRefusal(platform, "validate_agent", withCommit, "unsupported", "capabilities.commit"); err != nil {
+			return err
+		}
 	}
 
 	if err := expectRefusal(platform, "update_agent", map[string]any{nameKey: agentsGitOpsAgent, descriptionKey: agentsGitOpsDescription}, "gitops_owned", "mode commit"); err != nil {
 		return err
 	}
-	after, err := readGitOpsAgentRelease()
+	after, err := readHelmReleaseObject(agentsGitOpsAgent)
 	if err != nil {
 		return err
 	}
-	if after.GetResourceVersion() != live.GetResourceVersion() {
-		return fmt.Errorf("a refused write changed the live HelmRelease %s (resourceVersion %s -> %s)", agentsGitOpsAgent, live.GetResourceVersion(), after.GetResourceVersion())
+	if after.GetGeneration() != live.GetGeneration() {
+		return fmt.Errorf("a refused write changed the live HelmRelease %s (generation %d -> %d)", agentsGitOpsAgent, live.GetGeneration(), after.GetGeneration())
 	}
-	note("HelmRelease %s/%s at resourceVersion %s, as before", kagentNamespace, agentsGitOpsAgent, after.GetResourceVersion())
+	note("HelmRelease %s/%s at generation %d, as before (helm-controller's status writes move only its resourceVersion)", kagentNamespace, agentsGitOpsAgent, after.GetGeneration())
 
-	fmt.Printf("PASS: %s is applied from git (managed %s); validate_agent of a change refuses mode apply with gitops_owned and mode commit as unsupported on the platform's agent-manager, which no GitHub App pins; update_agent refused, the live release untouched\n",
-		agentsGitOpsAgent, gitOpsManaged)
+	commitVerdict := "mode commit as unsupported on the platform's agent-manager, which offers no commit mode"
+	if commit {
+		commitVerdict = "the pull requests of mode commit are backstage-test's commit stage"
+	}
+	fmt.Printf("PASS: %s is applied from git (managed %s); validate_agent of a change refuses mode apply with gitops_owned, %s; update_agent refused, the live release untouched\n",
+		agentsGitOpsAgent, gitOpsManaged, commitVerdict)
 	return nil
 }
 
-// applyGitOpsAgent applies the composed HelmRelease and stamps the Flux
-// provenance on it: what a Kustomization leaves on every object it applies,
-// and what makes agent-manager report the agent managed: gitops.
-func applyGitOpsAgent(helmRelease string) error {
+// applyGitOpsRelease applies the composed HelmRelease of agent name and
+// stamps the Flux provenance on it: what a Kustomization leaves on every
+// object it applies, and what makes agent-manager report the agent managed:
+// gitops.
+func applyGitOpsRelease(name, helmRelease string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	defer cancel()
 	if _, err := applyManifests(ctx, []byte(helmRelease)); err != nil {
-		return fmt.Errorf("applying the HelmRelease %s/%s: %w", kagentNamespace, agentsGitOpsAgent, err)
+		return fmt.Errorf("applying the HelmRelease %s/%s: %w", kagentNamespace, name, err)
 	}
 	gvr, err := gvrFor(fluxHelmReleaseResource)
 	if err != nil {
 		return err
 	}
 	body := fmt.Appendf(nil, `{"metadata":{"labels":{%q:%q,%q:%q}}}`, gitopsFluxName, gitopsFluxFixture, gitopsFluxNamespace, platformNamespace)
-	if err := patchObject(ctx, gvr, kagentNamespace, agentsGitOpsAgent, types.MergePatchType, body); err != nil {
-		return fmt.Errorf("labelling the HelmRelease %s/%s: %w", kagentNamespace, agentsGitOpsAgent, err)
+	if err := patchObject(ctx, gvr, kagentNamespace, name, types.MergePatchType, body); err != nil {
+		return fmt.Errorf("labelling the HelmRelease %s/%s: %w", kagentNamespace, name, err)
 	}
-	note("HelmRelease %s/%s applied, %s=%s", kagentNamespace, agentsGitOpsAgent, gitopsFluxName, gitopsFluxFixture)
+	note("HelmRelease %s/%s applied, %s=%s", kagentNamespace, name, gitopsFluxName, gitopsFluxFixture)
 	return nil
 }
 
-// readGitOpsAgentRelease reads the proof's HelmRelease back.
-func readGitOpsAgentRelease() (*unstructured.Unstructured, error) {
+// readHelmReleaseObject reads an agent's HelmRelease object back.
+func readHelmReleaseObject(name string) (*unstructured.Unstructured, error) {
 	gvr, err := gvrFor(fluxHelmReleaseResource)
 	if err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	defer cancel()
-	return getObject(ctx, gvr, kagentNamespace, agentsGitOpsAgent)
+	return getObject(ctx, gvr, kagentNamespace, name)
 }
 
 // expectManaged asserts get_agent reports the proof's agent managed as

@@ -28,9 +28,9 @@ const testWorkspaceManagerRange = ">=0.5.0 <1.0.0"
 func stubWorkspaceManagerTags(t *testing.T, tags ...string) {
 	t.Helper()
 	clear := func() {
-		workspaceManagerVersionMu.Lock()
-		workspaceManagerVersionCache = map[workspaceManagerSource]string{}
-		workspaceManagerVersionMu.Unlock()
+		componentVersionMu.Lock()
+		componentVersionCache = map[componentVersionKey]string{}
+		componentVersionMu.Unlock()
 	}
 	clear()
 	listChartTags = func(url string, _ bool) ([]string, error) {
@@ -47,7 +47,7 @@ func stubWorkspaceManagerTags(t *testing.T, tags ...string) {
 // 0.10 release pins, one resolving to 0.9 does not, and a range in
 // platform.valuesFiles admitting a release candidate wins over the chart's.
 func TestWorkspaceManagerTakesGrant(t *testing.T) {
-	source := workspaceManagerSource{repository: testWorkspaceManagerRepository, chart: workspaceManagerMCPServer, versionRange: testWorkspaceManagerRange}
+	source := componentSource{repository: testWorkspaceManagerRepository, chart: workspaceManagerMCPServer, versionRange: testWorkspaceManagerRange}
 	stubWorkspacesChart(t, chartWorkspaces{Carries: true, Organizations: true, Manager: source})
 
 	stubWorkspaceManagerTags(t, "0.9.0", "0.10.0-rc.5")
@@ -170,7 +170,7 @@ func TestWorkspaceGrantValues(t *testing.T) {
 // chart renders it (0.11.0-rc.6 and newer, resolved like the grant floor);
 // an earlier chart's schema refuses the key, so its pin goes without.
 func TestWorkspaceGrantForRevocationEndpoint(t *testing.T) {
-	source := workspaceManagerSource{repository: testWorkspaceManagerRepository, chart: workspaceManagerMCPServer, versionRange: testWorkspaceManagerRange}
+	source := componentSource{repository: testWorkspaceManagerRepository, chart: workspaceManagerMCPServer, versionRange: testWorkspaceManagerRange}
 	stubWorkspacesChart(t, chartWorkspaces{Carries: true, Organizations: true, Manager: source})
 	const gitlab = testGitLabURL
 	providers := []workspaceProviderValues{{Name: config.WorkspaceProviderGitLab, Kind: providerKindGitLab, URL: gitlab, ClientID: testGrantClientID, Secret: config.WorkspaceGitLabSecretName}}
@@ -227,7 +227,7 @@ func TestWorkspaceGrantValuesRevocationEndpoint(t *testing.T) {
 // the values carry no pin and no token exchange, and the chart derives the
 // Apps.
 func TestWorkspaceProviderApps(t *testing.T) {
-	source := workspaceManagerSource{repository: testWorkspaceManagerRepository, chart: workspaceManagerMCPServer, versionRange: ">=0.11.0 <1.0.0"}
+	source := componentSource{repository: testWorkspaceManagerRepository, chart: workspaceManagerMCPServer, versionRange: ">=0.11.0 <1.0.0"}
 	stubWorkspacesChart(t, chartWorkspaces{Carries: true, Organizations: true, Manager: source})
 	providers := []workspaceProviderValues{
 		{Name: config.WorkspaceProviderGitHub, Kind: providerKindGitHub, AppID: testGrantAppID, ClientID: testGrantClientID, Secret: config.WorkspaceGitHubSecretName},

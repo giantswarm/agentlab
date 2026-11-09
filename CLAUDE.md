@@ -251,7 +251,7 @@ agentlab configure       # interactive form; --defaults keeps/writes the canonic
 agentlab up              # certs, kind cluster, Dex, RBAC, the agent platform — verified
                            # on a terminal it ends by offering `trust` and the portal (--trust/--open pre-answer)
 agentlab open portal     # the portal (Backstage) in the browser; `open agents` the kagent UI, `open prometheus` the lab Prometheus
-agentlab list            # the labs on this machine: state, components, URLs, CA trust
+agentlab list            # the labs on this machine: state, components, kagent line, URLs, CA trust
 agentlab status          # the lab's live state: the chart in place (a dev chart named as such) vs agentlab.yaml's, every platform.valuesFiles overlay with what it pins, the platform HelmReleases
 agentlab configure --released  # the restore step before handing a lab on: drops overlays, dev images, chart directory, dev channel
 agentlab pods            # the lab's pods (kubectl get pods -A, without kubectl); -n <namespace>
@@ -268,8 +268,10 @@ agentlab beekeeper-decisions-test  # beekeeper serve behind muster puts decision
 agentlab beekeeper-central-test --part notes  # beekeeper's central notes through two lab users' CLIs: note add --for the other, listed and answered on the other's machine, the answer printed once by the filer's watch across a restart; a withdrawal only its filer may make; a fold into and a park on a central note, the park settled with the answer once
 agentlab test            # RBAC assertions for every configured user
 agentlab backstage-test  # headless Backstage sign-in for every user, the portal's Agent Platform and Models pages (--agent kagent/<name>: on an existing agent, no create or delete)
+agentlab roadmap-test    # the fake pro (a fixture board) registered with muster as pro: x_pro_list_issues as the person, with backstage.hive the portal's roadmap-backend routes reading it; --keep leaves it for the Hive spec (docs/backstage.md "The roadmap board fixture")
 agentlab organizations-test  # platform.organizations: two AgentPlatformOrganizations, alice and bob each an editor of one by group: each creates and runs an agent in their own; every surface (Kubernetes, kagent API, Slack; the Dev Portal skipped until backstage#3363) gives each the same agents; the negative cross-organization tests per surface and boundary (Kubernetes RBAC, kagent API and A2A, muster, the other organization's model, in-cluster 443 through the egress gateway); the profile tests (object-count quota, a PolicyException that does not lift the sandbox policies, the credential provider's grants, each component's Secret reads (ate-controller, both credential providers, the connectivity hooks); the Orphaned erasure skipped, HACKS.md U41)
 agentlab coding-test     # platform.coding: the coding Harness from the values, agent-manager's guards, a coding agent's sandbox floor (uid split, forwarder paths, a write tool refused, no credentials, DNS canary, egress), a workspace Session's MCP call audited by muster as the person, nothing in the sandbox running between turns, the instruction fixture, suspend/resume, the turn's usage, a share refused, no muster call of the actor accepted after delete_session
+agentlab coding-test --step egress  # one stage of coding-test and the stages it builds on (here create and the sandbox turn); the rest listed as skipped by the step
 agentlab coding-test --part devctl  # platform.devctl: a coding agent opens a pull request as the person, waits for its CI (one pr_wait), merges it (pr_merge) and waits for its release (release_wait) through devctl's MCP server; one pr_wait with a progressToken beside it
 agentlab coding-test --part toolchains  # agent-manager's toolchains: start_session with --toolchains (default go) mounts them pinned by digest; a turn finds each tool under /opt/kagent/tools/<name> on its PATH, with go builds a fixture module; the actor template mounts those digests; --other-version go@0.1.0 adds a second Session at that version and a resume of the first (--harness claude|codex)
 agentlab egress-test     # an agent with one declared origin, probed from its actor and judged from the egress gateway's record, never the reply: the origin forwarded, an undeclared host 403 (actor egress policy denied), muster forwarded without an entry, raw TCP to github.com:22 held at the gate
@@ -333,6 +335,19 @@ The lab's own e2e checks are the `*-test` subcommands, not `go test`.
   The read-only commands (`trust`, `status`, `open`, `pods`, `logs`, `list`)
   read an `agentlab.yaml` a newer release wrote (`config.LoadReadOnly`,
   `Peek`); every writer keeps the strict refusal.
+- **One binary per kagent line** (`internal/lab/kagentline.go`): a lab's
+  line is the major.minor of `components.kagent.versionRange`'s floor. This
+  agentlab drives the Session API lines (kagent 1.3 on, agent-platform
+  4.121.0 on) and the 3.x chart; the 4.x lines before 1.3 are agentlab
+  v0.84.6's. `up`/`platform` record the line in `state/kagent-line.json` as
+  the install starts and `list` shows it (the chart pin when no record:
+  4.x up to 4.120.1 is `a line before 1.3`); every command that writes
+  `agentlab.yaml` or renders into the lab (`configure`, `up`, `platform`,
+  `portal dev|build`, `reload`, `test`, `platform-down`), `turn` and the
+  proofs refuse such a lab before their first step, naming v0.84.6, except
+  an upgrade seed (`TestUndrivenLabIsLeftAlone`). Never write a lab on another line's `agentlab.yaml` with
+  this release: the line's binary refuses the newer fields. Two labs on two
+  lines: docs/cli.md "One binary per kagent line".
 - `internal/telemetry` — anonymous usage signals to TelemetryDeck
   (giantswarm/telemetrydeck-go). One per user-facing command, kubectl-gs's
   signal shape: `GiantSwarm.command` with the command path and the version
@@ -450,6 +465,13 @@ Load-bearing invariants (details in docs/):
   issuer bridged by the `dex-localhost` sidecar, proven by `platform-test`'s
   `muster replicas` stage (one pod deleted mid-session) — docs/platform.md
   "muster on the pod network".
+- **The platform's network policies are off** by default.
+  `platform.networkPolicy` (`configure --network-policy`) turns the
+  connectivity chart's and muster's on in the kubernetes flavour and needs
+  muster on the pod network (a host-network pod carries no pod labels on the
+  wire); the lab's peers are values and post-renderer patches 10 and 11,
+  proven by `platform-test`'s `network policy denial` stage — docs/platform.md
+  "Network policies".
 - **The lab shape of the agent-platform chart**: the bundled Flux engine ON
   (`components.flux.enabled: true` — the lab has no Flux of its own, and the
   chart refuses a second one) and self-management OFF (`gitops.self.enabled:
@@ -469,7 +491,7 @@ Load-bearing invariants (details in docs/):
   engine on.
 - **The fleet's admission is in the lab**: `agentlab up` installs Kyverno
   (the fleet's kyverno-crds and kyverno app charts from gsoci, Kyverno
-  3.7.2, admission controller only)
+  3.7.2, admission and reports controllers)
   with the fleet's `flux-multi-tenancy` ClusterPolicy in Enforce, verbatim
   from management-cluster-bases (`internal/lab/templates/flux-multi-tenancy.yaml`),
   the platform namespace exempt in code next to the fleet's three, and the
@@ -484,6 +506,13 @@ Load-bearing invariants (details in docs/):
   renders them with `kyvernoPolicies.enabled: true` and the tenants on and
   dry-runs each against the lab's Kyverno, PolicyExceptions on as on the
   fleet (`polextest.go`).
+  At apply time, discovery removes unserved Flux kinds and their otherwise
+  empty rules from the lab's policy copy (`withoutUnservedKinds`); failed
+  discovery stops the install rather than dropping enforcement rules.
+  The fleet's Pod policies run in Audit because the platform's exceptions
+  are not installed. `platform-test` reads their verdicts from each Running
+  platform Pod's PolicyReport (`reports.go`). Both Kyverno controllers must
+  finish rolling out and the policy webhook answer before policies apply.
 - The lab's credentials are throwaway by design; plaintext passwords in
   `agentlab.yaml` are fine.
 

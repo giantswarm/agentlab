@@ -169,6 +169,9 @@ func platformTopologyFor(cfg *config.Config) (platformTopology, error) {
 				if err := refuseUnreleasedComponents(chart, values); err != nil {
 					return platformTopology{}, err
 				}
+				if _, err := refuseUndrivenLine(cfg, chart, values); err != nil {
+					return platformTopology{}, err
+				}
 				roster, err = renderPlatformRoster(chart, values)
 			}
 		}
@@ -275,6 +278,11 @@ func platformChartFor(cfg *config.Config) platformChart {
 // user reads a single "what to do next" block once everything is verified,
 // the standalone `agentlab platform` entry point passes "Platform is up.".
 func platformUp(cfg *config.Config, header string, offers Offers) error {
+	// A lab another agentlab drives is left as it is, before anything here
+	// touches its directory (kagentline.go).
+	if err := RefuseUndrivenPin(cfg); err != nil {
+		return err
+	}
 	// The working-directory leftovers go first: nothing reads them, and the
 	// refusal below is exactly the moment a user of an earlier agentlab meets.
 	removeLegacyArtifacts()
@@ -302,11 +310,16 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	// A dev build that waits for a component release is refused before the
 	// first object is applied (unreleased.go): `up` judged it before the
 	// cluster already, `agentlab platform` judges it here.
+	// So is a chart on a kagent line this agentlab does not drive
+	// (kagentline.go): its turns and proofs belong to another release.
+	var line KagentLine
 	if _, valuesPath, err := renderManifest(cfg, platformValuesTemplate); err != nil {
 		return err
 	} else if values, err := helmValuesFiles(append([]string{valuesPath}, cfg.Platform.ValuesFiles...)...); err != nil {
 		return err
 	} else if err := refuseUnreleasedComponents(chart, values); err != nil {
+		return err
+	} else if line, err = refuseUndrivenLine(cfg, chart, values); err != nil {
 		return err
 	}
 	ctx := context.Background()
@@ -315,6 +328,11 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	// install, so a run that fails to install still says which line it was
 	// about to — the way the command signal counts failed runs.
 	telemetry.Platform(ctx, cfg, chart.installedVersion())
+	// The line is recorded as the install starts: from here the cluster is
+	// on its way to it, and `list` names it without asking the cluster.
+	if err := recordKagentLine(".", line); err != nil {
+		return err
+	}
 	step("Installing %s in the lab shape (bundled Flux engine on, self-management off)", chart)
 	// An install decides what runs: a proof's hold on the version ranges
 	// (rangehold.go) is lifted for it, and the proof in this process holds
@@ -494,6 +512,15 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 			return err
 		}
 	}
+	// platform.networkPolicy: the policies' apiServerCIDR is the node's
+	// address (render.go NodeIP), which a render left empty while the node
+	// did not exist; here it must resolve, or the chart's 0.0.0.0/0 would
+	// stand in for it.
+	if cfg.Platform.NetworkPolicy {
+		if _, err := kindNodeIPFn(cfg.ControlPlaneNode()); err != nil {
+			return fmt.Errorf("platform.networkPolicy: the apiserver's address for the policies: %w", err)
+		}
+	}
 	// Managed models: every host model server's endpoint is detected from
 	// the kind docker network and proven reachable from inside the cluster
 	// BEFORE the install, so a host-side misconfiguration (bind address,
@@ -587,6 +614,14 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	if err := ensureWorkspaceGrantClientIDs(ctx, signIns, workspaceProviders); err != nil {
 		return err
 	}
+	// agent-manager's commit mode (agentmanagercommit.go): the broker
+	// client's Secret placed ahead of the install that names it.
+	agentManagerCommit := agentManagerCommitFor(cfg, workspaceProviders, workspaceGrant, workspaceApps)
+	if agentManagerCommit != nil {
+		if err := agentManagerCommitUp(); err != nil {
+			return err
+		}
+	}
 	// The dev images a Harness runs (`harness`, `<runtime>-harness`), in the
 	// lab registry and pinned by digest before the first render, so the
 	// preload renders the components with the values the install carries.
@@ -599,6 +634,7 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 		t.WorkspaceProviders = workspaceProviders
 		t.WorkspaceGrant = workspaceGrant
 		t.WorkspaceProviderApps = workspaceApps
+		t.AgentManagerCommit = agentManagerCommit
 		registryImages.pin(cfg, t)
 	}
 
@@ -723,7 +759,24 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	}
 	gateways := agentgatewayIPv4Targets(renders)
 	noteAgentgatewayIPv4Targets(gateways)
-	postRenderers, err := componentPostRenderers(cfg, imageNames, sidecars, gateways)
+	// platform.networkPolicy: every egress policy of the renders that
+	// isolates a pod dialing the lab Dex gains the Dex peer (patch 11).
+	var dexPolicies map[string][]dexEgressPolicy
+	if cfg.Platform.NetworkPolicy {
+		dialers, err := dexDialers(cfg, renders)
+		if err != nil {
+			return err
+		}
+		if dexPolicies, err = dexEgressPolicies(renders, dialers); err != nil {
+			return err
+		}
+		for _, component := range slices.Sorted(maps.Keys(dexPolicies)) {
+			for _, p := range dexPolicies[component] {
+				note("network policy %s (%s): the lab Dex peer for the pods that dial the issuer", p.name, component)
+			}
+		}
+	}
+	postRenderers, err := componentPostRenderers(cfg, imageNames, sidecars, gateways, dexPolicies)
 	if err != nil {
 		return err
 	}
@@ -1102,6 +1155,7 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	}
 	if cfg.Platform.Agents {
 		agentsHint += "\n" + organizationsHint(cfg, orgNamespace)
+		agentsHint += "\n" + agentManagerCommitHint(agentManagerCommit)
 	}
 	fmt.Printf(`
 %s

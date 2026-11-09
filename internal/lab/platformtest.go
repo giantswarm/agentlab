@@ -28,10 +28,12 @@ const (
 	stageProvidedAPIs         = "provided APIs"
 	stageFleetAdmission       = "fleet admission"
 	stageChartExceptions      = "chart PolicyExceptions"
+	stagePolicyReports        = "policy reports"
 	stageDexReach             = "Dex reach"
 	stageDownstreamIdentity   = "downstream identity"
 	stageControllerIdentity   = "controller identity"
 	stageAgentManagerIdentity = "agent-manager identity"
+	stageNetworkPolicy        = "network policy denial"
 	stageAteletPolicy         = "atelet image-cache policy"
 	stageSubstrateLine        = "Substrate line"
 	stageWorkerPools          = "WorkerPool workers"
@@ -315,6 +317,21 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 	}
 	verdict += "\n" + polex
 
+	// The fleet's Pod policies' reports (reports.go): the reports controller
+	// judged every Running platform Pod, and the verdict of a Pod Security
+	// Standard reads off its PolicyReport, the way a policy proof asserts one.
+	p.begin(stagePolicyReports, "Verifying every Running Pod in %s carries a PolicyReport with the fleet's %s verdict", platformNamespace, reportProbePolicy)
+	reportsCtx, cancelReports := context.WithTimeout(context.Background(), time.Duration(policyReportAttempts)*policyReportInterval+kubeReadTimeout)
+	reported, err := provePolicyReports(reportsCtx)
+	cancelReports()
+	if err != nil {
+		return "", err
+	}
+	for _, v := range reported {
+		note("%s", v)
+	}
+	verdict += fmt.Sprintf("\nPASS: the reports controller judged all %d Running Pods in %s — each PolicyReport carries the fleet's %s verdict (%s)", len(reported), platformNamespace, reportProbePolicy, verdictTally(reported))
+
 	// The lab's Dex bridge: every OAuth resource server the rule selects on
 	// the live Deployments carries the dex-localhost sidecar, runs without a
 	// restart and reads Connected in muster (platformtest_sidecar.go) — the
@@ -393,6 +410,22 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 			return "", err
 		}
 		verdict += "\nPASS: agent-manager writes as the caller — a viewer's create_agent with a forged x-user-id is the apiserver's Forbidden for the viewer"
+		// The platform's own policies (platform.networkPolicy,
+		// platformtest_netpol.go): a backend that admits muster by its pod
+		// labels refuses a pod outside muster's namespace, and muster's
+		// call still answers.
+		p.begin(stageNetworkPolicy, "The platform's network policies: a pod outside muster's namespace refused by agent-manager, muster's call answered")
+		if !cfg.Platform.NetworkPolicy {
+			p.skip("platform.networkPolicy is off: the lab runs no policy of the platform's")
+		} else {
+			ctx, cancel := context.WithTimeout(context.Background(), probePodTimeout+kubeReadTimeout)
+			denial, err := proveNetworkPolicyDenial(ctx, cfg, token)
+			cancel()
+			if err != nil {
+				return "", err
+			}
+			verdict += "\nPASS: the platform's network policies — " + denial
+		}
 		// Agent Substrate, the component the 4.x line added: the chart in
 		// place renders its HelmRelease or has none to prove.
 		substrateCtx, cancelSubstrate := context.WithTimeout(context.Background(), kubeReadTimeout)
@@ -453,7 +486,7 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 			}
 		}
 	} else {
-		p.leaveOut("platform.agents is off in "+config.File, stageControllerIdentity, stageAgentManagerIdentity, stageAteletPolicy, stageSubstrateLine, stageWorkerPools)
+		p.leaveOut("platform.agents is off in "+config.File, stageControllerIdentity, stageAgentManagerIdentity, stageNetworkPolicy, stageAteletPolicy, stageSubstrateLine, stageWorkerPools)
 	}
 
 	// The workspace-manager (workspacemanagertest.go): registered with muster
