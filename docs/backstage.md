@@ -309,7 +309,10 @@ fixture makes the first `platform.workspaces.github.proofRepositories` entry
 the repository that owns the lab's agents — a suspended `GitRepository` on its
 default branch, the `Kustomization` `agentlab-gitops-fixture` at
 `clusters/agentlab/kagent`, and one agent applied from git (`agentlab-commit-seed`,
-composed by agent-manager and applied with the Kustomization's labels).
+composed by agent-manager and applied with the Kustomization's labels). The
+admin's grant of the `github` instance's App comes first: held already, or
+granted once in a browser signed in to GitHub through muster's sign-in link,
+which the stage prints and waits for, as the workspaces proofs do.
 
 - C1 `create_agent` in mode commit, as the create dialog sends it (no target):
   a pull request on that repository from `agent-manager/create-kagent-agentlab-commit`
@@ -321,7 +324,7 @@ composed by agent-manager and applied with the Kustomization's labels).
   `get_agent` says `managed: gitops`, `validate_agent` (`update`) in mode apply
   is `gitops_owned`, the commit's dry run names that repository and branch
   and opens nothing, `update_agent` in mode commit opens the pull request; the
-  live release keeps its resourceVersion;
+  live release keeps its generation (helm-controller's status writes move only its resourceVersion);
 - C4 `delete_agent` in mode commit opens the pull request removing the file;
   the release stays.
 

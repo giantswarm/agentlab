@@ -134,10 +134,10 @@ func AgentsGitOpsTest(cfg *config.Config, email string) error {
 	if err != nil {
 		return err
 	}
-	if after.GetResourceVersion() != live.GetResourceVersion() {
-		return fmt.Errorf("a refused write changed the live HelmRelease %s (resourceVersion %s -> %s)", agentsGitOpsAgent, live.GetResourceVersion(), after.GetResourceVersion())
+	if after.GetGeneration() != live.GetGeneration() {
+		return fmt.Errorf("a refused write changed the live HelmRelease %s (generation %d -> %d)", agentsGitOpsAgent, live.GetGeneration(), after.GetGeneration())
 	}
-	note("HelmRelease %s/%s at resourceVersion %s, as before", kagentNamespace, agentsGitOpsAgent, after.GetResourceVersion())
+	note("HelmRelease %s/%s at generation %d, as before (helm-controller's status writes move only its resourceVersion)", kagentNamespace, agentsGitOpsAgent, after.GetGeneration())
 
 	commitVerdict := "mode commit as unsupported on the platform's agent-manager, which offers no commit mode"
 	if commit {

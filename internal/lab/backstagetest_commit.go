@@ -38,7 +38,9 @@ import (
 //   - delete: delete_agent in mode commit opens the pull request removing the
 //     agent's file; the release stays.
 //
-// Every branch the stage opened is deleted at the end, which closes its pull
+// The admin's grant of the instance's App comes first (grantProofProvider):
+// held already, or granted once through muster's sign-in link. Every branch
+// the stage opened is deleted at the end, which closes its pull
 // request, with the person's own git credentials on this host; the agents,
 // the Kustomization and the GitRepository go with them, on every exit path.
 
@@ -125,6 +127,18 @@ func proveCommitPath(cfg *config.Config, primary *portalSession, spec agentSpec,
 	cp.base = defaultBranchOf(base)
 	if cp.base == "" {
 		return nil, fmt.Errorf("%s names no default branch: %q", cp.repo, base)
+	}
+
+	// The person's grant of the github instance's App, which muster's broker
+	// releases to agent-manager: held already, or granted once in a browser
+	// signed in to GitHub through muster's sign-in link, as every proof
+	// acting on GitHub as the person takes it.
+	admin, err := openWorkspacePerson(cfg, primary.user)
+	if err != nil {
+		return nil, err
+	}
+	if err := grantProofProvider(cfg, admin, config.WorkspaceProviderGitHub, 0); err != nil {
+		return nil, err
 	}
 
 	cp.cleanup()
@@ -282,10 +296,10 @@ func (cp *commitProof) edit(branch string) (*commitAnswer, error) {
 	if err != nil {
 		return nil, err
 	}
-	if after.GetResourceVersion() != live.GetResourceVersion() {
-		return nil, fmt.Errorf("update_agent in mode commit changed the live HelmRelease %s (resourceVersion %s -> %s)", commitTestAgent, live.GetResourceVersion(), after.GetResourceVersion())
+	if after.GetGeneration() != live.GetGeneration() {
+		return nil, fmt.Errorf("update_agent in mode commit changed the live HelmRelease %s (generation %d -> %d)", commitTestAgent, live.GetGeneration(), after.GetGeneration())
 	}
-	note("%s by %s: branch %s; the live release at resourceVersion %s, as before", edited.Commit.PullRequest, edited.Commit.Author, edited.Commit.Branch, after.GetResourceVersion())
+	note("%s by %s: branch %s; the live release at generation %d, as before", edited.Commit.PullRequest, edited.Commit.Author, edited.Commit.Branch, after.GetGeneration())
 	return &edited, nil
 }
 
