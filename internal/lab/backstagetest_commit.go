@@ -138,6 +138,10 @@ func proveCommitPath(cfg *config.Config, primary *portalSession, spec agentSpec,
 	if err != nil {
 		return nil, err
 	}
+	// grantProofProvider records even a pre-existing grant in the run ledger.
+	// Drop it on success and on a failed or timed-out sign-in alike, so the
+	// next proof starts without this run's provider credentials.
+	defer releaseWorkspaceGrants()
 	if err := grantProofProvider(cfg, admin, config.WorkspaceProviderGitHub, 0); err != nil {
 		return nil, err
 	}

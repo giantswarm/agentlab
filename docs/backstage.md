@@ -313,6 +313,7 @@ composed by agent-manager and applied with the Kustomization's labels). The
 admin's grant of the `github` instance's App comes first: held already, or
 granted once in a browser signed in to GitHub through muster's sign-in link,
 which the stage prints and waits for, as the workspaces proofs do.
+The grant is dropped when the stage ends, including a failed sign-in.
 
 - C1 `create_agent` in mode commit, as the create dialog sends it (no target):
   a pull request on that repository from `agent-manager/create-kagent-agentlab-commit`
