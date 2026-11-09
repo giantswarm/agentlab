@@ -43,7 +43,7 @@ const (
 	slackActionConnect       = "connector_connect"
 	slackActionSignInDecline = "sign_in_decline"
 	gatewayLandingPath       = "/connectors/complete"
-	gatewayLandingDone       = "The sign-in is complete"
+	gatewayContinuing        = "Opened the sign-in link"
 	gatewaySignedInLine      = " signed in."
 	gatewayNotSignedInLine   = " did not sign in."
 	gatewayNotSignedIn       = "Not signed in"
@@ -176,8 +176,8 @@ func klausGatewaySignInTest(cfg *config.Config, user *config.User, opts KlausGat
 	gw.defaultAgent = klausGatewaySignInAgent
 	gw.extraArgs = []string{"--obo-connectors-enabled=true"}
 	defer func() { _ = gw.stop() }()
-	step("Starting klaus-gateway %s on the host with its connector landing on (%s, on muster's post-login redirect allowlist), its Web API the fake at %s, a2a target %s",
-		gw.describe(), klausGatewayLanding(opts.Port), fake.baseURL(), target)
+	step("Starting klaus-gateway %s on the host with its connector prompts on, its Web API the fake at %s, a2a target %s",
+		gw.describe(), fake.baseURL(), target)
 	if err := gw.start(); err != nil {
 		return err
 	}
@@ -274,8 +274,11 @@ func (s *signInSurfaces) paused(t *slackThread, turn *slackTurn, before int) (*s
 	prompt, _ := signInPromptIn(msgs, before, t.user)
 	button, _ := prompt.action(slackActionConnect)
 	link, _ := button[slackKeyURL].(string)
-	if redirect := linkRedirect(link); redirect == "" || !strings.HasPrefix(redirect, klausGatewayLanding(s.port)) {
-		return nil, fmt.Errorf("the sign-in button's link %s carries no redirect to the gateway's landing %s", linkPath(link), klausGatewayLanding(s.port))
+	if redirect := linkRedirect(link); redirect != "" {
+		return nil, fmt.Errorf("the sign-in button's link %s carries a redirect %s: the gateway must open the server's link unchanged", linkPath(link), redirect)
+	}
+	if shown := "`" + strings.ReplaceAll(link, "&", "&amp;") + "`"; !strings.Contains(prompt.Text, shown) {
+		return nil, fmt.Errorf("the sign-in prompt does not show the whole link %s before it is opened: %s", linkPath(link), excerpt(prompt.Text, 300))
 	}
 	session, err := s.slack.boundSession(s.api, t)
 	if err != nil {
@@ -288,8 +291,8 @@ func (s *signInSurfaces) paused(t *slackThread, turn *slackTurn, before int) (*s
 	if task.Status.State != a2a.TaskStateInputRequired || parseURLElicitationRequest(task.Status.Message) == nil {
 		return nil, fmt.Errorf("the thread shows a sign-in prompt for task %s but the controller has it %s without a url_elicitation_request", task.ID, task.Status.State)
 	}
-	note("task %s of Session %s paused at input-required (status message %s); the prompt went to %s alone, its link %s returning to %s",
-		task.ID, session.GetId(), task.Status.Message.ID, prompt.Recipient, linkPath(link), gatewayLandingPath)
+	note("task %s of Session %s paused at input-required (status message %s); the prompt went to %s alone, showing its link %s whole and opening it unchanged",
+		task.ID, session.GetId(), task.Status.Message.ID, prompt.Recipient, linkPath(link))
 	return &signInPause{turn: turn, prompt: prompt, link: link, session: session, task: task, before: len(msgs)}, nil
 }
 
@@ -505,15 +508,19 @@ func (s *signInSurfaces) slackFirst(t *slackThread) error {
 }
 
 func (s *signInSurfaces) accepted(t *slackThread) error {
-	step("Accepted: the sign-in from the prompt's link completes through Dex and muster, whose redirect lands on the gateway; the landing resumes the same task with accept, and the call runs once")
+	step("Accepted: the click on Sign in is the consent and resumes the same task with accept before the person signed in; the sign-in then completes through Dex and muster on muster's own page, the runtime's retry waits for it, and the call runs once")
 	paused, err := s.pause(t, signInTestPrompt)
 	if err != nil {
 		return err
 	}
 	decided := time.Now()
-	if err := completeSignInEnding(paused.link, s.user, "the gateway's landing "+gatewayLandingPath, func(end *url.URL, body []byte) bool {
-		return end.Path == gatewayLandingPath && strings.Contains(string(body), gatewayLandingDone)
-	}); err != nil {
+	if err := s.slack.driver.click(t.user, paused.prompt, slackActionConnect); err != nil {
+		return err
+	}
+	if !waitFor(int(klausGatewayReplyWait/slackPoll), slackPoll, func() bool { return responded(s.slack.fake, gatewayContinuing) }) {
+		return fmt.Errorf("the clicked prompt was not rewritten to %q within %s", gatewayContinuing, klausGatewayReplyWait)
+	}
+	if err := completeSignIn(paused.link, s.user); err != nil {
 		return err
 	}
 	turn, err := s.resumed(t, paused)
@@ -534,7 +541,7 @@ func (s *signInSurfaces) accepted(t *slackThread) error {
 	if _, ok := findMessage(turn.msgs, "<@"+t.user+">"+gatewaySignedInLine); !ok {
 		return fmt.Errorf("the thread does not say %q: %s", "<@"+t.user+">"+gatewaySignedInLine, threadLine(turn.msgs))
 	}
-	s.pass("the sign-in from the prompt's link ended on the gateway's landing; it resumed task %s with accept (no message of the person's), the call ran once and the answer carried the fixture's tools", paused.task.ID)
+	s.pass("the click on Sign in resumed task %s with accept before the sign-in; the sign-in from the link, unchanged, ended on muster's page; the call ran once and the answer carried the fixture's tools", paused.task.ID)
 	s.signOut()
 	restartOAuthFixture()
 	return nil

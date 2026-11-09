@@ -217,11 +217,10 @@ Agent `klaus-gateway-signin` carries muster on the OAuth fixture's toolset
 so the only pause is the sign-in: its turn asks for the fixture's
 `filter_tools`, and the runtime parks the task at `input-required` on
 muster's `url_elicitation_request`. The gateway runs on the host as in the
-proof above, with `--obo-connectors-enabled`: the prompt's Sign in link
-carries a post-login redirect to its landing
-`http://127.0.0.1:<port>/connectors/complete`, which the lab puts on muster's
-`oauth.mcpClient.postLoginRedirectAllowlist` (the lab's own port, so the part
-refuses `--gateway-port`). The portal is signed in as the same person; its
+proof above, with `--obo-connectors-enabled`, on the lab's own port (the part
+refuses `--gateway-port`). The prompt must show the whole link, in code, and
+its Sign in button must open muster's link unchanged, with no `redirect=`
+(MCP URL mode elicitation). The portal is signed in as the same person; its
 `POST /kagent/sessions/:id/answer` is the portal's half of each decision.
 
 Each stage opens a new thread, waits for the pause (the ephemeral prompt to
@@ -245,10 +244,13 @@ records, muster's dispatch log and the controller:
   (giantswarm/backstage#3331) and the task keeps waiting on the second,
   which Slack then declines. A model that does not retry fails the stage as
   the model's doing.
-- **Accepted**: the sign-in from the prompt's link through Dex and muster
-  ends on the gateway's landing ("The sign-in is complete"), which resumes
-  the task with accept (a resume, not a message of the person's); the call
-  runs once and the answer carries the fixture's tools.
+- **Accepted**: the click on Sign in is the person's consent: the gateway
+  resumes the task with accept (a resume, not a message of the person's)
+  before the sign-in, and the prompt reads "Opened the sign-in link". The
+  sign-in from the link through Dex and muster then ends on muster's own
+  page; the runtime's retry waits for it, the call runs once and the answer
+  carries the fixture's tools. A runtime whose retry does not wait asks for
+  the sign-in again and fails the stage.
 
 The stages run on `--harness` (default the platform Harness; `omp` and
 `claude` as the lab renders them) on the Anthropic default model; codex needs
