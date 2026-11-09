@@ -147,7 +147,10 @@ a per-person server) and proves the chain:
    of the team, `/items?empty=status` the item without a status, `/overview`
    counting the team's items by status.
 3. The fake's record: each call came with the person's own token, the
-   backend's own reads among them.
+   backend's two item reads of this run among them. The backend keeps each
+   person's board reads for minutes, across restarts, so the item reads carry
+   an `updated` qualifier of the run's own (one every fixture item matches) and
+   reach the fake instead of a read an earlier run left.
 
 The run removes the fake, its Service and the MCPServer; `--keep` leaves them
 in place after a passing run, so the Hive board in the portal renders the

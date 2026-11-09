@@ -25,6 +25,9 @@ import (
 // portal's own e2e spec, which reads the same routes while `--keep` leaves
 // the fixture in place.
 
+// roadmapTeamParam is the roadmap-backend's team query parameter.
+const roadmapTeamParam = "team"
+
 // RoadmapTestOptions are roadmap-test's flags.
 type RoadmapTestOptions struct {
 	// Email is the lab user the proof reads as (default the admin).
@@ -267,15 +270,21 @@ func (p *roadmapProof) backend() error {
 	type items struct {
 		Items []proBoardItem `json:"items"`
 	}
-	team := url.Values{"team": {proFakeTeam}}
+	team := url.Values{roadmapTeamParam: {proFakeTeam}}
+	// The backend keeps each person's reads for minutes, across restarts:
+	// the item reads carry an updated qualifier of this run's own, which
+	// every fixture item matches, so they reach the fake instead of a read
+	// an earlier run left (the overview's and the schema's may not).
+	runUpdated := ">=" + time.Now().UTC().AddDate(-20, 0, 0).Format(time.RFC3339)
+	teamItems := url.Values{roadmapTeamParam: {proFakeTeam}, argUpdated: {runUpdated}}
 	var column items
-	if err := get("/items?"+team.Encode(), &column); err != nil {
+	if err := get("/items?"+teamItems.Encode(), &column); err != nil {
 		return err
 	}
 	if err := sameTitles("/api/roadmap/items of team "+proFakeTeam, itemTitles(column.Items), fixtureTitles(teamIs(proFakeTeam))); err != nil {
 		return err
 	}
-	noStatus := url.Values{"team": {proFakeTeam}, "empty": {"status"}}
+	noStatus := url.Values{roadmapTeamParam: {proFakeTeam}, "empty": {"status"}, argUpdated: {runUpdated}}
 	var unset items
 	if err := get("/items?"+noStatus.Encode(), &unset); err != nil {
 		return err
@@ -302,14 +311,17 @@ func (p *roadmapProof) backend() error {
 		return fmt.Errorf("/api/roadmap/overview of team %s answered %d items by status %v, want %d by %v", proFakeTeam, overview.Total, overview.ByStatus, len(column.Items), want)
 	}
 	note("team %s: %d items (%s), %v by status; without a status: %s", proFakeTeam, len(column.Items), strings.Join(itemTitles(column.Items), ", "), overview.ByStatus, strings.Join(itemTitles(unset.Items), ", "))
-	// The backend's own calls: muster's stage sends neither.
-	if err := p.callsAs("the backend's list_issues of the items without a status", func(c proFakeCall) bool {
+	// The backend's own calls of this run: muster's stage sends no updated.
+	if err := p.callsAs("the backend's list_issues of this run's items without a status", func(c proFakeCall) bool {
 		empty, _ := c.Arguments["emptyFields"].([]any)
-		return c.Tool == proToolListIssues && slices.Contains(empty, any(boardFieldStatus))
+		return c.Tool == proToolListIssues && c.Arguments[argUpdated] == runUpdated && slices.Contains(empty, any(boardFieldStatus))
 	}); err != nil {
 		return err
 	}
-	return p.callsAs("the backend's get_board_schema", func(c proFakeCall) bool { return c.Tool == "get_board_schema" })
+	return p.callsAs("the backend's list_issues of this run's team items", func(c proFakeCall) bool {
+		filters, _ := c.Arguments[argFilters].(map[string]any)
+		return c.Tool == proToolListIssues && c.Arguments[argUpdated] == runUpdated && filters[boardFieldTeam] == proFakeTeam
+	})
 }
 
 // callsAs reads back that the fake answered a call match accepts, what

@@ -121,6 +121,7 @@ const (
 	argKeyword        = "keyword"
 	argState          = "state"
 	argRepository     = "repository"
+	argUpdated        = "updated"
 	argOwner          = "owner"
 	argRepo           = "repo"
 	argIssueNumber    = "issue_number"
@@ -363,7 +364,7 @@ func proFakeTools() []proFakeTool {
 		tool(proToolListIssues, "List the items of a board, filtered by field values", []string{argBoard}, map[string]any{
 			argBoard: str, argFilters: map[string]any{fieldTypeKey: "object", "additionalProperties": str},
 			"emptyFields": map[string]any{fieldTypeKey: "array", "items": str}, "limit": num,
-			argKeyword: str, argState: str, "assignee": str, argRepository: str, "updated": str,
+			argKeyword: str, argState: str, "assignee": str, argRepository: str, argUpdated: str,
 		}),
 		tool("get_board_schema", "The fields of a board and their options", []string{argBoard}, map[string]any{argBoard: str}),
 		tool("get_item_by_issue", "The board item of an issue", []string{argBoard, argOwner, argRepo, argIssueNumber},
@@ -382,7 +383,7 @@ func (f *proFake) call(tool string, args map[string]any) (any, error) {
 		if err := requireBoard(args); err != nil {
 			return nil, err
 		}
-		return f.listIssues(args), nil
+		return f.listIssues(args)
 	case "get_board_schema":
 		if err := requireBoard(args); err != nil {
 			return nil, err
@@ -470,9 +471,9 @@ func (f *proFake) byIssue(args map[string]any) *proBoardItem {
 // arguments the roadmap-backend sends: field values (case-insensitive), the
 // fields that must be empty, the state, an assignee, the repository and the
 // keyword's words in the title (a quarter:"…" term matches no fixture item,
-// which has no quarter). limit 0 reads every item; a limit below the count
+// which has no quarter), the updated qualifier (updatedRange). limit 0 reads every item; a limit below the count
 // cuts the list and says so.
-func (f *proFake) listIssues(args map[string]any) map[string]any {
+func (f *proFake) listIssues(args map[string]any) (map[string]any, error) {
 	filters, _ := args[argFilters].(map[string]any)
 	var empty []string
 	if list, ok := args["emptyFields"].([]any); ok {
@@ -486,9 +487,14 @@ func (f *proFake) listIssues(args map[string]any) map[string]any {
 	assignee, _ := args["assignee"].(string)
 	repository, _ := args[argRepository].(string)
 	keyword, _ := args[argKeyword].(string)
+	updated, _ := args[argUpdated].(string)
+	since, until, err := updatedRange(updated)
+	if err != nil {
+		return nil, err
+	}
 	matched := []proBoardItem{}
 	for _, item := range f.items {
-		if itemMatches(item, filters, empty, state, assignee, repository, keyword) {
+		if itemMatches(item, filters, empty, state, assignee, repository, keyword) && updatedWithin(item, since, until) {
 			matched = append(matched, item)
 		}
 	}
@@ -497,7 +503,58 @@ func (f *proFake) listIssues(args map[string]any) map[string]any {
 	if limit, _ := args["limit"].(float64); limit > 0 && int(limit) < total {
 		matched, truncated = matched[:int(limit)], true
 	}
-	return map[string]any{"issues": matched, "totalCount": total, "hidden": 0, "truncated": truncated}
+	return map[string]any{"issues": matched, "totalCount": total, "hidden": 0, "truncated": truncated}, nil
+}
+
+// updatedRange reads list_issues' updated qualifier the way GitHub's search
+// reads one: >=, >, <= or < before a date (2006-01-02) or a time (RFC 3339),
+// or a bare date for that day; "" is no bound. It answers the half-open
+// range [since, until) an item's updatedAt must fall in, a zero end being
+// open.
+func updatedRange(q string) (since, until time.Time, err error) {
+	if q == "" {
+		return since, until, nil
+	}
+	parse := func(v string) (time.Time, bool, error) {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			return t, false, nil
+		}
+		t, err := time.Parse(time.DateOnly, v)
+		return t, true, err
+	}
+	for _, op := range []string{">=", "<=", ">", "<"} {
+		v, ok := strings.CutPrefix(q, op)
+		if !ok {
+			continue
+		}
+		t, day, err := parse(v)
+		if err != nil {
+			break
+		}
+		// A date's > and <= take the whole day.
+		if day && (op == ">" || op == "<=") {
+			t = t.AddDate(0, 0, 1)
+		} else if op == ">" || op == "<=" {
+			t = t.Add(time.Nanosecond)
+		}
+		if op[0] == '>' {
+			return t, until, nil
+		}
+		return since, t, nil
+	}
+	if t, day, err := parse(q); err == nil && day {
+		return t, t.AddDate(0, 0, 1), nil
+	}
+	return since, until, fmt.Errorf("updated %q is no date qualifier: >=, >, <= or < before a date (2006-01-02) or an RFC 3339 time, or a bare date", q)
+}
+
+// updatedWithin: the item's updatedAt is in [since, until).
+func updatedWithin(item proBoardItem, since, until time.Time) bool {
+	at, err := time.Parse(time.RFC3339, item.UpdatedAt)
+	if err != nil {
+		return false
+	}
+	return (since.IsZero() || !at.Before(since)) && (until.IsZero() || at.Before(until))
 }
 
 func itemMatches(item proBoardItem, filters map[string]any, empty []string, state, assignee, repository, keyword string) bool {

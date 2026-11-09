@@ -155,6 +155,11 @@ func TestProFakeListIssues(t *testing.T) {
 		{argKeyword, map[string]any{argKeyword: "cluster portal"}, []string{"Cluster templates in the portal"}},
 		{"quarter", map[string]any{argKeyword: `quarter:"Q4 2026"`}, nil},
 		{argRepository, map[string]any{argRepository: "giantswarm/other"}, nil},
+		{"updated since a time", map[string]any{argUpdated: ">=2006-01-02T15:04:05Z"}, fixtureTitles(nil)},
+		{"updated on the day", map[string]any{argUpdated: "2026-10-05"}, fixtureTitles(nil)},
+		{"updated by the day's end", map[string]any{argUpdated: "<=2026-10-05"}, fixtureTitles(nil)},
+		{"updated after the day", map[string]any{argUpdated: ">2026-10-05"}, nil},
+		{"updated before the time", map[string]any{argUpdated: "<2026-10-05T08:00:00Z"}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			args := map[string]any{argBoard: proFakeBoard, "limit": 0}
@@ -214,6 +219,7 @@ func TestProFakeReads(t *testing.T) {
 	}{
 		{proToolListIssues, map[string]any{argBoard: "customer"}},
 		{"update_issue_field", map[string]any{argBoard: proFakeBoard}},
+		{proToolListIssues, map[string]any{argBoard: proFakeBoard, argUpdated: "last week"}},
 	} {
 		if r := c.callTool(refused.tool, refused.args); r["isError"] != true {
 			t.Errorf("%s %v answered %v, want a tool error", refused.tool, refused.args, r)
