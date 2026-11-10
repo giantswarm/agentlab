@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -124,5 +125,38 @@ func TestSignInHoldDefault(t *testing.T) {
 	}
 	if got := (KlausGatewayTestOptions{Hold: time.Minute}).withDefaults().Hold; got != time.Minute {
 		t.Errorf("hold = %s, want the 1m0s given", got)
+	}
+}
+
+// muster held the retry when a boundary line of the fixture's tool, by name
+// or through call_tool, started before the sign-in began and ended once the
+// call ran; a call that arrived after the sign-in, a failed one, an earlier
+// one and another tool's do not count.
+func TestHeldCallIn(t *testing.T) {
+	signingIn := time.Date(2026, 11, 10, 12, 0, 40, 0, time.UTC)
+	ran := time.Date(2026, 11, 10, 12, 0, 45, 0, time.UTC)
+	line := func(at, tool, outcome string, seconds float64) string {
+		return fmt.Sprintf(`{"time":"2026-11-10T12:00:%sZ","level":"INFO","msg":"tool call","subsystem":"MCP-Tool","tool":%q,"outcome":%q,"duration_s":%g}`, at, tool, outcome, seconds)
+	}
+	for _, tc := range []struct {
+		name string
+		logs []string
+		held time.Duration
+		ok   bool
+	}{
+		{"held through call_tool", []string{line("46", musterMetaCallTool, "ok", 36)}, 30 * time.Second, true},
+		{"held by name, the longest", []string{line("46", signInTestTool, "ok", 16), line("46", signInTestTool, "ok", 41)}, 35 * time.Second, true},
+		{"arrived after the sign-in began", []string{line("46", musterMetaCallTool, "ok", 5)}, 0, false},
+		{"an error", []string{line("46", musterMetaCallTool, "error", 36)}, 0, false},
+		{"ended before the call ran", []string{line("44", musterMetaCallTool, "ok", 36)}, 0, false},
+		{"another tool", []string{line("46", "x_kubernetes_list", "ok", 36)}, 0, false},
+		{"a dispatch line", []string{`{"time":"2026-11-10T12:00:46Z","msg":"tool dispatched","tool":"` + signInTestTool + `","outcome":"ok","duration_s":36}`, "a plain line"}, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			held, ok := heldCallIn(strings.Join(tc.logs, "\n"), signingIn, ran)
+			if ok != tc.ok || held != tc.held {
+				t.Errorf("heldCallIn = %s, %t; want %s, %t", held, ok, tc.held, tc.ok)
+			}
+		})
 	}
 }

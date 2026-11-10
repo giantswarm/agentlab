@@ -2,6 +2,7 @@ package lab
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -43,6 +44,9 @@ const (
 	slackActionConnect       = "connector_connect"
 	slackActionSignInDecline = "sign_in_decline"
 	gatewayContinuing        = "Opened the sign-in link"
+	// musterToolCallLog is muster's boundary line for a tool call, its
+	// duration_s covering the sign-in wait (internal/aggregator/logging.go).
+	musterToolCallLog        = "tool call"
 	gatewaySignedInLine      = " signed in."
 	gatewayNotSignedInLine   = " did not sign in."
 	gatewayNotSignedIn       = "Not signed in"
@@ -546,6 +550,7 @@ func (s *signInSurfaces) accepted(t *slackThread) error {
 	if err := s.holdParked(paused, s.hold); err != nil {
 		return err
 	}
+	signingIn := time.Now()
 	if err := completeSignIn(paused.link, s.user); err != nil {
 		return err
 	}
@@ -562,15 +567,28 @@ func (s *signInSurfaces) accepted(t *slackThread) error {
 	if !callAnswered(turn.answer) {
 		return fmt.Errorf("after the sign-in the answer does not carry the fixture's tools (%s): %s", signInTestToolProof, excerpt(turn.answer, 300))
 	}
-	if ran, err := s.fixtureCallsSince(decided); err != nil {
+	logs, err := musterLogSince(decided)
+	if err != nil {
 		return err
-	} else if len(ran) != 1 {
+	}
+	ran := fixtureCallsIn(logs, decided, s.subject)
+	if len(ran) != 1 {
 		return fmt.Errorf("after the sign-in muster ran %s %d times, want once: %s", signInTestTool, len(ran), strings.Join(ran, ", "))
+	}
+	ranAt, err := time.Parse(time.RFC3339Nano, ran[0])
+	if err != nil {
+		return err
+	}
+	held, ok := heldCallIn(logs, signingIn, ranAt)
+	if !ok {
+		return fmt.Errorf("muster's log has no call that reached it before the sign-in began (%s) and ended once %s ran (%s): the runtime's retry did not wait in muster's sign-in wait",
+			signingIn.UTC().Format(time.RFC3339Nano), signInTestTool, ran[0])
 	}
 	if _, ok := findMessage(turn.msgs, "<@"+t.user+">"+gatewaySignedInLine); !ok {
 		return fmt.Errorf("the thread does not say %q: %s", "<@"+t.user+">"+gatewaySignedInLine, threadLine(turn.msgs))
 	}
-	s.pass("the click on Sign in resumed task %s with accept before the sign-in; the task stayed %s on its retry for %s, muster holding the call until the sign-in; the sign-in from the link, unchanged, ended on muster's page; the call ran once in the same task and the answer carried the fixture's tools", paused.task.ID, parked, s.hold)
+	s.pass("the click on Sign in resumed task %s with accept before the sign-in; the task stayed %s on its retry for the %s hold, muster holding the call %s before the sign-in began; the sign-in from the link, unchanged, ended on muster's page; the call ran once in the same task and the answer carried the fixture's tools",
+		paused.task.ID, parked, s.hold, held.Round(time.Second))
 	s.signOut()
 	restartOAuthFixture()
 	return nil
@@ -665,6 +683,36 @@ func retryParked(task *a2a.Task, askedIn string) (bool, error) {
 	default:
 		return false, fmt.Errorf("task %s ended %s before the sign-in: its retry did not wait in muster's sign-in wait", task.ID, state)
 	}
+}
+
+// heldCallIn is how long muster held a call before the sign-in began at
+// signingIn, from its boundary line ("tool call", which times muster's
+// sign-in wait too): the longest such line of the fixture's tool, by name or
+// through call_tool, that ran ok, started before signingIn and ended once the
+// fixture's call ran at ran. ok is false when none did: the retry reached
+// muster only after the sign-in began, or never waited in it.
+func heldCallIn(logs string, signingIn, ran time.Time) (held time.Duration, ok bool) {
+	for _, line := range strings.Split(logs, "\n") {
+		var entry struct {
+			Time     time.Time `json:"time"`
+			Msg      string    `json:"msg"`
+			Tool     string    `json:"tool"`
+			Outcome  string    `json:"outcome"`
+			Duration float64   `json:"duration_s"`
+		}
+		start := strings.IndexByte(line, '{')
+		if start < 0 || json.Unmarshal([]byte(line[start:]), &entry) != nil {
+			continue
+		}
+		if entry.Msg != musterToolCallLog || entry.Outcome != "ok" || (entry.Tool != signInTestTool && entry.Tool != musterMetaCallTool) || entry.Time.Before(ran) {
+			continue
+		}
+		began := entry.Time.Add(-time.Duration(entry.Duration * float64(time.Second)))
+		if before := signingIn.Sub(began); before > 0 && before > held {
+			held, ok = before, true
+		}
+	}
+	return held, ok
 }
 
 func (s *signInSurfaces) fixtureCallsSince(since time.Time) ([]string, error) {

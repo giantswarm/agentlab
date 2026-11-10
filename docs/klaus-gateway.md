@@ -247,12 +247,15 @@ records, muster's dispatch log and the controller:
   resumes the task with accept (a resume, not a message of the person's)
   before the sign-in, and the prompt reads "Opened the sign-in link". The
   stage then waits for the task to leave `input-required` (the runtime's
-  retry is in flight; muster holds it in its sign-in wait of up to five
-  minutes, which it does not log, so the stage reads the task) and holds
+  retry is in flight, held in muster's sign-in wait of up to five minutes)
+  and holds
   the sign-in back for `--hold` (default 10s), failing as soon as the task
   ends or asks again. Only then does the sign-in from the link go through
   Dex and muster, ending on muster's own page; the call runs once in the
-  same task and the answer carries the fixture's tools. A `--hold` longer
+  same task and the answer carries the fixture's tools. muster's `tool call`
+  line, whose `duration_s` covers the sign-in wait, must show the call
+  reaching muster before the sign-in began, and the verdict says how long
+  muster held it. A `--hold` longer
   than the Harness's MCP call timeout (on `claude` the RemoteMCPServer's
   timeout, 30s by default) proves the retry outlives it; the hold stays at
   most 4m, inside muster's wait.
