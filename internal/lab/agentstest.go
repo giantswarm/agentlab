@@ -403,7 +403,7 @@ func AgentsTest(cfg *config.Config, email string, opts AgentsTestOptions) error 
 		}
 	}
 
-	step("The agent-manager ServiceAccount holds no RBAC of its own beyond what the lab's switches grant — skills.mintGitAuthSecret the skills-Secret Role, tenants.organizations.enabled the tenant reconciler's ClusterRole, the chart-source Role on the agent chart's OCIRepository always (auth can-i --list --as=%s, against a ServiceAccount no binding names)", agentManagerServiceAccount)
+	step("The agent-manager ServiceAccount holds no RBAC of its own beyond what the lab's switches grant — skills.mintGitAuthSecret the skills-Secret Role, agentPlatformOrganizations.enabled namespace discovery, tenants.organizations.enabled the legacy tenant reconciler's ClusterRole, the chart-source Role on the agent chart's OCIRepository always (auth can-i --list --as=%s, against a ServiceAccount no binding names)", agentManagerServiceAccount)
 	rules, err := serviceAccountRules(agentManagerServiceAccount, kagentNamespace)
 	if err != nil {
 		return err
@@ -747,7 +747,8 @@ func agentManagerUpdate(s *musterSession, args map[string]any) (*agentManagerUpd
 
 // agentManagerMultiTenant reads off agent-manager's Deployment whether it
 // runs --multi-tenant: before agent-platform 4.175.0 the tenant reconciler
-// of the tenants mode, whose ClusterRole agentManagerGrants then allows.
+// of the tenants mode, and on the current line organization namespace
+// discovery. agentManagerGrants distinguishes their grants by the values.
 func agentManagerMultiTenant() (bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	defer cancel()
@@ -955,8 +956,12 @@ func (g saGrant) String() string {
 }
 
 // agentManagerGrants is what the switches in the lab's rendered values make
-// the agent-manager ServiceAccount hold in the kagent namespace, nothing
-// without either:
+// the agent-manager ServiceAccount hold in the kagent namespace
+// according to the enabled mode:
+//   - agentPlatformOrganizations.enabled, with --multi-tenant: get and list
+//     namespaces for organization discovery (templates/tenants-rbac.yaml).
+//     Organization operations themselves run as the caller; no reconciler
+//     writes or Secret reads belong to the ServiceAccount;
 //   - agent-manager.skills.mintGitAuthSecret: the skills-Secret Role
 //     (templates/skills-token.yaml), secrets get and update by the minted
 //     names;
@@ -978,6 +983,12 @@ func agentManagerGrants(values map[string]any, multiTenant bool) []saGrant {
 	grants := []saGrant{chartSourceGrant}
 	if minted := mintedSkillsSecretNames(values); minted != nil {
 		grants = append(grants, saGrant{resource: gvrSecrets.Resource, names: minted, verbs: mintGrantVerbs, by: "agent-manager." + skillsKey + "." + skillsMintValue})
+	}
+	if organizations, ok := values["agentPlatformOrganizations"].(map[string]any); ok {
+		if enabled, _ := organizations[valuesEnabled].(bool); enabled && multiTenant {
+			grants = append(grants, saGrant{resource: "namespaces", verbs: []string{verbGet, verbList}, by: "agentPlatformOrganizations.enabled"})
+		}
+		return grants
 	}
 	if enabled, _ := nestedValue(values, "tenants", "organizations", valuesEnabled).(bool); !enabled || !multiTenant {
 		return grants

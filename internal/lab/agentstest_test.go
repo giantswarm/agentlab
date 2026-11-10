@@ -247,6 +247,56 @@ func TestAgentManagerGrants(t *testing.T) {
 	}
 }
 
+// Organization discovery replaces the legacy reconciler: require exactly
+// namespaces get/list while enabled, and never inherit its write grants.
+func TestOrganizationNamespaceGrants(t *testing.T) {
+	const discovery = "namespaces  []  []  [get list]"
+	for _, tc := range []struct {
+		name                 string
+		enabled, multiTenant bool
+	}{
+		{"case 0: organizations enabled", true, true},
+		{"case 1: organizations disabled", false, true},
+		{"case 2: deployment flag absent", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			values := switchValues(false, false, "kagent-anthropic")
+			values["agentPlatformOrganizations"] = map[string]any{valuesEnabled: tc.enabled}
+			grants := agentManagerGrants(values, tc.multiTenant)
+			wantDiscovery := tc.enabled && tc.multiTenant
+			got, err := rulesBeyondGrants([]string{discovery}, grants)
+			if err != nil || (len(got) == 0) != wantDiscovery {
+				t.Fatalf("discovery: remaining %v, error %v; allowed %v", got, err, wantDiscovery)
+			}
+			if _, err := rulesBeyondGrants(nil, grants); (err != nil) != wantDiscovery {
+				t.Errorf("missing discovery: %v; required %v", err, wantDiscovery)
+			}
+			if !wantDiscovery {
+				return
+			}
+			for _, row := range []string{
+				"namespaces  []  []  [get list watch]",
+				"namespaces  []  []  [get list create]",
+				"namespaces  []  []  [delete]",
+				"namespaces  []  []  [*]",
+				"namespaces  []  [one]  [get list]",
+				"pods  []  []  [get list]",
+				"secrets  []  []  [get list]",
+			} {
+				got, err := rulesBeyondGrants([]string{discovery, row}, grants)
+				if err != nil || !reflect.DeepEqual(got, []string{row}) {
+					t.Errorf("extra %q: remaining %v, error %v", row, got, err)
+				}
+			}
+			for _, row := range []string{"namespaces  []  []  [get]", "namespaces  []  []  [list]"} {
+				if _, err := rulesBeyondGrants([]string{row}, grants); err == nil {
+					t.Errorf("incomplete discovery %q passed", row)
+				}
+			}
+		})
+	}
+}
+
 // TestServiceAccountRules: the rules review goes out impersonating the
 // ServiceAccount (kubectl's --as) in the asked namespace, on the lab admin's
 // config.
