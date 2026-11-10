@@ -119,6 +119,9 @@ type credentialsProof struct {
 	legacyElicitationID string
 	operation, formURL  string
 	otherOperation      string
+	// otherBlocked is why the other person could not prepare an operation
+	// of their own: the SKIP of the checks that need it.
+	otherBlocked string
 	// started is when the run began: the logs judged for the value are
 	// read from it.
 	started             time.Time
@@ -196,11 +199,14 @@ func (p *credentialsProof) checks() []organizationCheck {
 		{surface: surfaceAgentManager, boundary: "a client without URL elicitation gets a result whose credentials[].next carries the form's link", skip: uiSkip, run: p.plainGeneration},
 		p.resourceLinkCheck(uiSkip),
 		{surface: surfaceCredentialAPI, boundary: "an operation's confirmation is its preparer's alone: each person reads their own, the other's read and an anonymous one are refused", skip: uiSkip, run: p.otherPersonRefused},
+		{surface: surfaceAgentManager, boundary: "a person with read-only rights on the organization (a viewer) is refused set_organization_model with nothing written and no operation, and their POST of the admin's operation with its ETag is refused with nothing written", skip: firstNonEmpty(uiSkip, p.viewerSkip()), run: p.viewerRefused},
 		{surface: surfaceCredentialAPI, boundary: "DELETE with If-Match cancels a pending operation: a stale ETag is refused, and after the cancel a save is refused with nothing written", skip: uiSkip, run: p.cancel},
-		{surface: surfaceCredentialAPI, boundary: "the form's save: GET with a strong ETag, a POST without If-Match or with a stale one refused with nothing written, POST with If-Match and only the requested pair returns the receipt, each client generation's retry the same receipt", skip: uiSkip, run: p.save},
+		{surface: surfaceCredentialAPI, boundary: "a save whose Secret another consumer came to reference is refused 409 with nothing written, and preparing it again is refused", skip: uiSkip, run: p.sharedSecretRefused},
+		{surface: surfaceCredentialAPI, boundary: "the confirmations of set_organization_connector and set_organization_egress_policy list the one consumer each and, for the EgressPolicy, exactly the origins it sends the credential to; both cancelled with nothing written", skip: uiSkip, run: p.connectorAndEgressConfirmations},
+		{surface: surfaceCredentialAPI, boundary: "the form's save: GET with a strong ETag and the consumer the confirmation lists, a POST without If-Match (428) or with a stale one refused with nothing written, POST with If-Match and only the requested pair returns the receipt, a second POST and each client generation's retry the same receipt", skip: uiSkip, run: p.save},
 		{surface: surfaceGitHub, boundary: "the save opens a pull request as the person, its Secret SOPS-encrypted", skip: commit, run: p.pullRequest},
 		{surface: surfaceFlux, boundary: "the merged pull request is applied and decrypted by the organization's Kustomization: the Secret's SHA-256 matches and the ModelConfig exists", skip: flux, run: p.fluxApplied},
-		{surface: surfaceCredentialAPI, boundary: "neither agent-manager's nor muster's logs carry the value, plain or base64", skip: uiSkip, run: p.valueNotLogged},
+		{surface: surfaceCredentialAPI, boundary: "neither agent-manager's nor muster's logs carry the value, plain or base64, each read with at least one line", skip: uiSkip, run: p.valueNotLogged},
 		{surface: surfaceAgentManager, boundary: "a notifications/elicitation/complete reaches only the 2025-11-25 client that initiated the elicitation, carrying its elicitationId", skip: generations, run: p.completionsScoped},
 		p.tenantSignInCheck(),
 		{surface: surfaceAgentManager, boundary: "delete_organization names the models and credentials it erases, then erases the organization after the typed confirmation: its namespace, its Flux Kustomization and ServiceAccount, and every RoleBinding referring to it gone", run: p.erase},
@@ -422,16 +428,23 @@ func (p *credentialsProof) setModel(ctx context.Context, m *musterMCP) (*musterA
 // setModelWith calls set_organization_model with args, answering a previous
 // input_required with roundTrip, and decodes a result.
 func setModelWith(ctx context.Context, m *musterMCP, args map[string]any, roundTrip mcp.MultiRoundTripParams) (*musterAnswer, *credentialAnswer, error) {
-	answer, err := m.call(ctx, agentManagerToolPrefix+"set_organization_model", args, roundTrip)
+	return credentialToolWith(ctx, m, "set_organization_model", args, roundTrip)
+}
+
+// credentialToolWith calls one of agent-manager's model, connector and
+// egress tools with args, answering a previous input_required with
+// roundTrip, and decodes a result.
+func credentialToolWith(ctx context.Context, m *musterMCP, tool string, args map[string]any, roundTrip mcp.MultiRoundTripParams) (*musterAnswer, *credentialAnswer, error) {
+	answer, err := m.call(ctx, agentManagerToolPrefix+tool, args, roundTrip)
 	if err != nil || answer.result == nil {
 		return answer, nil, err
 	}
 	if answer.result.IsError {
-		return nil, nil, fmt.Errorf("set_organization_model failed: %s", excerpt(answer.result.text(), 300))
+		return nil, nil, fmt.Errorf("%s failed: %s", tool, excerpt(answer.result.text(), 300))
 	}
 	var result credentialAnswer
 	if err := json.Unmarshal([]byte(answer.result.text()), &result); err != nil {
-		return nil, nil, fmt.Errorf("set_organization_model's answer: %w: %s", err, excerpt(answer.result.text(), 300))
+		return nil, nil, fmt.Errorf("%s's answer: %w: %s", tool, err, excerpt(answer.result.text(), 300))
 	}
 	return answer, &result, nil
 }
@@ -638,7 +651,7 @@ func (p *credentialsProof) completionsScoped() (string, error) {
 		}
 	}
 	if len(got) == 0 {
-		return "no notifications/elicitation/complete reached either 2025-11-25 client (a server MAY send none); the client without URL elicitation was notified of nothing", nil
+		return "no notifications/elicitation/complete reached either 2025-11-25 client (a server MAY send none; muster relays none of a backend's until giantswarm/muster#1830); the client without URL elicitation was notified of nothing", nil
 	}
 	return fmt.Sprintf("the initiating client was notified complete for its elicitationId %s only; the client without URL elicitation was notified of nothing", p.legacyElicitationID), nil
 }
@@ -777,6 +790,10 @@ func (p *credentialsProof) otherPersonRefused() (string, error) {
 	defer other.close()
 	args := withArgs(p.modelArgs(), map[string]any{nameKey: credentialsOtherModel, modeArg: modeApply})
 	answer, result, err := setModelWith(ctx, other, args, mcp.MultiRoundTripParams{})
+	if reason := ownCredentialRefused(p.other.Email, p.agentManagerVersion, err); reason != "" {
+		p.otherBlocked = reason
+		return "", skipCheck("%s", reason)
+	}
 	if err != nil {
 		return "", err
 	}
@@ -880,6 +897,9 @@ const staleETag = `"agentlab-stale"`
 // ETag, after a stale ETag is refused; the operation then reads cancelled,
 // a save with its ETag is refused, and nothing of the model is written.
 func (p *credentialsProof) cancel() (string, error) {
+	if p.otherOperation == "" && p.otherBlocked != "" {
+		return "", skipCheck("the cancel is the other person's own operation: %s", p.otherBlocked)
+	}
 	if p.otherOperation == "" {
 		return "", errors.New("no operation of the other person to cancel")
 	}
@@ -922,7 +942,7 @@ func (p *credentialsProof) cancel() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	resp, raw, err = rest.do(ctx, http.MethodPost, p.otherOperation, p.otherToken, http.Header{"Content-Type": {"application/json"}, headerIfMatch: {etag}}, body)
+	resp, raw, err = rest.do(ctx, http.MethodPost, p.otherOperation, p.otherToken, http.Header{headerContentType: {mediaTypeJSON}, headerIfMatch: {etag}}, body)
 	if err != nil {
 		return "", err
 	}
@@ -981,6 +1001,10 @@ type confirmation struct {
 		Repository string `json:"repository"`
 		Base       string `json:"base"`
 	} `json:"gitTarget"`
+	// References are the objects the operation writes that name a
+	// requested Secret; Changes the writes themselves.
+	References []credentialReference `json:"references"`
+	Changes    []credentialChange    `json:"changes"`
 }
 
 // save drives the credential API as the portal's form: the confirmation,
@@ -1008,12 +1032,16 @@ func (p *credentialsProof) save() (string, error) {
 	case p.mode == modeCommit && (c.GitTarget == nil || c.GitTarget.Repository != p.pre.agentManager[flagOrgsRepository]):
 		return "", fmt.Errorf("the confirmation's git target %+v is not %s", c.GitTarget, p.pre.agentManager[flagOrgsRepository])
 	}
+	if err := confirmationListsOnly(*c, organizationModelConfigKind, credentialsModel, []credentialReference{{Kind: organizationModelConfigKind, Name: credentialsModel, Key: credentialsModelKey}}); err != nil {
+		return "", err
+	}
+	missingIfMatch, ifMatchNote := ifMatchRequiredStatuses(p.agentManagerVersion)
 	body, err := credentialSaveBody(credentialsModelSecret, credentialsModelKey, p.value)
 	if err != nil {
 		return "", err
 	}
 	post := func(ifMatch string) (*http.Response, []byte, error) {
-		header := http.Header{"Content-Type": {"application/json"}}
+		header := http.Header{headerContentType: {mediaTypeJSON}}
 		if ifMatch != "" {
 			header.Set(headerIfMatch, ifMatch)
 		}
@@ -1024,9 +1052,7 @@ func (p *credentialsProof) save() (string, error) {
 		ifMatch string
 		want    []int
 	}{
-		// RFC 6585 section 3 answers a missing precondition 428;
-		// agent-manager answers it as an invalid request.
-		{"", []int{http.StatusPreconditionRequired, http.StatusBadRequest}},
+		{"", missingIfMatch},
 		{staleETag, []int{http.StatusPreconditionFailed}},
 	} {
 		resp, raw, err := post(refused.ifMatch)
@@ -1073,6 +1099,10 @@ func (p *credentialsProof) save() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	again, err := p.secondSave(post, etag, receipt, want)
+	if err != nil {
+		return "", err
+	}
 	retried, err := p.retriesReturn(ctx, receipt, want)
 	if err != nil {
 		return "", err
@@ -1082,10 +1112,10 @@ func (p *credentialsProof) save() (string, error) {
 		return "", err
 	}
 	if after != saved {
-		return "", fmt.Errorf("the retries wrote again: the Secret's and the ModelConfig's resourceVersions %v after the save, %v after the retries", saved, after)
+		return "", fmt.Errorf("the second POST or the retries wrote again: the Secret's and the ModelConfig's resourceVersions %v after the save, %v after them", saved, after)
 	}
-	detail := fmt.Sprintf("ETag %s, Cache-Control no-store; POST refused with %s, nothing written; POST with If-Match saved %s/%s (%s) as %s; %s, the Secret's and the ModelConfig's resourceVersions unchanged",
-		etag, strings.Join(refusals, " and "), credentialsModelSecret, credentialsModelKey, shortSum(p.valueSum), want, retried)
+	detail := fmt.Sprintf("ETag %s, Cache-Control no-store, the confirmation lists only ModelConfig %s (key %s); POST refused with %s%s, nothing written; POST with If-Match saved %s/%s (%s) as %s; %s; %s, the Secret's and the ModelConfig's resourceVersions unchanged",
+		etag, credentialsModel, credentialsModelKey, strings.Join(refusals, " and "), ifMatchNote, credentialsModelSecret, credentialsModelKey, shortSum(p.valueSum), want, again, retried)
 	if p.mode == modeCommit {
 		if err := nothingWritten(ctx, p.namespace, credentialsModel, credentialsModelSecret); err != nil {
 			return "", fmt.Errorf("mode commit, before the pull request is merged: %w", err)
@@ -1205,10 +1235,11 @@ func (p *credentialsProof) valueNotLogged() (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if how := valueCarried(logs, p.value); how != "" {
-			return "", fmt.Errorf("the logs of %s/%s carry the value %s", platformNamespace, component, how)
+		lines, err := judgeComponentLogs(component, logs, p.value)
+		if err != nil {
+			return "", err
 		}
-		read = append(read, fmt.Sprintf("%s (%d lines)", component, strings.Count(logs, "\n")))
+		read = append(read, fmt.Sprintf("%s (%d lines)", component, lines))
 	}
 	return fmt.Sprintf("the logs of %s since the run began carry neither the value (%s) nor its base64", strings.Join(read, " and "), shortSum(p.valueSum)), nil
 }

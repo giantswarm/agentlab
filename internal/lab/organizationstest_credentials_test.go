@@ -3,8 +3,10 @@ package lab
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"testing"
 
@@ -438,4 +440,94 @@ func TestConformsTo(t *testing.T) {
 	require.Error(t, conformsTo(schema, json.RawMessage(`{"pending":"yes","credentials":[]}`)))
 	require.Error(t, conformsTo(schema, json.RawMessage(`{"pending":true,"credentials":[{}]}`)))
 	require.Error(t, conformsTo(schema, json.RawMessage(`{"pending":true}`)))
+}
+
+// A confirmation passes only with its one write and exactly the expected
+// consumers: another consumer, another key, an origin missing or an origin
+// that gets no credential each fail.
+func TestConfirmationListsOnly(t *testing.T) {
+	egress := credentialReference{Kind: egressPolicyKind, Name: "e", Key: credentialTokenKey, Origins: []string{"https://a.example", "https://b.example"}}
+	write := []credentialChange{{Action: "create", Object: map[string]any{kindKey: egressPolicyKind, crMetadata: map[string]any{nameKey: "e"}}}}
+	ok := confirmation{Changes: write, References: []credentialReference{{Kind: egressPolicyKind, Name: "e", Key: credentialTokenKey, Origins: []string{"https://b.example", "https://a.example"}}}}
+	require.NoError(t, confirmationListsOnly(ok, egressPolicyKind, "e", []credentialReference{egress}))
+	for name, c := range map[string]confirmation{
+		"another consumer": {Changes: write, References: append(slices.Clone(ok.References), credentialReference{Kind: "ModelConfig", Name: "m", Key: credentialTokenKey})},
+		"another key":      {Changes: write, References: []credentialReference{{Kind: egressPolicyKind, Name: "e", Key: "apiKey", Origins: egress.Origins}}},
+		"an origin short":  {Changes: write, References: []credentialReference{{Kind: egressPolicyKind, Name: "e", Key: credentialTokenKey, Origins: egress.Origins[:1]}}},
+		"a plain origin":   {Changes: write, References: []credentialReference{{Kind: egressPolicyKind, Name: "e", Key: credentialTokenKey, Origins: append(slices.Clone(egress.Origins), "https://plain.example")}}},
+		"no reference":     {Changes: write},
+		"another write":    {Changes: []credentialChange{{Action: "create", Object: map[string]any{kindKey: egressPolicyKind, crMetadata: map[string]any{nameKey: "x"}}}}, References: ok.References},
+		"two writes":       {Changes: append(slices.Clone(write), write...), References: ok.References},
+	} {
+		require.Error(t, confirmationListsOnly(c, egressPolicyKind, "e", []credentialReference{egress}), name)
+	}
+}
+
+// 428 alone from agent-manager 2.23.1 (giantswarm/agent-manager#354); an
+// older or unreadable version also admits 400 and says so.
+func TestIfMatchRequiredStatuses(t *testing.T) {
+	for _, v := range []string{"2.23.1", "v2.23.2", "2.24.0-rc.1"} {
+		got, note := ifMatchRequiredStatuses(v)
+		require.Equal(t, []int{428}, got, v)
+		require.Empty(t, note, v)
+	}
+	for _, v := range []string{"2.23.0", "2.23.1-rc.2", ""} {
+		got, note := ifMatchRequiredStatuses(v)
+		require.Equal(t, []int{428, 400}, got, v)
+		require.Contains(t, note, "giantswarm/agent-manager#354", v)
+	}
+}
+
+// Only agent-manager's credential-state refusal is giantswarm/agent-manager#359's
+// SKIP; any other failure stays a failure.
+func TestOwnCredentialRefused(t *testing.T) {
+	require.Contains(t, ownCredentialRefused("dev@lab.test", "2.23.2", errors.New("set_organization_model failed: forbidden: credential state cannot be verified")), "giantswarm/agent-manager#359")
+	require.Empty(t, ownCredentialRefused("dev@lab.test", "2.23.2", errors.New("set_organization_model failed: forbidden: create ModelConfig")))
+	require.Empty(t, ownCredentialRefused("dev@lab.test", "2.23.2", nil))
+}
+
+func TestJudgeComponentLogs(t *testing.T) {
+	value := "s3cr3t-value"
+	lines, err := judgeComponentLogs("muster", "a\n\nb\n", value)
+	require.NoError(t, err)
+	require.Equal(t, 2, lines)
+	_, err = judgeComponentLogs("muster", "\n \n", value)
+	require.ErrorContains(t, err, "read no log line")
+	_, err = judgeComponentLogs("muster", "x "+base64.StdEncoding.EncodeToString([]byte(value))+"\n", value)
+	require.ErrorContains(t, err, "base64-encoded")
+	require.NotContains(t, err.Error(), value)
+}
+
+// A refusal is agent-manager's error result with its code: muster's own
+// error, a result and a pending elicitation are not.
+func TestRefusedWith(t *testing.T) {
+	result := func(isError bool, text string) *musterAnswer {
+		return &musterAnswer{result: &musterToolResult{IsError: isError, Content: []musterToolContent{{Type: toolResultText, Text: text}}}}
+	}
+	text, err := refusedWith(result(true, "forbidden: credential state cannot be verified"), "forbidden")
+	require.NoError(t, err)
+	require.Contains(t, text, "credential state")
+	_, err = refusedWith(result(true, "tool x_agent-manager_set_organization_model not found"), "forbidden")
+	require.Error(t, err)
+	_, err = refusedWith(result(false, `{"pending":true}`), "forbidden")
+	require.Error(t, err)
+	_, err = refusedWith(&musterAnswer{urlRequired: []mcp.ElicitationParams{{Mode: mcp.ElicitationModeURL}}}, "forbidden")
+	require.Error(t, err)
+	_, err = refusedWith(result(true, "conflict: another consumer references the credential Secret"), "forbidden")
+	require.Error(t, err)
+}
+
+func TestCredentialsViewerUser(t *testing.T) {
+	cfg := &config.Config{Users: []config.User{
+		{Email: "admin@lab.test", Groups: []string{platformAdminsGroup, viewerGroup}},
+		{Email: "dev@lab.test", Groups: []string{developersGroup}},
+		{Email: "viewer@lab.test", Groups: []string{viewerGroup}},
+	}}
+	require.Equal(t, "viewer@lab.test", credentialsViewerUser(cfg).Email)
+	require.Nil(t, credentialsViewerUser(&config.Config{Users: cfg.Users[:2]}))
+}
+
+func TestErrorCode(t *testing.T) {
+	require.Equal(t, "conflict", errorCode([]byte(`{"error":{"code":"conflict","message":"another object references this Secret"}}`)))
+	require.Empty(t, errorCode([]byte(`not json`)))
 }

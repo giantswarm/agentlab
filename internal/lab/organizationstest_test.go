@@ -2,6 +2,7 @@ package lab
 
 import (
 	"errors"
+	"fmt"
 	"maps"
 	"os"
 	"os/exec"
@@ -71,6 +72,14 @@ func TestOrganizationCheckVerdict(t *testing.T) {
 	}
 	if _, err := (organizationCheck{surface: surfaceLLM, boundary: "the model"}).verdict(); err == nil {
 		t.Error("a check without a run or a skip passed")
+	}
+	// A run that finds its proof unreachable is a SKIP with its reason, a
+	// wrapped one too; it never passes.
+	unreachable := organizationCheck{surface: surfaceCredentialAPI, boundary: "the other person", run: func() (string, error) {
+		return "", fmt.Errorf("their own operation: %w", skipCheck("refused until %s ships", "giantswarm/agent-manager#359"))
+	}}
+	if v, err := unreachable.verdict(); err != nil || v.skip != "refused until giantswarm/agent-manager#359 ships" || !strings.HasPrefix(v.line(), "SKIP ") {
+		t.Errorf("a run that skips: %+v, %v", v, err)
 	}
 	passing := organizationCheck{surface: surfaceEgress, boundary: "443", run: func() (string, error) { return "kept out", nil }}
 	if v, err := passing.verdict(); err != nil || v.detail != "kept out" {
