@@ -39,6 +39,7 @@ const (
 	componentDex           = "dex"
 	componentMuster        = "muster"
 	componentBackstage     = "backstage"
+	componentSkillManager  = "skill-manager"
 	componentKagent        = "kagent"
 	componentKagentCRDs    = "kagent-crds"
 	componentMCPKubernetes = "mcp-kubernetes"
