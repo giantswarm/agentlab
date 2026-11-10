@@ -810,12 +810,14 @@ func (d *slackDriver) pick(user string, msg slackMessage, actionID, value string
 }
 
 // onMessage is a block_actions payload for one action on msg, as Slack sends
-// it: the message's ts and blocks, its thread, a response_url.
+// it: the message's ts and blocks, its thread, whether it is an ephemeral, a
+// response_url.
 func (d *slackDriver) onMessage(user string, msg slackMessage, action map[string]any) error {
 	return d.interaction(map[string]any{
 		fieldTypeKey: "block_actions", slackKeyUser: map[string]any{"id": user}, slackKeyTeam: map[string]any{"id": slackFakeTeam},
-		slackKeyChannel:     map[string]any{"id": msg.Channel},
-		"container":         map[string]any{fieldTypeKey: slackKeyMessage, "message_ts": msg.TS, "channel_id": msg.Channel, slackKeyThreadTS: msg.ThreadTS},
+		slackKeyChannel: map[string]any{"id": msg.Channel},
+		"container": map[string]any{fieldTypeKey: slackKeyMessage, "message_ts": msg.TS, "channel_id": msg.Channel, slackKeyThreadTS: msg.ThreadTS,
+			"is_ephemeral": msg.Method == slackPostEphemeral},
 		slackKeyMessage:     map[string]any{slackKeyTS: msg.TS, slackKeyThreadTS: msg.ThreadTS, slackKeyBlocks: msg.Blocks},
 		slackBlockActions:   []any{action},
 		slackKeyTriggerID:   "trigger-" + randomSuffix(),

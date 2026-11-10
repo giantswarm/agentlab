@@ -224,6 +224,10 @@ type KlausGatewayTestOptions struct {
 	// (klausgatewaytest_signin.go) or KlausGatewayPartRefresh
 	// (klausgatewaytest_refresh.go).
 	Part string
+	// Hold is how long the Accepted stage of KlausGatewayPartSignIn keeps
+	// the runtime's retry parked in muster's sign-in wait before it completes
+	// the sign-in (default signInDefaultHold, below signInMaxHold).
+	Hold time.Duration
 }
 
 // KlausGatewayTest is the headless Swarmgeist proof: klaus-gateway against
@@ -242,6 +246,9 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	}
 	if opts.Part != "" && opts.Part != KlausGatewayPartSignIn && opts.Part != KlausGatewayPartRefresh {
 		return fmt.Errorf("--part %s: the parts are %s and %s", opts.Part, KlausGatewayPartSignIn, KlausGatewayPartRefresh)
+	}
+	if err := checkSignInHold(opts); err != nil {
+		return err
 	}
 	if opts.RefusalOnly && !cfg.KlausGatewayEnabled() {
 		return fmt.Errorf("--refusal-only proves the meta chart's klaus-gateway component, which is off in this lab (platform.klausGateway; `agentlab configure --klaus-gateway` turns it on)")
@@ -667,6 +674,9 @@ func (o KlausGatewayTestOptions) withDefaults() KlausGatewayTestOptions {
 	}
 	if o.ReadyTimeout <= 0 {
 		o.ReadyTimeout = klausGatewayReadyTimeout
+	}
+	if o.Hold == 0 {
+		o.Hold = signInDefaultHold
 	}
 	if o.SlackFakeBinary == "" {
 		if exe, err := os.Executable(); err == nil {

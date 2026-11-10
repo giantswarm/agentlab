@@ -540,11 +540,6 @@ muster:
       mcpClient:
         enabled: true
         publicUrl: "{{ .MusterBaseURL }}"
-        # The host-mode klaus-gateway's connector landing: a sign-in its
-        # Slack prompt starts returns there, which resumes the paused task
-        # (`klaus-gateway-test --part signin`).
-        postLoginRedirectAllowlist:
-          - "{{ .KlausGatewayLanding }}"
       server:
         enabled: true
         # The public URL through the edge: what Claude Code dials, and what

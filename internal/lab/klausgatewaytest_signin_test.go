@@ -1,43 +1,13 @@
 package lab
 
 import (
-	"slices"
+	"fmt"
+	"strings"
 	"testing"
+	"time"
 
-	"github.com/giantswarm/agentlab/internal/config"
+	a2a "github.com/a2aproject/a2a-go/v2/a2a"
 )
-
-// muster's post-login redirect allowlist names the host-mode gateway's
-// landing on the lab's own port block, so a second lab's proof returns to its
-// own gateway.
-func TestMusterAllowsTheGatewayLanding(t *testing.T) {
-	stubWorkspacesProbe(t, true)
-	for _, tc := range []struct {
-		name    string
-		apiPort int
-		want    string
-	}{
-		{"the first lab", config.DefaultAPIServerPort, "http://127.0.0.1:18090/connectors/complete"},
-		{"a second lab", config.DefaultAPIServerPort + 1, "http://127.0.0.1:18100/connectors/complete"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg := workspaceLab("")
-			cfg.APIServerPort = tc.apiPort
-			values, _, _, _ := renderWorkspaceTemplates(t, cfg, nil)
-			muster, _ := values["muster"].(map[string]any)
-			inner, _ := muster["muster"].(map[string]any)
-			oauth, _ := inner["oauth"].(map[string]any)
-			client, _ := oauth["mcpClient"].(map[string]any)
-			allow, _ := client["postLoginRedirectAllowlist"].([]any)
-			if !slices.Equal(allow, []any{tc.want}) {
-				t.Errorf("muster.muster.oauth.mcpClient.postLoginRedirectAllowlist = %v, want [%s]", allow, tc.want)
-			}
-			if got := klausGatewayLanding(gatewayTestPort(cfg)); got != tc.want {
-				t.Errorf("klausGatewayLanding = %s, want %s", got, tc.want)
-			}
-		})
-	}
-}
 
 // The sign-in prompt is the person's ephemeral with Sign in and Not now: not
 // another person's, not a Connect prompt without Not now, not one before the
@@ -69,12 +39,124 @@ func TestSignInPromptIn(t *testing.T) {
 	}
 }
 
-func TestLinkRedirect(t *testing.T) {
-	link := "https://muster.example/oauth/proxy/start?s=1&redirect=http%3A%2F%2F127.0.0.1%3A18090%2Fconnectors%2Fcomplete%3Fs%3Dabc"
-	if got, want := linkRedirect(link), "http://127.0.0.1:18090/connectors/complete?s=abc"; got != want {
-		t.Errorf("linkRedirect = %q, want %q", got, want)
+// The prompt shows the link's domain in bold and the whole link in code,
+// escaped as Slack mrkdwn, as klaus-gateway's signInLinkText writes it.
+func TestSignInLinkShown(t *testing.T) {
+	link := "https://muster.example:8443/oauth/proxy/start?state=a&b=<1>"
+	want := "Opens *muster.example*\n`https://muster.example:8443/oauth/proxy/start?state=a&amp;b=&lt;1&gt;`"
+	if got := signInLinkShown(link); got != want {
+		t.Errorf("signInLinkShown = %q, want %q", got, want)
 	}
-	if got := linkRedirect("https://muster.example/oauth/proxy/start?s=1"); got != "" {
-		t.Errorf("linkRedirect of a link without one = %q, want empty", got)
+}
+
+// Before the sign-in completes, an accepted task still waiting on the request
+// it asked in is not parked yet, one working on the retry is, and one that
+// ended or asked again is a runtime that did not wait.
+func TestRetryParked(t *testing.T) {
+	const asksAgain, ended = "asks again", "ended"
+	task := func(state a2a.TaskState, message string) *a2a.Task {
+		task := &a2a.Task{ID: "t1", Status: a2a.TaskStatus{State: state}}
+		if message != "" {
+			task.Status.Message = &a2a.Message{ID: message}
+		}
+		return task
+	}
+	for _, tc := range []struct {
+		name    string
+		task    *a2a.Task
+		parked  bool
+		failure string
+	}{
+		{"still on the request", task(a2a.TaskStateInputRequired, "m1"), false, ""},
+		{"working on the retry", task(a2a.TaskStateWorking, "m2"), true, ""},
+		{"submitted", task(a2a.TaskStateSubmitted, ""), true, ""},
+		{"a new request", task(a2a.TaskStateInputRequired, "m2"), false, asksAgain},
+		{"asks without a message", task(a2a.TaskStateInputRequired, ""), false, asksAgain},
+		{"auth required anew", task(a2a.TaskStateAuthRequired, "m3"), false, asksAgain},
+		{"completed", task(a2a.TaskStateCompleted, "m2"), false, ended},
+		{"a failure", task(a2a.TaskStateFailed, "m2"), false, ended},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			parked, err := retryParked(tc.task, "m1")
+			if parked != tc.parked {
+				t.Errorf("retryParked = %t, want %t", parked, tc.parked)
+			}
+			switch {
+			case tc.failure == "" && err != nil:
+				t.Errorf("retryParked: %v, want no error", err)
+			case tc.failure != "" && (err == nil || !strings.Contains(err.Error(), tc.failure)):
+				t.Errorf("retryParked error = %v, want one saying %q", err, tc.failure)
+			}
+		})
+	}
+}
+
+// --hold belongs to the signin part and must leave the sign-in inside
+// muster's wait.
+func TestCheckSignInHold(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		opts    KlausGatewayTestOptions
+		failure string
+	}{
+		{"unset", KlausGatewayTestOptions{}, ""},
+		{"unset on another part", KlausGatewayTestOptions{Part: KlausGatewayPartRefresh}, ""},
+		{"past the Harness MCP timeout", KlausGatewayTestOptions{Part: KlausGatewayPartSignIn, Hold: 45 * time.Second}, ""},
+		{"the longest", KlausGatewayTestOptions{Part: KlausGatewayPartSignIn, Hold: signInMaxHold}, ""},
+		{"on the whole proof", KlausGatewayTestOptions{Hold: time.Minute}, "applies to --part signin alone"},
+		{"negative", KlausGatewayTestOptions{Part: KlausGatewayPartSignIn, Hold: -time.Second}, "positive"},
+		{"outlasts muster's wait", KlausGatewayTestOptions{Part: KlausGatewayPartSignIn, Hold: signInMaxHold + time.Second}, "outlasts"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := checkSignInHold(tc.opts)
+			switch {
+			case tc.failure == "" && err != nil:
+				t.Errorf("checkSignInHold: %v, want none", err)
+			case tc.failure != "" && (err == nil || !strings.Contains(err.Error(), tc.failure)):
+				t.Errorf("checkSignInHold = %v, want an error saying %q", err, tc.failure)
+			}
+		})
+	}
+}
+
+func TestSignInHoldDefault(t *testing.T) {
+	if got := (KlausGatewayTestOptions{}).withDefaults().Hold; got != signInDefaultHold {
+		t.Errorf("default hold = %s, want %s", got, signInDefaultHold)
+	}
+	if got := (KlausGatewayTestOptions{Hold: time.Minute}).withDefaults().Hold; got != time.Minute {
+		t.Errorf("hold = %s, want the 1m0s given", got)
+	}
+}
+
+// muster held the retry when a boundary line of the fixture's tool, by name
+// or through call_tool, started before the sign-in began and ended once the
+// call ran; a call that arrived after the sign-in, a failed one, an earlier
+// one and another tool's do not count.
+func TestHeldCallIn(t *testing.T) {
+	signingIn := time.Date(2026, 11, 10, 12, 0, 40, 0, time.UTC)
+	ran := time.Date(2026, 11, 10, 12, 0, 45, 0, time.UTC)
+	line := func(at, tool, outcome string, seconds float64) string {
+		return fmt.Sprintf(`{"time":"2026-11-10T12:00:%sZ","level":"INFO","msg":"tool call","subsystem":"MCP-Tool","tool":%q,"outcome":%q,"duration_s":%g}`, at, tool, outcome, seconds)
+	}
+	for _, tc := range []struct {
+		name string
+		logs []string
+		held time.Duration
+		ok   bool
+	}{
+		{"held through call_tool", []string{line("46", musterMetaCallTool, "ok", 36)}, 30 * time.Second, true},
+		{"held by name, the longest", []string{line("46", signInTestTool, "ok", 16), line("46", signInTestTool, "ok", 41)}, 35 * time.Second, true},
+		{"arrived after the sign-in began", []string{line("46", musterMetaCallTool, "ok", 5)}, 0, false},
+		{"an error", []string{line("46", musterMetaCallTool, "error", 36)}, 0, false},
+		{"ended before the call ran", []string{line("44", musterMetaCallTool, "ok", 36)}, 0, false},
+		{"another tool", []string{line("46", "x_kubernetes_list", "ok", 36)}, 0, false},
+		{"a dispatch line", []string{`{"time":"2026-11-10T12:00:46Z","msg":"tool dispatched","tool":"` + signInTestTool + `","outcome":"ok","duration_s":36}`, "a plain line"}, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			held, ok := heldCallIn(strings.Join(tc.logs, "\n"), signingIn, ran)
+			if ok != tc.ok || held != tc.held {
+				t.Errorf("heldCallIn = %s, %t; want %s, %t", held, ok, tc.held, tc.ok)
+			}
+		})
 	}
 }

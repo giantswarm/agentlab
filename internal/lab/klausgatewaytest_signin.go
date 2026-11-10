@@ -2,6 +2,7 @@ package lab
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -42,8 +43,10 @@ const (
 
 	slackActionConnect       = "connector_connect"
 	slackActionSignInDecline = "sign_in_decline"
-	gatewayLandingPath       = "/connectors/complete"
-	gatewayLandingDone       = "The sign-in is complete"
+	gatewayContinuing        = "Opened the sign-in link"
+	// musterToolCallLog is muster's boundary line for a tool call, its
+	// duration_s covering the sign-in wait (internal/aggregator/logging.go).
+	musterToolCallLog        = "tool call"
 	gatewaySignedInLine      = " signed in."
 	gatewayNotSignedInLine   = " did not sign in."
 	gatewayNotSignedIn       = "Not signed in"
@@ -54,13 +57,36 @@ const (
 	portalAnsweredByAnother = "already answered"
 )
 
+// The Accepted stage's hold: how long the runtime's retry stays parked in
+// muster's sign-in wait before the sign-in completes. A hold longer than the
+// MCP call timeout the Harness applies to the toolset (on claude the
+// RemoteMCPServer's timeout, 30s by default) proves the retry survives it;
+// the hold stays a minute inside muster's wait so the sign-in still lands.
+const (
+	signInDefaultHold = 10 * time.Second
+	musterSignInWait  = 5 * time.Minute
+	signInMaxHold     = musterSignInWait - time.Minute
+)
+
 // gatewayCallbackBase is the host-mode gateway's OBO callback base and its
-// public base: the sign-in links it posts return to its connector landing.
+// public base.
 func gatewayCallbackBase(port int) string { return fmt.Sprintf("http://127.0.0.1:%d", port) }
 
-// klausGatewayLanding is that gateway's connector landing, on muster's
-// post-login redirect allowlist in the lab's values.
-func klausGatewayLanding(port int) string { return gatewayCallbackBase(port) + gatewayLandingPath }
+// checkSignInHold refuses a hold outside the signin part, a negative one
+// and one that outlasts muster's sign-in wait.
+func checkSignInHold(opts KlausGatewayTestOptions) error {
+	switch {
+	case opts.Hold == 0:
+		return nil
+	case opts.Part != KlausGatewayPartSignIn:
+		return fmt.Errorf("--hold applies to --part %s alone", KlausGatewayPartSignIn)
+	case opts.Hold < 0:
+		return fmt.Errorf("--hold %s: want a positive duration", opts.Hold)
+	case opts.Hold > signInMaxHold:
+		return fmt.Errorf("--hold %s outlasts muster's %s sign-in wait less the minute the sign-in takes; at most %s", opts.Hold, musterSignInWait, signInMaxHold)
+	}
+	return nil
+}
 
 // signInSurfaces is one run of the part.
 type signInSurfaces struct {
@@ -72,17 +98,13 @@ type signInSurfaces struct {
 	slack    *slackProof
 	portal   *portalSession
 	harness  string
-	port     int
+	hold     time.Duration
 	verdicts []string
 }
 
-// klausGatewaySignInTest is the part: the fixture, the gateway on the host
-// with its connector landing, a portal session as the same person, then the
-// stages.
+// klausGatewaySignInTest is the part: the fixture, the gateway on the host,
+// a portal session as the same person, then the stages.
 func klausGatewaySignInTest(cfg *config.Config, user *config.User, opts KlausGatewayTestOptions) error {
-	if opts.Port != gatewayTestPort(cfg) {
-		return fmt.Errorf("--part %s runs the gateway on the lab's own port %d, the one muster's post-login redirect allowlist names; drop --gateway-port", KlausGatewayPartSignIn, gatewayTestPort(cfg))
-	}
 	if !cfg.Backstage.Enabled {
 		return fmt.Errorf("--part %s answers through the portal too; enable backstage in %s and run `agentlab platform` first", KlausGatewayPartSignIn, config.File)
 	}
@@ -106,7 +128,7 @@ func klausGatewaySignInTest(cfg *config.Config, user *config.User, opts KlausGat
 		return err
 	}
 	defer api.close()
-	s := &signInSurfaces{cfg: cfg, user: user, token: token, subject: identity.subject, api: api, harness: opts.Harness, port: opts.Port}
+	s := &signInSurfaces{cfg: cfg, user: user, token: token, subject: identity.subject, api: api, harness: opts.Harness, hold: opts.Hold}
 	s.cleanup()
 	defer s.cleanup()
 
@@ -176,8 +198,8 @@ func klausGatewaySignInTest(cfg *config.Config, user *config.User, opts KlausGat
 	gw.defaultAgent = klausGatewaySignInAgent
 	gw.extraArgs = []string{"--obo-connectors-enabled=true"}
 	defer func() { _ = gw.stop() }()
-	step("Starting klaus-gateway %s on the host with its connector landing on (%s, on muster's post-login redirect allowlist), its Web API the fake at %s, a2a target %s",
-		gw.describe(), klausGatewayLanding(opts.Port), fake.baseURL(), target)
+	step("Starting klaus-gateway %s on the host with its connector prompts on, its Web API the fake at %s, a2a target %s",
+		gw.describe(), fake.baseURL(), target)
 	if err := gw.start(); err != nil {
 		return err
 	}
@@ -274,9 +296,6 @@ func (s *signInSurfaces) paused(t *slackThread, turn *slackTurn, before int) (*s
 	prompt, _ := signInPromptIn(msgs, before, t.user)
 	button, _ := prompt.action(slackActionConnect)
 	link, _ := button[slackKeyURL].(string)
-	if redirect := linkRedirect(link); redirect == "" || !strings.HasPrefix(redirect, klausGatewayLanding(s.port)) {
-		return nil, fmt.Errorf("the sign-in button's link %s carries no redirect to the gateway's landing %s", linkPath(link), klausGatewayLanding(s.port))
-	}
 	session, err := s.slack.boundSession(s.api, t)
 	if err != nil {
 		return nil, err
@@ -285,11 +304,18 @@ func (s *signInSurfaces) paused(t *slackThread, turn *slackTurn, before int) (*s
 	if err != nil {
 		return nil, err
 	}
-	if task.Status.State != a2a.TaskStateInputRequired || parseURLElicitationRequest(task.Status.Message) == nil {
+	elicitation := parseURLElicitationRequest(task.Status.Message)
+	if task.Status.State != a2a.TaskStateInputRequired || elicitation == nil {
 		return nil, fmt.Errorf("the thread shows a sign-in prompt for task %s but the controller has it %s without a url_elicitation_request", task.ID, task.Status.State)
 	}
-	note("task %s of Session %s paused at input-required (status message %s); the prompt went to %s alone, its link %s returning to %s",
-		task.ID, session.GetId(), task.Status.Message.ID, prompt.Recipient, linkPath(link), gatewayLandingPath)
+	if link != elicitation.URL {
+		return nil, fmt.Errorf("the sign-in button opens %s, not the url_elicitation_request's %s: the gateway must open the server's link unchanged", linkPath(link), linkPath(elicitation.URL))
+	}
+	if shown := signInLinkShown(link); !strings.Contains(prompt.Text, shown) {
+		return nil, fmt.Errorf("the sign-in prompt does not show %q before the link is opened: %s", shown, excerpt(prompt.Text, 300))
+	}
+	note("task %s of Session %s paused at input-required (status message %s); the prompt went to %s alone, showing its link %s whole and opening it unchanged",
+		task.ID, session.GetId(), task.Status.Message.ID, prompt.Recipient, linkPath(link))
 	return &signInPause{turn: turn, prompt: prompt, link: link, session: session, task: task, before: len(msgs)}, nil
 }
 
@@ -505,15 +531,27 @@ func (s *signInSurfaces) slackFirst(t *slackThread) error {
 }
 
 func (s *signInSurfaces) accepted(t *slackThread) error {
-	step("Accepted: the sign-in from the prompt's link completes through Dex and muster, whose redirect lands on the gateway; the landing resumes the same task with accept, and the call runs once")
+	step("Accepted: the click on Sign in is the consent and resumes the same task with accept before the person signed in; the runtime's retry parks in muster's sign-in wait for %s, the sign-in then completes through Dex and muster on muster's own page, and the call runs once in the same task", s.hold)
 	paused, err := s.pause(t, signInTestPrompt)
 	if err != nil {
 		return err
 	}
 	decided := time.Now()
-	if err := completeSignInEnding(paused.link, s.user, "the gateway's landing "+gatewayLandingPath, func(end *url.URL, body []byte) bool {
-		return end.Path == gatewayLandingPath && strings.Contains(string(body), gatewayLandingDone)
-	}); err != nil {
+	if err := s.slack.driver.click(t.user, paused.prompt, slackActionConnect); err != nil {
+		return err
+	}
+	if !waitFor(int(klausGatewayReplyWait/slackPoll), slackPoll, func() bool { return responded(s.slack.fake, gatewayContinuing) }) {
+		return fmt.Errorf("the clicked prompt was not rewritten to %q within %s", gatewayContinuing, klausGatewayReplyWait)
+	}
+	parked, err := s.awaitParked(paused)
+	if err != nil {
+		return err
+	}
+	if err := s.holdParked(paused, s.hold); err != nil {
+		return err
+	}
+	signingIn := time.Now()
+	if err := completeSignIn(paused.link, s.user); err != nil {
 		return err
 	}
 	turn, err := s.resumed(t, paused)
@@ -523,18 +561,34 @@ func (s *signInSurfaces) accepted(t *slackThread) error {
 	if turn.record.Outcome != outcomeCompleted {
 		return fmt.Errorf("after the sign-in the turn ended %s", turnFailure(turn))
 	}
+	if turn.record.TaskID != string(paused.task.ID) {
+		return fmt.Errorf("after the sign-in the call ran in task %s, not the paused task %s", turn.record.TaskID, paused.task.ID)
+	}
 	if !callAnswered(turn.answer) {
 		return fmt.Errorf("after the sign-in the answer does not carry the fixture's tools (%s): %s", signInTestToolProof, excerpt(turn.answer, 300))
 	}
-	if ran, err := s.fixtureCallsSince(decided); err != nil {
+	logs, err := musterLogSince(decided)
+	if err != nil {
 		return err
-	} else if len(ran) != 1 {
+	}
+	ran := fixtureCallsIn(logs, decided, s.subject)
+	if len(ran) != 1 {
 		return fmt.Errorf("after the sign-in muster ran %s %d times, want once: %s", signInTestTool, len(ran), strings.Join(ran, ", "))
+	}
+	ranAt, err := time.Parse(time.RFC3339Nano, ran[0])
+	if err != nil {
+		return err
+	}
+	held, ok := heldCallIn(logs, signingIn, ranAt)
+	if !ok {
+		return fmt.Errorf("muster's log has no call that reached it before the sign-in began (%s) and ended once %s ran (%s): the runtime's retry did not wait in muster's sign-in wait",
+			signingIn.UTC().Format(time.RFC3339Nano), signInTestTool, ran[0])
 	}
 	if _, ok := findMessage(turn.msgs, "<@"+t.user+">"+gatewaySignedInLine); !ok {
 		return fmt.Errorf("the thread does not say %q: %s", "<@"+t.user+">"+gatewaySignedInLine, threadLine(turn.msgs))
 	}
-	s.pass("the sign-in from the prompt's link ended on the gateway's landing; it resumed task %s with accept (no message of the person's), the call ran once and the answer carried the fixture's tools", paused.task.ID)
+	s.pass("the click on Sign in resumed task %s with accept before the sign-in; the task stayed %s on its retry for the %s hold, muster holding the call %s before the sign-in began; the sign-in from the link, unchanged, ended on muster's page; the call ran once in the same task and the answer carried the fixture's tools",
+		paused.task.ID, parked, s.hold, held.Round(time.Second))
 	s.signOut()
 	restartOAuthFixture()
 	return nil
@@ -570,6 +624,95 @@ func (s *signInSurfaces) awaitLeft(paused *signInPause) error {
 		state = last.Status.State
 	}
 	return fmt.Errorf("task %s still waits on status message %s %s after the portal's answer (%s)", paused.task.ID, paused.asked(), klausGatewayTurnTimeout, state)
+}
+
+// awaitParked waits for the accepted task to leave input-required on the
+// request it asked in: the runtime's retry is in flight, parked in muster's
+// sign-in wait. It returns the state the task waits in.
+func (s *signInSurfaces) awaitParked(paused *signInPause) (a2a.TaskState, error) {
+	var state a2a.TaskState
+	var judged error
+	if waitFor(int(klausGatewayTurnTimeout/slackPoll), slackPoll, func() bool {
+		task, err := s.task(paused.session, string(paused.task.ID))
+		if err != nil {
+			return false
+		}
+		state = task.Status.State
+		parked, err := retryParked(task, paused.asked())
+		judged = err
+		return parked || err != nil
+	}) && judged == nil {
+		return state, nil
+	}
+	if judged != nil {
+		return "", fmt.Errorf("after the click on Sign in, before the sign-in: %w", judged)
+	}
+	return "", fmt.Errorf("task %s still waits on status message %s %s after the click on Sign in (%s): the gateway did not resume it", paused.task.ID, paused.asked(), klausGatewayTurnTimeout, state)
+}
+
+// holdParked keeps the sign-in back for hold and fails as soon as the task
+// stops waiting: a runtime that does not wait in muster's sign-in wait ends
+// the turn or asks again before the sign-in.
+func (s *signInSurfaces) holdParked(paused *signInPause, hold time.Duration) error {
+	note("task %s parked; holding the sign-in back for %s", paused.task.ID, hold)
+	for end := time.Now().Add(hold); time.Now().Before(end); time.Sleep(slackPoll) {
+		task, err := s.task(paused.session, string(paused.task.ID))
+		if err != nil {
+			continue
+		}
+		if _, err := retryParked(task, paused.asked()); err != nil {
+			return fmt.Errorf("while the sign-in was held back: %w", err)
+		}
+	}
+	return nil
+}
+
+// retryParked judges a task the person accepted the sign-in of, before the
+// sign-in completes: false while it still waits on the request it asked in
+// (askedIn), true while it works on the retry, an error once it ended or
+// asked again.
+func retryParked(task *a2a.Task, askedIn string) (bool, error) {
+	switch state := task.Status.State; state {
+	case a2a.TaskStateInputRequired, a2a.TaskStateAuthRequired:
+		if task.Status.Message != nil && task.Status.Message.ID == askedIn {
+			return false, nil
+		}
+		return false, fmt.Errorf("task %s asks again (%s) instead of its retry waiting in muster's sign-in wait", task.ID, state)
+	case a2a.TaskStateSubmitted, a2a.TaskStateWorking:
+		return true, nil
+	default:
+		return false, fmt.Errorf("task %s ended %s before the sign-in: its retry did not wait in muster's sign-in wait", task.ID, state)
+	}
+}
+
+// heldCallIn is how long muster held a call before the sign-in began at
+// signingIn, from its boundary line ("tool call", which times muster's
+// sign-in wait too): the longest such line of the fixture's tool, by name or
+// through call_tool, that ran ok, started before signingIn and ended once the
+// fixture's call ran at ran. ok is false when none did: the retry reached
+// muster only after the sign-in began, or never waited in it.
+func heldCallIn(logs string, signingIn, ran time.Time) (held time.Duration, ok bool) {
+	for _, line := range strings.Split(logs, "\n") {
+		var entry struct {
+			Time     time.Time `json:"time"`
+			Msg      string    `json:"msg"`
+			Tool     string    `json:"tool"`
+			Outcome  string    `json:"outcome"`
+			Duration float64   `json:"duration_s"`
+		}
+		start := strings.IndexByte(line, '{')
+		if start < 0 || json.Unmarshal([]byte(line[start:]), &entry) != nil {
+			continue
+		}
+		if entry.Msg != musterToolCallLog || entry.Outcome != "ok" || (entry.Tool != signInTestTool && entry.Tool != musterMetaCallTool) || entry.Time.Before(ran) {
+			continue
+		}
+		began := entry.Time.Add(-time.Duration(entry.Duration * float64(time.Second)))
+		if before := signingIn.Sub(began); before > 0 && before > held {
+			held, ok = before, true
+		}
+	}
+	return held, ok
 }
 
 func (s *signInSurfaces) fixtureCallsSince(since time.Time) ([]string, error) {
@@ -630,13 +773,16 @@ func signInPromptIn(msgs []slackMessage, before int, user string) (slackMessage,
 	return slackMessage{}, false
 }
 
-// linkRedirect is the post-login redirect a sign-in link carries.
-func linkRedirect(link string) string {
-	u, err := url.Parse(link)
-	if err != nil {
-		return ""
+// signInLinkShown is how the gateway's sign-in prompt shows an ASCII link
+// before it is opened: the domain in bold, then the whole URL in code,
+// escaped as Slack mrkdwn.
+func signInLinkShown(link string) string {
+	host := ""
+	if u, err := url.Parse(link); err == nil {
+		host = u.Hostname()
 	}
-	return u.Query().Get("redirect")
+	escape := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace
+	return "Opens *" + escape(host) + "*\n`" + escape(link) + "`"
 }
 
 // responded reports whether a prompt was rewritten through its response_url

@@ -92,11 +92,7 @@ type tmplData struct {
 	// The fake pro's MCPServer, the board it serves and that board's default
 	// team (profake.go): the portal's roadmap block under backstage.hive.
 	ProFakeServer, ProFakeBoard, ProFakeTeam string
-	// KlausGatewayLanding is the connector landing of the host-mode
-	// klaus-gateway the proofs start, on muster's post-login redirect
-	// allowlist so a completed sign-in returns there as on an installation.
-	KlausGatewayLanding string
-	GitHubMCPServer     string
+	GitHubMCPServer                          string
 	// GitHubMCPClientSecret is the OAuth client Secret the MCPServer
 	// references, platform.github.secret resolved (githubmcp.go).
 	GitHubMCPClientSecret config.SecretRef
@@ -357,7 +353,6 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		ProFakeServer:                proFakeServer,
 		ProFakeBoard:                 proFakeBoard,
 		ProFakeTeam:                  proFakeTeam,
-		KlausGatewayLanding:          klausGatewayLanding(gatewayTestPort(cfg)),
 		GitHubMCPServer:              gitHubMCPServer,
 		GitHubMCPClientSecret:        cfg.Platform.GitHub.ClientSecret(),
 		GitHubSignIn:                 gitHubSignInValuesFor(cfg),
