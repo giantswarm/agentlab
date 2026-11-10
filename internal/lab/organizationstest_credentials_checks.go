@@ -580,7 +580,7 @@ const credentialStateUnverifiable = "credential state cannot be verified" // #no
 // #359): an organization admin outside platform-admins prepares and saves
 // credentials, and a person without the rights is refused by the
 // authorization of the write itself.
-const credentialsWriteOnlyFloor = "2.24.0-rc.1" // #nosec G101 -- a version, not a credential
+const credentialsWriteOnlyFloor = "2.24.0-rc.2" // #nosec G101 -- a version, not a credential
 
 // atLeast says whether version is floor or newer; an unreadable version is
 // not.
@@ -632,13 +632,13 @@ func otherAdminFixtureProblem(email, ns string, r organizationRights) string {
 // viewerRefusalVerdict judges agent-manager's refusal of the viewer's
 // set_organization_model: it passes, naming the denied write, only when it
 // carries the apiserver's RBAC denial of that user creating the Secret or
-// the ModelConfig. An agent-manager older than credentialsWriteOnlyFloor
+// the ModelConfig in the organization's namespace ns. An agent-manager older than credentialsWriteOnlyFloor
 // refuses on reading the Secret first, for every person outside
 // platform-admins: a skip naming the release. Any other refusal is an
 // unrelated guard and fails.
-func viewerRefusalVerdict(version, refusal, user string) (denied, skip string, err error) {
+func viewerRefusalVerdict(version, refusal, user, ns string) (denied, skip string, err error) {
 	for _, resource := range []string{resourceSecrets, "modelconfigs"} {
-		if strings.Contains(refusal, fmt.Sprintf(`User %q cannot create resource %q`, user, resource)) {
+		if strings.Contains(refusal, fmt.Sprintf(`User %q cannot create resource %q`, user, resource)) && strings.Contains(refusal, fmt.Sprintf(`in the namespace %q`, ns)) {
 			return "create " + resource, "", nil
 		}
 	}

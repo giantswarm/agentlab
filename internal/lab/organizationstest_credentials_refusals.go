@@ -7,11 +7,10 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-
-	"github.com/giantswarm/agentlab/internal/config"
 )
 
 // The credentials part's refusals and confirmations beyond the save
@@ -21,6 +20,9 @@ import (
 // list, and a second POST of a saved operation.
 
 const (
+	// credentialsRightsSettle bounds the wait for the part's RoleBindings to
+	// show in the people's access reviews.
+	credentialsRightsSettle = 15 * time.Second
 	// credentialsViewerBinding binds the part's viewer to the organization's
 	// read-only role, agent-platform:user.
 	credentialsViewerBinding = "agentlab-credentials-viewer" // #nosec G101 -- a RoleBinding name, not a credential
@@ -98,37 +100,49 @@ func readOrganizationRights(token, ns string) (organizationRights, error) {
 	return r, nil
 }
 
-// signIn is a lab user's Dex token for muster and the credential API.
-func (p *credentialsProof) signIn(u *config.User) (string, error) {
-	step("Logging in to Dex as %s", u.Email)
-	return passwordGrant(p.cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret, u.Email, u.Password, musterLoginScopes)
+// checkPeople holds the part's people to their roles with their own
+// access reviews, before any verdict stands on them: the viewer reads the
+// organization's ModelConfigs and creates neither Secrets nor ModelConfigs,
+// the other admin creates both. A wrong fixture fails the part.
+func (p *credentialsProof) checkPeople() error {
+	var problem string
+	var readErr error
+	// The RoleBindings setUp just wrote reach the apiserver's authorizer
+	// through its informer: the reviews are read again for a few seconds.
+	waitFor(int(credentialsRightsSettle/pollInterval), pollInterval, func() bool {
+		viewer, err := readOrganizationRights(p.viewerToken, p.namespace)
+		if err == nil {
+			var other organizationRights
+			if other, err = readOrganizationRights(p.otherToken, p.namespace); err == nil {
+				problem = firstNonEmpty(viewerFixtureProblem(p.viewer.Email, p.namespace, viewer), otherAdminFixtureProblem(p.other.Email, p.namespace, other))
+			}
+		}
+		readErr = err
+		return err == nil && problem == ""
+	})
+	switch {
+	case readErr != nil:
+		return readErr
+	case problem != "":
+		return errors.New(problem)
+	}
+	note("access reviews in %s: %s lists modelconfigs and creates neither secrets nor modelconfigs; %s creates both", p.namespace, p.viewer.Email, p.other.Email)
+	return nil
 }
 
 // viewerWriteRefused: the viewer, bound agent-platform:user in the
-// organization by setUp, whose access reviews allow reading its ModelConfigs
-// and deny creating Secrets and ModelConfigs there (else the fixture is
-// wrong and the verdict fails), calls set_organization_model for a model of their own.
+// organization by setUp, whose access reviews setUp held to reading its
+// ModelConfigs and not creating Secrets and ModelConfigs there, calls set_organization_model for a model of their own.
 // The refusal must be that authorization: the apiserver's RBAC denial of
-// the viewer quoted in agent-manager's forbidden (from 2.24.0-rc.1 its
+// the viewer quoted in agent-manager's forbidden (from 2.24.0-rc.2 its
 // dry-run create of the Secret as the caller, giantswarm/agent-manager#360).
 // An older agent-manager refuses every person outside platform-admins on
 // reading the Secret first, which says nothing of the viewer's rights: a
 // SKIP naming the release that fixes it. Nothing of the model is written.
 func (p *credentialsProof) viewerWriteRefused() (string, error) {
-	token, err := p.signIn(p.viewer)
-	if err != nil {
-		return "", err
-	}
-	rights, err := readOrganizationRights(token, p.namespace)
-	if err != nil {
-		return "", err
-	}
-	if problem := viewerFixtureProblem(p.viewer.Email, p.namespace, rights); problem != "" {
-		return "", errors.New(problem)
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*musterMCPTimeout)
 	defer cancel()
-	m, err := dialMusterMCP(ctx, p.cfg, token, musterMCPOptions{name: "agentlab-credentials-viewer", protocol: mcp.ProtocolVersion20251125})
+	m, err := dialMusterMCP(ctx, p.cfg, p.viewerToken, musterMCPOptions{name: "agentlab-credentials-viewer", protocol: mcp.ProtocolVersion20251125})
 	if err != nil {
 		return "", err
 	}
@@ -145,7 +159,7 @@ func (p *credentialsProof) viewerWriteRefused() (string, error) {
 	if err := nothingWritten(ctx, p.namespace, credentialsViewerModel, "tenant-credential-"+credentialsViewerModel); err != nil {
 		return "", fmt.Errorf("after %s's refused call: %w", p.viewer.Email, err)
 	}
-	denied, skip, err := viewerRefusalVerdict(p.agentManagerVersion, refusal, apiserverUserPrefix+p.viewer.Email)
+	denied, skip, err := viewerRefusalVerdict(p.agentManagerVersion, refusal, apiserverUserPrefix+p.viewer.Email, p.namespace)
 	switch {
 	case err != nil:
 		return "", err
@@ -164,10 +178,7 @@ func (p *credentialsProof) viewerSaveRefused() (string, error) {
 	if p.operation == "" {
 		return "", errors.New("no pending operation of the admin")
 	}
-	token, err := p.signIn(p.viewer)
-	if err != nil {
-		return "", err
-	}
+	token := p.viewerToken
 	ctx, cancel := context.WithTimeout(context.Background(), musterMCPTimeout)
 	defer cancel()
 	rest, err := dialCredentialREST(ctx)

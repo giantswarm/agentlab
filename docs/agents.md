@@ -453,9 +453,7 @@ printed only as its SHA-256. Each verdict:
   with the person's token answers the confirmation with a strong `ETag` and
   `Cache-Control: no-store`. Another lab user, in neither `platform-admins`
   nor `viewers` (the default `dev@lab.local`) and bound by name as an admin
-  of the organization too, whose access reviews must allow creating Secrets
-  and ModelConfigs there (else the verdict fails as a wrong fixture),
-  prepares an operation of their own (model
+  of the organization too, prepares an operation of their own (model
   `agentlab-credentials-other`): each reads their own, each read of the
   other's is refused with the status of an operation that does not exist
   (404 or 403, no oracle), and an anonymous read answers 401; the reads of
@@ -463,21 +461,22 @@ printed only as its SHA-256. Each verdict:
   That user then cancels their operation: `DELETE` with a stale `If-Match`
   answers 412, with its `ETag` 204; it reads `cancelled`, a save of it
   answers 412 and nothing of that model is written. An agent-manager older
-  than 2.24.0-rc.1 refuses that user's own operation with `forbidden:
+  than 2.24.0-rc.2 refuses that user's own operation with `forbidden:
   credential state cannot be verified` (it reads the credential Secret as the
   caller, which `agent-platform:admin` may not): there the verdicts on their
   own operation and its cancel are a `SKIP` naming giantswarm/agent-manager#360;
-  from 2.24.0-rc.1 on they run, and that refusal fails them.
+  from 2.24.0-rc.2 on they run, and that refusal fails them.
 - A viewer: a third lab user, in `viewers` only (the default
   `viewer@lab.local`; never the other admin, never in `platform-admins` or
   `developers`), bound by name to the organization's read-only role
   `agent-platform:user`. A lab without three such people fails the part
-  naming the user it lacks. Access reviews as the viewer must allow listing
-  the organization's ModelConfigs and deny creating Secrets and ModelConfigs
-  there, else the verdict fails as a wrong fixture. Their
+  naming the user it lacks. Before any verdict, access reviews with each
+  person's own token must show the viewer listing the organization's
+  ModelConfigs and creating neither Secrets nor ModelConfigs, and the other
+  admin creating both; else the part fails as a wrong fixture. The viewer's
   `set_organization_model` for a model of their own must be refused with the
   apiserver's RBAC denial of that user creating the Secret or the ModelConfig
-  (agent-manager 2.24.0-rc.1 and newer, whose dry-run create of the Secret as
+  in the organization's namespace (agent-manager 2.24.0-rc.2 and newer, whose dry-run create of the Secret as
   the caller meets it), with nothing written; an older agent-manager refuses
   every person outside `platform-admins` on reading the Secret first, which
   is a `SKIP` naming giantswarm/agent-manager#360, and any other refusal

@@ -91,10 +91,12 @@ type credentialsProof struct {
 	cfg *config.Config
 	// admin and other are both admins of the organization: other is a lab
 	// user outside platform-admins and viewers, bound by name. viewer is a
-	// third person, in viewers only, never bound in the organization.
+	// third person, in viewers only, bound to the organization's read-only
+	// role agent-platform:user.
 	admin, other, viewer *config.User
 	adminToken           string
 	otherToken           string
+	viewerToken          string
 	namespace            string
 	uid                  string
 	pre                  credentialPrerequisites
@@ -276,11 +278,14 @@ func (p *credentialsProof) setUp() error {
 	for _, u := range []struct {
 		user  *config.User
 		token *string
-	}{{p.admin, &p.adminToken}, {p.other, &p.otherToken}} {
+	}{{p.admin, &p.adminToken}, {p.other, &p.otherToken}, {p.viewer, &p.viewerToken}} {
 		step("Logging in to Dex as %s", u.user.Email)
 		if *u.token, err = passwordGrant(p.cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret, u.user.Email, u.user.Password, musterLoginScopes); err != nil {
 			return err
 		}
+	}
+	if err := p.checkPeople(); err != nil {
+		return err
 	}
 	note("%s runs in namespace %s", credentialsOrganization, ns)
 	return nil
@@ -838,21 +843,13 @@ func (p *credentialsProof) otherPersonRefused() (string, error) {
 		p.admin.Email, p.other.Email, organizationAdminRole, credentialsOrganization, unknown), nil
 }
 
-// otherOwnOperation: the other person, whose access review allows creating
-// Secrets in the organization (else the fixture is wrong and the verdict
-// fails), prepares an operation of their own, reads it, and the admin is
+// otherOwnOperation: the other person, whose access reviews setUp held to
+// creating Secrets and ModelConfigs in the organization, prepares an operation of their own, reads it, and the admin is
 // refused it as an unknown operation. On an agent-manager older than
 // credentialsWriteOnlyFloor, which refuses that person's own preparation
 // (giantswarm/agent-manager#359), it is a SKIP, and so is the cancel of it;
 // from the floor on, that refusal fails.
 func (p *credentialsProof) otherOwnOperation() (string, error) {
-	rights, err := readOrganizationRights(p.otherToken, p.namespace)
-	if err != nil {
-		return "", err
-	}
-	if problem := otherAdminFixtureProblem(p.other.Email, p.namespace, rights); problem != "" {
-		return "", errors.New(problem)
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*musterMCPTimeout)
 	defer cancel()
 	other, err := dialMusterMCP(ctx, p.cfg, p.otherToken, musterMCPOptions{name: "agentlab-credentials-other", protocol: mcp.ProtocolVersion20251125})

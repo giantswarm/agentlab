@@ -460,7 +460,7 @@ func TestConfirmationListsOnly(t *testing.T) {
 // 428 alone from agent-manager 2.23.0 (giantswarm/agent-manager#354); an
 // older or unreadable version also admits 400 and says so.
 func TestIfMatchRequiredStatuses(t *testing.T) {
-	for _, v := range []string{"2.23.0", "v2.23.2", "2.24.0-rc.1"} {
+	for _, v := range []string{"2.23.0", "v2.23.2", "2.24.0-rc.2"} {
 		got, note := ifMatchRequiredStatuses(v)
 		require.Equal(t, []int{428}, got, v)
 		require.Empty(t, note, v)
@@ -519,6 +519,11 @@ func TestCredentialsPeople(t *testing.T) {
 		require.Equal(t, viewer.Email, v.Email)
 	}
 	const noViewer = "in viewers only"
+	// The lab's default users give dev and viewer.
+	defaults := config.Default()
+	other, v, err := credentialsPeople(defaults, defaults.FindUser("admin@lab.local"))
+	require.NoError(t, err)
+	require.Equal(t, []string{accessDefaultSecond, testPortalViewer}, []string{other.Email, v.Email})
 	for name, tc := range map[string]struct {
 		users []config.User
 		want  string
@@ -539,8 +544,11 @@ func TestCredentialsPeople(t *testing.T) {
 // other refusal, it is no SKIP.
 func TestOwnCredentialRefused(t *testing.T) {
 	refused := errors.New("set_organization_model failed: forbidden: credential state cannot be verified")
-	require.Contains(t, ownCredentialRefused("dev@lab.test", "2.23.2", refused), "giantswarm/agent-manager#360")
-	for _, v := range []string{"2.24.0-rc.1", "2.24.0-rc.2", "2.24.0"} {
+	// 2.24.0-rc.1 still reads the Secret; #360 is in rc.2.
+	for _, v := range []string{"2.23.2", "2.24.0-rc.1"} {
+		require.Contains(t, ownCredentialRefused("dev@lab.test", v, refused), "giantswarm/agent-manager#360", v)
+	}
+	for _, v := range []string{"2.24.0-rc.2", "2.24.0"} {
 		require.Empty(t, ownCredentialRefused("dev@lab.test", v, refused), v)
 	}
 	require.Empty(t, ownCredentialRefused("dev@lab.test", "2.23.2", errors.New("set_organization_model failed: forbidden: create ModelConfig")))
@@ -570,22 +578,28 @@ func TestFixtureProblems(t *testing.T) {
 func TestViewerRefusalVerdict(t *testing.T) {
 	user := "oidc:viewer@lab.test"
 	rbac := `forbidden: dry run of create credential Secret ns/tenant-credential-x: secrets "tenant-credential-x" is forbidden: User "oidc:viewer@lab.test" cannot create resource "secrets" in API group "" in the namespace "ns"; ask an admin`
-	denied, skip, err := viewerRefusalVerdict("2.24.0-rc.2", rbac, user)
+	denied, skip, err := viewerRefusalVerdict("2.24.0-rc.2", rbac, user, "ns")
 	require.NoError(t, err)
 	require.Empty(t, skip)
 	require.Equal(t, "create secrets", denied)
-	denied, _, err = viewerRefusalVerdict("2.23.2", `forbidden: dry run of create ModelConfig ns/x: User "oidc:viewer@lab.test" cannot create resource "modelconfigs" in API group "kagent.dev"`, user)
+	denied, _, err = viewerRefusalVerdict("2.23.2", `forbidden: dry run of create ModelConfig ns/x: User "oidc:viewer@lab.test" cannot create resource "modelconfigs" in API group "kagent.dev" in the namespace "ns"`, user, "ns")
 	require.NoError(t, err)
 	require.Equal(t, "create modelconfigs", denied)
 
 	old := "forbidden: credential state cannot be verified"
-	_, skip, err = viewerRefusalVerdict("2.23.2", old, user)
-	require.NoError(t, err)
-	require.Contains(t, skip, "giantswarm/agent-manager#360")
-	_, _, err = viewerRefusalVerdict("2.24.0-rc.2", old, user)
+	for _, v := range []string{"2.23.2", "2.24.0-rc.1"} {
+		_, skip, err = viewerRefusalVerdict(v, old, user, "ns")
+		require.NoError(t, err, v)
+		require.Contains(t, skip, "giantswarm/agent-manager#360", v)
+	}
+	_, _, err = viewerRefusalVerdict("2.24.0-rc.2", old, user, "ns")
 	require.ErrorContains(t, err, "unrelated guard")
-	_, _, err = viewerRefusalVerdict("2.24.0-rc.2", strings.ReplaceAll(rbac, "viewer@", "dev@"), user)
-	require.ErrorContains(t, err, "unrelated guard")
-	_, _, err = viewerRefusalVerdict("2.24.0-rc.2", "forbidden: organization agentlab-credentials is being deleted", user)
-	require.ErrorContains(t, err, "unrelated guard")
+	for name, refusal := range map[string]string{
+		"another user":      strings.ReplaceAll(rbac, "viewer@", "dev@"),
+		"another namespace": strings.ReplaceAll(rbac, `namespace "ns"`, `namespace "other"`),
+		"another guard":     "forbidden: organization agentlab-credentials is being deleted",
+	} {
+		_, _, err = viewerRefusalVerdict("2.24.0-rc.2", refusal, user, "ns")
+		require.ErrorContains(t, err, "unrelated guard", name)
+	}
 }
