@@ -353,9 +353,10 @@ the namespace's atespace from that namespace only. Then:
   (klaus-gateway's per-caller roster, giantswarm/klaus-gateway#354) are one
   set: their own organization's agent, nothing of the other's. The platform
   tenant's agents in `kagent` are not judged (they go with
-  giantswarm/agent-manager#166). The Dev Portal surface is skipped until its
-  organization page and New agent picker land
-  (giantswarm/backstage#3363).
+  giantswarm/agent-manager#166). The Dev Portal surface is a page, proven in
+  a browser by the portal's own suite (giantswarm/backstage
+  `e2e/agentlab/organizations.spec.ts`), so its verdict here is a SKIP naming
+  that spec.
 - **The negative cross-organization tests.** Each is a verdict that names
   its surface and the boundary it proves, and each has a twin in the
   member's own organization that is admitted, so a refusal for another

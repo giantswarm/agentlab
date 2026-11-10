@@ -39,8 +39,8 @@ import (
 //   - the same answer on every surface: the agents each member sees through
 //     the Kubernetes API, the kagent API through the edge and Slack are the
 //     same set, their own organization's agent and nothing of the other;
-//     the Dev Portal's is skipped until its organization pages land
-//     (giantswarm/backstage#3363);
+//     the Dev Portal's is the browser suite's (giantswarm/backstage
+//     e2e/agentlab/organizations.spec.ts), so its verdict is a SKIP naming it;
 //   - the negative cross-organization tests, each a verdict naming its
 //     surface and its boundary, each with a twin in the member's own
 //     organization that is admitted, so a refusal for any other reason
@@ -360,7 +360,7 @@ func (p *organizationsProof) run() error {
 		rosters[surfaceSlack] = slackRosters
 	}
 	p.add(organizationVerdict{surface: surfacePortal, boundary: "each member's roster and New agent picker are their own organization's",
-		skip: "the Dev Portal's organization page and New agent picker are giantswarm/backstage#3363 (slice 15), not in the lab's portal yet"})
+		skip: "a page, proven in a browser by giantswarm/backstage e2e/agentlab/organizations.spec.ts"})
 	same, err := sameAnswer(rosters, p.members)
 	if err != nil {
 		return err
