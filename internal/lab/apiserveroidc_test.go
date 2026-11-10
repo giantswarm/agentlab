@@ -130,7 +130,7 @@ func TestProofsRunApiserverOIDCFirst(t *testing.T) {
 	for name, proof := range map[string]func() error{
 		"test":           func() error { return Test(cfg) },
 		"backstage-test": func() error { return BackstageTest(cfg, nil, BackstageTestOptions{}) },
-		"agents-test":    func() error { return AgentsTest(cfg, cfg.Users[0].Email) },
+		"agents-test":    func() error { return AgentsTest(cfg, cfg.Users[0].Email, AgentsTestOptions{}) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			calls = 0

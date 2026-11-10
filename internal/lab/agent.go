@@ -160,6 +160,11 @@ type agentSpec struct {
 	// Plugins are the packages the agent binds (agent-manager's plugins,
 	// the chart's plugins), pinned by commit.
 	Plugins []agentPlugin
+	// GitAuthSecret names the Secret (key token) of the agent's namespace
+	// its git skills are fetched with (the chart's
+	// skillsGitAuthSecretRef.name, rendered as every git source's
+	// credentialRef); "" fetches anonymously. The direct writer only.
+	GitAuthSecret string
 }
 
 // agentSkill is one skills[] entry: a name, a directory and exactly one
@@ -592,8 +597,15 @@ func agentValues(spec agentSpec) map[string]any {
 		}
 		values[skillsKey] = skills
 	}
+	if spec.GitAuthSecret != "" {
+		values[skillsGitAuthSecretRefKey] = map[string]any{nameKey: spec.GitAuthSecret}
+	}
 	return values
 }
+
+// skillsGitAuthSecretRefKey is the chart value naming the Secret every git
+// skill is fetched with.
+const skillsGitAuthSecretRefKey = "skillsGitAuthSecretRef" // #nosec G101 -- a chart value NAME, not a credential
 
 // agentRelease is the part of an agent's HelmRelease the proofs read.
 type agentRelease struct {

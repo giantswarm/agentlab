@@ -2114,9 +2114,10 @@ func agentsGitOpsTestCmd() *cobra.Command {
 }
 
 func agentsTestCmd() *cobra.Command {
-	return &cobra.Command{
+	var opts lab.AgentsTestOptions
+	cmd := &cobra.Command{
 		Use:   "agents-test [email]",
-		Short: "Headless agent-manager proof through muster: get_info (caller) -> create -> ready -> update -> delete as the admin, a viewer's create Forbidden by the apiserver, the ServiceAccount without RBAC",
+		Short: "Headless agent-manager proof through muster: get_info (caller) -> create -> ready -> update -> delete as the admin, a viewer's create Forbidden by the apiserver, the ServiceAccount without RBAC, and a golden whose skill comes from a private repository booting with the credential",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadProofLab()
@@ -2127,9 +2128,11 @@ func agentsTestCmd() *cobra.Command {
 			if len(args) == 1 {
 				email = args[0]
 			}
-			return lab.AgentsTest(cfg, email)
+			return lab.AgentsTest(cfg, email, opts)
 		},
 	}
+	cmd.Flags().StringVar(&opts.SkillHostBinary, "skill-host-binary", "", "the static Linux agentlab the private-skill case's skill host fixture container runs on the kind network (default: this binary)")
+	return cmd
 }
 
 func organizationsTestCmd() *cobra.Command {

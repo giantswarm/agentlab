@@ -56,7 +56,9 @@ const baselineServiceAccount = "system:serviceaccount:" + platformNamespace + ":
 
 // AgentsTest is the headless proof that agent-manager acts as the signed-in
 // user and writes the Generic chart 1.x contract, through the platform path
-// only (Dex id_token -> muster -> call_tool x_agent-manager_*): get_info
+// only (Dex id_token -> muster -> call_tool x_agent-manager_*). First, a
+// golden whose skill comes from a private repository boots with the skill
+// host fixture's credential (proveAgentsTestPrivateSkill). Then get_info
 // reports identity caller on the 1.x chart and the platform Harness; the
 // admin's create -> ready -> turn -> update -> refreshSkills -> plugins -> delete round
 // trip succeeds with requestedBy set — the HelmRelease written by
@@ -72,7 +74,7 @@ const baselineServiceAccount = "system:serviceaccount:" + platformNamespace + ":
 // User "oidc:viewer@lab.local" (the view role writes no HelmReleases); and the
 // agent-manager ServiceAccount holds nothing beyond API discovery. Leaves
 // nothing behind.
-func AgentsTest(cfg *config.Config, email string) error {
+func AgentsTest(cfg *config.Config, email string, opts AgentsTestOptions) error {
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
 	}
@@ -159,7 +161,7 @@ func AgentsTest(cfg *config.Config, email string) error {
 	// Leftovers of an aborted run first, and everything this run creates on
 	// every exit path.
 	cleanup := func() {
-		for _, name := range []string{agentsTestAgent, agentsTestUnadmitted, agentsTestViewer} {
+		for _, name := range []string{agentsTestAgent, agentsTestUnadmitted, agentsTestViewer, agentsTestPrivate} {
 			if !agentExists(name) {
 				continue
 			}
@@ -171,6 +173,13 @@ func AgentsTest(cfg *config.Config, email string) error {
 	}
 	cleanup()
 	defer cleanup()
+
+	// A golden whose skill comes from a private repository needs no turn and
+	// no agent-manager write: it goes first, so a later step cannot hide it.
+	privateVerdict, err := proveAgentsTestPrivateSkill(cfg, modelConfig, opts)
+	if err != nil {
+		return err
+	}
 
 	step("%slist_skills — the head commit of %s (the commit refreshSkills re-pins to)", agentManagerToolPrefix, fixture.Repo)
 	// agent-manager reads GitHub for this and for the create_agent pin
@@ -492,6 +501,7 @@ func AgentsTest(cfg *config.Config, email string) error {
 		fmt.Printf("PASS: %s's create is Forbidden by the apiserver as User \"oidc:%s\" (user RBAC, not the ServiceAccount's)\n", viewer.Email, viewer.Email)
 	}
 	fmt.Printf("PASS: %s holds no permissions beyond discovery%s\n", agentManagerServiceAccount, grantsClause(grants))
+	fmt.Println(privateVerdict)
 	return nil
 }
 
