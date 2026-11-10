@@ -123,22 +123,6 @@ func (m *musterMCP) call(ctx context.Context, tool string, args map[string]any, 
 	return &musterAnswer{result: result}, nil
 }
 
-// declaresOutputSchema says whether muster's describe_tool lists an
-// outputSchema for tool.
-func (m *musterMCP) declaresOutputSchema(ctx context.Context, tool string) (bool, error) {
-	request := mcp.CallToolRequest{}
-	request.Params.Name = "describe_tool"
-	request.Params.Arguments = map[string]any{nameKey: tool}
-	res, err := m.client.CallTool(ctx, request)
-	if err != nil {
-		return false, fmt.Errorf("muster describe_tool %s: %w", tool, err)
-	}
-	if res.IsError {
-		return false, fmt.Errorf("muster describe_tool %s: %s", tool, resultText(res))
-	}
-	return describesOutputSchema(resultText(res))
-}
-
 // resultText is a tool result's text blocks, one per line: where muster's
 // meta-tools put their JSON payload.
 func resultText(res *mcp.CallToolResult) string {
@@ -149,18 +133,6 @@ func resultText(res *mcp.CallToolResult) string {
 		}
 	}
 	return strings.Join(texts, "\n")
-}
-
-// describesOutputSchema reads describe_tool's JSON payload for a non-empty
-// outputSchema.
-func describesOutputSchema(payload string) (bool, error) {
-	var described struct {
-		OutputSchema map[string]any `json:"outputSchema"`
-	}
-	if err := json.Unmarshal([]byte(payload), &described); err != nil {
-		return false, fmt.Errorf("parsing describe_tool payload: %w", err)
-	}
-	return len(described.OutputSchema) > 0, nil
 }
 
 // urlElicitations are the answer's URL mode elicitations, from either

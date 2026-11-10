@@ -488,12 +488,14 @@ func (s *musterSession) filterTools(args map[string]any) (*filterToolsResponse, 
 }
 
 // describeToolResponse is the part of muster's DescribeToolResponse the
-// proofs read: the name, the owning server, the kind and the annotations.
+// proofs read: the name, the owning server, the kind, the annotations and
+// the output schema.
 type describeToolResponse struct {
-	Name        string           `json:"name"`
-	Server      string           `json:"server,omitempty"`
-	Kind        string           `json:"kind,omitempty"`
-	Annotations *toolAnnotations `json:"annotations,omitempty"`
+	Name         string           `json:"name"`
+	Server       string           `json:"server,omitempty"`
+	Kind         string           `json:"kind,omitempty"`
+	Annotations  *toolAnnotations `json:"annotations,omitempty"`
+	OutputSchema map[string]any   `json:"outputSchema,omitempty"`
 }
 
 // describeTool runs muster's describe_tool meta-tool. A tool outside the

@@ -213,15 +213,12 @@ func TestParseAgeIdentityTakesAgeKeygenFiles(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestDescribesOutputSchema(t *testing.T) {
-	declared, err := describesOutputSchema(`{"name":"x_agent-manager_set_organization_model","outputSchema":{"type":"object","properties":{"credentials":{}}}}`)
-	require.NoError(t, err)
-	require.True(t, declared)
-	declared, err = describesOutputSchema(`{"name":"x_agent-manager_set_organization_model","inputSchema":{"type":"object"}}`)
-	require.NoError(t, err)
-	require.False(t, declared)
-	_, err = describesOutputSchema("not json")
-	require.Error(t, err)
+func TestDescribeToolResponseOutputSchema(t *testing.T) {
+	var declared, undeclared describeToolResponse
+	require.NoError(t, json.Unmarshal([]byte(`{"name":"x_agent-manager_set_organization_model","outputSchema":{"type":"object","properties":{"credentials":{}}}}`), &declared))
+	require.NotEmpty(t, declared.OutputSchema)
+	require.NoError(t, json.Unmarshal([]byte(`{"name":"x_agent-manager_set_organization_model","inputSchema":{"type":"object"}}`), &undeclared))
+	require.Empty(t, undeclared.OutputSchema)
 }
 
 func TestCredentialsSignInManifest(t *testing.T) {
@@ -354,10 +351,11 @@ func TestContentPathRemovalCommand(t *testing.T) {
 
 func TestContainerArgs(t *testing.T) {
 	sidecar := corev1.Container{Name: "sidecar", Args: []string{"--other"}}
-	main := corev1.Container{Name: agentManagerMCPServer, Args: []string{"--credential-ui-url=https://x"}}
+	main := corev1.Container{Name: agentManagerMCPServer, Command: []string{"/agent-manager", "--flux-namespace=flux"}, Args: []string{"--credential-ui-url=https://x"}}
 	args, err := containerArgs([]corev1.Container{sidecar, main}, agentManagerMCPServer)
 	require.NoError(t, err)
-	require.Equal(t, main.Args, args)
+	require.Equal(t, []string{"/agent-manager", "--flux-namespace=flux", "--credential-ui-url=https://x"}, args)
+	require.Equal(t, map[string]string{flagFluxNamespace: "flux", flagCredentialUIURL: "https://x"}, containerFlags(args)) // #nosec G101 -- flag names, not credentials
 	args, err = containerArgs([]corev1.Container{sidecar}, agentManagerMCPServer)
 	require.NoError(t, err, "the one container is read whatever its name")
 	require.Equal(t, sidecar.Args, args)

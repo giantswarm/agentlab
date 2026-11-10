@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -22,6 +23,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -98,18 +100,26 @@ type credentialsProof struct {
 	// plain is the generation without URL elicitation, kept open: the
 	// retry that returns the receipt is its call again. modern is the
 	// 2026-07-28 generation, kept open with its input_required answer, which
-	// it retries before and after the save.
+	// it retries before and after the save. agent-manager binds an
+	// operation to the person, the client and the MCP session it sees
+	// (agent-manager docs/organization-credentials.md, step 4), so
+	// modernOperation is the plain client's operation only while muster
+	// reaches agent-manager on one session for both.
 	plain              *musterMCP
 	modern             *musterMCP
 	modernAnswer       *musterAnswer
+	modernOperation    string
 	operation, formURL string
 	otherOperation     string
 	// started is when the run began: the logs judged for the value are
 	// read from it.
-	started              time.Time
-	receipt              *credentialAnswer
-	agentManagerVersion  string
-	merged               bool
+	started             time.Time
+	receipt             *credentialAnswer
+	agentManagerVersion string
+	merged              bool
+	// live says the model and its credential Secret exist on the cluster:
+	// saved in mode apply, or applied by Flux after the merge.
+	live                 bool
 	verdicts             []organizationVerdict
 	retainForDiagnostics bool
 }
@@ -289,17 +299,18 @@ func (p *credentialsProof) readPrerequisites() error {
 		return err
 	}
 	p.agentManagerVersion = info.Version
+	described, err := session.describeTool(agentManagerToolPrefix + "set_organization_model")
+	if err != nil {
+		return err
+	}
+	p.pre.outputSchema = len(described.OutputSchema) > 0
 	p.pre.grant = p.grantProblem()
 	modern, err := dialMusterMCP(ctx, p.cfg, p.adminToken, musterMCPOptions{name: "agentlab-credentials-probe", protocol: mcp.ProtocolVersion20260728})
 	if err != nil {
 		return err
 	}
 	p.pre.musterModern = modern.protocol() == mcp.ProtocolVersion20260728
-	p.pre.outputSchema, err = modern.declaresOutputSchema(ctx, agentManagerToolPrefix+"set_organization_model")
 	modern.close()
-	if err != nil {
-		return err
-	}
 	if p.pre.kustomizeController, err = kustomizeControllerReady(ctx); err != nil {
 		return err
 	}
@@ -355,12 +366,8 @@ func (p *credentialsProof) modelWithoutKey() (string, error) {
 	if p.operation, p.formURL, err = pendingCredential(*result, credentialsModelSecret, credentialsModelKey); err != nil {
 		return "", err
 	}
-	mc, err := modelConfigGVR()
-	if err != nil {
-		return "", err
-	}
-	if exists, err := objectExists(ctx, mc, p.namespace, credentialsModel); err != nil || exists {
-		return "", fmt.Errorf("ModelConfig %s/%s exists before its credential was saved (err %v)", p.namespace, credentialsModel, err)
+	if err := modelConfigPresent(ctx, p.namespace, credentialsModel, false); err != nil {
+		return "", fmt.Errorf("before its credential was saved: %w", err)
 	}
 	values, err := tenantCredentialValues(ctx, p.namespace)
 	if err != nil {
@@ -470,9 +477,13 @@ func (p *credentialsProof) modernGeneration() (string, error) {
 	if again != operation {
 		return "", fmt.Errorf("the retry having accepted names operation %s, the first answer %s", again, operation)
 	}
-	p.modernAnswer = retried
-	return fmt.Sprintf("input_required on %s with requestState, one URL elicitation %q for operation %s; retried having accepted, input_required again for the same operation",
-		m.protocol(), excerpt(e.Message, 160), operation), nil
+	p.modernAnswer, p.modernOperation = retried, operation
+	binding := "the plain client's operation"
+	if operation != p.operation {
+		binding = "its own, not the plain client's " + p.operation
+	}
+	return fmt.Sprintf("input_required on %s with requestState, one URL elicitation %q for operation %s (%s); retried having accepted, input_required again for the same operation",
+		m.protocol(), excerpt(e.Message, 160), operation, binding), nil
 }
 
 // inputRequired calls set_organization_model on the 2026-07-28 client with
@@ -626,9 +637,7 @@ func (r *credentialREST) do(ctx context.Context, method, operation, token string
 	if err != nil {
 		return nil, nil, err
 	}
-	for name, values := range header {
-		req.Header[name] = values
-	}
+	maps.Copy(req.Header, header)
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
@@ -829,12 +838,24 @@ func nothingWritten(ctx context.Context, ns, model, secret string) error {
 	if found {
 		return fmt.Errorf("the Secret %s/%s holds a value", ns, secret)
 	}
+	return modelConfigPresent(ctx, ns, model, false)
+}
+
+// modelConfigPresent checks the ModelConfig ns/name exists, or does not when
+// want is false.
+func modelConfigPresent(ctx context.Context, ns, name string, want bool) error {
 	mc, err := modelConfigGVR()
 	if err != nil {
 		return err
 	}
-	if exists, err := objectExists(ctx, mc, ns, model); err != nil || exists {
-		return fmt.Errorf("the ModelConfig %s/%s exists (err %v)", ns, model, err)
+	exists, err := objectExists(ctx, mc, ns, name)
+	switch {
+	case err != nil:
+		return fmt.Errorf("reading the ModelConfig %s/%s: %w", ns, name, err)
+	case exists && !want:
+		return fmt.Errorf("the ModelConfig %s/%s exists", ns, name)
+	case !exists && want:
+		return fmt.Errorf("the ModelConfig %s/%s is missing", ns, name)
 	}
 	return nil
 }
@@ -922,6 +943,9 @@ func (p *credentialsProof) save() (string, error) {
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("POST %s answered %d: %s", p.operation, resp.StatusCode, excerpt(redactValue(string(raw), p.value), 300))
 	}
+	if how := valueCarried(string(raw), p.value); how != "" {
+		return "", fmt.Errorf("the receipt carries the value %s", how)
+	}
 	var receipt credentialAnswer
 	if err := json.Unmarshal(raw, &receipt); err != nil {
 		return "", fmt.Errorf("the receipt: %w", err)
@@ -937,11 +961,23 @@ func (p *credentialsProof) save() (string, error) {
 	if err := receiptNames(receipt, p.operation, credentialsModelSecret, credentialsModelKey, want); err != nil {
 		return "", fmt.Errorf("the receipt: %w", err)
 	}
-	if err := p.retriesReturn(ctx, receipt, want); err != nil {
+	saved, err := liveVersions(ctx, p.namespace, credentialsModel, credentialsModelSecret)
+	if err != nil {
 		return "", err
 	}
-	detail := fmt.Sprintf("ETag %s, Cache-Control no-store; POST refused with %s, nothing written; POST with If-Match saved %s/%s (%s) as %s; the original call retried on %s and on %s returns the same receipt",
-		etag, strings.Join(refusals, " and "), credentialsModelSecret, credentialsModelKey, shortSum(p.valueSum), want, mcp.ProtocolVersion20251125, mcp.ProtocolVersion20260728)
+	retried, err := p.retriesReturn(ctx, receipt, want)
+	if err != nil {
+		return "", err
+	}
+	after, err := liveVersions(ctx, p.namespace, credentialsModel, credentialsModelSecret)
+	if err != nil {
+		return "", err
+	}
+	if after != saved {
+		return "", fmt.Errorf("the retries wrote again: the Secret's and the ModelConfig's resourceVersions %v after the save, %v after the retries", saved, after)
+	}
+	detail := fmt.Sprintf("ETag %s, Cache-Control no-store; POST refused with %s, nothing written; POST with If-Match saved %s/%s (%s) as %s; %s, the Secret's and the ModelConfig's resourceVersions unchanged",
+		etag, strings.Join(refusals, " and "), credentialsModelSecret, credentialsModelKey, shortSum(p.valueSum), want, retried)
 	if p.mode == modeCommit {
 		if err := nothingWritten(ctx, p.namespace, credentialsModel, credentialsModelSecret); err != nil {
 			return "", fmt.Errorf("mode commit, before the pull request is merged: %w", err)
@@ -962,45 +998,87 @@ func (p *credentialsProof) save() (string, error) {
 	if !found || sum != p.valueSum {
 		return "", fmt.Errorf("mode apply: Secret %s/%s holds %s, want %s", p.namespace, credentialsModelSecret, shortSum(sum), shortSum(p.valueSum))
 	}
-	mc, err := modelConfigGVR()
-	if err != nil {
-		return "", err
+	if err := modelConfigPresent(ctx, p.namespace, credentialsModel, true); err != nil {
+		return "", fmt.Errorf("mode apply, after the save: %w", err)
 	}
-	if exists, err := objectExists(ctx, mc, p.namespace, credentialsModel); err != nil || !exists {
-		return "", fmt.Errorf("mode apply: ModelConfig %s/%s missing after the save (err %v)", p.namespace, credentialsModel, err)
-	}
+	p.live = true
 	return detail + "; mode apply: the live Secret's SHA-256 matches and ModelConfig " + credentialsModel + " exists", nil
 }
 
 // retriesReturn retries the original call on the plain client and, when it
-// ran, on the 2026-07-28 client having accepted: each must answer the save's
-// receipt, not another write.
-func (p *credentialsProof) retriesReturn(ctx context.Context, receipt credentialAnswer, want string) error {
+// ran, on the 2026-07-28 client having accepted. A retry bound to the saved
+// operation must answer its receipt, not another write; the 2026-07-28
+// client bound to an operation of its own stays input_required for it, as a
+// 2026-07-28 retry does until its operation completes. No answer carries the
+// value.
+func (p *credentialsProof) retriesReturn(ctx context.Context, receipt credentialAnswer, want string) (string, error) {
 	type retry struct {
 		name      string
 		m         *musterMCP
 		roundTrip mcp.MultiRoundTripParams
+		operation string
 	}
-	retries := []retry{{mcp.ProtocolVersion20251125, p.plain, mcp.MultiRoundTripParams{}}}
+	retries := []retry{{mcp.ProtocolVersion20251125, p.plain, mcp.MultiRoundTripParams{}, p.operation}}
 	if p.modernAnswer != nil {
-		retries = append(retries, retry{mcp.ProtocolVersion20260728, p.modern, p.modernAnswer.accepted()})
+		retries = append(retries, retry{mcp.ProtocolVersion20260728, p.modern, p.modernAnswer.accepted(), p.modernOperation})
 	}
+	outcomes := make([]string, 0, len(retries))
 	for _, r := range retries {
+		if r.operation != p.operation {
+			_, operation, err := p.inputRequired(ctx, r.roundTrip)
+			if err != nil {
+				return "", fmt.Errorf("the original call retried on %s, bound to its own operation %s: %w", r.name, r.operation, err)
+			}
+			if operation != r.operation {
+				return "", fmt.Errorf("the original call retried on %s names operation %s, want its own %s", r.name, operation, r.operation)
+			}
+			outcomes = append(outcomes, fmt.Sprintf("on %s, bound to its own operation %s, input_required still", r.name, r.operation))
+			continue
+		}
 		answer, result, err := setModelWith(ctx, r.m, p.modelArgs(), r.roundTrip)
 		if err != nil {
-			return fmt.Errorf("the original call retried on %s: %w", r.name, err)
+			return "", fmt.Errorf("the original call retried on %s: %w", r.name, err)
 		}
 		if answer.result == nil {
-			return fmt.Errorf("the original call retried on %s does not return the receipt: it was answered with %d elicitations", r.name, len(answer.urlElicitations()))
+			return "", fmt.Errorf("the original call retried on %s does not return the receipt: it was answered with %d elicitations", r.name, len(answer.urlElicitations()))
+		}
+		if how := valueCarried(answer.result.text()+string(answer.result.StructuredContent), p.value); how != "" {
+			return "", fmt.Errorf("the original call retried on %s carries the value %s", r.name, how)
 		}
 		if err := receiptNames(*result, p.operation, credentialsModelSecret, credentialsModelKey, want); err != nil {
-			return fmt.Errorf("the original call retried on %s: %w", r.name, err)
+			return "", fmt.Errorf("the original call retried on %s: %w", r.name, err)
 		}
 		if err := sameReceipt(receipt, *result); err != nil {
-			return fmt.Errorf("the original call retried on %s: %w", r.name, err)
+			return "", fmt.Errorf("the original call retried on %s: %w", r.name, err)
+		}
+		outcomes = append(outcomes, "on "+r.name+" the same receipt")
+	}
+	return "the original call retried " + strings.Join(outcomes, "; "), nil
+}
+
+// liveVersions are the resourceVersions of the model's credential Secret and
+// ModelConfig, "" for one that does not exist: a retry that writes again
+// changes one of them.
+func liveVersions(ctx context.Context, ns, model, secret string) ([2]string, error) {
+	mc, err := modelConfigGVR()
+	if err != nil {
+		return [2]string{}, err
+	}
+	var out [2]string
+	for i, read := range []struct {
+		gvr  schema.GroupVersionResource
+		name string
+	}{{gvrSecrets, secret}, {mc, model}} {
+		obj, err := getObject(ctx, read.gvr, ns, read.name)
+		switch {
+		case apierrors.IsNotFound(err):
+		case err != nil:
+			return [2]string{}, err
+		default:
+			out[i] = obj.GetResourceVersion()
 		}
 	}
-	return nil
+	return out, nil
 }
 
 // credentialLogSources are the components a credential value passes
@@ -1063,7 +1141,8 @@ func (p *credentialsProof) pullRequest() (string, error) {
 		return "", err
 	}
 	secretPath := credentialSecretPath(p.pre.orgsContentPrefix(), organizationsRootNamespace, credentialsOrganization, credentialsModelSecret)
-	seen := false
+	modelPath := credentialsContentPath(p.pre.orgsContentPrefix()) + "/modelconfig-" + credentialsModel + ".yaml"
+	seen, seenModel := false, false
 	dec := json.NewDecoder(strings.NewReader(files))
 	for {
 		var f struct {
@@ -1083,11 +1162,15 @@ func (p *credentialsProof) pullRequest() (string, error) {
 		} else if err := valueInPatch(f.Patch, p.value); err != nil {
 			return "", fmt.Errorf("%s: %w", f.Filename, err)
 		}
+		seenModel = seenModel || f.Filename == modelPath
 	}
-	if !seen {
+	switch {
+	case !seen:
 		return "", fmt.Errorf("pull request %s carries no %s", c.PullRequest, secretPath)
+	case !seenModel:
+		return "", fmt.Errorf("pull request %s carries no %s: the consumer and its Secret belong in one pull request", c.PullRequest, modelPath)
 	}
-	return fmt.Sprintf("%s on %s opened by %s, its commit authored by %s (committer %s); %s SOPS-encrypted, no file carries the value", c.PullRequest, c.Repository, author, commitAuthor, committer, secretPath), nil
+	return fmt.Sprintf("%s on %s opened by %s, its commit authored by %s (committer %s); %s and %s in it, the Secret SOPS-encrypted, no file carries the value", c.PullRequest, c.Repository, author, commitAuthor, committer, modelPath, secretPath), nil
 }
 
 // fluxApplied merges the pull request as the person and waits for the
@@ -1155,13 +1238,10 @@ func (p *credentialsProof) fluxApplied() (string, error) {
 	if !found || sum != p.valueSum {
 		return "", fmt.Errorf("the Secret %s/%s holds %s after the apply, want %s", p.namespace, credentialsModelSecret, shortSum(sum), shortSum(p.valueSum))
 	}
-	mc, err := modelConfigGVR()
-	if err != nil {
-		return "", err
+	if err := modelConfigPresent(ctx, p.namespace, credentialsModel, true); err != nil {
+		return "", fmt.Errorf("after the apply: %w", err)
 	}
-	if exists, err := objectExists(ctx, mc, p.namespace, credentialsModel); err != nil || !exists {
-		return "", fmt.Errorf("ModelConfig %s/%s missing after the apply (err %v)", p.namespace, credentialsModel, err)
-	}
+	p.live = true
 	return fmt.Sprintf("merged %s (%s); Kustomization %s/%s %s, decryption sops from %s (the lab's age recipient %s); Secret %s/%s %s, ModelConfig %s present",
 		c.PullRequest, merge[:min(12, len(merge))], fluxNS, p.namespace, applied, decryption, recipient, p.namespace, credentialsModelSecret, shortSum(sum), credentialsModel), nil
 }
@@ -1302,7 +1382,9 @@ type deleteResult struct {
 }
 
 // erase deletes the organization through delete_organization as the
-// admin: what it erases, the confirmed dry run, the delete; then the
+// admin: what it erases (the model and its credential Secret among it when
+// they are live: delete_organization lists the cluster's objects, never a
+// pull request's), the confirmed dry run, the delete; then the
 // namespace, the operator's Kustomization and ServiceAccount for it in the
 // Flux namespace (both named after the namespace) and every RoleBinding
 // referring to the organization are gone.
@@ -1329,7 +1411,7 @@ func (p *credentialsProof) erase() (string, error) {
 	switch {
 	case preview.Deleted || preview.Erases == nil || preview.Erases.Namespace != p.namespace:
 		return "", fmt.Errorf("delete_organization without confirm answered deleted=%v erases=%+v, want what would be erased in %s", preview.Deleted, preview.Erases, p.namespace)
-	case !slices.Contains(preview.Erases.Models, credentialsModel) || !slices.Contains(preview.Erases.Credentials, credentialsModelSecret):
+	case p.live && (!slices.Contains(preview.Erases.Models, credentialsModel) || !slices.Contains(preview.Erases.Credentials, credentialsModelSecret)):
 		return "", fmt.Errorf("delete_organization without confirm names models %v and credentials %v, want %s and %s among them", preview.Erases.Models, preview.Erases.Credentials, credentialsModel, credentialsModelSecret)
 	case dry.Deleted || !dry.DryRun:
 		return "", fmt.Errorf("the confirmed dry run answered deleted=%v dryRun=%v", dry.Deleted, dry.DryRun)
@@ -1401,13 +1483,8 @@ func absent(_ *unstructured.Unstructured, err error) error {
 
 // withArgs is base with more arguments.
 func withArgs(base, more map[string]any) map[string]any {
-	out := make(map[string]any, len(base)+len(more))
-	for k, v := range base {
-		out[k] = v
-	}
-	for k, v := range more {
-		out[k] = v
-	}
+	out := maps.Clone(base)
+	maps.Copy(out, more)
 	return out
 }
 

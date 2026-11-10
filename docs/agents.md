@@ -452,17 +452,23 @@ printed only as its SHA-256. Each verdict:
   `If-Match` (400, or RFC 6585's 428) and one with a stale tag (412) write
   nothing and leave it pending; `POST` with `If-Match` and only the requested
   Secret/key returns the receipt, and the original call retried on the
-  2025-11-25 client and on the 2026-07-28 one returns the same receipt (the
-  same pull request on the same branch). The lab's portal reaches
+  2025-11-25 client returns the same receipt (the same pull request on the
+  same branch), the Secret's and the ModelConfig's resourceVersions
+  unchanged. agent-manager binds an operation to the person, the client and
+  the MCP session it sees, so the 2026-07-28 client's retry returns that
+  receipt too when muster reached agent-manager on one session for both, and
+  otherwise stays `input_required` for its own operation. Neither the
+  receipt nor a retry's answer carries the value. The lab's portal reaches
   agent-manager through muster only, so the part calls the agent-manager
   Service's REST listener on a port-forward, the hop a portal backend takes.
   Without commit mode the save writes the Secret live, its SHA-256 is
   compared and the ModelConfig exists. In commit mode the receipt's pull
   request is the only open one on its branch.
 - In commit mode, the receipt's pull request is read back with your `gh`
-  login: opened by the person, its commit authored by them, the Secret file
-  `<contentPrefix>/<parent>/<name>/<secret>-secret.enc.yaml` SOPS-encrypted
-  and no file carrying the value. Before the merge the cluster holds no
+  login: opened by the person, its commit authored by them, the ModelConfig
+  file `<contentPrefix>/<parent>/<name>/modelconfig-<model>.yaml` and the
+  Secret file `<contentPrefix>/<parent>/<name>/<secret>-secret.enc.yaml` in
+  it, the Secret SOPS-encrypted, and no file carrying the value. Before the merge the cluster holds no
   value of the Secret and no ModelConfig, so the Flux verdict is Flux's.
 - Flux: the person merges the pull request, and the organization's own
   Kustomization, which agent-platform-operator keeps in commit mode
@@ -488,7 +494,9 @@ printed only as its SHA-256. Each verdict:
   continue`) or as the `[<namespace>/<name>]` prefix muster puts on a
   backend's elicitation.
 - `delete_organization` erases the organization: without `confirm` it says
-  what goes, the model and its credential Secret named among it, the
+  what goes, the model and its credential Secret named among it once they
+  are live (saved in apply mode, or applied by Flux: it lists the cluster's
+  objects, never a pull request's), the
   confirmed dry run deletes nothing, the confirmed call deletes it; the
   namespace goes, in commit mode so do the operator's Kustomization and
   ServiceAccount named after it in the Flux namespace, and no RoleBinding

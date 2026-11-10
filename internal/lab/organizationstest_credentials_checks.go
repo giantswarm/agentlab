@@ -39,14 +39,14 @@ func containerFlags(args []string) map[string]string {
 	return flags
 }
 
-// containerArgs are the arguments of the container named name, or of the
-// one container when none is named so.
+// containerArgs are the command and arguments of the container named name,
+// or of the one container when none is named so.
 func containerArgs(containers []corev1.Container, name string) ([]string, error) {
 	if i := slices.IndexFunc(containers, func(c corev1.Container) bool { return c.Name == name }); i >= 0 {
-		return containers[i].Args, nil
+		return append(slices.Clone(containers[i].Command), containers[i].Args...), nil
 	}
 	if len(containers) == 1 {
-		return containers[0].Args, nil
+		return append(slices.Clone(containers[0].Command), containers[0].Args...), nil
 	}
 	return nil, fmt.Errorf("no container named %s among %d", name, len(containers))
 }
@@ -65,6 +65,8 @@ type credentialPrerequisites struct {
 	// musterModern says muster answered an MCP 2026-07-28 client on that
 	// revision.
 	musterModern bool
+	// outputSchema says muster's describe_tool lists an outputSchema for
+	// set_organization_model.
 	outputSchema bool
 	// kustomizeController says a Ready kustomize-controller runs.
 	kustomizeController bool
@@ -210,10 +212,6 @@ type credentialAnswer struct {
 		PullRequest string `json:"pullRequest"`
 		Number      int    `json:"number"`
 		Author      string `json:"author"`
-		Files       []struct {
-			Path   string `json:"path"`
-			Action string `json:"action"`
-		} `json:"files"`
 	} `json:"commit"`
 }
 
