@@ -251,6 +251,10 @@ type tmplData struct {
 	// and the overlay's integrations.github lists the App. Only ever the
 	// Secret's name and env var references.
 	PortalGitHubApp bool
+	// SkillManager is skillManagerChartCarries: the chart runs the
+	// skill-manager, so the values carry its lab block (its GitHub
+	// credential, its network policy following platform.networkPolicy).
+	SkillManager bool
 	// BackstageAppConfigChecksum is the data checksum of the lab's app-config
 	// overlay (appconfig.go): stamped on the overlay ConfigMap, where
 	// `agentlab status` reads a hand edit against it, and carried in the
@@ -342,6 +346,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		GitHubToken:                  gitHubTokenWired(cfg),
 		GitHubApp:                    gitHubAppWired(cfg),
 		PortalGitHubApp:              portalGitHubAppWired(cfg),
+		SkillManager:                 skillManagerChartCarries(cfg),
 		ModelManagerEnabled:          cfg.ModelManagerEnabled(),
 		LegacyChart:                  cfg.LegacyChart(),
 		FamilylessChart:              cfg.FamilylessChart(),

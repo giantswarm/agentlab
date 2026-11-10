@@ -582,7 +582,9 @@ on the host network at one replica.
 
 `platform.networkPolicy: true` (`agentlab configure --network-policy`) turns
 the platform's own network policies on — the connectivity chart's
-(`networkPolicy.enabled`) and muster's chart's (`muster.networkPolicy.enabled`)
+(`networkPolicy.enabled`), muster's chart's (`muster.networkPolicy.enabled`)
+and, on a chart that runs it, the skill-manager's
+(`skill-manager.networkPolicy.enabled`, which its chart turns on by default)
 — in the plain `NetworkPolicy` flavour kind's kindnetd enforces, with the
 selectors an installation runs. Off by default: the lab then runs none of the
 platform's policies.
