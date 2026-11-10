@@ -274,6 +274,9 @@ func TestMusterAnswerURLElicitations(t *testing.T) {
 	require.Equal(t, []mcp.ElicitationParams{url}, a.urlElicitations())
 	_, err := oneURLElicitation(&musterAnswer{urlRequired: []mcp.ElicitationParams{url, url}})
 	require.ErrorContains(t, err, "2 URL elicitations")
+	_, err = oneURLElicitation(&musterAnswer{result: &musterToolResult{IsError: true, Content: []musterToolContent{{Type: toolResultText, Text: "registering muster with its authorization server: redirect_uri: hostname resolves to private IP address"}}}})
+	require.ErrorContains(t, err, "isError true")
+	require.ErrorContains(t, err, "redirect_uri: hostname resolves to private IP address")
 }
 
 func TestEnsureCredentialsAgeIdentity(t *testing.T) {

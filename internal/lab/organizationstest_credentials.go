@@ -643,8 +643,12 @@ func (p *credentialsProof) completionsScoped() (string, error) {
 	return fmt.Sprintf("the initiating client was notified complete for its elicitationId %s only; the client without URL elicitation was notified of nothing", p.legacyElicitationID), nil
 }
 
-// oneURLElicitation is the answer's one URL elicitation.
+// oneURLElicitation is the answer's one URL elicitation. An answer that is
+// a result carries muster's text into the error.
 func oneURLElicitation(a *musterAnswer) (mcp.ElicitationParams, error) {
+	if a.result != nil {
+		return mcp.ElicitationParams{}, fmt.Errorf("the answer is a result (isError %v), not a URL elicitation: %s", a.result.IsError, excerpt(a.result.text(), 400))
+	}
 	es := a.urlElicitations()
 	if len(es) != 1 {
 		return mcp.ElicitationParams{}, fmt.Errorf("the answer carries %d URL elicitations, want one", len(es))
@@ -1355,7 +1359,8 @@ func (p *credentialsProof) fluxApplied() (string, error) {
 }
 
 // tenantSignInCheck is the tenant namespace's MCP server sign-in, skipped
-// while muster serves no organization namespace's MCPServers.
+// while muster serves no organization namespace's MCPServers or refuses to
+// register itself with its own authorization server.
 func (p *credentialsProof) tenantSignInCheck() organizationCheck {
 	c := organizationCheck{surface: surfaceMuster, boundary: "a sign-in an organization namespace's MCP server needs is elicited attributed to its <namespace>/<name> key"}
 	tenancy, err := readMusterTenancy()
@@ -1402,9 +1407,6 @@ func (p *credentialsProof) tenantSignIn() (string, error) {
 	answer, err := m.call(ctx, "core_auth_login", map[string]any{serverKey: key}, mcp.MultiRoundTripParams{})
 	if err != nil {
 		return "", err
-	}
-	if answer.result != nil {
-		return "", fmt.Errorf("core_auth_login answered a result, not a sign-in elicitation (isError %v): %s", answer.result.IsError, excerpt(answer.result.text(), 400))
 	}
 	e, err := oneURLElicitation(answer)
 	if err != nil {

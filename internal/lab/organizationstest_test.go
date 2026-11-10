@@ -10,11 +10,9 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-
 	"time"
 
 	"github.com/stretchr/testify/require"
-
 	"gopkg.in/yaml.v3"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
@@ -661,10 +659,24 @@ func TestMultiTenantArg(t *testing.T) {
 }
 
 func TestMusterTenancySelfSignInProblem(t *testing.T) {
-	off, err := parseMusterTenancy("aggregator:\n  oauth:\n    server:\n      allowLocalhostRedirectURIs: true\n")
-	require.NoError(t, err)
-	require.Contains(t, off.selfSignInProblem(), "allowPrivateIPRedirectURIs")
-	on, err := parseMusterTenancy("aggregator:\n  oauth:\n    server:\n      allowPrivateIPRedirectURIs: true\n")
-	require.NoError(t, err)
-	require.Empty(t, on.selfSignInProblem())
+	for name, tc := range map[string]struct {
+		config  string
+		refused bool
+	}{
+		"private redirect URIs allowed": {"aggregator:\n  oauth:\n    server:\n      allowPrivateIPRedirectURIs: true\n", false},
+		"private redirect URIs refused": {"aggregator:\n  oauth:\n    server:\n      allowPrivateIPRedirectURIs: false\n", true},
+		"no OAuth server settings":      {"mcpServerNamespaceSelector: {}\n", true},
+		"only localhost redirect URIs":  {"aggregator:\n  oauth:\n    server:\n      allowLocalhostRedirectURIs: true\n", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tenancy, err := parseMusterTenancy(tc.config)
+			require.NoError(t, err)
+			problem := tenancy.selfSignInProblem()
+			if !tc.refused {
+				require.Empty(t, problem)
+				return
+			}
+			require.Contains(t, problem, "allowPrivateIPRedirectURIs off")
+		})
+	}
 }
