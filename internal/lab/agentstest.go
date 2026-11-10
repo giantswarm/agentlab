@@ -891,6 +891,12 @@ const skillsMintValue = "mintGitAuthSecret"
 // mintGrantVerbs are the verbs of the skills-Secret Role minting grants.
 var mintGrantVerbs = []string{"get", "update"}
 
+// Read verbs shared by the namespace discovery grant and RBAC assertions.
+const (
+	verbGet  = "get"
+	verbList = "list"
+)
+
 // chartSourceGrant is the chart-source Role's row: the agent chart's shared
 // OCIRepository by name, get and update like the skills-Secret Role.
 var chartSourceGrant = saGrant{resource: fluxOCIRepositoryResource, names: []string{agentChartOCIRepository}, verbs: mintGrantVerbs, optional: true, by: "agent-manager's chart-source Role"}
