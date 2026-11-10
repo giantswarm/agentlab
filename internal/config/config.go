@@ -3017,24 +3017,33 @@ const valuesFile = "values.yaml"
 // release replaces on both lines, so the roster is what tells them apart; a
 // directory without a readable components block is the current line.
 func legacyChartDir(dir string) bool {
+	roster := chartDirRoster(dir)
+	if roster == nil {
+		return false
+	}
+	_, substrate := roster["substrate"]
+	return !substrate
+}
+
+// chartDirRoster is the components block of the chart directory's values,
+// nil when the file or the block cannot be read.
+func chartDirRoster(dir string) map[string]yaml.Node {
 	data, err := os.ReadFile(filepath.Join(dir, valuesFile)) // #nosec G304 -- the chart directory agentlab.yaml names
 	if err != nil {
-		return false
+		return nil
 	}
 	var values struct {
 		Components map[string]yaml.Node `yaml:"components"`
 	}
-	if yaml.Unmarshal(data, &values) != nil || values.Components == nil {
-		return false
+	if yaml.Unmarshal(data, &values) != nil {
+		return nil
 	}
-	_, substrate := values.Components["substrate"]
-	return !substrate
+	return values.Components
 }
 
 // skillManagerChartFloor is the first agent-platform release with the
-// skill-manager component (giantswarm/agent-platform#1265). PLACEHOLDER: the
-// minor after 4.177.5, the latest release when the key was added; set it to
-// the release that carries the component.
+// skill-manager component (giantswarm/agent-platform#1265). PLACEHOLDER: set
+// it to the release that carries the component.
 var skillManagerChartFloor = semver.MustParse("4.178.0")
 
 // SkillManagerChart reports whether the lab's meta chart runs the
@@ -3043,28 +3052,12 @@ var skillManagerChartFloor = semver.MustParse("4.178.0")
 // lists the component. The chart's schema is closed, so a chart without it
 // refuses the block.
 func (c *Config) SkillManagerChart() bool {
-	if c.Platform.ChartPath != "" && !c.LegacyChart() {
-		return chartDirHasComponent(c.Platform.ChartPath, "skill-manager")
+	if c.ChartChannel() == ChartChannelPath {
+		_, ok := chartDirRoster(c.Platform.ChartPath)["skill-manager"]
+		return ok
 	}
 	_, below := c.chartBelow(skillManagerChartFloor)
 	return !below
-}
-
-// chartDirHasComponent reports whether the chart directory's values list the
-// component under components.
-func chartDirHasComponent(dir, component string) bool {
-	data, err := os.ReadFile(filepath.Join(dir, valuesFile)) // #nosec G304 -- the chart directory agentlab.yaml names
-	if err != nil {
-		return false
-	}
-	var values struct {
-		Components map[string]yaml.Node `yaml:"components"`
-	}
-	if yaml.Unmarshal(data, &values) != nil {
-		return false
-	}
-	_, ok := values.Components[component]
-	return ok
 }
 
 // AdminUser returns the first user in platform-admins: the identity the up

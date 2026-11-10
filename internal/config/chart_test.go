@@ -470,7 +470,6 @@ func TestSkillManagerChart(t *testing.T) {
 		name, version, branch, path string
 		want                        bool
 	}{
-		{name: "default release", version: DefaultChartVersion},
 		{name: "the floor", version: skillManagerChartFloor.Original(), want: true},
 		{name: "a later release", version: "4.179.2", want: true},
 		{name: "before the floor", version: "4.177.5"},

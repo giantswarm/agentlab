@@ -926,44 +926,45 @@ func TestPlatformValuesLegacyChartShape(t *testing.T) {
 	}
 
 	// The switch follows the chart, not the channel: a 4.x release, a 5.x
-	// one and a 4.x dev build render the current line's bytes (beside the
-	// skill-manager's block, where the chart runs it), a dev build of a
-	// 3.x-line branch the 3.x line's.
+	// one and a 4.x dev build render the current line's values, a dev build
+	// of a 3.x-line branch the 3.x line's. A chart that runs the
+	// skill-manager adds its block and nothing else.
 	for name, tc := range map[string]struct {
-		mutate func(*config.Config)
-		want   string
+		mutate       func(*config.Config)
+		want         string
+		skillManager bool
 	}{
-		"4.x release": {func(c *config.Config) { c.Platform.ChartVersion = "4.175.0" }, currentOut},
-		"5.x release": {func(c *config.Config) { c.Platform.ChartVersion = "5.0.0" }, currentOut},
+		"4.x release": {func(c *config.Config) { c.Platform.ChartVersion = "4.175.0" }, currentOut, false},
+		"5.x release": {func(c *config.Config) { c.Platform.ChartVersion = "5.0.0" }, currentOut, true},
 		"dev build of main": {func(c *config.Config) {
 			c.Platform.ChartVersion, c.Platform.ChartBranch = "4.106.1-rbf28cd64t20261001120000h7f841be", testRefMain
-		}, currentOut},
+		}, currentOut, true},
 		"dev build of a 3.x-line branch": {func(c *config.Config) {
 			c.Platform.ChartVersion, c.Platform.ChartBranch = "3.23.5-r1f2e3d4ct20261001120000h7f841be", "fix-v3-gateway"
-		}, legacyOut},
+		}, legacyOut, false},
 	} {
 		cfg := config.Default()
 		tc.mutate(cfg)
 		_, out := render(cfg)
-		if cfg.SkillManagerChart() {
-			var got, want map[string]any
-			if err := yaml.Unmarshal([]byte(out), &got); err != nil {
-				t.Fatal(err)
-			}
-			if err := yaml.Unmarshal([]byte(tc.want), &want); err != nil {
-				t.Fatal(err)
-			}
-			if _, ok := got[componentSkillManager]; !ok {
-				t.Errorf("%s: no skill-manager block", name)
-			}
-			delete(got, componentSkillManager)
-			if !reflect.DeepEqual(got, want) {
-				t.Errorf("%s: the render is not its line's beside the skill-manager block", name)
+		if !tc.skillManager {
+			if out != tc.want {
+				t.Errorf("%s: the render is not its line's", name)
 			}
 			continue
 		}
-		if out != tc.want {
-			t.Errorf("%s: the render is not its line's", name)
+		var got, want map[string]any
+		if err := yaml.Unmarshal([]byte(out), &got); err != nil {
+			t.Fatal(err)
+		}
+		if err := yaml.Unmarshal([]byte(tc.want), &want); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := got[componentSkillManager]; !ok {
+			t.Errorf("%s: no skill-manager block", name)
+		}
+		delete(got, componentSkillManager)
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: the render is not its line's beside the skill-manager block", name)
 		}
 	}
 	// An upgrade seed's 4.x release below the families floor renders the
