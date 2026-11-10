@@ -14,12 +14,13 @@ func TestOrganizationProofPart(t *testing.T) {
 		{name: "all checks"},
 		{name: "named check", part: "cleanup", want: organizationCleanupPart},
 		{name: "compatible alias", part: "erasure", want: organizationCleanupPart},
+		{name: "credentials", part: organizationCredentialsPart, want: organizationCredentialsPart},
 		{name: "unsupported part", part: "invalid", wantError: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			part, err := organizationProofPart(test.part)
 			if test.wantError {
-				require.ErrorContains(t, err, "use cleanup or omit --part")
+				require.ErrorContains(t, err, "use cleanup or credentials, or omit --part")
 				return
 			}
 			require.NoError(t, err)
