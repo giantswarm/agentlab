@@ -146,6 +146,22 @@ data:
               publicAccess: true
 {{- end }}
 {{- end }}
+{{- if .Backstage.Hive }}
+    # backstage.hive: Hive's Roadmap tab reads the board through the
+    # roadmap-backend, which calls pro's board tools through muster as the
+    # signed-in person (x_pro_list_issues, …). The lab's pro is the fake
+    # `agentlab roadmap-test` registers as the MCPServer {{ .ProFakeServer }}, serving a
+    # fixture board under the key {{ .ProFakeBoard }}; while no fake runs the tab
+    # shows muster's refusal. The installation is the umbrella's Helm release
+    # name, the key its app-config lists in muster.installations.
+    roadmap:
+      board: {{ .ProFakeBoard }}
+      teams:
+        - {{ .ProFakeTeam }}
+      muster:
+        installation: agent-platform
+        server: {{ .ProFakeServer }}
+{{- end }}
 {{- if .Platform.Observability }}
     # The umbrella hardcodes mimirEnabled: false — standalone installations
     # have no GS observability stack at observability.<baseDomain>. With
