@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	corev1 "k8s.io/api/core/v1"
@@ -51,6 +52,10 @@ const (
 	credentialsModel        = "agentlab-credentials"                  // #nosec G101 -- a ModelConfig name, not a credential
 	credentialsModelSecret  = "tenant-credential-" + credentialsModel // #nosec G101 -- a Secret's NAME, not a credential
 	credentialsModelKey     = "apiKey"
+	// credentialsOtherModel is the model the other person adds without a
+	// key: their own operation, which they read and then cancel.
+	credentialsOtherModel       = "agentlab-credentials-other"                 // #nosec G101 -- a ModelConfig name, not a credential
+	credentialsOtherModelSecret = "tenant-credential-" + credentialsOtherModel // #nosec G101 -- a Secret's NAME, not a credential
 	// credentialsSignInServer is the tenant namespace's MCPServer that needs
 	// a per-server sign-in.
 	credentialsSignInServer = "agentlab-credentials-signin" // #nosec G101 -- an MCPServer name, not a credential
@@ -61,6 +66,10 @@ const (
 	// credentialStateCommitted is a credential whose pull request exists.
 	credentialStateCommitted = "committed"
 	credentialStatePresent   = "present"
+	// operationPending and operationCancelled are a credential operation's
+	// states as its confirmation reads them.
+	operationPending   = "pending"
+	operationCancelled = "cancelled"
 )
 
 // Surfaces of the credentials part.
@@ -87,9 +96,17 @@ type credentialsProof struct {
 	value    string
 	valueSum [sha256.Size]byte
 	// plain is the generation without URL elicitation, kept open: the
-	// retry that returns the receipt is its call again.
-	plain                *musterMCP
-	operation, formURL   string
+	// retry that returns the receipt is its call again. modern is the
+	// 2026-07-28 generation, kept open with its input_required answer, which
+	// it retries before and after the save.
+	plain              *musterMCP
+	modern             *musterMCP
+	modernAnswer       *musterAnswer
+	operation, formURL string
+	otherOperation     string
+	// started is when the run began: the logs judged for the value are
+	// read from it.
+	started              time.Time
 	receipt              *credentialAnswer
 	agentManagerVersion  string
 	merged               bool
@@ -105,7 +122,7 @@ func organizationCredentialsTest(cfg *config.Config, admin *config.User) error {
 		return fmt.Errorf("the credentials part needs a lab user outside %s for the refused read of another person's operation; %s has none", platformAdminsGroup, config.File)
 	}
 	value := randomHex(32)
-	p := &credentialsProof{cfg: cfg, admin: admin, other: other, value: value, valueSum: sha256.Sum256([]byte(value))}
+	p := &credentialsProof{cfg: cfg, admin: admin, other: other, value: value, valueSum: sha256.Sum256([]byte(value)), started: time.Now()}
 	defer p.cleanup()
 	if err := p.run(); err != nil {
 		return err
@@ -155,16 +172,18 @@ func (p *credentialsProof) checks() []organizationCheck {
 	flux := firstNonEmpty(commit, p.pre.fluxSkip())
 	return []organizationCheck{
 		{surface: surfaceAgentManager, boundary: "a model without a key is not written: no ModelConfig, no tenant credential value, a pending credential operation", skip: uiSkip, run: p.modelWithoutKey},
-		{surface: surfaceAgentManager, boundary: "an MCP 2026-07-28 client declaring URL elicitation gets input_required, its message attributed to agent-manager by muster", skip: generations, run: p.modernGeneration},
+		{surface: surfaceAgentManager, boundary: "an MCP 2026-07-28 client declaring URL elicitation gets input_required, its message attributed to agent-manager by muster, and stays input_required when it retries having accepted", skip: generations, run: p.modernGeneration},
 		{surface: surfaceAgentManager, boundary: "an MCP 2025-11-25 client that declared URL elicitation gets -32042 carrying the form's URL", skip: generations, run: p.legacyGeneration},
 		{surface: surfaceAgentManager, boundary: "a client without URL elicitation gets a result whose credentials[].next carries the form's link", skip: uiSkip, run: p.plainGeneration},
 		p.resourceLinkCheck(uiSkip),
-		{surface: surfaceCredentialAPI, boundary: "the operation's confirmation is the person's alone: another person's read is refused", skip: uiSkip, run: p.otherPersonRefused},
-		{surface: surfaceCredentialAPI, boundary: "the form's save: GET with a strong ETag, POST with If-Match and only the requested pair returns the receipt", skip: uiSkip, run: p.save},
+		{surface: surfaceCredentialAPI, boundary: "an operation's confirmation is its preparer's alone: each person reads their own, the other's read and an anonymous one are refused", skip: uiSkip, run: p.otherPersonRefused},
+		{surface: surfaceCredentialAPI, boundary: "DELETE with If-Match cancels a pending operation: a stale ETag is refused, and after the cancel a save is refused with nothing written", skip: uiSkip, run: p.cancel},
+		{surface: surfaceCredentialAPI, boundary: "the form's save: GET with a strong ETag, a POST without If-Match or with a stale one refused with nothing written, POST with If-Match and only the requested pair returns the receipt, each client generation's retry the same receipt", skip: uiSkip, run: p.save},
 		{surface: surfaceGitHub, boundary: "the save opens a pull request as the person, its Secret SOPS-encrypted", skip: commit, run: p.pullRequest},
 		{surface: surfaceFlux, boundary: "the merged pull request is applied and decrypted by the organization's Kustomization: the Secret's SHA-256 matches and the ModelConfig exists", skip: flux, run: p.fluxApplied},
+		{surface: surfaceCredentialAPI, boundary: "neither agent-manager's nor muster's logs carry the value, plain or base64", skip: uiSkip, run: p.valueNotLogged},
 		p.tenantSignInCheck(),
-		{surface: surfaceAgentManager, boundary: "delete_organization erases the organization after the typed confirmation: its namespace and every RoleBinding referring to it gone", run: p.erase},
+		{surface: surfaceAgentManager, boundary: "delete_organization names the models and credentials it erases, then erases the organization after the typed confirmation: its namespace, its Flux Kustomization and ServiceAccount, and every RoleBinding referring to it gone", run: p.erase},
 	}
 }
 
@@ -255,7 +274,11 @@ func (p *credentialsProof) readPrerequisites() error {
 		if err != nil {
 			return fmt.Errorf("reading Deployment %s/%s: %w", platformNamespace, d.name, err)
 		}
-		*d.flags = containerFlags(deployment.Spec.Template.Spec.Containers[0].Args)
+		args, err := containerArgs(deployment.Spec.Template.Spec.Containers, d.name)
+		if err != nil {
+			return fmt.Errorf("reading the flags of Deployment %s/%s: %w", platformNamespace, d.name, err)
+		}
+		*d.flags = containerFlags(args)
 	}
 	session, err := openMusterSession(p.cfg, p.adminToken, "organizations-credentials")
 	if err != nil {
@@ -346,13 +369,43 @@ func (p *credentialsProof) modelWithoutKey() (string, error) {
 	if len(values) > 0 {
 		return "", fmt.Errorf("tenant credential Secrets hold values before the save: %v", values)
 	}
-	return fmt.Sprintf("%s's set_organization_model %s/%s (%s, mode %s) without a key: no ModelConfig, no tenant-credential-* value, operation %s pending for %s/%s",
-		p.admin.Email, p.namespace, credentialsModel, p.cfg.AIModel, p.mode, p.operation, credentialsModelSecret, credentialsModelKey), nil
+	detail := fmt.Sprintf("%s's set_organization_model %s/%s (%s, mode %s) without a key: no ModelConfig, no tenant-credential-* value, operation %s pending for %s/%s",
+		p.admin.Email, p.namespace, credentialsModel, p.cfg.AIModel, p.mode, p.operation, credentialsModelSecret, credentialsModelKey)
+	if p.mode != modeCommit {
+		return detail, nil
+	}
+	repo, path := p.pre.agentManager[flagOrgsRepository], credentialsContentPath(p.pre.orgsContentPrefix())
+	open, err := openPullRequestsTouching(repo, path)
+	if err != nil {
+		return "", err
+	}
+	if len(open) > 0 {
+		return "", fmt.Errorf("pull requests %v on %s touch %s before the save", open, repo, path)
+	}
+	return detail + "; no open pull request on " + repo + " touches " + path, nil
 }
 
-// setModel calls set_organization_model on the client and decodes a result.
+// openPullRequestsTouching are the person's open pull requests on repo
+// that change a file under path.
+func openPullRequestsTouching(repo, path string) ([]string, error) {
+	out, err := personGH("pr", "list", "--repo", repo, "--state", "open", "--author", "@me", "--json", "number,files",
+		"--jq", fmt.Sprintf(`.[] | select(any(.files[]; .path | startswith(%s))) | .number`, strconv.Quote(path+"/")))
+	if err != nil {
+		return nil, err
+	}
+	return strings.Fields(out), nil
+}
+
+// setModel calls set_organization_model with the part's model on the client
+// and decodes a result.
 func (p *credentialsProof) setModel(ctx context.Context, m *musterMCP) (*musterAnswer, *credentialAnswer, error) {
-	answer, err := m.call(ctx, agentManagerToolPrefix+"set_organization_model", p.modelArgs(), mcp.MultiRoundTripParams{})
+	return setModelWith(ctx, m, p.modelArgs(), mcp.MultiRoundTripParams{})
+}
+
+// setModelWith calls set_organization_model with args, answering a previous
+// input_required with roundTrip, and decodes a result.
+func setModelWith(ctx context.Context, m *musterMCP, args map[string]any, roundTrip mcp.MultiRoundTripParams) (*musterAnswer, *credentialAnswer, error) {
+	answer, err := m.call(ctx, agentManagerToolPrefix+"set_organization_model", args, roundTrip)
 	if err != nil || answer.result == nil {
 		return answer, nil, err
 	}
@@ -401,28 +454,47 @@ func (p *credentialsProof) modernGeneration() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer m.close()
-	answer, _, err := p.setModel(ctx, m)
+	p.modern = m
+	answer, operation, err := p.inputRequired(ctx, mcp.MultiRoundTripParams{})
 	if err != nil {
 		return "", err
 	}
-	if answer.input == nil {
-		return "", fmt.Errorf("an MCP %s client declaring URL elicitation got no input_required result", m.protocol())
-	}
-	if answer.requestState == "" {
-		return "", fmt.Errorf("the input_required result on %s carries no requestState", m.protocol())
-	}
-	e, err := oneURLElicitation(answer)
-	if err != nil {
-		return "", err
-	}
+	e, _ := oneURLElicitation(answer)
 	if !attributedTo(e.Message, agentManagerMCPServer) {
 		return "", fmt.Errorf("the elicitation's message %q is not prefixed with [%s]", e.Message, agentManagerMCPServer)
 	}
-	if err := p.formLink(e.URL); err != nil {
-		return "", err
+	retried, again, err := p.inputRequired(ctx, answer.accepted())
+	if err != nil {
+		return "", fmt.Errorf("the retry having accepted, before the save: %w", err)
 	}
-	return fmt.Sprintf("input_required on %s with requestState, one URL elicitation %q", m.protocol(), excerpt(e.Message, 160)), nil
+	if again != operation {
+		return "", fmt.Errorf("the retry having accepted names operation %s, the first answer %s", again, operation)
+	}
+	p.modernAnswer = retried
+	return fmt.Sprintf("input_required on %s with requestState, one URL elicitation %q for operation %s; retried having accepted, input_required again for the same operation",
+		m.protocol(), excerpt(e.Message, 160), operation), nil
+}
+
+// inputRequired calls set_organization_model on the 2026-07-28 client with
+// roundTrip and checks the answer is input_required with a requestState and
+// one URL elicitation to the credential UI, whose operation it returns.
+func (p *credentialsProof) inputRequired(ctx context.Context, roundTrip mcp.MultiRoundTripParams) (*musterAnswer, string, error) {
+	answer, err := p.modern.call(ctx, agentManagerToolPrefix+"set_organization_model", p.modelArgs(), roundTrip)
+	if err != nil {
+		return nil, "", err
+	}
+	switch {
+	case answer.input == nil:
+		return nil, "", fmt.Errorf("an MCP %s client declaring URL elicitation got no input_required result", p.modern.protocol())
+	case answer.requestState == "":
+		return nil, "", fmt.Errorf("the input_required result on %s carries no requestState", p.modern.protocol())
+	}
+	e, err := oneURLElicitation(answer)
+	if err != nil {
+		return nil, "", err
+	}
+	operation, err := p.formLink(e.URL)
+	return answer, operation, err
 }
 
 // legacyGeneration: a 2025-11-25 client that declared URL elicitation at
@@ -449,10 +521,10 @@ func (p *credentialsProof) legacyGeneration() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := p.formLink(e.URL); err != nil {
+	if _, err := p.formLink(e.URL); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("JSON-RPC error %d with one URL elicitation to %s", mcp.URL_ELICITATION_REQUIRED, uiURLPrefix(p.pre.agentManager[flagCredentialUIURL])+"…"), nil
+	return fmt.Sprintf("JSON-RPC error %d with one URL elicitation to %s", mcp.URL_ELICITATION_REQUIRED, e.URL), nil
 }
 
 // oneURLElicitation is the answer's one URL elicitation.
@@ -464,13 +536,10 @@ func oneURLElicitation(a *musterAnswer) (mcp.ElicitationParams, error) {
 	return es[0], nil
 }
 
-// formLink checks a link is the credential UI's.
-func (p *credentialsProof) formLink(link string) error {
-	prefix := uiURLPrefix(p.pre.agentManager[flagCredentialUIURL])
-	if prefix == "" || !strings.HasPrefix(link, prefix) {
-		return fmt.Errorf("the link %q is not the credential UI's (%s…)", link, prefix)
-	}
-	return nil
+// formLink checks a link is the credential UI URL template expanded for the
+// part's organization and returns the operation it carries.
+func (p *credentialsProof) formLink(link string) (string, error) {
+	return formOperation(p.pre.agentManager[flagCredentialUIURL], link, organizationsRootNamespace, credentialsOrganization)
 }
 
 // plainGeneration: the plain client's answer carries the link in
@@ -479,10 +548,14 @@ func (p *credentialsProof) plainGeneration() (string, error) {
 	if p.formURL == "" {
 		return "", errors.New("no pending operation from the plain client's call")
 	}
-	if err := p.formLink(p.formURL); err != nil {
+	operation, err := p.formLink(p.formURL)
+	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("credentials[].next carries %s (operation %s)", p.formURL, p.operation), nil
+	if operation != p.operation {
+		return "", fmt.Errorf("the link %s carries operation %s, the answer names %s", p.formURL, operation, p.operation)
+	}
+	return fmt.Sprintf("credentials[].next carries %s (operation %s), the credential UI URL template expanded with the operation, the parent and the organization only", p.formURL, p.operation), nil
 }
 
 // resourceLinkCheck is the structuredContent and resource_link of the plain
@@ -546,8 +619,8 @@ func dialCredentialREST(ctx context.Context) (*credentialREST, error) {
 	return &credentialREST{base: fmt.Sprintf("http://127.0.0.1:%d", port), stop: stop, http: &http.Client{Timeout: musterMCPTimeout}}, nil
 }
 
-// do sends one request with the person's token and reads the answer; the
-// request body is never part of an error.
+// do sends one request with the person's token, anonymous without one, and
+// reads the answer; the request body is never part of an error.
 func (r *credentialREST) do(ctx context.Context, method, operation, token string, header http.Header, body []byte) (*http.Response, []byte, error) {
 	req, err := http.NewRequestWithContext(ctx, method, r.base+credentialOperationsPath+operation, bytes.NewReader(body))
 	if err != nil {
@@ -556,7 +629,9 @@ func (r *credentialREST) do(ctx context.Context, method, operation, token string
 	for name, values := range header {
 		req.Header[name] = values
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	resp, err := r.http.Do(req)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%s %s: %w", method, credentialOperationsPath+operation, err)
@@ -566,14 +641,130 @@ func (r *credentialREST) do(ctx context.Context, method, operation, token string
 	return resp, raw, err
 }
 
-// otherPersonRefused: another admin's read of the admin's operation is
-// refused, as the phishing rule of agent-manager's credential operations
-// requires (the operation is bound to its preparer's issuer and subject).
-// Both are admins of the organization, so the refusal is the per-person
-// binding's, not the membership check's.
+// otherPersonRefused: an operation is bound to its preparer's issuer and
+// subject, as the phishing rule of agent-manager's credential operations
+// requires. The other person, an admin of the organization too, prepares an
+// operation of their own: each reads their own, each is refused the other's
+// with the answer of an operation that does not exist (no oracle), and an
+// anonymous read is refused.
 func (p *credentialsProof) otherPersonRefused() (string, error) {
 	if p.operation == "" {
 		return "", errors.New("no pending operation to read")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*musterMCPTimeout)
+	defer cancel()
+	other, err := dialMusterMCP(ctx, p.cfg, p.otherToken, musterMCPOptions{name: "agentlab-credentials-other", protocol: mcp.ProtocolVersion20251125})
+	if err != nil {
+		return "", err
+	}
+	defer other.close()
+	args := withArgs(p.modelArgs(), map[string]any{nameKey: credentialsOtherModel, modeArg: modeApply})
+	answer, result, err := setModelWith(ctx, other, args, mcp.MultiRoundTripParams{})
+	if err != nil {
+		return "", err
+	}
+	if answer.result == nil {
+		return "", fmt.Errorf("%s's client without URL elicitation was answered with %d elicitations", p.other.Email, len(answer.urlElicitations()))
+	}
+	if p.otherOperation, _, err = pendingCredential(*result, credentialsOtherModelSecret, credentialsModelKey); err != nil {
+		return "", fmt.Errorf("%s's set_organization_model %s: %w", p.other.Email, credentialsOtherModel, err)
+	}
+	rest, err := dialCredentialREST(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer rest.stop()
+	status := func(token, operation string) (int, []byte, http.Header, error) {
+		resp, raw, err := rest.do(ctx, http.MethodGet, operation, token, nil, nil)
+		if err != nil {
+			return 0, nil, nil, err
+		}
+		return resp.StatusCode, raw, resp.Header, nil
+	}
+	for _, own := range []struct {
+		who, token, operation string
+	}{{p.admin.Email, p.adminToken, p.operation}, {p.other.Email, p.otherToken, p.otherOperation}} {
+		code, _, _, err := status(own.token, own.operation)
+		if err != nil {
+			return "", err
+		}
+		if code != http.StatusOK {
+			return "", fmt.Errorf("%s's GET of their own operation %s answered %d, want 200", own.who, own.operation, code)
+		}
+	}
+	unknown, _, _, err := status(p.otherToken, randomHex(24))
+	if err != nil {
+		return "", err
+	}
+	for _, refused := range []struct {
+		who, token, owner, operation string
+	}{{p.other.Email, p.otherToken, p.admin.Email, p.operation}, {p.admin.Email, p.adminToken, p.other.Email, p.otherOperation}} {
+		code, raw, header, err := status(refused.token, refused.operation)
+		if err != nil {
+			return "", err
+		}
+		switch {
+		case code != unknown:
+			return "", fmt.Errorf("%s's GET of %s's operation answered %d, an unknown operation %d: the refusal tells the operation exists: %s", refused.who, refused.owner, code, unknown, excerpt(redactValue(string(raw), p.value), 200))
+		case code != http.StatusNotFound && code != http.StatusForbidden:
+			return "", fmt.Errorf("%s's GET of %s's operation answered %d, want 404 or 403", refused.who, refused.owner, code)
+		case bytes.Contains(raw, []byte(p.namespace)) || header.Get("ETag") != "":
+			return "", fmt.Errorf("%s's refused GET still carries the operation's organization or an ETag", refused.who)
+		}
+	}
+	anonymous, _, _, err := status("", p.operation)
+	if err != nil {
+		return "", err
+	}
+	if anonymous != http.StatusUnauthorized {
+		return "", fmt.Errorf("an anonymous GET of the operation answered %d, want 401", anonymous)
+	}
+	return fmt.Sprintf("%s and %s both %s of %s, each preparing an operation: each one's own GET 200; each one's GET of the other's %d, as an unknown operation's; anonymous 401",
+		p.other.Email, p.admin.Email, organizationAdminRole, credentialsOrganization, unknown), nil
+}
+
+// readConfirmation GETs an operation as token and decodes the confirmation
+// with its strong ETag.
+func (p *credentialsProof) readConfirmation(ctx context.Context, rest *credentialREST, operation, token string) (*confirmation, string, error) {
+	resp, raw, err := rest.do(ctx, http.MethodGet, operation, token, nil, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, "", fmt.Errorf("GET %s answered %d: %s", operation, resp.StatusCode, excerpt(redactValue(string(raw), p.value), 300))
+	}
+	if cc := resp.Header.Get("Cache-Control"); cc != "no-store" {
+		return nil, "", fmt.Errorf("GET %s answered Cache-Control %q, want no-store", operation, cc)
+	}
+	etag, err := strongETag(resp.Header.Get("ETag"))
+	if err != nil {
+		return nil, "", err
+	}
+	var c confirmation
+	if err := json.Unmarshal(raw, &c); err != nil {
+		return nil, "", fmt.Errorf("the confirmation of %s: %w", operation, err)
+	}
+	return &c, etag, nil
+}
+
+// credentialsSaveTimeout bounds the save's exchanges: the refused saves,
+// the save itself (agent-manager gives a commit-mode save 90 seconds) and
+// each generation's retry.
+const credentialsSaveTimeout = 4 * time.Minute
+
+// headerIfMatch is the precondition header of a save and a cancel (RFC
+// 9110 section 13.1.1).
+const headerIfMatch = "If-Match"
+
+// staleETag is an entity tag no operation carries.
+const staleETag = `"agentlab-stale"`
+
+// cancel: the other person cancels their operation with DELETE and its
+// ETag, after a stale ETag is refused; the operation then reads cancelled,
+// a save with its ETag is refused, and nothing of the model is written.
+func (p *credentialsProof) cancel() (string, error) {
+	if p.otherOperation == "" {
+		return "", errors.New("no operation of the other person to cancel")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), musterMCPTimeout)
 	defer cancel()
@@ -582,26 +773,70 @@ func (p *credentialsProof) otherPersonRefused() (string, error) {
 		return "", err
 	}
 	defer rest.stop()
-	resp, raw, err := rest.do(ctx, http.MethodGet, p.operation, p.otherToken, nil, nil)
+	c, etag, err := p.readConfirmation(ctx, rest, p.otherOperation, p.otherToken)
 	if err != nil {
 		return "", err
 	}
-	if resp.StatusCode != http.StatusNotFound && resp.StatusCode != http.StatusForbidden {
-		return "", fmt.Errorf("%s's GET of %s's operation answered %d, want 404 or 403: %s", p.other.Email, p.admin.Email, resp.StatusCode, excerpt(redactValue(string(raw), p.value), 200))
+	if c.State != operationPending {
+		return "", fmt.Errorf("operation %s reads %q before the cancel, want %s", p.otherOperation, c.State, operationPending)
 	}
-	if bytes.Contains(raw, []byte(p.namespace)) || resp.Header.Get("ETag") != "" {
-		return "", fmt.Errorf("%s's refused GET still carries the operation's organization or an ETag", p.other.Email)
-	}
-	// The twin: the preparer reads it.
-	own, _, err := rest.do(ctx, http.MethodGet, p.operation, p.adminToken, nil, nil)
+	resp, _, err := rest.do(ctx, http.MethodDelete, p.otherOperation, p.otherToken, http.Header{headerIfMatch: {staleETag}}, nil)
 	if err != nil {
 		return "", err
 	}
-	if own.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("the twin: %s's own GET answered %d", p.admin.Email, own.StatusCode)
+	if resp.StatusCode != http.StatusPreconditionFailed {
+		return "", fmt.Errorf("DELETE with a stale If-Match answered %d, want 412", resp.StatusCode)
 	}
-	return fmt.Sprintf("%s and %s both %s of %s; %s's GET answered %d, %s's own GET 200",
-		p.other.Email, p.admin.Email, organizationAdminRole, credentialsOrganization, p.other.Email, resp.StatusCode, p.admin.Email), nil
+	resp, raw, err := rest.do(ctx, http.MethodDelete, p.otherOperation, p.otherToken, http.Header{headerIfMatch: {etag}}, nil)
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode != http.StatusNoContent {
+		return "", fmt.Errorf("DELETE with If-Match answered %d, want 204: %s", resp.StatusCode, excerpt(string(raw), 200))
+	}
+	c, etag, err = p.readConfirmation(ctx, rest, p.otherOperation, p.otherToken)
+	if err != nil {
+		return "", err
+	}
+	if c.State != operationCancelled {
+		return "", fmt.Errorf("operation %s reads %q after the cancel, want %s", p.otherOperation, c.State, operationCancelled)
+	}
+	body, err := credentialSaveBody(credentialsOtherModelSecret, credentialsModelKey, p.value)
+	if err != nil {
+		return "", err
+	}
+	resp, raw, err = rest.do(ctx, http.MethodPost, p.otherOperation, p.otherToken, http.Header{"Content-Type": {"application/json"}, headerIfMatch: {etag}}, body)
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode != http.StatusPreconditionFailed {
+		return "", fmt.Errorf("a save of the cancelled operation answered %d, want 412: %s", resp.StatusCode, excerpt(redactValue(string(raw), p.value), 200))
+	}
+	if err := nothingWritten(ctx, p.namespace, credentialsOtherModel, credentialsOtherModelSecret); err != nil {
+		return "", fmt.Errorf("after the cancel: %w", err)
+	}
+	return fmt.Sprintf("%s's operation %s: DELETE with a stale If-Match 412, with its ETag 204; it reads %s, a save with its ETag 412, no ModelConfig %s and no value in %s",
+		p.other.Email, p.otherOperation, operationCancelled, credentialsOtherModel, credentialsOtherModelSecret), nil
+}
+
+// nothingWritten checks a model has neither a ModelConfig nor a value in
+// its credential Secret.
+func nothingWritten(ctx context.Context, ns, model, secret string) error {
+	_, found, err := secretValueSum(ctx, ns, secret, credentialsModelKey)
+	if err != nil {
+		return err
+	}
+	if found {
+		return fmt.Errorf("the Secret %s/%s holds a value", ns, secret)
+	}
+	mc, err := modelConfigGVR()
+	if err != nil {
+		return err
+	}
+	if exists, err := objectExists(ctx, mc, ns, model); err != nil || exists {
+		return fmt.Errorf("the ModelConfig %s/%s exists (err %v)", ns, model, err)
+	}
+	return nil
 }
 
 // confirmation is the part of the credential API's confirmation the proof
@@ -620,40 +855,27 @@ type confirmation struct {
 }
 
 // save drives the credential API as the portal's form: the confirmation,
-// then the value with If-Match; the original call retried returns the
-// receipt.
+// two refused saves (no If-Match, a stale one) that write nothing, then the
+// value with If-Match. The original call retried on the plain client and on
+// the 2026-07-28 one returns the save's receipt.
 func (p *credentialsProof) save() (string, error) {
 	if p.operation == "" {
 		return "", errors.New("no pending operation to save")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), musterMCPTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), credentialsSaveTimeout)
 	defer cancel()
 	rest, err := dialCredentialREST(ctx)
 	if err != nil {
 		return "", err
 	}
 	defer rest.stop()
-	resp, raw, err := rest.do(ctx, http.MethodGet, p.operation, p.adminToken, nil, nil)
+	c, etag, err := p.readConfirmation(ctx, rest, p.operation, p.adminToken)
 	if err != nil {
 		return "", err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("GET %s answered %d: %s", p.operation, resp.StatusCode, excerpt(redactValue(string(raw), p.value), 300))
-	}
-	etag, err := strongETag(resp.Header.Get("ETag"))
-	if err != nil {
-		return "", err
-	}
-	if cc := resp.Header.Get("Cache-Control"); cc != "no-store" {
-		return "", fmt.Errorf("GET answered Cache-Control %q, want no-store", cc)
-	}
-	var c confirmation
-	if err := json.Unmarshal(raw, &c); err != nil {
-		return "", fmt.Errorf("the confirmation: %w", err)
 	}
 	switch {
-	case c.ID != p.operation || c.State != "pending" || c.Mode != p.mode || c.Organization.Namespace != p.namespace:
-		return "", fmt.Errorf("the confirmation names operation %q state %q mode %q in %q, want %s pending %s in %s", c.ID, c.State, c.Mode, c.Organization.Namespace, p.operation, p.mode, p.namespace)
+	case c.ID != p.operation || c.State != operationPending || c.Mode != p.mode || c.Organization.Namespace != p.namespace:
+		return "", fmt.Errorf("the confirmation names operation %q state %q mode %q in %q, want %s %s %s in %s", c.ID, c.State, c.Mode, c.Organization.Namespace, p.operation, operationPending, p.mode, p.namespace)
 	case p.mode == modeCommit && (c.GitTarget == nil || c.GitTarget.Repository != p.pre.agentManager[flagOrgsRepository]):
 		return "", fmt.Errorf("the confirmation's git target %+v is not %s", c.GitTarget, p.pre.agentManager[flagOrgsRepository])
 	}
@@ -661,8 +883,39 @@ func (p *credentialsProof) save() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	header := http.Header{"Content-Type": {"application/json"}, "If-Match": {etag}}
-	resp, raw, err = rest.do(ctx, http.MethodPost, p.operation, p.adminToken, header, body)
+	post := func(ifMatch string) (*http.Response, []byte, error) {
+		header := http.Header{"Content-Type": {"application/json"}}
+		if ifMatch != "" {
+			header.Set(headerIfMatch, ifMatch)
+		}
+		return rest.do(ctx, http.MethodPost, p.operation, p.adminToken, header, body)
+	}
+	refusals := make([]string, 0, 2)
+	for _, refused := range []struct {
+		ifMatch string
+		want    []int
+	}{
+		// RFC 6585 section 3 answers a missing precondition 428;
+		// agent-manager answers it as an invalid request.
+		{"", []int{http.StatusPreconditionRequired, http.StatusBadRequest}},
+		{staleETag, []int{http.StatusPreconditionFailed}},
+	} {
+		resp, raw, err := post(refused.ifMatch)
+		if err != nil {
+			return "", err
+		}
+		if !slices.Contains(refused.want, resp.StatusCode) {
+			return "", fmt.Errorf("POST with If-Match %q answered %d, want %v: %s", refused.ifMatch, resp.StatusCode, refused.want, excerpt(redactValue(string(raw), p.value), 300))
+		}
+		refusals = append(refusals, fmt.Sprintf("%s %d", firstNonEmpty(refused.ifMatch, "no If-Match"), resp.StatusCode))
+	}
+	if again, _, err := p.readConfirmation(ctx, rest, p.operation, p.adminToken); err != nil || again.State != operationPending {
+		return "", fmt.Errorf("after the refused saves the operation is not %s (%+v, %v)", operationPending, again, err)
+	}
+	if err := nothingWritten(ctx, p.namespace, credentialsModel, credentialsModelSecret); err != nil {
+		return "", fmt.Errorf("after the refused saves: %w", err)
+	}
+	resp, raw, err := post(etag)
 	if err != nil {
 		return "", err
 	}
@@ -684,22 +937,23 @@ func (p *credentialsProof) save() (string, error) {
 	if err := receiptNames(receipt, p.operation, credentialsModelSecret, credentialsModelKey, want); err != nil {
 		return "", fmt.Errorf("the receipt: %w", err)
 	}
-	retried, result, err := p.setModel(ctx, p.plain)
-	if err != nil {
+	if err := p.retriesReturn(ctx, receipt, want); err != nil {
 		return "", err
 	}
-	if retried.result == nil {
-		return "", errors.New("the original call retried does not return the receipt: it was answered with elicitations")
-	}
-	if err := receiptNames(*result, p.operation, credentialsModelSecret, credentialsModelKey, want); err != nil {
-		return "", fmt.Errorf("the original call retried: %w", err)
-	}
-	detail := fmt.Sprintf("ETag %s, Cache-Control no-store; POST with If-Match saved %s/%s (%s) as %s; the original call retried returns the receipt", etag, credentialsModelSecret, credentialsModelKey, shortSum(p.valueSum), want)
+	detail := fmt.Sprintf("ETag %s, Cache-Control no-store; POST refused with %s, nothing written; POST with If-Match saved %s/%s (%s) as %s; the original call retried on %s and on %s returns the same receipt",
+		etag, strings.Join(refusals, " and "), credentialsModelSecret, credentialsModelKey, shortSum(p.valueSum), want, mcp.ProtocolVersion20251125, mcp.ProtocolVersion20260728)
 	if p.mode == modeCommit {
-		if err := p.nothingLiveBeforeMerge(ctx); err != nil {
+		if err := nothingWritten(ctx, p.namespace, credentialsModel, credentialsModelSecret); err != nil {
+			return "", fmt.Errorf("mode commit, before the pull request is merged: %w", err)
+		}
+		branches, err := personGH("pr", "list", "--repo", receipt.Commit.Repository, "--state", "open", "--head", receipt.Commit.Branch, "--json", "number", "--jq", ".[].number")
+		if err != nil {
 			return "", err
 		}
-		return detail + "; pull request " + receipt.Commit.PullRequest + "; before its merge no live Secret value and no ModelConfig", nil
+		if open := strings.Fields(branches); len(open) != 1 || open[0] != strconv.Itoa(receipt.Commit.Number) {
+			return "", fmt.Errorf("open pull requests on %s's branch %s: %v, want only #%d", receipt.Commit.Repository, receipt.Commit.Branch, open, receipt.Commit.Number)
+		}
+		return detail + "; pull request " + receipt.Commit.PullRequest + ", the one open on " + receipt.Commit.Branch + "; before its merge no live Secret value and no ModelConfig", nil
 	}
 	sum, found, err := secretValueSum(ctx, p.namespace, credentialsModelSecret, credentialsModelKey)
 	if err != nil {
@@ -708,28 +962,69 @@ func (p *credentialsProof) save() (string, error) {
 	if !found || sum != p.valueSum {
 		return "", fmt.Errorf("mode apply: Secret %s/%s holds %s, want %s", p.namespace, credentialsModelSecret, shortSum(sum), shortSum(p.valueSum))
 	}
-	return detail + "; mode apply: the live Secret's SHA-256 matches", nil
-}
-
-// nothingLiveBeforeMerge checks a commit-mode save wrote nothing to the
-// cluster: the Secret holds no value and the ModelConfig does not exist, so
-// what the Flux verdict sees is Flux's.
-func (p *credentialsProof) nothingLiveBeforeMerge(ctx context.Context) error {
-	_, found, err := secretValueSum(ctx, p.namespace, credentialsModelSecret, credentialsModelKey)
-	if err != nil {
-		return err
-	}
-	if found {
-		return fmt.Errorf("mode commit: Secret %s/%s holds a value before the pull request is merged", p.namespace, credentialsModelSecret)
-	}
 	mc, err := modelConfigGVR()
 	if err != nil {
-		return err
+		return "", err
 	}
-	if exists, err := objectExists(ctx, mc, p.namespace, credentialsModel); err != nil || exists {
-		return fmt.Errorf("mode commit: ModelConfig %s/%s exists before the pull request is merged (err %v)", p.namespace, credentialsModel, err)
+	if exists, err := objectExists(ctx, mc, p.namespace, credentialsModel); err != nil || !exists {
+		return "", fmt.Errorf("mode apply: ModelConfig %s/%s missing after the save (err %v)", p.namespace, credentialsModel, err)
+	}
+	return detail + "; mode apply: the live Secret's SHA-256 matches and ModelConfig " + credentialsModel + " exists", nil
+}
+
+// retriesReturn retries the original call on the plain client and, when it
+// ran, on the 2026-07-28 client having accepted: each must answer the save's
+// receipt, not another write.
+func (p *credentialsProof) retriesReturn(ctx context.Context, receipt credentialAnswer, want string) error {
+	type retry struct {
+		name      string
+		m         *musterMCP
+		roundTrip mcp.MultiRoundTripParams
+	}
+	retries := []retry{{mcp.ProtocolVersion20251125, p.plain, mcp.MultiRoundTripParams{}}}
+	if p.modernAnswer != nil {
+		retries = append(retries, retry{mcp.ProtocolVersion20260728, p.modern, p.modernAnswer.accepted()})
+	}
+	for _, r := range retries {
+		answer, result, err := setModelWith(ctx, r.m, p.modelArgs(), r.roundTrip)
+		if err != nil {
+			return fmt.Errorf("the original call retried on %s: %w", r.name, err)
+		}
+		if answer.result == nil {
+			return fmt.Errorf("the original call retried on %s does not return the receipt: it was answered with %d elicitations", r.name, len(answer.urlElicitations()))
+		}
+		if err := receiptNames(*result, p.operation, credentialsModelSecret, credentialsModelKey, want); err != nil {
+			return fmt.Errorf("the original call retried on %s: %w", r.name, err)
+		}
+		if err := sameReceipt(receipt, *result); err != nil {
+			return fmt.Errorf("the original call retried on %s: %w", r.name, err)
+		}
 	}
 	return nil
+}
+
+// credentialLogSources are the components a credential value passes
+// through on its way in: agent-manager takes the save, muster the calls.
+var credentialLogSources = []string{agentManagerMCPServer, componentMuster}
+
+// valueNotLogged reads agent-manager's and muster's logs since the run
+// began and fails when one carries the value, plain or base64.
+func (p *credentialsProof) valueNotLogged() (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*kubeReadTimeout)
+	defer cancel()
+	since := time.Since(p.started) + 5*time.Second
+	var read []string
+	for _, component := range credentialLogSources {
+		logs, err := podLogs(ctx, platformNamespace, "deploy/"+component, component, since)
+		if err != nil {
+			return "", err
+		}
+		if how := valueCarried(logs, p.value); how != "" {
+			return "", fmt.Errorf("the logs of %s/%s carry the value %s", platformNamespace, component, how)
+		}
+		read = append(read, fmt.Sprintf("%s (%d lines)", component, strings.Count(logs, "\n")))
+	}
+	return fmt.Sprintf("the logs of %s since the run began carry neither the value (%s) nor its base64", strings.Join(read, " and "), shortSum(p.valueSum)), nil
 }
 
 // pullRequest reads the receipt's pull request back on GitHub with the
@@ -1008,7 +1303,9 @@ type deleteResult struct {
 
 // erase deletes the organization through delete_organization as the
 // admin: what it erases, the confirmed dry run, the delete; then the
-// namespace and every RoleBinding referring to the organization are gone.
+// namespace, the operator's Kustomization and ServiceAccount for it in the
+// Flux namespace (both named after the namespace) and every RoleBinding
+// referring to the organization are gone.
 func (p *credentialsProof) erase() (string, error) {
 	session, err := openMusterSession(p.cfg, p.adminToken, "organizations-credentials-erase")
 	if err != nil {
@@ -1032,6 +1329,8 @@ func (p *credentialsProof) erase() (string, error) {
 	switch {
 	case preview.Deleted || preview.Erases == nil || preview.Erases.Namespace != p.namespace:
 		return "", fmt.Errorf("delete_organization without confirm answered deleted=%v erases=%+v, want what would be erased in %s", preview.Deleted, preview.Erases, p.namespace)
+	case !slices.Contains(preview.Erases.Models, credentialsModel) || !slices.Contains(preview.Erases.Credentials, credentialsModelSecret):
+		return "", fmt.Errorf("delete_organization without confirm names models %v and credentials %v, want %s and %s among them", preview.Erases.Models, preview.Erases.Credentials, credentialsModel, credentialsModelSecret)
 	case dry.Deleted || !dry.DryRun:
 		return "", fmt.Errorf("the confirmed dry run answered deleted=%v dryRun=%v", dry.Deleted, dry.DryRun)
 	case !done.Deleted:
@@ -1041,17 +1340,29 @@ func (p *credentialsProof) erase() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	fluxNS := p.pre.operator[flagFluxNamespace]
 	var last string
 	gone := waitFor(int(organizationCleanupWait/pollInterval), pollInterval, func() bool {
 		ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 		defer cancel()
-		_, orgErr := getObject(ctx, gvr, organizationsRootNamespace, credentialsOrganization)
-		_, nsErr := getObject(ctx, gvrNamespaces, "", p.namespace)
-		last = fmt.Sprintf("organization: %v; namespace: %v", orgErr, nsErr)
-		return apierrors.IsNotFound(orgErr) && apierrors.IsNotFound(nsErr)
+		left := map[string]error{
+			"AgentPlatformOrganization": absent(getObject(ctx, gvr, organizationsRootNamespace, credentialsOrganization)),
+			"Namespace":                 absent(getObject(ctx, gvrNamespaces, "", p.namespace)),
+		}
+		if fluxNS != "" {
+			left["Kustomization"] = absent(getObject(ctx, kustomizationGVR, fluxNS, p.namespace))
+			left["ServiceAccount"] = absent(getObject(ctx, gvrServiceAccounts, fluxNS, p.namespace))
+		}
+		last = fmt.Sprint(left)
+		for _, err := range left {
+			if err != nil {
+				return false
+			}
+		}
+		return true
 	})
 	if !gone {
-		return "", fmt.Errorf("organization %s and namespace %s not gone within %s (%s)", confirm, p.namespace, organizationCleanupWait, last)
+		return "", fmt.Errorf("organization %s, namespace %s and its Flux objects not gone within %s (%s)", confirm, p.namespace, organizationCleanupWait, last)
 	}
 	k, err := labKube()
 	if err != nil {
@@ -1068,8 +1379,24 @@ func (p *credentialsProof) erase() (string, error) {
 		return "", fmt.Errorf("RoleBindings referring to the erased organization remain: %s", strings.Join(left, ", "))
 	}
 	p.namespace = ""
-	return fmt.Sprintf("without confirm: erases %d models, %d credentials, %d members in %s; the confirmed dry run deleted nothing; the delete erased it, namespace gone, no RoleBinding of %d refers to it",
-		len(preview.Erases.Models), len(preview.Erases.Credentials), len(preview.Erases.Members), preview.Erases.Namespace, len(bindings.Items)), nil
+	fluxGone := ""
+	if fluxNS != "" {
+		fluxGone = ", its Kustomization and ServiceAccount in " + fluxNS + " gone"
+	}
+	return fmt.Sprintf("without confirm: erases models %v, credentials %v, %d members in %s; the confirmed dry run deleted nothing; the delete erased it, namespace gone%s, no RoleBinding of %d refers to it",
+		preview.Erases.Models, preview.Erases.Credentials, len(preview.Erases.Members), preview.Erases.Namespace, fluxGone, len(bindings.Items)), nil
+}
+
+// absent is nil when a read found nothing, else why the object is not
+// gone.
+func absent(_ *unstructured.Unstructured, err error) error {
+	switch {
+	case apierrors.IsNotFound(err):
+		return nil
+	case err == nil:
+		return errors.New("still present")
+	}
+	return err
 }
 
 // withArgs is base with more arguments.
@@ -1091,8 +1418,10 @@ func withArgs(base, more map[string]any) map[string]any {
 // content path too: Flux would prune what is kept, so the run prints the
 // removal instead.
 func (p *credentialsProof) cleanup() {
-	if p.plain != nil {
-		p.plain.close()
+	for _, m := range []*musterMCP{p.plain, p.modern} {
+		if m != nil {
+			m.close()
+		}
 	}
 	if p.namespace != "" {
 		removeCredentialsSignInServer(p.namespace)

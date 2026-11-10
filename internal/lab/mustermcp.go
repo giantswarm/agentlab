@@ -116,13 +116,7 @@ func (m *musterMCP) call(ctx context.Context, tool string, args map[string]any, 
 	case res.NeedsInput():
 		return &musterAnswer{input: res.InputRequests, requestState: res.RequestState}, nil
 	}
-	var texts []string
-	for _, c := range res.Content {
-		if text, ok := mcp.AsTextContent(c); ok {
-			texts = append(texts, text.Text)
-		}
-	}
-	result, err := parseMusterToolResult(strings.Join(texts, "\n"), res.IsError)
+	result, err := parseMusterToolResult(resultText(res), res.IsError)
 	if err != nil {
 		return nil, fmt.Errorf("muster call_tool %s: %w", tool, err)
 	}
@@ -139,16 +133,22 @@ func (m *musterMCP) declaresOutputSchema(ctx context.Context, tool string) (bool
 	if err != nil {
 		return false, fmt.Errorf("muster describe_tool %s: %w", tool, err)
 	}
+	if res.IsError {
+		return false, fmt.Errorf("muster describe_tool %s: %s", tool, resultText(res))
+	}
+	return describesOutputSchema(resultText(res))
+}
+
+// resultText is a tool result's text blocks, one per line: where muster's
+// meta-tools put their JSON payload.
+func resultText(res *mcp.CallToolResult) string {
 	var texts []string
 	for _, c := range res.Content {
 		if text, ok := mcp.AsTextContent(c); ok {
 			texts = append(texts, text.Text)
 		}
 	}
-	if res.IsError {
-		return false, fmt.Errorf("muster describe_tool %s: %s", tool, strings.Join(texts, "\n"))
-	}
-	return describesOutputSchema(strings.Join(texts, "\n"))
+	return strings.Join(texts, "\n")
 }
 
 // describesOutputSchema reads describe_tool's JSON payload for a non-empty
@@ -175,18 +175,33 @@ func (a *musterAnswer) urlElicitations() []mcp.ElicitationParams {
 	return out
 }
 
+// accepted is the retry of an input_required answer after the person
+// accepted every elicitation: for a URL elicitation, consent to open the
+// page, never the page's outcome (MCP 2026-07-28 client/elicitation).
+func (a *musterAnswer) accepted() mcp.MultiRoundTripParams {
+	responses := make(mcp.InputResponses, len(a.input))
+	for id := range a.input {
+		responses[id] = mcp.InputResponse{Elicitation: &mcp.ElicitationResult{ElicitationResponse: mcp.ElicitationResponse{Action: mcp.ElicitationResponseActionAccept}}}
+	}
+	return mcp.MultiRoundTripParams{InputResponses: responses, RequestState: a.requestState}
+}
+
 // musterToolResult is the target tool's result as call_tool serialises it
 // into its text: every content block with its type, structuredContent as
 // sent, and the tool's isError.
 type musterToolResult struct {
-	IsError bool `json:"isError"`
-	Content []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-		URI  string `json:"uri"`
-		Name string `json:"name"`
-	} `json:"content"`
-	StructuredContent json.RawMessage `json:"structuredContent"`
+	IsError           bool                `json:"isError"`
+	Content           []musterToolContent `json:"content"`
+	StructuredContent json.RawMessage     `json:"structuredContent"`
+}
+
+// musterToolContent is one content block of the target tool's result: text,
+// or a resource_link's uri and name.
+type musterToolContent struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+	URI  string `json:"uri"`
+	Name string `json:"name"`
 }
 
 // parseMusterToolResult reads call_tool's text. A refusal by muster itself
@@ -201,14 +216,7 @@ func parseMusterToolResult(text string, isError bool) (*musterToolResult, error)
 		return &r, nil
 	}
 	if isError && strings.TrimSpace(text) != "" {
-		r = musterToolResult{IsError: true}
-		r.Content = append(r.Content, struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-			URI  string `json:"uri"`
-			Name string `json:"name"`
-		}{Type: toolResultText, Text: text})
-		return &r, nil
+		return &musterToolResult{IsError: true, Content: []musterToolContent{{Type: toolResultText, Text: text}}}, nil
 	}
 	if strings.TrimSpace(text) == "" {
 		return nil, errEmptyToolAnswer

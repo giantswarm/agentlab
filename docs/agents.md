@@ -423,28 +423,42 @@ printed only as its SHA-256. Each verdict:
 - `set_organization_model` through muster (`x_agent-manager_set_organization_model`)
   for a new model without a key writes nothing: no ModelConfig, no
   `tenant-credential-*` value, and the answer names a pending credential
-  operation.
+  operation. In commit mode no open pull request of the person touches the
+  organization's content path yet.
 - The same call from three MCP client generations, each on mcp-go's client:
   a 2026-07-28 client declaring URL elicitation gets `input_required`, its
-  message prefixed `[agent-manager]` by muster (giantswarm/muster#1812); a
+  message prefixed `[agent-manager]` by muster (giantswarm/muster#1812), and
+  retried with `requestState` having accepted (consent to open the page, not
+  the page's outcome) gets `input_required` again for the same operation; a
   2025-11-25 client that declared it at initialize gets `-32042` with the
   form's URL; a client without it gets a result whose `credentials[].next`
-  carries the link, and `structuredContent` with a `resource_link` once
+  carries the link. Every link must be agent-manager's `credentials.uiURL`
+  template expanded (RFC 6570) with the operation, the parent and the
+  organization only, so no value or token travels in it. That client also
+  gets `structuredContent` with a `resource_link` once
   `set_organization_model` declares an `outputSchema` through muster's
   `describe_tool` (giantswarm/agent-manager#329; skipped while it declares none).
 - The form's save, the way the portal's form posts it
   (giantswarm/backstage#3364): `GET /api/v1/credential-operations/{operation}`
   with the person's token answers the confirmation with a strong `ETag` and
-  `Cache-Control: no-store`; another lab user's read is refused (404 or
-  403), that user bound as an admin of the organization too, so the refusal
-  is the operation's binding to its preparer and not the membership check;
-  `POST`
-  with `If-Match` and only the requested Secret/key returns the receipt, and
-  the original call retried returns it too. The lab's portal reaches
+  `Cache-Control: no-store`. Another lab user, bound as an admin of the
+  organization too, prepares an operation of their own (model
+  `agentlab-credentials-other`): each reads their own, each read of the
+  other's is refused with the status of an operation that does not exist
+  (404 or 403, no oracle), and an anonymous read answers 401. That user then
+  cancels their operation: `DELETE` with a stale `If-Match` answers 412, with
+  its `ETag` 204; it reads `cancelled`, a save of it answers 412 and nothing
+  of that model is written. Back on the admin's operation, a `POST` without
+  `If-Match` (400, or RFC 6585's 428) and one with a stale tag (412) write
+  nothing and leave it pending; `POST` with `If-Match` and only the requested
+  Secret/key returns the receipt, and the original call retried on the
+  2025-11-25 client and on the 2026-07-28 one returns the same receipt (the
+  same pull request on the same branch). The lab's portal reaches
   agent-manager through muster only, so the part calls the agent-manager
   Service's REST listener on a port-forward, the hop a portal backend takes.
-  Without commit mode the save writes the Secret live and its SHA-256 is
-  compared.
+  Without commit mode the save writes the Secret live, its SHA-256 is
+  compared and the ModelConfig exists. In commit mode the receipt's pull
+  request is the only open one on its branch.
 - In commit mode, the receipt's pull request is read back with your `gh`
   login: opened by the person, its commit authored by them, the Secret file
   `<contentPrefix>/<parent>/<name>/<secret>-secret.enc.yaml` SOPS-encrypted
@@ -464,6 +478,8 @@ printed only as its SHA-256. Each verdict:
   would prune the retained organization, and prints the commands that
   remove it by hand. A pull request nothing merged is closed and its branch
   deleted.
+- Neither agent-manager's nor muster's logs since the run began carry the
+  value, plain or base64.
 - A sign-in a server of the organization's namespace needs: an OAuth
   `MCPServer` there, modelled on `lab-oauth-fixture` without a pinned
   client, reads `Auth Required`, and `core_auth_login` for
@@ -472,8 +488,11 @@ printed only as its SHA-256. Each verdict:
   continue`) or as the `[<namespace>/<name>]` prefix muster puts on a
   backend's elicitation.
 - `delete_organization` erases the organization: without `confirm` it says
-  what goes, the confirmed dry run deletes nothing, the confirmed call
-  deletes it; the namespace goes and no RoleBinding anywhere refers to it.
+  what goes, the model and its credential Secret named among it, the
+  confirmed dry run deletes nothing, the confirmed call deletes it; the
+  namespace goes, in commit mode so do the operator's Kustomization and
+  ServiceAccount named after it in the Flux namespace, and no RoleBinding
+  anywhere refers to it.
 
 What the part stands on is read from the live lab and never configured
 by it, except the SOPS age Secret the organizations' Kustomizations decrypt

@@ -11,8 +11,11 @@ import (
 	"filippo.io/age"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	sigsyaml "sigs.k8s.io/yaml"
 
 	"github.com/giantswarm/agentlab/internal/config"
@@ -100,12 +103,6 @@ func TestAttribution(t *testing.T) {
 	require.Equal(t, "prefixed ["+key+"]", signInAttribution("["+key+"] Sign in to continue.", key))
 	require.Equal(t, "muster's sign-in sentence naming "+key, signInAttribution("Sign in to "+key+" to continue.", key))
 	require.Empty(t, signInAttribution("Sign in to agents-x-abc/other to continue.", key))
-}
-
-func TestUIURLPrefix(t *testing.T) {
-	require.Equal(t, "https://p.example/orgs/", uiURLPrefix("https://p.example/orgs/{parent}/{organization}?operation={operation}"))
-	require.Equal(t, "https://p.example/c", uiURLPrefix("https://p.example/c{?operation}"))
-	require.Equal(t, "https://p.example/c", uiURLPrefix("https://p.example/c"))
 }
 
 func TestPendingCredential(t *testing.T) {
@@ -353,4 +350,76 @@ func TestContentPathRemovalCommand(t *testing.T) {
 	require.Contains(t, got, "rm -r -q organizations/p/o")
 	require.Contains(t, got, "push -q origin HEAD:main")
 	require.NotContains(t, got, "%!")
+}
+
+func TestContainerArgs(t *testing.T) {
+	sidecar := corev1.Container{Name: "sidecar", Args: []string{"--other"}}
+	main := corev1.Container{Name: agentManagerMCPServer, Args: []string{"--credential-ui-url=https://x"}}
+	args, err := containerArgs([]corev1.Container{sidecar, main}, agentManagerMCPServer)
+	require.NoError(t, err)
+	require.Equal(t, main.Args, args)
+	args, err = containerArgs([]corev1.Container{sidecar}, agentManagerMCPServer)
+	require.NoError(t, err, "the one container is read whatever its name")
+	require.Equal(t, sidecar.Args, args)
+	_, err = containerArgs([]corev1.Container{sidecar, {Name: "other"}}, agentManagerMCPServer)
+	require.ErrorContains(t, err, "no container named")
+}
+
+func TestFormOperation(t *testing.T) {
+	const tpl = "https://portal.example/organizations/agentlab/{parent}/{organization}/credentials{?operation}"
+	op, err := formOperation(tpl, "https://portal.example/organizations/agentlab/root/org/credentials?operation=9b0e2fc5", "root", "org")
+	require.NoError(t, err)
+	require.Equal(t, "9b0e2fc5", op)
+
+	for name, link := range map[string]string{
+		"another organization": "https://portal.example/organizations/agentlab/root/other/credentials?operation=9b0e2fc5",
+		"another origin":       "https://evil.example/organizations/agentlab/root/org/credentials?operation=9b0e2fc5",
+		"an extra parameter":   "https://portal.example/organizations/agentlab/root/org/credentials?operation=9b0e2fc5&token=abc",
+		"no operation":         "https://portal.example/organizations/agentlab/root/org/credentials?operation=",
+	} {
+		_, err := formOperation(tpl, link, "root", "org")
+		require.Error(t, err, name)
+	}
+
+	op, err = formOperation("https://p.example/c/{operation}", "https://p.example/c/abc-1", "root", "org")
+	require.NoError(t, err)
+	require.Equal(t, "abc-1", op)
+	_, err = formOperation("https://p.example/c", "https://p.example/c", "root", "org")
+	require.ErrorContains(t, err, "does not expand {operation} once")
+}
+
+func TestSameReceipt(t *testing.T) {
+	commit := func(number int, branch string) credentialAnswer {
+		var a credentialAnswer
+		require.NoError(t, json.Unmarshal([]byte(`{"commit":{"number":`+strconv.Itoa(number)+`,"branch":"`+branch+`"}}`), &a))
+		return a
+	}
+	require.NoError(t, sameReceipt(credentialAnswer{}, credentialAnswer{}))
+	require.NoError(t, sameReceipt(commit(7, "b"), commit(7, "b")))
+	require.ErrorContains(t, sameReceipt(commit(7, "b"), commit(8, "b")), "#8")
+	require.ErrorContains(t, sameReceipt(commit(7, "b"), commit(7, "c")), `"c"`)
+	require.Error(t, sameReceipt(commit(7, "b"), credentialAnswer{}))
+}
+
+func TestValueCarried(t *testing.T) {
+	const value = "s3cr3t-value"
+	require.Empty(t, valueCarried("nothing here", value))
+	require.Equal(t, "in plaintext", valueCarried("key="+value, value))
+	require.Equal(t, "base64-encoded", valueCarried(`"data":"`+base64.StdEncoding.EncodeToString([]byte(value))+`"`, value))
+	require.Empty(t, valueCarried("anything", ""))
+}
+
+func TestMusterAnswerAccepted(t *testing.T) {
+	a := &musterAnswer{input: mcp.InputRequests{"e1": {Method: mcp.MethodElicitationCreate}}, requestState: "request-state-1"}
+	rt := a.accepted()
+	require.Equal(t, a.requestState, rt.RequestState)
+	raw, err := json.Marshal(rt.InputResponses)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"e1":{"action":"accept"}}`, string(raw))
+}
+
+func TestAbsent(t *testing.T) {
+	require.NoError(t, absent(nil, apierrors.NewNotFound(gvrNamespaces.GroupResource(), "x")))
+	require.ErrorContains(t, absent(&unstructured.Unstructured{}, nil), "still present")
+	require.Error(t, absent(nil, apierrors.NewForbidden(gvrNamespaces.GroupResource(), "x", nil)))
 }

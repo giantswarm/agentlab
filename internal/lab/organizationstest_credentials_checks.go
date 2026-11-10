@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/yosida95/uritemplate/v3"
+	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	sigsyaml "sigs.k8s.io/yaml"
 )
@@ -35,6 +37,18 @@ func containerFlags(args []string) map[string]string {
 		flags[key] = value
 	}
 	return flags
+}
+
+// containerArgs are the arguments of the container named name, or of the
+// one container when none is named so.
+func containerArgs(containers []corev1.Container, name string) ([]string, error) {
+	if i := slices.IndexFunc(containers, func(c corev1.Container) bool { return c.Name == name }); i >= 0 {
+		return containers[i].Args, nil
+	}
+	if len(containers) == 1 {
+		return containers[0].Args, nil
+	}
+	return nil, fmt.Errorf("no container named %s among %d", name, len(containers))
 }
 
 // credentialPrerequisites is what the credentials part stands on, read from
@@ -179,29 +193,16 @@ func signInAttribution(message, key string) string {
 	return ""
 }
 
-// uiURLPrefix is the fixed part of the credential UI URL template, up to its
-// first expression: every elicited link starts with it.
-func uiURLPrefix(template string) string {
-	prefix, _, _ := strings.Cut(template, "{")
-	return prefix
-}
-
 // credentialAnswer is the part of agent-manager's ResourceResult the proof
 // reads: the credentials and the pending operation, or the receipt.
 type credentialAnswer struct {
-	Namespace   string `json:"namespace"`
-	Kind        string `json:"kind"`
-	Name        string `json:"name"`
-	Credentials []struct {
-		Secret  string `json:"secret"`
-		Key     string `json:"key"`
-		State   string `json:"state"`
-		FormURL string `json:"formUrl"`
-		Next    string `json:"next"`
-	} `json:"credentials"`
-	CredentialOperation string `json:"credentialOperation"`
-	Pending             bool   `json:"pending"`
-	DryRun              bool   `json:"dryRun"`
+	Namespace           string            `json:"namespace"`
+	Kind                string            `json:"kind"`
+	Name                string            `json:"name"`
+	Credentials         []credentialEntry `json:"credentials"`
+	CredentialOperation string            `json:"credentialOperation"`
+	Pending             bool              `json:"pending"`
+	DryRun              bool              `json:"dryRun"`
 	Commit              *struct {
 		Repository  string `json:"repository"`
 		Base        string `json:"base"`
@@ -216,6 +217,16 @@ type credentialAnswer struct {
 	} `json:"commit"`
 }
 
+// credentialEntry is one credential of agent-manager's ResourceResult: its
+// Secret and key, its state and, while missing, the form's link.
+type credentialEntry struct {
+	Secret  string `json:"secret"`
+	Key     string `json:"key"`
+	State   string `json:"state"`
+	FormURL string `json:"formUrl"`
+	Next    string `json:"next"`
+}
+
 // pendingCredential checks an answer is a pending credential operation for
 // the one missing key of secret, its form linked from credentials[].next,
 // and returns the operation and the link.
@@ -223,15 +234,7 @@ func pendingCredential(a credentialAnswer, secret, key string) (operation, formU
 	if !a.Pending || a.CredentialOperation == "" {
 		return "", "", fmt.Errorf("the answer names no pending credential operation (pending=%v, credentialOperation=%q)", a.Pending, a.CredentialOperation)
 	}
-	i := slices.IndexFunc(a.Credentials, func(c struct {
-		Secret  string `json:"secret"`
-		Key     string `json:"key"`
-		State   string `json:"state"`
-		FormURL string `json:"formUrl"`
-		Next    string `json:"next"`
-	}) bool {
-		return c.Secret == secret && c.Key == key
-	})
+	i := slices.IndexFunc(a.Credentials, func(c credentialEntry) bool { return c.Secret == secret && c.Key == key })
 	if i < 0 {
 		return "", "", fmt.Errorf("the answer's credentials do not name %s/%s", secret, key)
 	}
@@ -282,13 +285,82 @@ func sopsEncryptedPatch(patch, value string) error {
 // valueInPatch fails a diff that carries the value, plain or base64; the
 // error never names the value.
 func valueInPatch(patch, value string) error {
+	if how := valueCarried(patch, value); how != "" {
+		return errors.New("the diff carries the value " + how)
+	}
+	return nil
+}
+
+// valueCarried says how s carries the value: "in plaintext",
+// "base64-encoded", or "" when it does not.
+func valueCarried(s, value string) string {
 	switch {
 	case value == "":
+		return ""
+	case strings.Contains(s, value):
+		return "in plaintext"
+	case strings.Contains(s, base64.StdEncoding.EncodeToString([]byte(value))):
+		return "base64-encoded"
+	}
+	return ""
+}
+
+// The variables of agent-manager's credential UI URL template.
+const (
+	uiVarOperation    = "operation"
+	uiVarParent       = "parent"
+	uiVarOrganization = "organization"
+)
+
+// formOperationMarker stands in for the operation while the credential UI
+// URL template is expanded: unreserved characters, kept as is by RFC 6570.
+const formOperationMarker = "agentlabformoperation"
+
+// operationRe is an operation as a link may carry it: unreserved
+// characters only (RFC 3986 section 2.3).
+var operationRe = regexp.MustCompile(`^[A-Za-z0-9._~-]+$`)
+
+// formOperation reads the operation from a link to the credential UI: the
+// link must be the template expanded as agent-manager expands it (RFC 6570,
+// with operation, parent and organization only), so nothing else, no value
+// and no token, travels in it.
+func formOperation(template, link, parent, organization string) (string, error) {
+	tpl, err := uritemplate.New(template)
+	if err != nil {
+		return "", fmt.Errorf("credential UI URL template %q: %w", template, err)
+	}
+	expanded, err := tpl.Expand(uritemplate.Values{
+		uiVarOperation:    uritemplate.String(formOperationMarker),
+		uiVarParent:       uritemplate.String(parent),
+		uiVarOrganization: uritemplate.String(organization),
+	})
+	if err != nil {
+		return "", fmt.Errorf("credential UI URL template %q: %w", template, err)
+	}
+	prefix, suffix, ok := strings.Cut(expanded, formOperationMarker)
+	if !ok || strings.Contains(suffix, formOperationMarker) {
+		return "", fmt.Errorf("credential UI URL template %q does not expand {operation} once", template)
+	}
+	if !strings.HasPrefix(link, prefix) || !strings.HasSuffix(link, suffix) || len(link) < len(prefix)+len(suffix) {
+		return "", fmt.Errorf("the link %q is not the credential UI's %s", link, strings.Replace(expanded, formOperationMarker, "{operation}", 1))
+	}
+	operation := link[len(prefix) : len(link)-len(suffix)]
+	if !operationRe.MatchString(operation) {
+		return "", fmt.Errorf("the link %q carries %q where the operation goes", link, operation)
+	}
+	return operation, nil
+}
+
+// sameReceipt checks a retried call's receipt is the save's: the same
+// pull request on the same branch, or neither carrying one.
+func sameReceipt(saved, retried credentialAnswer) error {
+	switch {
+	case saved.Commit == nil && retried.Commit == nil:
 		return nil
-	case strings.Contains(patch, value):
-		return errors.New("the diff carries the value in plaintext")
-	case strings.Contains(patch, base64.StdEncoding.EncodeToString([]byte(value))):
-		return errors.New("the diff carries the value base64-encoded")
+	case saved.Commit == nil || retried.Commit == nil:
+		return fmt.Errorf("the save's commit %+v and the retry's %+v differ", saved.Commit, retried.Commit)
+	case saved.Commit.Number != retried.Commit.Number || saved.Commit.Branch != retried.Commit.Branch:
+		return fmt.Errorf("the retry names pull request #%d on %q, the save #%d on %q", retried.Commit.Number, retried.Commit.Branch, saved.Commit.Number, saved.Commit.Branch)
 	}
 	return nil
 }

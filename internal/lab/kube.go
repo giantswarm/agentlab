@@ -113,12 +113,13 @@ var gvkCRD = schema.GroupVersionKind{Group: "apiextensions.k8s.io", Version: "v1
 // gvrFor from the resource name kubectl takes, so their versions are never
 // pinned here.
 var (
-	gvrNamespaces  = corev1.SchemeGroupVersion.WithResource("namespaces")
-	gvrSecrets     = corev1.SchemeGroupVersion.WithResource("secrets")
-	gvrConfigMaps  = corev1.SchemeGroupVersion.WithResource("configmaps")
-	gvrPods        = corev1.SchemeGroupVersion.WithResource("pods")
-	gvrDeployments = appsv1.SchemeGroupVersion.WithResource("deployments")
-	gvrCRDs        = gvkCRD.GroupVersion().WithResource("customresourcedefinitions")
+	gvrNamespaces      = corev1.SchemeGroupVersion.WithResource("namespaces")
+	gvrSecrets         = corev1.SchemeGroupVersion.WithResource("secrets")
+	gvrConfigMaps      = corev1.SchemeGroupVersion.WithResource("configmaps")
+	gvrPods            = corev1.SchemeGroupVersion.WithResource("pods")
+	gvrServiceAccounts = corev1.SchemeGroupVersion.WithResource("serviceaccounts")
+	gvrDeployments     = appsv1.SchemeGroupVersion.WithResource("deployments")
+	gvrCRDs            = gvkCRD.GroupVersion().WithResource("customresourcedefinitions")
 )
 
 // kubeClients is the client bundle behind every helper: one REST config for

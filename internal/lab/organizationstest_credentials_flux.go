@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -133,7 +134,7 @@ func placeCredentialsAgeSecret(ctx context.Context, ns, name, path string) error
 // readSOPSConfig reads the repository's .sops.yaml at ref with the person's
 // gh login.
 func readSOPSConfig(repo, ref string) ([]byte, error) {
-	out, err := personGH("api", fmt.Sprintf("repos/%s/contents/.sops.yaml?ref=%s", repo, ref), "--jq", ".content")
+	out, err := personGH("api", "repos/"+repo+"/contents/.sops.yaml?ref="+url.QueryEscape(ref), "--jq", ".content")
 	if err != nil {
 		return nil, err
 	}
