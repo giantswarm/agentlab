@@ -234,15 +234,18 @@ func OrganizationsTest(cfg *config.Config, opts OrganizationsTestOptions) error 
 		}
 		return fmt.Errorf("platform.organizations is off in %s — `agentlab configure --organizations`, then `agentlab platform`", config.File)
 	}
-	members, err := organizationsTestMembers(cfg)
-	if err != nil {
-		return err
-	}
 	admin := cfg.AdminUser()
 	if admin == nil {
 		return fmt.Errorf("no platform-admins user in %s", config.File)
 	}
 	if err := checkApiserverOIDC(cfg); err != nil {
+		return err
+	}
+	if part == organizationCredentialsPart {
+		return organizationCredentialsTest(cfg, admin)
+	}
+	members, err := organizationsTestMembers(cfg)
+	if err != nil {
 		return err
 	}
 	p := &organizationsProof{cfg: cfg, opts: opts, names: [2]string{organizationsTestA, organizationsTestB}, members: members, admin: admin}

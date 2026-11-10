@@ -410,6 +410,110 @@ the namespace's atespace from that namespace only. Then:
   check (removed afterwards) and read the pool only. A get the authorizer
   allows may answer NotFound; a refusal must be 403. The cleanup check starts a member-owned READY session, records its organization in a suspended installation Kustomization's settled inventory, then removes that inventory entry and waits for the operator to report `Orphaned=True`. Administrative deletion must remove the organization, namespace, actors and snapshot prefix, and refuse another resume of the session. A seeded control object under the second organization's UID must survive that cleanup. The check requires kagent 1.31.1-rc.3 or newer and an operator that supports the configured path-style store; it preserves the five-minute snapshot cleanup delay.
 
+### The credentials part
+
+`organizations-test --part credentials` proves an organization's keys are
+typed only into agent-manager's credential API, never into a tool call
+(agent-manager docs/organization-credentials.md). It keeps its own
+organization, `agentlab-organizations/agentlab-credentials` (a previous
+run's is erased first), with `platform-admins` as its admins, and acts as
+the first admin. The key it types is a random value made in the process and
+printed only as its SHA-256. Each verdict:
+
+- `set_organization_model` through muster (`x_agent-manager_set_organization_model`)
+  for a new model without a key writes nothing: no ModelConfig, no
+  `tenant-credential-*` value, and the answer names a pending credential
+  operation. In commit mode no open pull request of the person touches the
+  organization's content path yet.
+- The same call from three MCP client generations, each on mcp-go's client:
+  a 2026-07-28 client declaring URL elicitation gets `input_required`, its
+  message prefixed `[agent-manager]` by muster (giantswarm/muster#1812), and
+  retried with `requestState` having accepted (consent to open the page, not
+  the page's outcome) gets `input_required` again for the same operation; a
+  2025-11-25 client that declared it at initialize gets `-32042` with the
+  form's URL; a client without it gets a result whose `credentials[].next`
+  carries the link. Every link must be agent-manager's `credentials.uiURL`
+  template expanded (RFC 6570) with the operation, the parent and the
+  organization only, so no value or token travels in it. That client also
+  gets `structuredContent` with a `resource_link` once
+  `set_organization_model` declares an `outputSchema` through muster's
+  `describe_tool` (giantswarm/agent-manager#329; skipped while it declares none).
+- The form's save, the way the portal's form posts it
+  (giantswarm/backstage#3364): `GET /api/v1/credential-operations/{operation}`
+  with the person's token answers the confirmation with a strong `ETag` and
+  `Cache-Control: no-store`. Another lab user, bound as an admin of the
+  organization too, prepares an operation of their own (model
+  `agentlab-credentials-other`): each reads their own, each read of the
+  other's is refused with the status of an operation that does not exist
+  (404 or 403, no oracle), and an anonymous read answers 401. That user then
+  cancels their operation: `DELETE` with a stale `If-Match` answers 412, with
+  its `ETag` 204; it reads `cancelled`, a save of it answers 412 and nothing
+  of that model is written. Back on the admin's operation, a `POST` without
+  `If-Match` (400, or RFC 6585's 428) and one with a stale tag (412) write
+  nothing and leave it pending; `POST` with `If-Match` and only the requested
+  Secret/key returns the receipt, and the original call retried on the
+  2025-11-25 client returns the same receipt (the same pull request on the
+  same branch), the Secret's and the ModelConfig's resourceVersions
+  unchanged. agent-manager binds an operation to the person, the client and
+  the MCP session it sees, so the 2026-07-28 client's retry returns that
+  receipt too when muster reached agent-manager on one session for both, and
+  otherwise stays `input_required` for its own operation. Neither the
+  receipt nor a retry's answer carries the value. The lab's portal reaches
+  agent-manager through muster only, so the part calls the agent-manager
+  Service's REST listener on a port-forward, the hop a portal backend takes.
+  Without commit mode the save writes the Secret live, its SHA-256 is
+  compared and the ModelConfig exists. In commit mode the receipt's pull
+  request is the only open one on its branch.
+- In commit mode, the receipt's pull request is read back with your `gh`
+  login: opened by the person, its commit authored by them, the ModelConfig
+  file `<contentPrefix>/<parent>/<name>/modelconfig-<model>.yaml` and the
+  Secret file `<contentPrefix>/<parent>/<name>/<secret>-secret.enc.yaml` in
+  it, the Secret SOPS-encrypted, and no file carrying the value. Before the merge the cluster holds no
+  value of the Secret and no ModelConfig, so the Flux verdict is Flux's.
+- Flux: the person merges the pull request, and the organization's own
+  Kustomization, which agent-platform-operator keeps in commit mode
+  (`--flux-namespace`, `--flux-source-name`) with `decryption.provider: sops`
+  and `--flux-decryption-secret`, applies and decrypts it: the Secret's
+  SHA-256 matches and the ModelConfig exists. The age identity is the lab's,
+  generated once into `certs/organization-credentials-sops/` (a key file
+  its group or others can reach is refused) and placed as that Secret (an existing Secret the lab did not write is left alone). The
+  repository's `.sops.yaml` must encrypt the content path for its recipient;
+  the part prints the rule to commit when it does not. After a merge, the
+  run removes the organization's content path from the base branch with
+  your git credentials; a failed run after the merge keeps it, since Flux
+  would prune the retained organization, and prints the commands that
+  remove it by hand. A pull request nothing merged is closed and its branch
+  deleted.
+- Neither agent-manager's nor muster's logs since the run began carry the
+  value, plain or base64.
+- A sign-in a server of the organization's namespace needs: an OAuth
+  `MCPServer` there, modelled on `lab-oauth-fixture` without a pinned
+  client, reads `Auth Required`, and `core_auth_login` for
+  `<namespace>/<name>` is a URL elicitation whose message names that key,
+  either in muster's own sentence (`Sign in to <namespace>/<name> to
+  continue`) or as the `[<namespace>/<name>]` prefix muster puts on a
+  backend's elicitation.
+- `delete_organization` erases the organization: without `confirm` it says
+  what goes, the model and its credential Secret named among it once they
+  are live (saved in apply mode, or applied by Flux: it lists the cluster's
+  objects, never a pull request's), the
+  confirmed dry run deletes nothing, the confirmed call deletes it; the
+  namespace goes, in commit mode so do the operator's Kustomization and
+  ServiceAccount named after it in the Flux namespace, and no RoleBinding
+  anywhere refers to it.
+
+What the part stands on is read from the live lab and never configured
+by it, except the SOPS age Secret the organizations' Kustomizations decrypt
+with: the lab places its own only where none exists or agentlab wrote it.
+Each missing piece is a `SKIP` naming its fix: agent-manager's
+`credentials.uiURL` (its `--credential-ui-url`), muster speaking MCP
+2026-07-28, commit mode (`githubTokenExchange`, `tenants.commit.repository`)
+and the person's grant of the workspaces' `github` App, a Ready
+kustomize-controller (`flux-engine.instance.components`), and
+agent-platform-operator's commit-mode flags. muster's
+`mcpServerNamespaceSelector` must select the organization namespace for the
+sign-in verdict.
+
 `organizations-test --part cleanup` runs the orphan cleanup check alone, creating the proof agents and a member-owned session directly through kagent without a model turn. The default run includes this check after all other organization checks. The former `--part erasure` spelling remains an alias. See the operator's [glossary](https://github.com/giantswarm/agent-platform-operator/blob/main/GLOSSARY.md) for the distinction between organization deletion and cleanup.
 
 The report prints one `PASS` or `SKIP` line per verdict, `[surface]

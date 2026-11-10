@@ -244,6 +244,11 @@ func groupSubject(group string) rbacv1.Subject {
 	return rbacv1.Subject{APIGroup: rbacv1.GroupName, Kind: rbacv1.GroupKind, Name: apiserverUserPrefix + group}
 }
 
+// userSubject is a lab person as the API server spells them in a binding.
+func userSubject(u *config.User) rbacv1.Subject {
+	return rbacv1.Subject{APIGroup: rbacv1.GroupName, Kind: rbacv1.UserKind, Name: apiserverUserPrefix + u.Email}
+}
+
 // organizationModelManifest is the organization's ModelConfig: Anthropic on
 // the lab's model with the key from the tenant credential, marked default;
 // the chart's admission policy fills in the LLM listener as its baseUrl.

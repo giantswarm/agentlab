@@ -170,12 +170,11 @@ func workspaceManagerFlags(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading the Deployment %s/%s: %w", platformNamespace, workspaceManagerMCPServer, err)
 	}
-	for _, c := range d.Spec.Template.Spec.Containers {
-		if c.Name == workspaceManagerMCPServer || len(d.Spec.Template.Spec.Containers) == 1 {
-			return append(slices.Clone(c.Command), c.Args...), nil
-		}
+	args, err := containerArgs(d.Spec.Template.Spec.Containers, workspaceManagerMCPServer)
+	if err != nil {
+		return nil, fmt.Errorf("the Deployment %s/%s: %w", platformNamespace, workspaceManagerMCPServer, err)
 	}
-	return nil, fmt.Errorf("the Deployment %s/%s has no container %s", platformNamespace, workspaceManagerMCPServer, workspaceManagerMCPServer)
+	return args, nil
 }
 
 // flagValue is the value of a --name= argument, "" without one.
