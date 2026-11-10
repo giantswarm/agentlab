@@ -169,7 +169,11 @@ a SKIP with the same reason.
 `agentlab up`/`platform` place **or update** the Secret `agentlab-github-token` (key `GITHUB_TOKEN`) in
 `agent-platform`: the portal takes it through `extraEnvVarsSecrets` and the
 lab's app-config overlay (`integrations.github[].token: ${GITHUB_TOKEN}`),
-agent-manager through the chart's `skills.github.tokenSecret`. Both
+agent-manager through the chart's `skills.github.tokenSecret`, and, on a
+chart that runs the skill-manager (its values schema or defaults carry the
+`skill-manager` key, read from the chart itself, so a release, a branch build
+and a chart directory are judged alike), the skill-manager through its
+`github.tokenSecret`. All
 then call GitHub authenticated (5000 requests an hour; the rate-limit headers
 say so). A copy in `kagent` that an earlier agentlab placed is removed. A fine-grained token with public read access is enough; a token that
 reads a private skill repository lets agent-manager resolve skills from it.
@@ -178,7 +182,7 @@ The token travels vault -> Secret through beekeeper only and never enters
 log line or a process's argv. Re-running after a rotation in the vault
 rotates the Secret.
 
-**A skills GitHub App** is the way a lab reaches GitHub without any token: agent-manager's chart takes a read-only App (`skills.github.app.secretName`) and resolves skills with its installation tokens, at the App's rate limit. `agentlab configure --github-app-id <id> --github-app-installation-id <id> --github-app-private-key-source op://<vault>/<item>/<field>` records it as `githubApp` in `agentlab.yaml` (the ids are public; the key is a reference). A lab that already records the workspaces GitHub App (`platform.workspaces.github`, docs/workspaces.md) records only its installation, `agentlab configure --github-app-installation-id <id>`: agent-manager then resolves skills as that App, its id and private key source taken from the workspaces entry. With the workspaces App's OAuth client recorded too (`clientId` and `clientSecretSource`, or `githubApp.clientId` and `githubApp.clientSecretSource` for an App of its own), the portal's skill discovery calls GitHub as the same App: every `up` and `platform` write the Secret `agentlab-portal-github-app` (`GITHUB_APP_ID` and `GITHUB_APP_CLIENT_ID` applied, `GITHUB_APP_PRIVATE_KEY` and `GITHUB_APP_CLIENT_SECRET` placed by beekeeper), the portal's `extraEnvVarsSecrets` take it, and the overlay's `integrations.github` lists the App with `publicAccess: true`, so a public repository of any owner gets an installation token. Every `up` and `platform` apply the ids to the Secret `agentlab-github-app` in `agent-platform` and hand the key to `beekeeper secret copy --to-secret` (key `private-key`, never read by agentlab; a failed placement fails the run), and the values name the Secret for agent-manager. The chart refuses the App together with `tokenSecret`, so `githubApp` and `githubToken.source` are not recorded together.
+**A skills GitHub App** is the way a lab reaches GitHub without any token: agent-manager's chart takes a read-only App (`skills.github.app.secretName`) and resolves skills with its installation tokens, at the App's rate limit. `agentlab configure --github-app-id <id> --github-app-installation-id <id> --github-app-private-key-source op://<vault>/<item>/<field>` records it as `githubApp` in `agentlab.yaml` (the ids are public; the key is a reference). A lab that already records the workspaces GitHub App (`platform.workspaces.github`, docs/workspaces.md) records only its installation, `agentlab configure --github-app-installation-id <id>`: agent-manager then resolves skills as that App, its id and private key source taken from the workspaces entry. With the workspaces App's OAuth client recorded too (`clientId` and `clientSecretSource`, or `githubApp.clientId` and `githubApp.clientSecretSource` for an App of its own), the portal's skill discovery calls GitHub as the same App: every `up` and `platform` write the Secret `agentlab-portal-github-app` (`GITHUB_APP_ID` and `GITHUB_APP_CLIENT_ID` applied, `GITHUB_APP_PRIVATE_KEY` and `GITHUB_APP_CLIENT_SECRET` placed by beekeeper), the portal's `extraEnvVarsSecrets` take it, and the overlay's `integrations.github` lists the App with `publicAccess: true`, so a public repository of any owner gets an installation token. Every `up` and `platform` apply the ids to the Secret `agentlab-github-app` in `agent-platform` and hand the key to `beekeeper secret copy --to-secret` (key `private-key`, never read by agentlab; a failed placement fails the run), and the values name the Secret for agent-manager and, on a chart that runs it, the skill-manager (`skill-manager.github.app.secretName`). The chart refuses the App together with `tokenSecret`, so `githubApp` and `githubToken.source` are not recorded together.
 
 Without either the lab is as before: the values name no Secret, the
 consumers call GitHub unauthenticated, and a Secret an earlier run created
@@ -554,7 +558,55 @@ and the person's grant of the workspaces' `github` App, a Ready
 kustomize-controller (`flux-engine.instance.components`), and
 agent-platform-operator's commit-mode flags. muster's
 `mcpServerNamespaceSelector` must select the organization namespace for the
-sign-in verdict.
+sign-in verdict, and its OAuth server must accept a redirect URI on a private
+address (`oauth.server.allowPrivateIPRedirectURIs`, which the lab sets with
+`platform.klausGateway`, HACKS.md U43): in the lab muster's own host resolves to
+the edge's cluster IP, and the tenant server signs in to muster itself.
+
+### The admins part
+
+`organizations-test --part admins` proves that the admins of one Giant Swarm
+Organization create an organization alone (giantswarm/agentlab#1225). On an
+installation they are `cluster-admin` only inside their `org-<name>`
+namespace, through a RoleBinding that rbac-operator writes with the label
+`giantswarm.io/managed-by: rbac-operator`. The lab runs no rbac-operator, so
+the part writes those bindings itself, as the lab's admin, with that label.
+It needs agent-platform-operator 0.2.0 or later (agent-platform 4.178.0 or
+later), which mirrors the Users and Groups of such a binding into each
+organization namespace as `agent-platform:organizations-admin`, and
+agent-manager 2.23.0 or later, whose `create_organization` refuses before
+any write a person whose right will not reach the new namespace.
+
+It keeps two parents, `org-agentlab-admins-a` and `org-agentlab-admins-b`.
+In the first, rbac-operator's binding names the group of `alice@lab.local`
+and a ServiceAccount; in the second, it names `bob@lab.local`. Beside them in
+the first parent: a `cluster-admin` binding without the label, for the first
+lab user outside `platform-admins` (`dev@lab.local` by default), a labelled
+binding whose subjects are a ServiceAccount and a `system:` name, and a
+labelled binding that a finalizer holds, for a user nobody signs in as.
+The verdicts:
+
+- nobody of the three may create or bind RoleBindings cluster-wide;
+- alice, then bob, calls `create_organization` through muster in mode apply:
+  the answer is created with its first admins written and nothing pending,
+  the organization is Ready, and `organization-admins` binds the first admins
+  to `agent-platform:admin`;
+- each organization namespace holds the mirror of its parent binding: the
+  ClusterRole `agent-platform:organizations-admin`, the group or the user
+  alone (the ServiceAccount left out), the annotation
+  `agent-platform.giantswarm.io/copied-from: <parent>/<binding>`, and no
+  RoleBinding there binds `cluster-admin`;
+- no mirror of the binding without the label, nor of the machines' binding;
+- the person of the binding without the label is refused before any write,
+  and the refusal names that binding; no organization exists afterwards;
+- bob is refused in alice's parent, and alice in bob's, with nothing
+  written;
+- the held binding is deleted: its mirror goes while the finalizer still
+  keeps the binding;
+- alice's group is removed from rbac-operator's binding: its mirror goes.
+
+A successful run deletes both organizations and both parents. A failed run
+keeps them for diagnosis, and the next run deletes them first.
 
 `organizations-test --part cleanup` runs the orphan cleanup check alone, creating the proof agents and a member-owned session directly through kagent without a model turn. The default run includes this check after all other organization checks. The former `--part erasure` spelling remains an alias. See the operator's [glossary](https://github.com/giantswarm/agent-platform-operator/blob/main/GLOSSARY.md) for the distinction between organization deletion and cleanup.
 

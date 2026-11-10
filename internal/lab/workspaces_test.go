@@ -27,21 +27,13 @@ func stubWorkspacesProbe(t *testing.T, carries bool) {
 	stubWorkspacesChart(t, chartWorkspaces{Carries: carries, Organizations: carries})
 }
 
-// stubWorkspacesChart points the chart probe at w for the test and clears
-// the memo, restored afterwards.
+// stubWorkspacesChart points the chart probe at w for the test, restored
+// afterwards.
 func stubWorkspacesChart(t *testing.T, w chartWorkspaces) {
 	t.Helper()
 	prev := chartWorkspacesProbe
-	chartWorkspacesMu.Lock()
-	chartWorkspacesCache = map[string]chartWorkspaces{}
-	chartWorkspacesMu.Unlock()
 	chartWorkspacesProbe = func(platformChart) (chartWorkspaces, error) { return w, nil }
-	t.Cleanup(func() {
-		chartWorkspacesProbe = prev
-		chartWorkspacesMu.Lock()
-		chartWorkspacesCache = map[string]chartWorkspaces{}
-		chartWorkspacesMu.Unlock()
-	})
+	t.Cleanup(func() { chartWorkspacesProbe = prev })
 }
 
 // The values template's workspaces block: absent with the switch off,

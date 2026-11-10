@@ -55,8 +55,9 @@ func tenantServerKey(ns, name string) string {
 }
 
 // musterTenancy is what decides whether muster serves the proof's
-// MCPServers in the organization namespaces: the selectors in its
-// config.yaml (giantswarm/muster#1779).
+// MCPServers in the organization namespaces and signs in to them: the
+// selectors in its config.yaml (giantswarm/muster#1779) and its OAuth
+// server's redirect URI guard.
 type musterTenancy struct {
 	// NamespaceSelector selects the namespaces besides muster's whose
 	// MCPServers muster serves; nil when unset, which selects none.
@@ -64,6 +65,29 @@ type musterTenancy struct {
 	// ServerSelector selects the served MCPServers by their own labels; nil
 	// when unset, which selects every one.
 	ServerSelector *metav1.LabelSelector `json:"mcpServerSelector"`
+	// Aggregator carries muster's OAuth server settings.
+	Aggregator struct {
+		OAuth struct {
+			Server struct {
+				// AllowPrivateIPRedirectURIs lets a client register a
+				// redirect URI whose host resolves to a private address.
+				AllowPrivateIPRedirectURIs bool `json:"allowPrivateIPRedirectURIs"`
+			} `json:"server"`
+		} `json:"oauth"`
+	} `json:"aggregator"`
+}
+
+// selfSignInProblem words what keeps muster from registering itself with
+// its own authorization server, the sign-in an organization namespace's
+// server modelled on lab-oauth-fixture needs, "" when nothing does. In the
+// lab muster's host resolves to the edge's cluster IP, so its redirect URI
+// is on a private address, which muster's OAuth server refuses unless
+// allowPrivateIPRedirectURIs is on.
+func (t musterTenancy) selfSignInProblem() string {
+	if t.Aggregator.OAuth.Server.AllowPrivateIPRedirectURIs {
+		return ""
+	}
+	return "muster's OAuth server refuses redirect URIs on a private address (aggregator.oauth.server.allowPrivateIPRedirectURIs off), and in the lab muster's own host is one, so muster cannot register itself for the organization server's sign-in: `agentlab configure --klaus-gateway`, then `agentlab platform`, turns it on (HACKS.md U43)"
 }
 
 // problem words what keeps muster from serving the proof's MCPServer
@@ -111,7 +135,8 @@ func readMusterTenancy() (musterTenancy, error) {
 	return parseMusterTenancy(file)
 }
 
-// parseMusterTenancy reads the MCPServer selectors of muster's config.yaml.
+// parseMusterTenancy reads the MCPServer selectors and the OAuth server's
+// redirect URI guard of muster's config.yaml.
 func parseMusterTenancy(file string) (musterTenancy, error) {
 	var t musterTenancy
 	if err := sigsyaml.Unmarshal([]byte(file), &t); err != nil {

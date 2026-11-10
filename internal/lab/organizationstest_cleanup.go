@@ -44,8 +44,10 @@ func organizationProofPart(part string) (string, error) {
 		return organizationCleanupPart, nil
 	case organizationCredentialsPart:
 		return organizationCredentialsPart, nil
+	case organizationAdminsPart:
+		return organizationAdminsPart, nil
 	default:
-		return "", fmt.Errorf("unknown organizations proof part %q: use cleanup or credentials, or omit --part", part)
+		return "", fmt.Errorf("unknown organizations proof part %q: use cleanup, credentials or admins, or omit --part", part)
 	}
 }
 

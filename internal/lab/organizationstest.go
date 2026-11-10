@@ -261,6 +261,9 @@ func OrganizationsTest(cfg *config.Config, opts OrganizationsTestOptions) error 
 	if part == organizationCredentialsPart {
 		return organizationCredentialsTest(cfg, admin)
 	}
+	if part == organizationAdminsPart {
+		return organizationAdminsTest(cfg)
+	}
 	members, err := organizationsTestMembers(cfg)
 	if err != nil {
 		return err
