@@ -58,6 +58,10 @@ const (
 	// key: their own operation, which they read and then cancel.
 	credentialsOtherModel       = "agentlab-credentials-other"                 // #nosec G101 -- a ModelConfig name, not a credential
 	credentialsOtherModelSecret = "tenant-credential-" + credentialsOtherModel // #nosec G101 -- a Secret's NAME, not a credential
+	// credentialsDeclineModel and credentialsDismissModel are the models
+	// whose URL elicitation the person declines and dismisses.
+	credentialsDeclineModel = "agentlab-credentials-decline" // #nosec G101 -- a ModelConfig name, not a credential
+	credentialsDismissModel = "agentlab-credentials-dismiss" // #nosec G101 -- a ModelConfig name, not a credential
 	// credentialsSignInServer is the tenant namespace's MCPServer that needs
 	// a per-server sign-in.
 	credentialsSignInServer = "agentlab-credentials-signin" // #nosec G101 -- an MCPServer name, not a credential
@@ -105,12 +109,16 @@ type credentialsProof struct {
 	// (agent-manager docs/organization-credentials.md, step 4), so
 	// modernOperation is the plain client's operation only while muster
 	// reaches agent-manager on one session for both.
-	plain              *musterMCP
-	modern             *musterMCP
-	modernAnswer       *musterAnswer
-	modernOperation    string
-	operation, formURL string
-	otherOperation     string
+	plain           *musterMCP
+	modern          *musterMCP
+	modernAnswer    *musterAnswer
+	modernOperation string
+	// legacy is the 2025-11-25 generation declaring URL elicitation, kept
+	// open on its listening stream with the elicitationId it was given.
+	legacy              *musterMCP
+	legacyElicitationID string
+	operation, formURL  string
+	otherOperation      string
 	// started is when the run began: the logs judged for the value are
 	// read from it.
 	started             time.Time
@@ -183,7 +191,8 @@ func (p *credentialsProof) checks() []organizationCheck {
 	return []organizationCheck{
 		{surface: surfaceAgentManager, boundary: "a model without a key is not written: no ModelConfig, no tenant credential value, a pending credential operation", skip: uiSkip, run: p.modelWithoutKey},
 		{surface: surfaceAgentManager, boundary: "an MCP 2026-07-28 client declaring URL elicitation gets input_required, its message attributed to agent-manager by muster, and stays input_required when it retries having accepted", skip: generations, run: p.modernGeneration},
-		{surface: surfaceAgentManager, boundary: "an MCP 2025-11-25 client that declared URL elicitation gets -32042 carrying the form's URL", skip: generations, run: p.legacyGeneration},
+		{surface: surfaceAgentManager, boundary: "an MCP 2026-07-28 client whose person declines or dismisses the URL elicitation gets an error result, nothing written and the operation cancelled", skip: generations, run: p.declinedAndDismissed},
+		{surface: surfaceAgentManager, boundary: "an MCP 2025-11-25 client that declared URL elicitation gets -32042 carrying one URL mode elicitation with an elicitationId and the form's URL", skip: generations, run: p.legacyGeneration},
 		{surface: surfaceAgentManager, boundary: "a client without URL elicitation gets a result whose credentials[].next carries the form's link", skip: uiSkip, run: p.plainGeneration},
 		p.resourceLinkCheck(uiSkip),
 		{surface: surfaceCredentialAPI, boundary: "an operation's confirmation is its preparer's alone: each person reads their own, the other's read and an anonymous one are refused", skip: uiSkip, run: p.otherPersonRefused},
@@ -192,6 +201,7 @@ func (p *credentialsProof) checks() []organizationCheck {
 		{surface: surfaceGitHub, boundary: "the save opens a pull request as the person, its Secret SOPS-encrypted", skip: commit, run: p.pullRequest},
 		{surface: surfaceFlux, boundary: "the merged pull request is applied and decrypted by the organization's Kustomization: the Secret's SHA-256 matches and the ModelConfig exists", skip: flux, run: p.fluxApplied},
 		{surface: surfaceCredentialAPI, boundary: "neither agent-manager's nor muster's logs carry the value, plain or base64", skip: uiSkip, run: p.valueNotLogged},
+		{surface: surfaceAgentManager, boundary: "a notifications/elicitation/complete reaches only the 2025-11-25 client that initiated the elicitation, carrying its elicitationId", skip: generations, run: p.completionsScoped},
 		p.tenantSignInCheck(),
 		{surface: surfaceAgentManager, boundary: "delete_organization names the models and credentials it erases, then erases the organization after the typed confirmation: its namespace, its Flux Kustomization and ServiceAccount, and every RoleBinding referring to it gone", run: p.erase},
 	}
@@ -303,7 +313,7 @@ func (p *credentialsProof) readPrerequisites() error {
 	if err != nil {
 		return err
 	}
-	p.pre.outputSchema = len(described.OutputSchema) > 0
+	p.pre.outputSchema = described.OutputSchema
 	p.pre.grant = p.grantProblem()
 	modern, err := dialMusterMCP(ctx, p.cfg, p.adminToken, musterMCPOptions{name: "agentlab-credentials-probe", protocol: mcp.ProtocolVersion20260728})
 	if err != nil {
@@ -351,7 +361,7 @@ func (p *credentialsProof) modelArgs() map[string]any {
 func (p *credentialsProof) modelWithoutKey() (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), musterMCPTimeout)
 	defer cancel()
-	plain, err := dialMusterMCP(ctx, p.cfg, p.adminToken, musterMCPOptions{name: "agentlab-credentials-plain", protocol: mcp.ProtocolVersion20251125})
+	plain, err := dialMusterMCP(ctx, p.cfg, p.adminToken, musterMCPOptions{name: "agentlab-credentials-plain", protocol: mcp.ProtocolVersion20251125, listen: true})
 	if err != nil {
 		return "", err
 	}
@@ -513,11 +523,11 @@ func (p *credentialsProof) inputRequired(ctx context.Context, roundTrip mcp.Mult
 func (p *credentialsProof) legacyGeneration() (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), musterMCPTimeout)
 	defer cancel()
-	m, err := dialMusterMCP(ctx, p.cfg, p.adminToken, musterMCPOptions{name: "agentlab-credentials-legacy", protocol: mcp.ProtocolVersion20251125, urlElicitation: true})
+	m, err := dialMusterMCP(ctx, p.cfg, p.adminToken, musterMCPOptions{name: "agentlab-credentials-legacy", protocol: mcp.ProtocolVersion20251125, urlElicitation: true, listen: true})
 	if err != nil {
 		return "", err
 	}
-	defer m.close()
+	p.legacy = m
 	if m.protocol() != mcp.ProtocolVersion20251125 {
 		return "", fmt.Errorf("the client pinned to %s runs on %s", mcp.ProtocolVersion20251125, m.protocol())
 	}
@@ -532,10 +542,105 @@ func (p *credentialsProof) legacyGeneration() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if e.Mode != mcp.ElicitationModeURL || e.ElicitationID == "" {
+		return "", fmt.Errorf("the -32042 elicitation has mode %q and elicitationId %q: MCP 2025-11-25 requires mode url and an elicitationId", e.Mode, e.ElicitationID)
+	}
+	p.legacyElicitationID = e.ElicitationID
 	if _, err := p.formLink(e.URL); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("JSON-RPC error %d with one URL elicitation to %s", mcp.URL_ELICITATION_REQUIRED, e.URL), nil
+	return fmt.Sprintf("JSON-RPC error %d with one URL mode elicitation %s to %s", mcp.URL_ELICITATION_REQUIRED, e.ElicitationID, e.URL), nil
+}
+
+// declinedAndDismissed: on the 2026-07-28 client, for a model of its own
+// each, the person declines the URL elicitation and dismisses it. Each
+// retry ends the call with an error result naming the action, writes
+// nothing and cancels the operation (MCP 2026-07-28 client/elicitation,
+// "Error Handling").
+func (p *credentialsProof) declinedAndDismissed() (string, error) {
+	if p.modern == nil {
+		return "", errors.New("no 2026-07-28 client")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*musterMCPTimeout)
+	defer cancel()
+	rest, err := dialCredentialREST(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer rest.stop()
+	tool := agentManagerToolPrefix + "set_organization_model"
+	outcomes := make([]string, 0, 2)
+	for _, c := range []struct {
+		action mcp.ElicitationResponseAction
+		model  string
+		word   string
+	}{
+		{mcp.ElicitationResponseActionDecline, credentialsDeclineModel, "declined"},
+		{mcp.ElicitationResponseActionCancel, credentialsDismissModel, "cancelled"},
+	} {
+		args := withArgs(p.modelArgs(), map[string]any{nameKey: c.model, modeArg: modeApply})
+		answer, err := p.modern.call(ctx, tool, args, mcp.MultiRoundTripParams{})
+		if err != nil {
+			return "", err
+		}
+		if answer.input == nil {
+			return "", fmt.Errorf("model %s without a key got no input_required result", c.model)
+		}
+		e, err := oneURLElicitation(answer)
+		if err != nil {
+			return "", err
+		}
+		operation, err := p.formLink(e.URL)
+		if err != nil {
+			return "", err
+		}
+		final, err := p.modern.call(ctx, tool, args, answer.answered(c.action))
+		if err != nil {
+			return "", fmt.Errorf("the retry having %s: %w", c.word, err)
+		}
+		switch {
+		case final.result == nil:
+			return "", fmt.Errorf("the retry having %s was answered with %d elicitations, want an error result", c.word, len(final.urlElicitations()))
+		case !final.result.IsError || !strings.Contains(final.result.text(), c.word):
+			return "", fmt.Errorf("the retry having %s answered isError=%v %q, want an error result saying %s", c.word, final.result.IsError, excerpt(final.result.text(), 200), c.word)
+		}
+		confirmation, _, err := p.readConfirmation(ctx, rest, operation, p.adminToken)
+		if err != nil {
+			return "", err
+		}
+		if confirmation.State != operationCancelled {
+			return "", fmt.Errorf("operation %s reads %q after the person %s, want %s", operation, confirmation.State, c.word, operationCancelled)
+		}
+		if err := nothingWritten(ctx, p.namespace, c.model, "tenant-credential-"+c.model); err != nil {
+			return "", fmt.Errorf("after the person %s: %w", c.word, err)
+		}
+		outcomes = append(outcomes, fmt.Sprintf("%s: isError %q, operation %s %s, no ModelConfig %s", c.action, excerpt(final.result.text(), 80), operation, operationCancelled, c.model))
+	}
+	return strings.Join(outcomes, "; "), nil
+}
+
+// completionsScoped: any notifications/elicitation/complete reaches only
+// the client that initiated the elicitation, carrying its elicitationId
+// (MCP 2025-11-25 client/elicitation). A server MAY send none, so its
+// absence is reported, not failed. Both 2025-11-25 clients listened on
+// their standalone stream since they connected.
+func (p *credentialsProof) completionsScoped() (string, error) {
+	if p.legacy == nil || p.plain == nil {
+		return "", errors.New("no 2025-11-25 clients")
+	}
+	if got := p.plain.completedElicitations(); len(got) > 0 {
+		return "", fmt.Errorf("the client without URL elicitation, sent no elicitation, was notified complete for %v", got)
+	}
+	got := p.legacy.completedElicitations()
+	for _, id := range got {
+		if id != p.legacyElicitationID {
+			return "", fmt.Errorf("the 2025-11-25 client was notified complete for elicitationId %q, it was given %s", id, p.legacyElicitationID)
+		}
+	}
+	if len(got) == 0 {
+		return "no notifications/elicitation/complete reached either 2025-11-25 client (a server MAY send none); the client without URL elicitation was notified of nothing", nil
+	}
+	return fmt.Sprintf("the initiating client was notified complete for its elicitationId %s only; the client without URL elicitation was notified of nothing", p.legacyElicitationID), nil
 }
 
 // oneURLElicitation is the answer's one URL elicitation.
@@ -573,7 +678,7 @@ func (p *credentialsProof) plainGeneration() (string, error) {
 // client's answer, skipped on an agent-manager that predates them.
 func (p *credentialsProof) resourceLinkCheck(uiSkip string) organizationCheck {
 	c := organizationCheck{surface: surfaceAgentManager, boundary: "a client without URL elicitation gets structuredContent and a resource_link to the form", skip: uiSkip}
-	if c.skip == "" && !p.pre.outputSchema {
+	if c.skip == "" && len(p.pre.outputSchema) == 0 {
 		c.skip = fmt.Sprintf("agent-manager %s declares no outputSchema on set_organization_model: it predates structuredContent and the resource_link on credential writes (giantswarm/agent-manager#329)", p.agentManagerVersion)
 	}
 	c.run = func() (string, error) {
@@ -586,6 +691,9 @@ func (p *credentialsProof) resourceLinkCheck(uiSkip string) organizationCheck {
 		if answer.result == nil || len(answer.result.StructuredContent) == 0 {
 			return "", errors.New("the answer carries no structuredContent")
 		}
+		if err := conformsTo(p.pre.outputSchema, answer.result.StructuredContent); err != nil {
+			return "", fmt.Errorf("structuredContent does not conform to the declared outputSchema: %w", err)
+		}
 		var structured credentialAnswer
 		if err := json.Unmarshal(answer.result.StructuredContent, &structured); err != nil {
 			return "", fmt.Errorf("structuredContent: %w", err)
@@ -596,7 +704,7 @@ func (p *credentialsProof) resourceLinkCheck(uiSkip string) organizationCheck {
 		if !slices.Contains(answer.result.resourceLinks(), p.formURL) {
 			return "", fmt.Errorf("the answer's resource_link blocks %v do not carry %s", answer.result.resourceLinks(), p.formURL)
 		}
-		return "structuredContent names the pending credential; a resource_link block carries " + p.formURL, nil
+		return "structuredContent conforms to the declared outputSchema and names the pending credential; a resource_link block carries " + p.formURL, nil
 	}
 	return c
 }
@@ -1495,7 +1603,7 @@ func withArgs(base, more map[string]any) map[string]any {
 // content path too: Flux would prune what is kept, so the run prints the
 // removal instead.
 func (p *credentialsProof) cleanup() {
-	for _, m := range []*musterMCP{p.plain, p.modern} {
+	for _, m := range []*musterMCP{p.plain, p.modern, p.legacy} {
 		if m != nil {
 			m.close()
 		}

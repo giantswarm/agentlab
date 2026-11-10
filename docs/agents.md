@@ -430,14 +430,20 @@ printed only as its SHA-256. Each verdict:
   message prefixed `[agent-manager]` by muster (giantswarm/muster#1812), and
   retried with `requestState` having accepted (consent to open the page, not
   the page's outcome) gets `input_required` again for the same operation; a
-  2025-11-25 client that declared it at initialize gets `-32042` with the
-  form's URL; a client without it gets a result whose `credentials[].next`
-  carries the link. Every link must be agent-manager's `credentials.uiURL`
+  2025-11-25 client that declared it at initialize gets `-32042` carrying one
+  elicitation of mode `url` with an `elicitationId` and the form's URL; a
+  client without it gets a result whose `credentials[].next` carries the
+  link. Every link must be an `https` URL, agent-manager's `credentials.uiURL`
   template expanded (RFC 6570) with the operation, the parent and the
   organization only, so no value or token travels in it. That client also
   gets `structuredContent` with a `resource_link` once
   `set_organization_model` declares an `outputSchema` through muster's
-  `describe_tool` (giantswarm/agent-manager#329; skipped while it declares none).
+  `describe_tool` (giantswarm/agent-manager#329; skipped while it declares
+  none), the `structuredContent` validated against that schema.
+- On the 2026-07-28 client, for a model of its own each, the person declines
+  the URL elicitation and dismisses it (`decline`, `cancel`): each retry ends
+  the call with an error result saying `declined` or `cancelled`, the
+  operation reads `cancelled` and nothing of that model is written.
 - The form's save, the way the portal's form posts it
   (giantswarm/backstage#3364): `GET /api/v1/credential-operations/{operation}`
   with the person's token answers the confirmation with a strong `ETag` and
@@ -486,6 +492,12 @@ printed only as its SHA-256. Each verdict:
   deleted.
 - Neither agent-manager's nor muster's logs since the run began carry the
   value, plain or base64.
+- Both 2025-11-25 clients listen on their standalone stream from the start:
+  a `notifications/elicitation/complete` may only reach the client that
+  initiated the elicitation, carrying its `elicitationId`, and the client
+  without URL elicitation receives none. A server may send no completion at
+  all (muster from giantswarm/muster#1812 relays none), which the verdict
+  reports.
 - A sign-in a server of the organization's namespace needs: an OAuth
   `MCPServer` there, modelled on `lab-oauth-fixture` without a pinned
   client, reads `Auth Required`, and `core_auth_login` for

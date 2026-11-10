@@ -382,6 +382,8 @@ func TestFormOperation(t *testing.T) {
 	op, err = formOperation("https://p.example/c/{operation}", "https://p.example/c/abc-1", "root", "org")
 	require.NoError(t, err)
 	require.Equal(t, "abc-1", op)
+	_, err = formOperation("http://p.example/c/{operation}", "http://p.example/c/abc-1", "root", "org")
+	require.ErrorContains(t, err, "not an https URL")
 	_, err = formOperation("https://p.example/c", "https://p.example/c", "root", "org")
 	require.ErrorContains(t, err, "does not expand {operation} once")
 }
@@ -420,4 +422,20 @@ func TestAbsent(t *testing.T) {
 	require.NoError(t, absent(nil, apierrors.NewNotFound(gvrNamespaces.GroupResource(), "x")))
 	require.ErrorContains(t, absent(&unstructured.Unstructured{}, nil), "still present")
 	require.Error(t, absent(nil, apierrors.NewForbidden(gvrNamespaces.GroupResource(), "x", nil)))
+}
+
+func TestConformsTo(t *testing.T) {
+	var schema map[string]any
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"type": "object",
+		"required": ["pending", "credentials"],
+		"properties": {
+			"pending": {"type": "boolean"},
+			"credentials": {"type": "array", "items": {"type": "object", "required": ["secret"]}}
+		}
+	}`), &schema))
+	require.NoError(t, conformsTo(schema, json.RawMessage(`{"pending":true,"credentials":[{"secret":"tenant-credential-x"}]}`)))
+	require.Error(t, conformsTo(schema, json.RawMessage(`{"pending":"yes","credentials":[]}`)))
+	require.Error(t, conformsTo(schema, json.RawMessage(`{"pending":true,"credentials":[{}]}`)))
+	require.Error(t, conformsTo(schema, json.RawMessage(`{"pending":true}`)))
 }

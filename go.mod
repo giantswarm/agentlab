@@ -23,6 +23,7 @@ require (
 	github.com/giantswarm/telemetrydeck-go v0.3.18
 	github.com/giantswarm/vm-manager v0.26.2
 	github.com/google/go-github/v93 v93.0.0
+	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0
 	github.com/mark3labs/mcp-go v1.5.0
 	github.com/smallstep/truststore v0.13.0
@@ -147,7 +148,6 @@ require (
 	github.com/google/gnostic-models v0.7.0 // indirect
 	github.com/google/go-containerregistry v0.22.1 // indirect
 	github.com/google/go-querystring v1.2.0 // indirect
-	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/google/pprof v0.0.0-20260906184651-6331bc6350fe // indirect
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 // indirect
 	github.com/gosuri/uitable v0.0.4 // indirect

@@ -2,9 +2,11 @@ package lab
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -118,4 +120,38 @@ func TestParseMusterToolResult(t *testing.T) {
 
 	_, err = parseMusterToolResult("not json", false)
 	require.ErrorContains(t, err, "unexpected call_tool payload shape")
+}
+
+func TestMusterMCPRecordsElicitationComplete(t *testing.T) {
+	srv := mcpserver.NewMCPServer("fake-muster", "1", mcpserver.WithToolCapabilities(false))
+	srv.AddTool(mcp.NewTool("call_tool"), func(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		if err := srv.SendNotificationToClient(ctx, string(mcp.MethodNotificationElicitationComplete), map[string]any{"elicitationId": "e1"}); err != nil {
+			return nil, err
+		}
+		if err := srv.SendNotificationToClient(ctx, "notifications/message", map[string]any{"level": "info", "data": "x"}); err != nil {
+			return nil, err
+		}
+		return mcp.NewToolResultText(`{"isError":false,"content":[{"type":"text","text":"{}"}]}`), nil
+	})
+	ts := httptest.NewServer(mcpserver.NewStreamableHTTPServer(srv))
+	t.Cleanup(ts.Close)
+
+	m, err := dialMCPAt(t.Context(), ts.URL+"/mcp", http.DefaultClient, "token", musterMCPOptions{name: "legacy", protocol: mcp.ProtocolVersion20251125, urlElicitation: true, listen: true})
+	require.NoError(t, err)
+	defer m.close()
+	_, err = m.call(t.Context(), "x_agent-manager_set_organization_model", nil, mcp.MultiRoundTripParams{})
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { return len(m.completedElicitations()) == 1 }, 5*time.Second, 10*time.Millisecond)
+	require.Equal(t, []string{"e1"}, m.completedElicitations())
+}
+
+func TestMusterAnswerAnswered(t *testing.T) {
+	a := &musterAnswer{input: mcp.InputRequests{"e1": {Method: mcp.MethodElicitationCreate}}, requestState: "s"}
+	for _, action := range []mcp.ElicitationResponseAction{mcp.ElicitationResponseActionDecline, mcp.ElicitationResponseActionCancel} {
+		rt := a.answered(action)
+		require.Equal(t, "s", rt.RequestState)
+		raw, err := json.Marshal(rt.InputResponses)
+		require.NoError(t, err)
+		require.JSONEq(t, `{"e1":{"action":"`+string(action)+`"}}`, string(raw))
+	}
 }
