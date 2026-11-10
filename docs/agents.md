@@ -170,7 +170,9 @@ a SKIP with the same reason.
 `agent-platform`: the portal takes it through `extraEnvVarsSecrets` and the
 lab's app-config overlay (`integrations.github[].token: ${GITHUB_TOKEN}`),
 agent-manager through the chart's `skills.github.tokenSecret`, and, on a
-chart that runs the skill-manager, the skill-manager through its
+chart that runs the skill-manager (its values schema or defaults carry the
+`skill-manager` key, read from the chart itself, so a release, a branch build
+and a chart directory are judged alike), the skill-manager through its
 `github.tokenSecret`. All
 then call GitHub authenticated (5000 requests an hour; the rate-limit headers
 say so). A copy in `kagent` that an earlier agentlab placed is removed. A fine-grained token with public read access is enough; a token that

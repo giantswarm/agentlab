@@ -251,7 +251,7 @@ type tmplData struct {
 	// and the overlay's integrations.github lists the App. Only ever the
 	// Secret's name and env var references.
 	PortalGitHubApp bool
-	// SkillManager mirrors cfg.SkillManagerChart(): the chart runs the
+	// SkillManager is skillManagerChartCarries: the chart runs the
 	// skill-manager, so the values carry its lab block (its GitHub
 	// credential, its network policy following platform.networkPolicy).
 	SkillManager bool
@@ -346,7 +346,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		GitHubToken:                  gitHubTokenWired(cfg),
 		GitHubApp:                    gitHubAppWired(cfg),
 		PortalGitHubApp:              portalGitHubAppWired(cfg),
-		SkillManager:                 cfg.SkillManagerChart(),
+		SkillManager:                 skillManagerChartCarries(cfg),
 		ModelManagerEnabled:          cfg.ModelManagerEnabled(),
 		LegacyChart:                  cfg.LegacyChart(),
 		FamilylessChart:              cfg.FamilylessChart(),

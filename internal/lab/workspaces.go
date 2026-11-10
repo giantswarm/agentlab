@@ -3,13 +3,11 @@ package lab
 import (
 	"cmp"
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -522,46 +520,27 @@ type chartWorkspaces struct {
 	Manager, AgentManager                componentSource
 }
 
-// chartWorkspacesOf probes the chart once: memoized per chart, since a
-// registry chart is pulled once per digest; a test points
-// chartWorkspacesProbe at a stub.
+// chartWorkspacesOf probes the chart; a test points chartWorkspacesProbe at a
+// stub.
 func chartWorkspacesOf(chart platformChart) (chartWorkspaces, error) {
-	chartWorkspacesMu.Lock()
-	defer chartWorkspacesMu.Unlock()
-	key := chart.String()
-	if w, ok := chartWorkspacesCache[key]; ok {
-		return w, nil
-	}
-	w, err := chartWorkspacesProbe(chart)
+	return chartWorkspacesProbe(chart)
+}
+
+// chartWorkspacesProbe reads the chart's schema and values
+// (platformChartValuesOf); the tests replace it.
+var chartWorkspacesProbe = func(chart platformChart) (chartWorkspaces, error) {
+	v, err := platformChartValuesOf(chart)
 	if err != nil {
 		return chartWorkspaces{}, err
 	}
-	chartWorkspacesCache[key] = w
-	return w, nil
+	return chartWorkspaces{
+		Carries:       v.carries(valuesWorkspaces),
+		Organizations: v.carries(valuesWorkspaces, valuesWorkspacesOrganizations),
+		CSICompanion:  v.carries(valuesWorkspaces, valuesWorkspacesSubstrate, valuesWorkspacesCSICompanion),
+		Manager:       componentSourceOf(workspaceManagerMCPServer, v.values),
+		AgentManager:  componentSourceOf(agentManagerMCPServer, v.values),
+	}, nil
 }
-
-var (
-	chartWorkspacesMu    sync.Mutex
-	chartWorkspacesCache = map[string]chartWorkspaces{}
-	// chartWorkspacesProbe loads the chart and reads its schema and values;
-	// the tests replace it.
-	chartWorkspacesProbe = func(chart platformChart) (chartWorkspaces, error) {
-		c, err := loadPlatformChart(chart)
-		if err != nil {
-			return chartWorkspaces{}, err
-		}
-		if c == nil {
-			return chartWorkspaces{}, nil
-		}
-		return chartWorkspaces{
-			Carries:       chartValuesCarry(c.Schema, c.Values, valuesWorkspaces),
-			Organizations: chartValuesCarry(c.Schema, c.Values, valuesWorkspaces, valuesWorkspacesOrganizations),
-			CSICompanion:  chartValuesCarry(c.Schema, c.Values, valuesWorkspaces, valuesWorkspacesSubstrate, valuesWorkspacesCSICompanion),
-			Manager:       componentSourceOf(workspaceManagerMCPServer, c.Values),
-			AgentManager:  componentSourceOf(agentManagerMCPServer, c.Values),
-		}, nil
-	}
-)
 
 // valuesWorkspaces is the chart's workspaces key, valuesWorkspacesOrganizations
 // the Organizations' list beneath it, valuesWorkspacesSubstrate and
@@ -610,50 +589,6 @@ func checkWorkspacesCSICompanion(cfg *config.Config) error {
 // workspaces block (workspacesChartFor).
 func workspacesChartCarries(cfg *config.Config) bool {
 	return workspacesChartFor(cfg).Carries
-}
-
-// chartValuesCarry reports whether a chart's values schema names the key
-// path (each key a property of the one before, from the root), or its
-// default values carry it.
-func chartValuesCarry(schema []byte, values map[string]any, path ...string) bool {
-	if valuesCarry(values, path) {
-		return true
-	}
-	if len(schema) == 0 {
-		return false
-	}
-	raw := json.RawMessage(schema)
-	for _, key := range path {
-		var s struct {
-			Properties map[string]json.RawMessage `json:"properties"`
-		}
-		if err := json.Unmarshal(raw, &s); err != nil {
-			return false
-		}
-		next, ok := s.Properties[key]
-		if !ok {
-			return false
-		}
-		raw = next
-	}
-	return true
-}
-
-// valuesCarry reports whether values hold the key path, each key a mapping's.
-func valuesCarry(values map[string]any, path []string) bool {
-	for i, key := range path {
-		v, ok := values[key]
-		if !ok {
-			return false
-		}
-		if i == len(path)-1 {
-			return true
-		}
-		if values, ok = v.(map[string]any); !ok {
-			return false
-		}
-	}
-	return false
 }
 
 // workspacesUp installs the workspace storage: the rendered manifest (the

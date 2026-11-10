@@ -452,38 +452,3 @@ func TestDefaultModelChart(t *testing.T) {
 		t.Errorf("reservedModelNames = %v holds an empty name", reservedModelNames)
 	}
 }
-
-// The skill-manager is the chart's from its floor on; a chart directory has
-// it when its roster lists it, so a checkout from before the component
-// renders none of its values.
-func TestSkillManagerChart(t *testing.T) {
-	chartDir := func(values string) string {
-		dir := t.TempDir()
-		if err := os.WriteFile(filepath.Join(dir, valuesFile), []byte(values), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		return dir
-	}
-	withSkillManager := chartDir("components:\n  kagent: {}\n  substrate: {}\n  skill-manager: {}\n")
-	without := chartDir("components:\n  kagent: {}\n  substrate: {}\n")
-	for _, tc := range []struct {
-		name, version, branch, path string
-		want                        bool
-	}{
-		{name: "the floor", version: skillManagerChartFloor.Original(), want: true},
-		{name: "a later release", version: "4.179.2", want: true},
-		{name: "before the floor", version: "4.177.5"},
-		{name: "the 3.x line", version: "3.23.1"},
-		{name: "a chart directory with the component", version: DefaultChartVersion, path: withSkillManager, want: true},
-		{name: "a chart directory without it", version: DefaultChartVersion, path: without},
-		{name: "a branch build", version: DefaultChartVersion, branch: "feat-x", want: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg := Default()
-			cfg.Platform.ChartVersion, cfg.Platform.ChartBranch, cfg.Platform.ChartPath = tc.version, tc.branch, tc.path
-			if got := cfg.SkillManagerChart(); got != tc.want {
-				t.Errorf("SkillManagerChart() = %v, want %v", got, tc.want)
-			}
-		})
-	}
-}

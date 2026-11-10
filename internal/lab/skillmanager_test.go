@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -10,25 +11,21 @@ import (
 )
 
 // skillManagerGitHub is the skill-manager chart's key of its GitHub
-// credential; skillManagerAbsentChart a released chart without the component.
-const (
-	skillManagerGitHub      = "github"
-	skillManagerAbsentChart = "4.177.5"
-)
+// credential.
+const skillManagerGitHub = "github"
 
-// skillManagerTestConfig is a lab on a dev build of main, which runs the
-// skill-manager whatever the release floor is.
-func skillManagerTestConfig() *config.Config {
-	cfg := gitHubTokenTestConfig()
-	cfg.Platform.ChartVersion, cfg.Platform.ChartBranch = "4.178.1-rbf28cd64t20261110120000h7f841be", testRefMain
-	return cfg
+// skillManagerTestConfig is a lab whose meta chart carries the skill-manager.
+func skillManagerTestConfig(t *testing.T) *config.Config {
+	t.Helper()
+	stubPlatformChartValues(t, platformChartValues{values: map[string]any{componentSkillManager: map[string]any{}}}, nil)
+	return gitHubTokenTestConfig()
 }
 
 // TestSkillManagerReadsWithTheLabsGitHubCredential: the skill-manager lists
 // and pins skills with the credential agent-manager has, the App when one is
 // recorded (the chart refuses both), else the token, by the Secret's name.
 func TestSkillManagerReadsWithTheLabsGitHubCredential(t *testing.T) {
-	cfg := skillManagerTestConfig()
+	cfg := skillManagerTestConfig(t)
 	cfg.GitHubToken.Source = gitHubTokenTestSource
 	s := renderGitHubTokenSurfaces(t, cfg)
 	token := []string{componentSkillManager, skillManagerGitHub, "tokenSecret"}
@@ -39,7 +36,7 @@ func TestSkillManagerReadsWithTheLabsGitHubCredential(t *testing.T) {
 		t.Errorf("skill-manager.github.tokenSecret.key = %v, want %s", got, gitHubTokenSecretKey)
 	}
 
-	cfg = skillManagerTestConfig()
+	cfg = skillManagerTestConfig(t)
 	cfg.GitHubToken.Source = gitHubTokenTestSource
 	cfg.GitHubApp = gitHubAppTestConfig().GitHubApp
 	s = renderGitHubTokenSurfaces(t, cfg)
@@ -50,7 +47,7 @@ func TestSkillManagerReadsWithTheLabsGitHubCredential(t *testing.T) {
 		t.Errorf("skill-manager.github.tokenSecret = %v next to the App, want nothing", got)
 	}
 
-	if got := dig(renderGitHubTokenSurfaces(t, skillManagerTestConfig()).values, componentSkillManager, skillManagerGitHub); got != nil {
+	if got := dig(renderGitHubTokenSurfaces(t, skillManagerTestConfig(t)).values, componentSkillManager, skillManagerGitHub); got != nil {
 		t.Errorf("skill-manager.github = %v without a recorded credential, want nothing", got)
 	}
 }
@@ -61,7 +58,7 @@ func TestSkillManagerReadsWithTheLabsGitHubCredential(t *testing.T) {
 // lab's policies do.
 func TestSkillManagerNetworkPolicyFollowsTheSwitch(t *testing.T) {
 	for _, on := range []bool{false, true} {
-		cfg := skillManagerTestConfig()
+		cfg := skillManagerTestConfig(t)
 		cfg.Platform.NetworkPolicy, cfg.Platform.MusterPodNetwork = on, on
 		s := renderGitHubTokenSurfaces(t, cfg)
 		if got := dig(s.values, componentSkillManager, "networkPolicy", "enabled"); got != on {
@@ -75,7 +72,7 @@ func TestSkillManagerNetworkPolicyFollowsTheSwitch(t *testing.T) {
 // the issuer through --dex-issuer-url, and its policy isolates egress with
 // rules of its own, as the chart renders both.
 func TestSkillManagerPolicyGetsTheDexPeer(t *testing.T) {
-	cfg := skillManagerTestConfig()
+	cfg := skillManagerTestConfig(t)
 	render := fmt.Sprintf(`apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -127,13 +124,16 @@ spec:
 	}
 }
 
-// TestSkillManagerAbsentBeforeItsChart: a chart without the component
-// refuses its values (the meta chart's schema is closed), so nothing names it.
-func TestSkillManagerAbsentBeforeItsChart(t *testing.T) {
-	cfg := gitHubTokenTestConfig()
-	cfg.Platform.ChartVersion = skillManagerAbsentChart
-	cfg.GitHubToken.Source = gitHubTokenTestSource
-	if s := renderGitHubTokenSurfaces(t, cfg); strings.Contains(s.valuesRaw, "\n"+componentSkillManager+":") {
-		t.Errorf("platform.chartVersion %s names skill-manager:\n%s", cfg.Platform.ChartVersion, s.valuesRaw)
+// TestSkillManagerAbsentWithoutItsChart: a chart that does not carry the
+// component refuses its values (the meta chart's schema is closed), and a
+// chart that cannot be read is no answer, so nothing names it in either case.
+func TestSkillManagerAbsentWithoutItsChart(t *testing.T) {
+	for name, probeErr := range map[string]error{"a chart without the component": nil, "a chart that cannot be read": errors.New("registry unreachable")} {
+		stubPlatformChartValues(t, platformChartValues{}, probeErr)
+		cfg := gitHubTokenTestConfig()
+		cfg.GitHubToken.Source = gitHubTokenTestSource
+		if s := renderGitHubTokenSurfaces(t, cfg); strings.Contains(s.valuesRaw, "\n"+componentSkillManager+":") {
+			t.Errorf("%s: the values name skill-manager:\n%s", name, s.valuesRaw)
+		}
 	}
 }
