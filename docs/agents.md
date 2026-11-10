@@ -526,6 +526,48 @@ agent-platform-operator's commit-mode flags. muster's
 `mcpServerNamespaceSelector` must select the organization namespace for the
 sign-in verdict.
 
+### The admins part
+
+`organizations-test --part admins` proves that the admins of one Giant Swarm
+Organization create an organization alone (giantswarm/agentlab#1225). On an
+installation they are `cluster-admin` only inside their `org-<name>`
+namespace, through a RoleBinding that rbac-operator writes with the label
+`giantswarm.io/managed-by: rbac-operator`. The lab runs no rbac-operator, so
+the part writes those bindings itself, as the lab's admin, with that label.
+It needs agent-platform-operator 0.2.0 or later (agent-platform 4.178.0 or
+later), which mirrors the Users and Groups of such a binding into each
+organization namespace as `agent-platform:organizations-admin`.
+
+It keeps two parents, `org-agentlab-admins-a` and `org-agentlab-admins-b`.
+In the first, rbac-operator's binding names the group of `alice@lab.local`
+and a ServiceAccount; in the second, it names `bob@lab.local`. Beside them in
+the first parent: a `cluster-admin` binding without the label, for the first
+lab user outside `platform-admins` (`dev@lab.local` by default), a labelled
+binding whose subjects are a ServiceAccount and a `system:` name, and a
+labelled binding that a finalizer holds. The verdicts:
+
+- nobody of the three may create or bind RoleBindings cluster-wide;
+- alice, then bob, calls `create_organization` through muster in mode apply:
+  the answer is created with its first admins written and nothing pending,
+  the organization is Ready, and `organization-admins` binds the first admins
+  to `agent-platform:admin`;
+- each organization namespace holds the mirror of its parent binding: the
+  ClusterRole `agent-platform:organizations-admin`, the group or the user
+  alone (the ServiceAccount left out), the annotation
+  `agent-platform.giantswarm.io/copied-from: <parent>/<binding>`, and no
+  RoleBinding there binds `cluster-admin`;
+- no mirror of the binding without the label, nor of the machines' binding;
+- the person of the binding without the label is refused before any write,
+  and the refusal names that binding; no organization exists afterwards;
+- bob is refused in alice's parent, and alice in bob's, with nothing
+  written;
+- the held binding is deleted: its mirror goes while the finalizer still
+  keeps the binding;
+- alice's group is removed from rbac-operator's binding: its mirror goes.
+
+A successful run deletes both organizations and both parents. A failed run
+keeps them for diagnosis, and the next run deletes them first.
+
 `organizations-test --part cleanup` runs the orphan cleanup check alone, creating the proof agents and a member-owned session directly through kagent without a model turn. The default run includes this check after all other organization checks. The former `--part erasure` spelling remains an alias. See the operator's [glossary](https://github.com/giantswarm/agent-platform-operator/blob/main/GLOSSARY.md) for the distinction between organization deletion and cleanup.
 
 The report prints one `PASS` or `SKIP` line per verdict, `[surface]
