@@ -830,12 +830,16 @@ CIMD fetch verifies the edge with the lab CA of `extraCaFile`) and set
 switch for every host. Both are muster's own settings for an installation
 whose hostnames resolve to an internal load balancer. The host-scoped list is
 the end state; the global redirect switch is what stays a hack: every
-client's redirect URI loses the DNS-rebinding guard in the lab. **Unblocked
-by** a host-scoped redirect allowance, `AllowPrivateIPRedirectURIHosts` in
+client's redirect URI loses the DNS-rebinding guard in the lab. The switch
+also lets muster register itself with its own authorization server for an
+organization namespace's MCPServer, whose callback is on muster's own host:
+`organizations-test --part credentials` skips its tenant sign-in without it.
+**Unblocked by** a host-scoped redirect allowance, `AllowPrivateIPRedirectURIHosts` in
 mcp-oauth (giantswarm/mcp-oauth#669) exposed as
 `oauth.server.allowPrivateIPRedirectURIHosts` in muster
-(giantswarm/muster#1787); the lab then lists `agentgateway.<domain>` there
-and drops `allowPrivateIPRedirectURIs`. `klaus-gateway-test --part refresh` completes a real sign-in through
+(giantswarm/muster#1787); the lab then lists `agentgateway.<domain>` and
+muster's own host there and drops `allowPrivateIPRedirectURIs`, and the
+credentials part reads that list instead of the switch. `klaus-gateway-test --part refresh` completes a real sign-in through
 them. The OAuth fixture's pin (U18) is unchanged: muster's own CIMD host is not
 listed.
 
