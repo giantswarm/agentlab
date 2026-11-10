@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	mcpclient "github.com/mark3labs/mcp-go/client"
@@ -24,14 +26,21 @@ import (
 // elicitation (MCP specification, client/elicitation).
 type musterMCP struct {
 	client *mcpclient.Client
+	mu     sync.Mutex
+	// completed are the elicitationIds of the notifications/elicitation/complete
+	// the client received, in order.
+	completed []string
 }
 
 // musterMCPOptions are a client's generation: its name, the protocol
-// revision it asks for and whether it declares URL elicitation.
+// revision it asks for and whether it declares URL elicitation. listen
+// opens the standalone GET stream of 2025-11-25's Streamable HTTP, where a
+// notification outside any request arrives.
 type musterMCPOptions struct {
 	name           string
 	protocol       string
 	urlElicitation bool
+	listen         bool
 }
 
 // musterMCPTimeout bounds one exchange with muster.
@@ -52,10 +61,14 @@ func dialMusterMCP(ctx context.Context, cfg *config.Config, token string, o must
 
 // dialMCPAt is dialMusterMCP on the MCP endpoint with httpClient.
 func dialMCPAt(ctx context.Context, endpoint string, httpClient *http.Client, token string, o musterMCPOptions) (*musterMCP, error) {
-	t, err := transport.NewStreamableHTTP(endpoint,
+	options := []transport.StreamableHTTPCOption{
 		transport.WithHTTPBasicClient(httpClient),
 		transport.WithHTTPHeaders(map[string]string{"Authorization": "Bearer " + token}),
-	)
+	}
+	if o.listen {
+		options = append(options, transport.WithContinuousListening()) //nolint:staticcheck // the 2025-11-25 stream a completion notification arrives on; 2026-07-28 has none
+	}
+	t, err := transport.NewStreamableHTTP(endpoint, options...)
 	if err != nil {
 		return nil, fmt.Errorf("muster MCP transport: %w", err)
 	}
@@ -68,6 +81,8 @@ func dialMCPAt(ctx context.Context, endpoint string, httpClient *http.Client, to
 		mcpclient.WithClientCapabilities(capabilities),
 		mcpclient.WithProtocolVersion(o.protocol),
 	)
+	m := &musterMCP{client: c}
+	c.OnNotification(m.notified)
 	if err := c.Start(ctx); err != nil {
 		return nil, fmt.Errorf("muster MCP start as %s: %w", o.name, err)
 	}
@@ -77,7 +92,26 @@ func dialMCPAt(ctx context.Context, endpoint string, httpClient *http.Client, to
 		_ = c.Close()
 		return nil, fmt.Errorf("muster MCP initialize as %s on %s: %w", o.name, o.protocol, err)
 	}
-	return &musterMCP{client: c}, nil
+	return m, nil
+}
+
+// notified records a notifications/elicitation/complete.
+func (m *musterMCP) notified(n mcp.JSONRPCNotification) {
+	if n.Method != string(mcp.MethodNotificationElicitationComplete) {
+		return
+	}
+	id, _ := n.Params.AdditionalFields["elicitationId"].(string)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.completed = append(m.completed, id)
+}
+
+// completedElicitations are the elicitationIds the client was notified
+// complete.
+func (m *musterMCP) completedElicitations() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return slices.Clone(m.completed)
 }
 
 // protocol is the revision in effect.
@@ -151,9 +185,15 @@ func (a *musterAnswer) urlElicitations() []mcp.ElicitationParams {
 // accepted every elicitation: for a URL elicitation, consent to open the
 // page, never the page's outcome (MCP 2026-07-28 client/elicitation).
 func (a *musterAnswer) accepted() mcp.MultiRoundTripParams {
+	return a.answered(mcp.ElicitationResponseActionAccept)
+}
+
+// answered is the retry of an input_required answer with the person's
+// action on every elicitation.
+func (a *musterAnswer) answered(action mcp.ElicitationResponseAction) mcp.MultiRoundTripParams {
 	responses := make(mcp.InputResponses, len(a.input))
 	for id := range a.input {
-		responses[id] = mcp.InputResponse{Elicitation: &mcp.ElicitationResult{ElicitationResponse: mcp.ElicitationResponse{Action: mcp.ElicitationResponseActionAccept}}}
+		responses[id] = mcp.InputResponse{Elicitation: &mcp.ElicitationResult{ElicitationResponse: mcp.ElicitationResponse{Action: action}}}
 	}
 	return mcp.MultiRoundTripParams{InputResponses: responses, RequestState: a.requestState}
 }

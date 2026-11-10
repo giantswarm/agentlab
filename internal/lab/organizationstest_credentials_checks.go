@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/yosida95/uritemplate/v3"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -65,9 +67,9 @@ type credentialPrerequisites struct {
 	// musterModern says muster answered an MCP 2026-07-28 client on that
 	// revision.
 	musterModern bool
-	// outputSchema says muster's describe_tool lists an outputSchema for
-	// set_organization_model.
-	outputSchema bool
+	// outputSchema is the outputSchema muster's describe_tool lists for
+	// set_organization_model, nil without one.
+	outputSchema map[string]any
 	// kustomizeController says a Ready kustomize-controller runs.
 	kustomizeController bool
 }
@@ -310,6 +312,10 @@ const (
 	uiVarOrganization = "organization"
 )
 
+// schemeHTTPS is the scheme MCP's safe URL handling has a URL elicitation
+// use outside development.
+const schemeHTTPS = "https"
+
 // formOperationMarker stands in for the operation while the credential UI
 // URL template is expanded: unreserved characters, kept as is by RFC 6570.
 const formOperationMarker = "agentlabformoperation"
@@ -342,11 +348,38 @@ func formOperation(template, link, parent, organization string) (string, error) 
 	if !strings.HasPrefix(link, prefix) || !strings.HasSuffix(link, suffix) || len(link) < len(prefix)+len(suffix) {
 		return "", fmt.Errorf("the link %q is not the credential UI's %s", link, strings.Replace(expanded, formOperationMarker, "{operation}", 1))
 	}
+	if u, err := url.Parse(link); err != nil || u.Scheme != schemeHTTPS {
+		return "", fmt.Errorf("the link %q is not an https URL, as MCP's safe URL handling has servers send", link)
+	}
 	operation := link[len(prefix) : len(link)-len(suffix)]
 	if !operationRe.MatchString(operation) {
 		return "", fmt.Errorf("the link %q carries %q where the operation goes", link, operation)
 	}
 	return operation, nil
+}
+
+// conformsTo validates a tool's structuredContent against its declared
+// outputSchema, as MCP's tools page has clients do (2025-11-25
+// server/tools, "Output Schema"), with the JSON Schema dialect the schema
+// names (2020-12 by default).
+func conformsTo(schema map[string]any, structured json.RawMessage) error {
+	raw, err := json.Marshal(schema)
+	if err != nil {
+		return err
+	}
+	var s jsonschema.Schema
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return fmt.Errorf("the outputSchema: %w", err)
+	}
+	resolved, err := s.Resolve(nil)
+	if err != nil {
+		return fmt.Errorf("the outputSchema: %w", err)
+	}
+	var instance any
+	if err := json.Unmarshal(structured, &instance); err != nil {
+		return err
+	}
+	return resolved.Validate(instance)
 }
 
 // sameReceipt checks a retried call's receipt is the save's: the same
