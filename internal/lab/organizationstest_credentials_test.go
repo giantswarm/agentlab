@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
 	"filippo.io/age"
@@ -249,16 +250,6 @@ func TestCredentialsSignInManifest(t *testing.T) {
 	require.False(t, obj.Spec.Auth.ForwardToken)
 }
 
-func TestCredentialsOtherUser(t *testing.T) {
-	cfg := &config.Config{Users: []config.User{
-		{Email: "first@lab.test", Groups: []string{platformAdminsGroup}},
-		{Email: "second@lab.test", Groups: []string{platformAdminsGroup}},
-		{Email: "third@lab.test", Groups: []string{developersGroup}},
-	}}
-	require.Equal(t, "third@lab.test", credentialsOtherUser(cfg, &cfg.Users[0]).Email)
-	require.Nil(t, credentialsOtherUser(&config.Config{Users: cfg.Users[:2]}, &cfg.Users[0]))
-}
-
 func TestWithArgs(t *testing.T) {
 	base := map[string]any{"a": 1}
 	got := withArgs(base, map[string]any{"b": 2})
@@ -481,14 +472,6 @@ func TestIfMatchRequiredStatuses(t *testing.T) {
 	}
 }
 
-// Only agent-manager's credential-state refusal is giantswarm/agent-manager#359's
-// SKIP; any other failure stays a failure.
-func TestOwnCredentialRefused(t *testing.T) {
-	require.Contains(t, ownCredentialRefused("dev@lab.test", "2.23.2", errors.New("set_organization_model failed: forbidden: credential state cannot be verified")), "giantswarm/agent-manager#359")
-	require.Empty(t, ownCredentialRefused("dev@lab.test", "2.23.2", errors.New("set_organization_model failed: forbidden: create ModelConfig")))
-	require.Empty(t, ownCredentialRefused("dev@lab.test", "2.23.2", nil))
-}
-
 func TestJudgeComponentLogs(t *testing.T) {
 	value := "s3cr3t-value"
 	lines, err := judgeComponentLogs("muster", "a\n\nb\n", value)
@@ -520,12 +503,89 @@ func TestRefusedWith(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestCredentialsViewerUser(t *testing.T) {
-	cfg := &config.Config{Users: []config.User{
-		{Email: "admin@lab.test", Groups: []string{platformAdminsGroup, viewerGroup}},
-		{Email: "dev@lab.test", Groups: []string{developersGroup}},
-		{Email: "viewer@lab.test", Groups: []string{viewerGroup}},
-	}}
-	require.Equal(t, "viewer@lab.test", credentialsViewerUser(cfg).Email)
-	require.Nil(t, credentialsViewerUser(&config.Config{Users: cfg.Users[:2]}))
+// Three different people by role whatever the order of the lab's users: the
+// order admin, viewer, developer gives the developer as the other admin,
+// never the viewer; a viewer who is also an admin or a developer is no
+// viewer; a lab without either role is an error naming it.
+func TestCredentialsPeople(t *testing.T) {
+	admin := config.User{Email: "admin@lab.test", Groups: []string{platformAdminsGroup, developersGroup}}
+	viewer := config.User{Email: "viewer@lab.test", Groups: []string{viewerGroup}}
+	dev := config.User{Email: "dev@lab.test", Groups: []string{developersGroup}}
+	for _, users := range [][]config.User{{admin, viewer, dev}, {admin, dev, viewer}, {viewer, admin, dev}} {
+		cfg := &config.Config{Users: users}
+		other, v, err := credentialsPeople(cfg, &cfg.Users[slices.IndexFunc(users, func(u config.User) bool { return u.Email == admin.Email })])
+		require.NoError(t, err)
+		require.Equal(t, dev.Email, other.Email)
+		require.Equal(t, viewer.Email, v.Email)
+	}
+	const noViewer = "in viewers only"
+	for name, tc := range map[string]struct {
+		users []config.User
+		want  string
+	}{
+		"no second admin":                {[]config.User{admin, viewer}, "second organization admin"},
+		"no viewer":                      {[]config.User{admin, dev}, noViewer},
+		"the viewer is a platform admin": {[]config.User{admin, dev, {Email: "v@lab.test", Groups: []string{viewerGroup, platformAdminsGroup}}}, noViewer},
+		"the viewer is a developer":      {[]config.User{admin, dev, {Email: "v@lab.test", Groups: []string{viewerGroup, developersGroup}}}, noViewer},
+	} {
+		cfg := &config.Config{Users: tc.users}
+		_, _, err := credentialsPeople(cfg, &cfg.Users[0])
+		require.ErrorContains(t, err, tc.want, name)
+	}
+}
+
+// The old refusal of a person's own operation is a SKIP only below the
+// release that stops reading Secrets as the caller; from it on, and for any
+// other refusal, it is no SKIP.
+func TestOwnCredentialRefused(t *testing.T) {
+	refused := errors.New("set_organization_model failed: forbidden: credential state cannot be verified")
+	require.Contains(t, ownCredentialRefused("dev@lab.test", "2.23.2", refused), "giantswarm/agent-manager#360")
+	for _, v := range []string{"2.24.0-rc.1", "2.24.0-rc.2", "2.24.0"} {
+		require.Empty(t, ownCredentialRefused("dev@lab.test", v, refused), v)
+	}
+	require.Empty(t, ownCredentialRefused("dev@lab.test", "2.23.2", errors.New("set_organization_model failed: forbidden: create ModelConfig")))
+	require.Empty(t, ownCredentialRefused("dev@lab.test", "2.23.2", nil))
+}
+
+// A fixture whose viewer may write, or whose other admin may not, is wrong.
+func TestFixtureProblems(t *testing.T) {
+	viewer := organizationRights{listModelConfigs: true}
+	require.Empty(t, viewerFixtureProblem("v@lab.test", "ns", viewer))
+	for name, r := range map[string]organizationRights{
+		"creates secrets":      {listModelConfigs: true, createSecrets: true},
+		"creates modelconfigs": {listModelConfigs: true, createModelConfigs: true},
+		"reads nothing":        {},
+	} {
+		require.Contains(t, viewerFixtureProblem("v@lab.test", "ns", r), "fixture wrong", name)
+	}
+	admin := organizationRights{listModelConfigs: true, createSecrets: true, createModelConfigs: true}
+	require.Empty(t, otherAdminFixtureProblem("d@lab.test", "ns", admin))
+	require.Contains(t, otherAdminFixtureProblem("d@lab.test", "ns", viewer), "fixture wrong")
+	require.Contains(t, otherAdminFixtureProblem("d@lab.test", "ns", organizationRights{listModelConfigs: true, createSecrets: true}), "fixture wrong")
+}
+
+// The viewer's refusal passes only as the apiserver's denial of that user's
+// create; the read-first refusal of older releases is a SKIP below the
+// floor and a failure from it; another user's denial or another guard fails.
+func TestViewerRefusalVerdict(t *testing.T) {
+	user := "oidc:viewer@lab.test"
+	rbac := `forbidden: dry run of create credential Secret ns/tenant-credential-x: secrets "tenant-credential-x" is forbidden: User "oidc:viewer@lab.test" cannot create resource "secrets" in API group "" in the namespace "ns"; ask an admin`
+	denied, skip, err := viewerRefusalVerdict("2.24.0-rc.2", rbac, user)
+	require.NoError(t, err)
+	require.Empty(t, skip)
+	require.Equal(t, "create secrets", denied)
+	denied, _, err = viewerRefusalVerdict("2.23.2", `forbidden: dry run of create ModelConfig ns/x: User "oidc:viewer@lab.test" cannot create resource "modelconfigs" in API group "kagent.dev"`, user)
+	require.NoError(t, err)
+	require.Equal(t, "create modelconfigs", denied)
+
+	old := "forbidden: credential state cannot be verified"
+	_, skip, err = viewerRefusalVerdict("2.23.2", old, user)
+	require.NoError(t, err)
+	require.Contains(t, skip, "giantswarm/agent-manager#360")
+	_, _, err = viewerRefusalVerdict("2.24.0-rc.2", old, user)
+	require.ErrorContains(t, err, "unrelated guard")
+	_, _, err = viewerRefusalVerdict("2.24.0-rc.2", strings.ReplaceAll(rbac, "viewer@", "dev@"), user)
+	require.ErrorContains(t, err, "unrelated guard")
+	_, _, err = viewerRefusalVerdict("2.24.0-rc.2", "forbidden: organization agentlab-credentials is being deleted", user)
+	require.ErrorContains(t, err, "unrelated guard")
 }

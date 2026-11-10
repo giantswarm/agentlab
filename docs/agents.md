@@ -451,27 +451,40 @@ printed only as its SHA-256. Each verdict:
 - The form's save, the way the portal's form posts it
   (giantswarm/backstage#3364): `GET /api/v1/credential-operations/{operation}`
   with the person's token answers the confirmation with a strong `ETag` and
-  `Cache-Control: no-store`. Another lab user, bound as an admin of the
-  organization too, prepares an operation of their own (model
+  `Cache-Control: no-store`. Another lab user, in neither `platform-admins`
+  nor `viewers` (the default `dev@lab.local`) and bound by name as an admin
+  of the organization too, whose access reviews must allow creating Secrets
+  and ModelConfigs there (else the verdict fails as a wrong fixture),
+  prepares an operation of their own (model
   `agentlab-credentials-other`): each reads their own, each read of the
   other's is refused with the status of an operation that does not exist
   (404 or 403, no oracle), and an anonymous read answers 401; the reads of
   the admin's operation are one verdict, that user's own operation another.
   That user then cancels their operation: `DELETE` with a stale `If-Match`
   answers 412, with its `ETag` 204; it reads `cancelled`, a save of it
-  answers 412 and nothing of that model is written. While agent-manager
-  refuses that user's own operation with `forbidden: credential state cannot
-  be verified` (it reads the credential Secret as the caller, which
-  `agent-platform:admin` may not), the verdicts on their own operation and
-  its cancel are a `SKIP` naming giantswarm/agent-manager#359.
-- A person with read-only rights, the first lab user in `viewers` outside
-  `platform-admins`, calls `set_organization_model` for a model of their own:
-  agent-manager's `forbidden` error result, no ModelConfig and no value; the
-  verdict names the guard that refused it (until giantswarm/agent-manager#359
-  the read of the credential Secret as the caller, before the write's own
-  authorization). Their `POST` of the admin's pending operation, with its current
-  `ETag` and a value, answers what an unknown operation answers (404 or 403),
-  nothing is written and the admin's operation stays pending at that `ETag`.
+  answers 412 and nothing of that model is written. An agent-manager older
+  than 2.24.0-rc.1 refuses that user's own operation with `forbidden:
+  credential state cannot be verified` (it reads the credential Secret as the
+  caller, which `agent-platform:admin` may not): there the verdicts on their
+  own operation and its cancel are a `SKIP` naming giantswarm/agent-manager#360;
+  from 2.24.0-rc.1 on they run, and that refusal fails them.
+- A viewer: a third lab user, in `viewers` only (the default
+  `viewer@lab.local`; never the other admin, never in `platform-admins` or
+  `developers`), bound by name to the organization's read-only role
+  `agent-platform:user`. A lab without three such people fails the part
+  naming the user it lacks. Access reviews as the viewer must allow listing
+  the organization's ModelConfigs and deny creating Secrets and ModelConfigs
+  there, else the verdict fails as a wrong fixture. Their
+  `set_organization_model` for a model of their own must be refused with the
+  apiserver's RBAC denial of that user creating the Secret or the ModelConfig
+  (agent-manager 2.24.0-rc.1 and newer, whose dry-run create of the Secret as
+  the caller meets it), with nothing written; an older agent-manager refuses
+  every person outside `platform-admins` on reading the Secret first, which
+  is a `SKIP` naming giantswarm/agent-manager#360, and any other refusal
+  fails. A second verdict: their `POST` of the admin's pending operation,
+  with its current `ETag` and a value, answers what an unknown operation
+  answers (404 or 403), nothing is written and the admin's operation stays
+  pending at that `ETag`.
 - A Secret another consumer comes to reference: the admin prepares model
   `agentlab-credentials-shared` naming `tenant-credential-agentlab-credentials-shared`,
   then a ModelConfig applied by the lab references that Secret too; the save

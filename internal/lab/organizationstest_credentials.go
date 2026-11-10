@@ -90,14 +90,15 @@ const (
 type credentialsProof struct {
 	cfg *config.Config
 	// admin and other are both admins of the organization: other is a lab
-	// user outside platform-admins, bound by name.
-	admin, other *config.User
-	adminToken   string
-	otherToken   string
-	namespace    string
-	uid          string
-	pre          credentialPrerequisites
-	mode         string
+	// user outside platform-admins and viewers, bound by name. viewer is a
+	// third person, in viewers only, never bound in the organization.
+	admin, other, viewer *config.User
+	adminToken           string
+	otherToken           string
+	namespace            string
+	uid                  string
+	pre                  credentialPrerequisites
+	mode                 string
 	// value is the key typed into the form; valueSum its hash.
 	value    string
 	valueSum [sha256.Size]byte
@@ -138,12 +139,12 @@ type credentialsProof struct {
 // organizationCredentialsTest runs the credentials part and prints its
 // verdicts.
 func organizationCredentialsTest(cfg *config.Config, admin *config.User) error {
-	other := credentialsOtherUser(cfg, admin)
-	if other == nil {
-		return fmt.Errorf("the credentials part needs a lab user outside %s for the refused read of another person's operation; %s has none", platformAdminsGroup, config.File)
+	other, viewer, err := credentialsPeople(cfg, admin)
+	if err != nil {
+		return err
 	}
 	value := randomHex(32)
-	p := &credentialsProof{cfg: cfg, admin: admin, other: other, value: value, valueSum: sha256.Sum256([]byte(value)), started: time.Now()}
+	p := &credentialsProof{cfg: cfg, admin: admin, other: other, viewer: viewer, value: value, valueSum: sha256.Sum256([]byte(value)), started: time.Now()}
 	defer p.cleanup()
 	if err := p.run(); err != nil {
 		return err
@@ -155,15 +156,36 @@ func organizationCredentialsTest(cfg *config.Config, admin *config.User) error {
 	return nil
 }
 
-// credentialsOtherUser is the first lab user outside platform-admins.
-func credentialsOtherUser(cfg *config.Config, admin *config.User) *config.User {
+// credentialsPeople are the part's two people besides the admin, three
+// different lab users each chosen by the role its verdicts need, whatever
+// the order of the lab's users: other, a second organization admin (bound
+// by name in setUp), in neither platform-admins nor viewers; viewer, in
+// viewers and in neither platform-admins nor developers, and never other,
+// so never bound in the organization. A lab without either is an error
+// that names the user it lacks: one person in two roles would let a
+// verdict pass on the wrong person's rights.
+func credentialsPeople(cfg *config.Config, admin *config.User) (other, viewer *config.User, err error) {
 	for i := range cfg.Users {
 		u := &cfg.Users[i]
-		if u.Email != admin.Email && !u.HasGroup(platformAdminsGroup) {
-			return u
+		if u.Email != admin.Email && !u.HasGroup(platformAdminsGroup) && !u.HasGroup(viewerGroup) {
+			other = u
+			break
 		}
 	}
-	return nil
+	if other == nil {
+		return nil, nil, fmt.Errorf("the credentials part needs a lab user in neither %s nor %s to bind as a second organization admin (the default dev@lab.local); %s has none: add one with `agentlab configure`", platformAdminsGroup, viewerGroup, config.File)
+	}
+	for i := range cfg.Users {
+		u := &cfg.Users[i]
+		if u.Email != admin.Email && u.Email != other.Email && u.HasGroup(viewerGroup) && !u.HasGroup(platformAdminsGroup) && !u.HasGroup(developersGroup) {
+			viewer = u
+			break
+		}
+	}
+	if viewer == nil {
+		return nil, nil, fmt.Errorf("the credentials part needs a lab user in %s only (in neither %s nor %s, the default viewer@lab.local), apart from %s and %s; %s has none: add one with `agentlab configure`", viewerGroup, platformAdminsGroup, developersGroup, admin.Email, other.Email, config.File)
+	}
+	return other, viewer, nil
 }
 
 func (p *credentialsProof) run() error {
@@ -200,7 +222,8 @@ func (p *credentialsProof) checks() []organizationCheck {
 		p.resourceLinkCheck(uiSkip),
 		{surface: surfaceCredentialAPI, boundary: "an operation's confirmation is its preparer's alone: the admin reads their own, another admin's read is refused as an unknown operation's, an anonymous one 401", skip: uiSkip, run: p.otherPersonRefused},
 		{surface: surfaceCredentialAPI, boundary: "an organization admin outside platform-admins prepares an operation of their own and reads it; the first admin's read of it is refused as an unknown operation's", skip: uiSkip, run: p.otherOwnOperation},
-		{surface: surfaceAgentManager, boundary: "a person with read-only rights on the organization (a viewer) is refused set_organization_model with nothing written, and their POST of the admin's operation with its ETag is refused with nothing written", skip: firstNonEmpty(uiSkip, p.viewerSkip()), run: p.viewerRefused},
+		{surface: surfaceAgentManager, boundary: "a viewer of the organization, whose access review denies creating Secrets and ModelConfigs there, is refused set_organization_model by that authorization, with nothing written", skip: uiSkip, run: p.viewerWriteRefused},
+		{surface: surfaceCredentialAPI, boundary: "a viewer's POST of the admin's operation, with its ETag and a value, is refused as an unknown operation's, nothing written, the operation pending at the same ETag", skip: uiSkip, run: p.viewerSaveRefused},
 		{surface: surfaceCredentialAPI, boundary: "DELETE with If-Match cancels a pending operation: a stale ETag is refused, and after the cancel a save is refused with nothing written", skip: uiSkip, run: p.cancel},
 		{surface: surfaceCredentialAPI, boundary: "the form's save: GET with a strong ETag and the consumer the confirmation lists, a POST without If-Match (428) or with a stale one refused with nothing written, POST with If-Match and only the requested pair returns the receipt, a second POST and each client generation's retry the same receipt", skip: uiSkip, run: p.save},
 		{surface: surfaceCredentialAPI, boundary: "a save whose Secret another consumer came to reference is refused 409 with nothing written, and preparing it again is refused", skip: uiSkip, run: p.sharedSecretRefused},
@@ -233,6 +256,10 @@ func (p *credentialsProof) setUp() error {
 		return err
 	}
 	if err := bindOrganizationRole(ns, organizationAdminsBinding, organizationAdminRole, []rbacv1.Subject{groupSubject(platformAdminsGroup), userSubject(p.other)}); err != nil {
+		return err
+	}
+	step("%s bound to %s, the organization's read-only role, in %s", p.viewer.Email, organizationUserRole, ns)
+	if err := bindOrganizationRole(ns, credentialsViewerBinding, organizationUserRole, []rbacv1.Subject{userSubject(p.viewer)}); err != nil {
 		return err
 	}
 	gvr, err := gvrFor(organizationResource)
@@ -811,11 +838,21 @@ func (p *credentialsProof) otherPersonRefused() (string, error) {
 		p.admin.Email, p.other.Email, organizationAdminRole, credentialsOrganization, unknown), nil
 }
 
-// otherOwnOperation: the other person prepares an operation of their own,
-// reads it, and the admin is refused it as an unknown operation. While
-// agent-manager refuses that person's own preparation
-// (giantswarm/agent-manager#359) it is a SKIP, and so is the cancel of it.
+// otherOwnOperation: the other person, whose access review allows creating
+// Secrets in the organization (else the fixture is wrong and the verdict
+// fails), prepares an operation of their own, reads it, and the admin is
+// refused it as an unknown operation. On an agent-manager older than
+// credentialsWriteOnlyFloor, which refuses that person's own preparation
+// (giantswarm/agent-manager#359), it is a SKIP, and so is the cancel of it;
+// from the floor on, that refusal fails.
 func (p *credentialsProof) otherOwnOperation() (string, error) {
+	rights, err := readOrganizationRights(p.otherToken, p.namespace)
+	if err != nil {
+		return "", err
+	}
+	if problem := otherAdminFixtureProblem(p.other.Email, p.namespace, rights); problem != "" {
+		return "", errors.New(problem)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*musterMCPTimeout)
 	defer cancel()
 	other, err := dialMusterMCP(ctx, p.cfg, p.otherToken, musterMCPOptions{name: "agentlab-credentials-other", protocol: mcp.ProtocolVersion20251125})

@@ -21,6 +21,9 @@ import (
 // list, and a second POST of a saved operation.
 
 const (
+	// credentialsViewerBinding binds the part's viewer to the organization's
+	// read-only role, agent-platform:user.
+	credentialsViewerBinding = "agentlab-credentials-viewer" // #nosec G101 -- a RoleBinding name, not a credential
 	// credentialsViewerModel is the model a viewer tries to add.
 	credentialsViewerModel = "agentlab-credentials-viewer" // #nosec G101 -- a ModelConfig name, not a credential
 	// credentialsSharedModel is the model whose Secret another consumer,
@@ -40,6 +43,10 @@ const (
 	// writes for set_organization_egress_policy.
 	egressPolicyResource = "egresspolicies." + kagentAPIGroup
 	egressPolicyKind     = "EgressPolicy"
+	// The access reviews' verbs and the Secret resource.
+	reviewVerbList   = "list"
+	reviewVerbCreate = "create"
+	resourceSecrets  = "secrets"
 	// egressOriginKey is a destination's origin in an egress policy's
 	// arguments.
 	egressOriginKey = "origin"
@@ -56,43 +63,68 @@ const (
 	credentialsEgressPlainOrigin = "https://public.agentlab-credentials.example"  // #nosec G101 -- an origin, not a credential
 )
 
-// credentialsViewerUser is the first lab user in the viewers group and not
-// in platform-admins: read-only rights on every organization, no write.
-func credentialsViewerUser(cfg *config.Config) *config.User {
-	for i := range cfg.Users {
-		u := &cfg.Users[i]
-		if u.HasGroup(viewerGroup) && !u.HasGroup(platformAdminsGroup) {
-			return u
+// organizationRights are a person's rights in an organization namespace as
+// SelfSubjectAccessReviews with their own token read them: the reads and
+// writes agent-manager's calls as the person meet.
+type organizationRights struct {
+	// listModelConfigs is the read every role of the organization holds;
+	// createSecrets and createModelConfigs are the admin's writes.
+	listModelConfigs, createSecrets, createModelConfigs bool
+}
+
+// readOrganizationRights reads a person's organizationRights in ns.
+func readOrganizationRights(token, ns string) (organizationRights, error) {
+	_, cs, err := personClients(token)
+	if err != nil {
+		return organizationRights{}, err
+	}
+	mc, err := modelConfigGVR()
+	if err != nil {
+		return organizationRights{}, err
+	}
+	var r organizationRights
+	for _, q := range []struct {
+		into                  *bool
+		verb, group, resource string
+	}{
+		{&r.listModelConfigs, reviewVerbList, mc.Group, mc.Resource},
+		{&r.createSecrets, reviewVerbCreate, "", resourceSecrets},
+		{&r.createModelConfigs, reviewVerbCreate, mc.Group, mc.Resource},
+	} {
+		if *q.into, err = selfAccess(cs, ns, q.verb, q.group, q.resource); err != nil {
+			return organizationRights{}, err
 		}
 	}
-	return nil
+	return r, nil
 }
 
-// viewerSkip is why no person without write rights can be tried.
-func (p *credentialsProof) viewerSkip() string {
-	if credentialsViewerUser(p.cfg) != nil {
-		return ""
-	}
-	return fmt.Sprintf("%s has no user in group %s outside %s (the lab's default viewer@lab.local): add one with `agentlab configure`, then run again", config.File, viewerGroup, platformAdminsGroup)
+// signIn is a lab user's Dex token for muster and the credential API.
+func (p *credentialsProof) signIn(u *config.User) (string, error) {
+	step("Logging in to Dex as %s", u.Email)
+	return passwordGrant(p.cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret, u.Email, u.Password, musterLoginScopes)
 }
 
-// viewerRefused: a viewer's set_organization_model is agent-manager's
-// forbidden with nothing written; their POST of the admin's pending
-// operation, with its current ETag and a value, is refused as an unknown
-// operation's would be, nothing is written and the admin's operation stays
-// pending at the same ETag. The detail names the guard that refused the
-// call: until giantswarm/agent-manager#359 agent-manager refuses on reading
-// the credential Secret as the caller, before the write's own authorization,
-// which refuses an organization admin outside platform-admins too.
-func (p *credentialsProof) viewerRefused() (string, error) {
-	if p.operation == "" {
-		return "", errors.New("no pending operation of the admin")
-	}
-	viewer := credentialsViewerUser(p.cfg)
-	step("Logging in to Dex as %s", viewer.Email)
-	token, err := passwordGrant(p.cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret, viewer.Email, viewer.Password, musterLoginScopes)
+// viewerWriteRefused: the viewer, bound agent-platform:user in the
+// organization by setUp, whose access reviews allow reading its ModelConfigs
+// and deny creating Secrets and ModelConfigs there (else the fixture is
+// wrong and the verdict fails), calls set_organization_model for a model of their own.
+// The refusal must be that authorization: the apiserver's RBAC denial of
+// the viewer quoted in agent-manager's forbidden (from 2.24.0-rc.1 its
+// dry-run create of the Secret as the caller, giantswarm/agent-manager#360).
+// An older agent-manager refuses every person outside platform-admins on
+// reading the Secret first, which says nothing of the viewer's rights: a
+// SKIP naming the release that fixes it. Nothing of the model is written.
+func (p *credentialsProof) viewerWriteRefused() (string, error) {
+	token, err := p.signIn(p.viewer)
 	if err != nil {
 		return "", err
+	}
+	rights, err := readOrganizationRights(token, p.namespace)
+	if err != nil {
+		return "", err
+	}
+	if problem := viewerFixtureProblem(p.viewer.Email, p.namespace, rights); problem != "" {
+		return "", errors.New(problem)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*musterMCPTimeout)
 	defer cancel()
@@ -108,15 +140,36 @@ func (p *credentialsProof) viewerRefused() (string, error) {
 	}
 	refusal, err := refusedWith(answer, "forbidden")
 	if err != nil {
-		return "", fmt.Errorf("%s's set_organization_model %s: %w", viewer.Email, credentialsViewerModel, err)
-	}
-	guard := "the write's authorization"
-	if strings.Contains(refusal, credentialStateUnverifiable) {
-		guard = "the credential Secret's read as the caller, not yet the write's authorization (giantswarm/agent-manager#359)"
+		return "", fmt.Errorf("%s's set_organization_model %s: %w", p.viewer.Email, credentialsViewerModel, err)
 	}
 	if err := nothingWritten(ctx, p.namespace, credentialsViewerModel, "tenant-credential-"+credentialsViewerModel); err != nil {
-		return "", fmt.Errorf("after %s's refused call: %w", viewer.Email, err)
+		return "", fmt.Errorf("after %s's refused call: %w", p.viewer.Email, err)
 	}
+	denied, skip, err := viewerRefusalVerdict(p.agentManagerVersion, refusal, apiserverUserPrefix+p.viewer.Email)
+	switch {
+	case err != nil:
+		return "", err
+	case skip != "":
+		return "", skipCheck("%s", skip)
+	}
+	return fmt.Sprintf("%s (%s in %s only; access reviews: list modelconfigs allowed, create secrets and modelconfigs denied): set_organization_model %s refused by the apiserver's denial of %s %q, no ModelConfig, no value",
+		p.viewer.Email, organizationUserRole, p.namespace, credentialsViewerModel, denied, excerpt(refusal, 200)), nil
+}
+
+// viewerSaveRefused: the viewer's POST of the admin's pending operation,
+// with its current ETag and a value, is refused as an unknown operation's
+// would be (the operation is the admin's alone), nothing is written and the
+// admin's operation stays pending at the same ETag.
+func (p *credentialsProof) viewerSaveRefused() (string, error) {
+	if p.operation == "" {
+		return "", errors.New("no pending operation of the admin")
+	}
+	token, err := p.signIn(p.viewer)
+	if err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), musterMCPTimeout)
+	defer cancel()
 	rest, err := dialCredentialREST(ctx)
 	if err != nil {
 		return "", err
@@ -147,22 +200,22 @@ func (p *credentialsProof) viewerRefused() (string, error) {
 	}
 	switch {
 	case code != http.StatusNotFound && code != http.StatusForbidden:
-		return "", fmt.Errorf("%s's POST of %s's operation answered %d, want 404 or 403: %s", viewer.Email, p.admin.Email, code, excerpt(redactValue(string(raw), p.value), 200))
+		return "", fmt.Errorf("%s's POST of %s's operation answered %d, want 404 or 403: %s", p.viewer.Email, p.admin.Email, code, excerpt(redactValue(string(raw), p.value), 200))
 	case code != unknown:
-		return "", fmt.Errorf("%s's POST of %s's operation answered %d, an unknown operation's %d: the refusal tells the operation exists", viewer.Email, p.admin.Email, code, unknown)
+		return "", fmt.Errorf("%s's POST of %s's operation answered %d, an unknown operation's %d: the refusal tells the operation exists", p.viewer.Email, p.admin.Email, code, unknown)
 	}
 	if err := nothingWritten(ctx, p.namespace, credentialsModel, credentialsModelSecret); err != nil {
-		return "", fmt.Errorf("after %s's refused POST: %w", viewer.Email, err)
+		return "", fmt.Errorf("after %s's refused POST: %w", p.viewer.Email, err)
 	}
 	after, etagAfter, err := p.readConfirmation(ctx, rest, p.operation, p.adminToken)
 	if err != nil {
 		return "", err
 	}
 	if after.State != operationPending || before.State != operationPending || etagAfter != etag {
-		return "", fmt.Errorf("%s's operation reads %q at %s after %s's refused POST, want %s at %s", p.admin.Email, after.State, etagAfter, viewer.Email, operationPending, etag)
+		return "", fmt.Errorf("%s's operation reads %q at %s after %s's refused POST, want %s at %s", p.admin.Email, after.State, etagAfter, p.viewer.Email, operationPending, etag)
 	}
-	return fmt.Sprintf("%s (%s): set_organization_model %s refused %q by %s, no ModelConfig, no value; their POST of %s's operation with its ETag %d, as an unknown operation's, nothing written, the operation %s at %s",
-		viewer.Email, viewerGroup, credentialsViewerModel, excerpt(refusal, 160), guard, p.admin.Email, code, operationPending, etag), nil
+	return fmt.Sprintf("%s's POST of %s's operation with its ETag %d, as an unknown operation's; nothing written, the operation %s at %s",
+		p.viewer.Email, p.admin.Email, code, operationPending, etag), nil
 }
 
 // sharedSecretRefusal is agent-manager's refusal to prepare a credential a

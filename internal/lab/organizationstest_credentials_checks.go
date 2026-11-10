@@ -564,7 +564,7 @@ const ifMatchRequiredFloor = "2.23.0"
 // from the agent-manager version the lab runs, and a note when it predates
 // the floor.
 func ifMatchRequiredStatuses(version string) ([]int, string) {
-	if v, err := semver.NewVersion(version); err == nil && !v.LessThan(semver.MustParse(ifMatchRequiredFloor)) {
+	if atLeast(version, ifMatchRequiredFloor) {
 		return []int{http.StatusPreconditionRequired}, ""
 	}
 	return []int{http.StatusPreconditionRequired, http.StatusBadRequest},
@@ -575,16 +575,77 @@ func ifMatchRequiredStatuses(version string) ([]int, string) {
 // credential write when it cannot read the credential Secret as them.
 const credentialStateUnverifiable = "credential state cannot be verified" // #nosec G101 -- an error text, not a credential
 
-// ownCredentialRefused is the SKIP reason when agent-manager refused a
-// person's own set_organization_model because it reads the credential
-// Secret as the caller, which agent-platform:admin may not (Secrets are
-// write-only for it): giantswarm/agent-manager#359. "" for any other answer.
+// credentialsWriteOnlyFloor is the first agent-manager that never reads a
+// credential Secret as the caller (giantswarm/agent-manager#360, closing
+// #359): an organization admin outside platform-admins prepares and saves
+// credentials, and a person without the rights is refused by the
+// authorization of the write itself.
+const credentialsWriteOnlyFloor = "2.24.0-rc.1" // #nosec G101 -- a version, not a credential
+
+// atLeast says whether version is floor or newer; an unreadable version is
+// not.
+func atLeast(version, floor string) bool {
+	v, err := semver.NewVersion(version)
+	return err == nil && !v.LessThan(semver.MustParse(floor))
+}
+
+// ownCredentialRefused is the SKIP reason when an agent-manager older than
+// credentialsWriteOnlyFloor refused a person's own set_organization_model
+// because it reads the credential Secret as the caller, which
+// agent-platform:admin may not. "" for any other answer, and for any answer
+// of an agent-manager at or above the floor, where that refusal is a
+// failure.
 func ownCredentialRefused(email, version string, err error) string {
-	if err == nil || !strings.Contains(err.Error(), credentialStateUnverifiable) {
+	if err == nil || atLeast(version, credentialsWriteOnlyFloor) || !strings.Contains(err.Error(), credentialStateUnverifiable) {
 		return ""
 	}
-	return fmt.Sprintf("agent-manager %s refuses %s's own set_organization_model (forbidden: %s): it reads the credential Secret as the caller, which agent-platform:admin may not; an organization admin outside platform-admins needs giantswarm/agent-manager#359 (credentials write-only)",
-		version, email, credentialStateUnverifiable)
+	return fmt.Sprintf("agent-manager %s refuses %s's own set_organization_model (forbidden: %s): it reads the credential Secret as the caller, which agent-platform:admin may not; agent-manager %s or newer writes credentials without reading them (giantswarm/agent-manager#360, closing #359)",
+		version, email, credentialStateUnverifiable, credentialsWriteOnlyFloor)
+}
+
+// viewerFixtureProblem is why the viewer's verdict cannot stand on its
+// person: an access review allows them to create Secrets or ModelConfigs in
+// the organization, so a refusal would not be their missing right, or
+// denies them the read of its ModelConfigs, which agent-manager does before
+// the write. "" for a viewer that reads and does not write.
+func viewerFixtureProblem(email, ns string, r organizationRights) string {
+	switch {
+	case r.createSecrets || r.createModelConfigs:
+		return fmt.Sprintf("fixture wrong: %s, the part's viewer, may create Secrets (%v) or ModelConfigs (%v) in %s: they hold write rights there, so a refusal would not be a viewer's", email, r.createSecrets, r.createModelConfigs, ns)
+	case !r.listModelConfigs:
+		return fmt.Sprintf("fixture wrong: %s, the part's viewer, may not list ModelConfigs in %s: without the read %s grants, agent-manager refuses the read before the write", email, ns, organizationUserRole)
+	}
+	return ""
+}
+
+// otherAdminFixtureProblem is why the other admin's verdicts cannot stand on
+// their person: an access review denies them creating Secrets or
+// ModelConfigs in the organization, so they are no organization admin. ""
+// when both are allowed.
+func otherAdminFixtureProblem(email, ns string, r organizationRights) string {
+	if r.createSecrets && r.createModelConfigs {
+		return ""
+	}
+	return fmt.Sprintf("fixture wrong: %s, bound %s in %s, may not create Secrets or ModelConfigs there: they are no organization admin, so their verdicts would prove nothing of one", email, organizationAdminRole, ns)
+}
+
+// viewerRefusalVerdict judges agent-manager's refusal of the viewer's
+// set_organization_model: it passes, naming the denied write, only when it
+// carries the apiserver's RBAC denial of that user creating the Secret or
+// the ModelConfig. An agent-manager older than credentialsWriteOnlyFloor
+// refuses on reading the Secret first, for every person outside
+// platform-admins: a skip naming the release. Any other refusal is an
+// unrelated guard and fails.
+func viewerRefusalVerdict(version, refusal, user string) (denied, skip string, err error) {
+	for _, resource := range []string{resourceSecrets, "modelconfigs"} {
+		if strings.Contains(refusal, fmt.Sprintf(`User %q cannot create resource %q`, user, resource)) {
+			return "create " + resource, "", nil
+		}
+	}
+	if strings.Contains(refusal, credentialStateUnverifiable) && !atLeast(version, credentialsWriteOnlyFloor) {
+		return "", fmt.Sprintf("agent-manager %s refuses the viewer on reading the credential Secret (forbidden: %s), as it refuses every person outside platform-admins, before the write's authorization: the viewer's own refusal needs agent-manager %s or newer (giantswarm/agent-manager#360)", version, credentialStateUnverifiable, credentialsWriteOnlyFloor), nil
+	}
+	return "", "", fmt.Errorf("agent-manager %s refused the viewer %q, not with the apiserver's denial of %s creating secrets or modelconfigs: an unrelated guard", version, excerpt(refusal, 300), user)
 }
 
 // judgeComponentLogs checks one component's logs carry the value neither
