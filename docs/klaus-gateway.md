@@ -54,7 +54,11 @@ platform:
   `https://agentgateway.<domain>` (no port: the connectivity chart derives
   the hostname of the OBO route it renders on the edge from it, and a
   Gateway API hostname carries none) and `existingSecret` the keys Secret;
-  `serviceMonitor.enabled` following `platform.observability`. The meta
+  `serviceMonitor.enabled` following `platform.observability`; and the
+  meta chart's `routing.store: valkey`, the routing store installations run:
+  the threads live in the platform's Valkey (`muster-valkey`), behind the
+  store's policy when `platform.networkPolicy` is on (docs/platform.md
+  "Network policies"). The meta
   chart's own `klausGateway` block keeps the static lifecycle driver, no
   second agentgateway and the disruption guards. The chart's edge route for
   the channels (`agentgatewayRoute`) stays off — the public leg is the

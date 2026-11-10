@@ -1296,10 +1296,15 @@ vm-manager:
 # static lifecycle driver, no second agentgateway, the disruption guards;
 # klausgateway.go has the reasoning): the in-cluster controller target and
 # the proof's fixture as the default agent, the Slack adapter on the lab's
-# placeholder Secret, the OBO link store in a Secret
-# with the lab's keys Secret mounted, the ServiceMonitor following the
-# observability switch. The edge route for the channels stays off.
+# placeholder Secret, the OBO link store in a Secret with the lab's keys
+# Secret mounted, the routing store in the platform's Valkey, the
+# ServiceMonitor following the observability switch. The edge route for the channels stays off.
 klausGateway:
+  # The routing store an installation's gateway keeps its threads in: the
+  # platform's Valkey (muster-valkey), which its store policy admits the
+  # gateway to.
+  routing:
+    store: valkey
   a2a:
     enabled: true
     url: {{ .KlausGateway.A2ATarget }}
@@ -1428,7 +1433,28 @@ backstage:
 
 valkey:
   ciliumNetworkPolicy:
+{{- if .Platform.NetworkPolicy }}
+    # platform.networkPolicy: the store's policy as an installation renders
+    # it (the chart's clients, muster and klaus-gateway). The wrapper ships
+    # it only as a CiliumNetworkPolicy, which kind serves and nothing
+    # enforces: `agentlab platform` applies its NetworkPolicy stand-in,
+    # translated from this render (ciliumstandin.go).
+    enabled: true
+{{- if .Platform.Observability }}
+    ingress:
+      # The lab's Prometheus scrapes the exporter where an installation's
+      # alloy-metrics does.
+      metricsScrapers:
+        - namespace: kube-system
+          matchLabels:
+            app.kubernetes.io/instance: alloy-metrics
+        - namespace: monitoring
+          matchLabels:
+            app.kubernetes.io/name: prometheus
+{{- end }}
+{{- else }}
     enabled: false
+{{- end }}
   valkey:
     # Scraped by the lab Prometheus when platform.observability is on; without
     # it the PodMonitor CR has no CRD to bind to and the whole release fails

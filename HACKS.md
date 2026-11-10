@@ -872,6 +872,20 @@ workspaces. **Unblocked by** the kubernetes flavour rendering the controller's
 full egress, or no isolating policy, in giantswarm/agent-platform; the
 deletion then goes from patch 10.
 
+### U46. `ciliumstandin.go`: the Valkey store's policy enforced through a NetworkPolicy stand-in — ACCEPTED
+The valkey wrapper (giantswarm/valkey-app) ships the store's policy only as a
+`CiliumNetworkPolicy`: every installation runs Cilium, and kind runs
+kindnetd, which serves the kind (the lab provides the CRDs) and enforces
+nothing of it. With `platform.networkPolicy` the lab turns the wrapper's
+policy on and `agentlab platform` applies a plain `NetworkPolicy`
+translated from the valkey release's render, which kindnetd enforces: the
+chart's own client selectors, ports and the `host` entity as the nodes'
+addresses. **Accepted:** running Cilium in kind would cost each lab a second
+CNI for one policy; the translation names what it cannot carry (the egress,
+mutual authentication, L7 rules, other entities), leaves it out — the
+stand-in refuses more, never admits more — and those parts stay unproven in
+the lab (docs/platform.md "Network policies").
+
 ### U38. `postRenderers` patch: agentgateway binds IPv4 — BLOCKED UPSTREAM
 agentgateway binds its readiness (15021) and stats (15020) servers and its
 listeners on the IPv6 wildcard unless IPv6 is switched off
