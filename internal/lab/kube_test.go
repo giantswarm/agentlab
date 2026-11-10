@@ -819,7 +819,7 @@ func TestGvrFor(t *testing.T) {
 			t.Errorf("gvrFor(%q) = %v, %v; want %v", arg, got, err, want)
 		}
 	}
-	if _, err := gvrFor("kustomizations.kustomize.toolkit.fluxcd.io"); err == nil || !strings.Contains(err.Error(), "kustomizations.kustomize.toolkit.fluxcd.io") {
+	if _, err := gvrFor("widgets.example.com"); err == nil || !strings.Contains(err.Error(), "widgets.example.com") {
 		t.Errorf("an unserved resource must fail by name, got %v", err)
 	}
 }

@@ -943,6 +943,19 @@ renders `kagent.providers` and the kagent chart's `default-model-config`.
   for the sake of policies the lab never tests; the CRDs alone let the charts
   install and validate their policies against the real schema, and enforce
   nothing. Named as a lab-only difference in docs/platform.md.
+- **Flux's Kustomization CRD served without kustomize-controller**
+  (`kustomize.toolkit.fluxcd.io/v1`,
+  `internal/lab/templates/flux-kustomization-crd.yaml`, verbatim from the
+  Flux release the chart's flux-engine pins, applied by `up` with the other
+  provided APIs; `providedapis.go`) — model-manager and the agent-platform
+  operator read a Kustomization's inventory, so the proofs of those paths
+  need the API; running kustomize-controller would add a controller nothing
+  in the lab applies from git with. The proofs apply their Kustomizations
+  suspended and write the inventory themselves. A Kyverno that started
+  before a provided CRD existed is restarted once (`admission.go`,
+  `reloadKyvernoForProvidedAPIs`): Kyverno resolves a policy's kinds when it
+  loads it and otherwise admits every Kustomization. Named as a lab-only
+  difference in docs/platform.md.
 - **The fleet's `flux-multi-tenancy` policy and Pod policies on the fleet's
   Kyverno charts, the platform namespace exempt in code, the Pod policies in
   Audit** (`internal/lab/admission.go`,
@@ -962,7 +975,8 @@ renders `kagent.providers` and the kagent chart's `default-model-config`.
   (`kyvernoPolicies.enabled: false`), and an enforced standard would refuse
   Pods an installation's exceptions admit. The lab's copy of
   `flux-multi-tenancy` also leaves out, at apply time, the Flux kinds the
-  lab does not serve (Kustomization, Alert, Receiver, ImagePolicy) and the
+  lab does not serve (Alert, Receiver, ImagePolicy; Kustomization is served,
+  previous entry) and the
   rules left matching nothing: for a kind no API serves, Kyverno refetches
   its whole discovery about once a second, which slowed every policy
   validation past the webhook's deadline. Unblocks: serving every Flux kind

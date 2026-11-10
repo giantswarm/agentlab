@@ -36,28 +36,18 @@ func TestInventoryStatus(t *testing.T) {
 	}
 }
 
-// TestGitOpsFixtureManifests checks the fixture's API serves the version
-// model-manager reads, with the status subresource the inventory is written
-// through, and that the Kustomization is suspended in the platform namespace.
+// TestGitOpsFixtureManifests checks the fixture is one Kustomization of the
+// version model-manager reads, suspended in the platform namespace — the
+// API is the lab's (providedapis.go), never the fixture's.
 func TestGitOpsFixtureManifests(t *testing.T) {
-	objs, err := decodeManifests(append(append(kustomizationCRD(), "---\n"...), gitopsFixtureKustomization()...))
+	objs, err := decodeManifests(gitopsFixtureKustomization())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(objs) != 2 {
-		t.Fatalf("%d objects, want the CRD and the Kustomization", len(objs))
+	if len(objs) != 1 {
+		t.Fatalf("%d objects, want the Kustomization alone", len(objs))
 	}
-	crd, ks := objs[0], objs[1]
-	if crd.GetName() != kustomizationCRDName || crd.GetLabels()[managedByLabel] != managedByAgentlabValue {
-		t.Fatalf("CRD %s labelled %v", crd.GetName(), crd.GetLabels())
-	}
-	if gvks := crdServedGVKs(crd); len(gvks) != 1 || gvks[0] != kustomizationGVR.GroupVersion().WithKind("Kustomization") {
-		t.Fatalf("CRD serves %v", gvks)
-	}
-	versions, _, _ := unstructured.NestedSlice(crd.Object, "spec", "versions")
-	if _, ok, _ := unstructured.NestedMap(versions[0].(map[string]any), "subresources", "status"); !ok {
-		t.Fatal("CRD has no status subresource")
-	}
+	ks := objs[0]
 	suspend, _, _ := unstructured.NestedBool(ks.Object, "spec", "suspend")
 	if ks.GroupVersionKind() != kustomizationGVR.GroupVersion().WithKind("Kustomization") || ks.GetName() != gitopsFluxFixture ||
 		ks.GetNamespace() != platformNamespace || !suspend {
