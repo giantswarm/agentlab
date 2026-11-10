@@ -198,12 +198,13 @@ func (p *credentialsProof) checks() []organizationCheck {
 		{surface: surfaceAgentManager, boundary: "an MCP 2025-11-25 client that declared URL elicitation gets -32042 carrying one URL mode elicitation with an elicitationId and the form's URL", skip: generations, run: p.legacyGeneration},
 		{surface: surfaceAgentManager, boundary: "a client without URL elicitation gets a result whose credentials[].next carries the form's link", skip: uiSkip, run: p.plainGeneration},
 		p.resourceLinkCheck(uiSkip),
-		{surface: surfaceCredentialAPI, boundary: "an operation's confirmation is its preparer's alone: each person reads their own, the other's read and an anonymous one are refused", skip: uiSkip, run: p.otherPersonRefused},
-		{surface: surfaceAgentManager, boundary: "a person with read-only rights on the organization (a viewer) is refused set_organization_model with nothing written and no operation, and their POST of the admin's operation with its ETag is refused with nothing written", skip: firstNonEmpty(uiSkip, p.viewerSkip()), run: p.viewerRefused},
+		{surface: surfaceCredentialAPI, boundary: "an operation's confirmation is its preparer's alone: the admin reads their own, another admin's read is refused as an unknown operation's, an anonymous one 401", skip: uiSkip, run: p.otherPersonRefused},
+		{surface: surfaceCredentialAPI, boundary: "an organization admin outside platform-admins prepares an operation of their own and reads it; the first admin's read of it is refused as an unknown operation's", skip: uiSkip, run: p.otherOwnOperation},
+		{surface: surfaceAgentManager, boundary: "a person with read-only rights on the organization (a viewer) is refused set_organization_model with nothing written, and their POST of the admin's operation with its ETag is refused with nothing written", skip: firstNonEmpty(uiSkip, p.viewerSkip()), run: p.viewerRefused},
 		{surface: surfaceCredentialAPI, boundary: "DELETE with If-Match cancels a pending operation: a stale ETag is refused, and after the cancel a save is refused with nothing written", skip: uiSkip, run: p.cancel},
+		{surface: surfaceCredentialAPI, boundary: "the form's save: GET with a strong ETag and the consumer the confirmation lists, a POST without If-Match (428) or with a stale one refused with nothing written, POST with If-Match and only the requested pair returns the receipt, a second POST and each client generation's retry the same receipt", skip: uiSkip, run: p.save},
 		{surface: surfaceCredentialAPI, boundary: "a save whose Secret another consumer came to reference is refused 409 with nothing written, and preparing it again is refused", skip: uiSkip, run: p.sharedSecretRefused},
 		{surface: surfaceCredentialAPI, boundary: "the confirmations of set_organization_connector and set_organization_egress_policy list the one consumer each and, for the EgressPolicy, exactly the origins it sends the credential to; both cancelled with nothing written", skip: uiSkip, run: p.connectorAndEgressConfirmations},
-		{surface: surfaceCredentialAPI, boundary: "the form's save: GET with a strong ETag and the consumer the confirmation lists, a POST without If-Match (428) or with a stale one refused with nothing written, POST with If-Match and only the requested pair returns the receipt, a second POST and each client generation's retry the same receipt", skip: uiSkip, run: p.save},
 		{surface: surfaceGitHub, boundary: "the save opens a pull request as the person, its Secret SOPS-encrypted", skip: commit, run: p.pullRequest},
 		{surface: surfaceFlux, boundary: "the merged pull request is applied and decrypted by the organization's Kustomization: the Secret's SHA-256 matches and the ModelConfig exists", skip: flux, run: p.fluxApplied},
 		{surface: surfaceCredentialAPI, boundary: "neither agent-manager's nor muster's logs carry the value, plain or base64, each read with at least one line", skip: uiSkip, run: p.valueNotLogged},
@@ -773,14 +774,44 @@ func (r *credentialREST) do(ctx context.Context, method, operation, token string
 
 // otherPersonRefused: an operation is bound to its preparer's issuer and
 // subject, as the phishing rule of agent-manager's credential operations
-// requires. The other person, an admin of the organization too, prepares an
-// operation of their own: each reads their own, each is refused the other's
-// with the answer of an operation that does not exist (no oracle), and an
-// anonymous read is refused.
+// requires. The admin reads their own operation; the other person, an
+// admin of the organization too, is refused it with the answer of an
+// operation that does not exist (no oracle), and an anonymous read is
+// refused.
 func (p *credentialsProof) otherPersonRefused() (string, error) {
 	if p.operation == "" {
 		return "", errors.New("no pending operation to read")
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), musterMCPTimeout)
+	defer cancel()
+	rest, err := dialCredentialREST(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer rest.stop()
+	if err := rest.ownRead(ctx, p.admin.Email, p.adminToken, p.operation); err != nil {
+		return "", err
+	}
+	unknown, err := rest.refusedAsUnknown(ctx, p.other.Email, p.otherToken, p.admin.Email, p.operation, p.namespace, p.value)
+	if err != nil {
+		return "", err
+	}
+	anonymous, _, _, err := rest.get(ctx, "", p.operation)
+	if err != nil {
+		return "", err
+	}
+	if anonymous != http.StatusUnauthorized {
+		return "", fmt.Errorf("an anonymous GET of the operation answered %d, want 401", anonymous)
+	}
+	return fmt.Sprintf("%s's own GET 200; %s, %s of %s too, GET %d as an unknown operation's; anonymous 401",
+		p.admin.Email, p.other.Email, organizationAdminRole, credentialsOrganization, unknown), nil
+}
+
+// otherOwnOperation: the other person prepares an operation of their own,
+// reads it, and the admin is refused it as an unknown operation. While
+// agent-manager refuses that person's own preparation
+// (giantswarm/agent-manager#359) it is a SKIP, and so is the cancel of it.
+func (p *credentialsProof) otherOwnOperation() (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*musterMCPTimeout)
 	defer cancel()
 	other, err := dialMusterMCP(ctx, p.cfg, p.otherToken, musterMCPOptions{name: "agentlab-credentials-other", protocol: mcp.ProtocolVersion20251125})
@@ -808,53 +839,59 @@ func (p *credentialsProof) otherPersonRefused() (string, error) {
 		return "", err
 	}
 	defer rest.stop()
-	status := func(token, operation string) (int, []byte, http.Header, error) {
-		resp, raw, err := rest.do(ctx, http.MethodGet, operation, token, nil, nil)
-		if err != nil {
-			return 0, nil, nil, err
-		}
-		return resp.StatusCode, raw, resp.Header, nil
+	if err := rest.ownRead(ctx, p.other.Email, p.otherToken, p.otherOperation); err != nil {
+		return "", err
 	}
-	for _, own := range []struct {
-		who, token, operation string
-	}{{p.admin.Email, p.adminToken, p.operation}, {p.other.Email, p.otherToken, p.otherOperation}} {
-		code, _, _, err := status(own.token, own.operation)
-		if err != nil {
-			return "", err
-		}
-		if code != http.StatusOK {
-			return "", fmt.Errorf("%s's GET of their own operation %s answered %d, want 200", own.who, own.operation, code)
-		}
-	}
-	unknown, _, _, err := status(p.otherToken, randomHex(24))
+	unknown, err := rest.refusedAsUnknown(ctx, p.admin.Email, p.adminToken, p.other.Email, p.otherOperation, p.namespace, p.value)
 	if err != nil {
 		return "", err
 	}
-	for _, refused := range []struct {
-		who, token, owner, operation string
-	}{{p.other.Email, p.otherToken, p.admin.Email, p.operation}, {p.admin.Email, p.adminToken, p.other.Email, p.otherOperation}} {
-		code, raw, header, err := status(refused.token, refused.operation)
-		if err != nil {
-			return "", err
-		}
-		switch {
-		case code != unknown:
-			return "", fmt.Errorf("%s's GET of %s's operation answered %d, an unknown operation %d: the refusal tells the operation exists: %s", refused.who, refused.owner, code, unknown, excerpt(redactValue(string(raw), p.value), 200))
-		case code != http.StatusNotFound && code != http.StatusForbidden:
-			return "", fmt.Errorf("%s's GET of %s's operation answered %d, want 404 or 403", refused.who, refused.owner, code)
-		case bytes.Contains(raw, []byte(p.namespace)) || header.Get("ETag") != "":
-			return "", fmt.Errorf("%s's refused GET still carries the operation's organization or an ETag", refused.who)
-		}
-	}
-	anonymous, _, _, err := status("", p.operation)
+	return fmt.Sprintf("%s (outside %s) prepared operation %s: their own GET 200; %s's GET %d as an unknown operation's",
+		p.other.Email, platformAdminsGroup, p.otherOperation, p.admin.Email, unknown), nil
+}
+
+// get GETs an operation with token, anonymous without one.
+func (r *credentialREST) get(ctx context.Context, token, operation string) (int, []byte, http.Header, error) {
+	resp, raw, err := r.do(ctx, http.MethodGet, operation, token, nil, nil)
 	if err != nil {
-		return "", err
+		return 0, nil, nil, err
 	}
-	if anonymous != http.StatusUnauthorized {
-		return "", fmt.Errorf("an anonymous GET of the operation answered %d, want 401", anonymous)
+	return resp.StatusCode, raw, resp.Header, nil
+}
+
+// ownRead checks a person reads their own operation.
+func (r *credentialREST) ownRead(ctx context.Context, who, token, operation string) error {
+	code, _, _, err := r.get(ctx, token, operation)
+	if err != nil {
+		return err
 	}
-	return fmt.Sprintf("%s and %s both %s of %s, each preparing an operation: each one's own GET 200; each one's GET of the other's %d, as an unknown operation's; anonymous 401",
-		p.other.Email, p.admin.Email, organizationAdminRole, credentialsOrganization, unknown), nil
+	if code != http.StatusOK {
+		return fmt.Errorf("%s's GET of their own operation %s answered %d, want 200", who, operation, code)
+	}
+	return nil
+}
+
+// refusedAsUnknown checks who's GET of owner's operation answers what an
+// unknown operation answers them (404 or 403), carrying neither the
+// operation's namespace nor an ETag, and returns that status.
+func (r *credentialREST) refusedAsUnknown(ctx context.Context, who, token, owner, operation, namespace, value string) (int, error) {
+	unknown, _, _, err := r.get(ctx, token, randomHex(24))
+	if err != nil {
+		return 0, err
+	}
+	code, raw, header, err := r.get(ctx, token, operation)
+	if err != nil {
+		return 0, err
+	}
+	switch {
+	case code != unknown:
+		return 0, fmt.Errorf("%s's GET of %s's operation answered %d, an unknown operation %d: the refusal tells the operation exists: %s", who, owner, code, unknown, excerpt(redactValue(string(raw), value), 200))
+	case code != http.StatusNotFound && code != http.StatusForbidden:
+		return 0, fmt.Errorf("%s's GET of %s's operation answered %d, want 404 or 403", who, owner, code)
+	case bytes.Contains(raw, []byte(namespace)) || header.Get("ETag") != "":
+		return 0, fmt.Errorf("%s's refused GET still carries the operation's organization or an ETag", who)
+	}
+	return code, nil
 }
 
 // readConfirmation GETs an operation as token and decodes the confirmation

@@ -557,8 +557,8 @@ func confirmationListsOnly(c confirmation, kind, name string, want []credentialR
 
 // ifMatchRequiredFloor is the first agent-manager that answers a save or a
 // cancel without If-Match 428 Precondition Required (RFC 6585 section 3,
-// giantswarm/agent-manager#354); before it, 400.
-const ifMatchRequiredFloor = "2.23.1"
+// giantswarm/agent-manager#354, from 2.23.0-rc.10); before it, 400.
+const ifMatchRequiredFloor = "2.23.0"
 
 // ifMatchRequiredStatuses are the statuses a save without If-Match may get
 // from the agent-manager version the lab runs, and a note when it predates

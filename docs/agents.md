@@ -451,24 +451,30 @@ printed only as its SHA-256. Each verdict:
   organization too, prepares an operation of their own (model
   `agentlab-credentials-other`): each reads their own, each read of the
   other's is refused with the status of an operation that does not exist
-  (404 or 403, no oracle), and an anonymous read answers 401. That user then
-  cancels their operation: `DELETE` with a stale `If-Match` answers 412, with
-  its `ETag` 204; it reads `cancelled`, a save of it answers 412 and nothing
-  of that model is written. While agent-manager refuses that user's own
-  operation with `forbidden: credential state cannot be verified` (it reads
-  the credential Secret as the caller, which `agent-platform:admin` may not),
-  both verdicts are a `SKIP` naming giantswarm/agent-manager#359.
+  (404 or 403, no oracle), and an anonymous read answers 401; the reads of
+  the admin's operation are one verdict, that user's own operation another.
+  That user then cancels their operation: `DELETE` with a stale `If-Match`
+  answers 412, with its `ETag` 204; it reads `cancelled`, a save of it
+  answers 412 and nothing of that model is written. While agent-manager
+  refuses that user's own operation with `forbidden: credential state cannot
+  be verified` (it reads the credential Secret as the caller, which
+  `agent-platform:admin` may not), the verdicts on their own operation and
+  its cancel are a `SKIP` naming giantswarm/agent-manager#359.
 - A person with read-only rights, the first lab user in `viewers` outside
   `platform-admins`, calls `set_organization_model` for a model of their own:
-  agent-manager's `forbidden` error result, no ModelConfig, no value and no
-  operation. Their `POST` of the admin's pending operation, with its current
+  agent-manager's `forbidden` error result, no ModelConfig and no value; the
+  verdict names the guard that refused it (until giantswarm/agent-manager#359
+  the read of the credential Secret as the caller, before the write's own
+  authorization). Their `POST` of the admin's pending operation, with its current
   `ETag` and a value, answers what an unknown operation answers (404 or 403),
   nothing is written and the admin's operation stays pending at that `ETag`.
 - A Secret another consumer comes to reference: the admin prepares model
   `agentlab-credentials-shared` naming `tenant-credential-agentlab-credentials-shared`,
   then a ModelConfig applied by the lab references that Secret too; the save
   answers 409 `conflict` with nothing written, and preparing the model again
-  (a fresh `requestId`) is refused `conflict`.
+  (a fresh `requestId`) is refused `conflict` for that reference. It runs
+  after the save, like the next verdict, so the admin's operation is saved
+  well within its 15 minutes.
 - The confirmations of `set_organization_connector` and
   `set_organization_egress_policy`, each without its credential: each shows
   its one write and lists only that object as the Secret's consumer (key
@@ -476,7 +482,7 @@ printed only as its SHA-256. Each verdict:
   policy with exactly the two origins that get the credential and not the
   one reached without it. Both are cancelled, nothing written.
 - Back on the admin's operation, its confirmation lists only the ModelConfig
-  (key `apiKey`); a `POST` without `If-Match` (428 from agent-manager 2.23.1,
+  (key `apiKey`); a `POST` without `If-Match` (428 from agent-manager 2.23.0,
   giantswarm/agent-manager#354; 400 also admitted, and said, on an older one)
   and one with a stale tag (412) write nothing and leave it pending; `POST`
   with `If-Match` and only the requested Secret/key returns the receipt, a

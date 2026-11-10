@@ -77,10 +77,13 @@ func (p *credentialsProof) viewerSkip() string {
 }
 
 // viewerRefused: a viewer's set_organization_model is agent-manager's
-// forbidden with nothing written and no operation; their POST of the
-// admin's pending operation, with its current ETag and a value, is refused
-// as an unknown operation's would be, nothing is written and the admin's
-// operation stays pending at the same ETag.
+// forbidden with nothing written; their POST of the admin's pending
+// operation, with its current ETag and a value, is refused as an unknown
+// operation's would be, nothing is written and the admin's operation stays
+// pending at the same ETag. The detail names the guard that refused the
+// call: until giantswarm/agent-manager#359 agent-manager refuses on reading
+// the credential Secret as the caller, before the write's own authorization,
+// which refuses an organization admin outside platform-admins too.
 func (p *credentialsProof) viewerRefused() (string, error) {
 	if p.operation == "" {
 		return "", errors.New("no pending operation of the admin")
@@ -106,6 +109,10 @@ func (p *credentialsProof) viewerRefused() (string, error) {
 	refusal, err := refusedWith(answer, "forbidden")
 	if err != nil {
 		return "", fmt.Errorf("%s's set_organization_model %s: %w", viewer.Email, credentialsViewerModel, err)
+	}
+	guard := "the write's authorization"
+	if strings.Contains(refusal, credentialStateUnverifiable) {
+		guard = "the credential Secret's read as the caller, not yet the write's authorization (giantswarm/agent-manager#359)"
 	}
 	if err := nothingWritten(ctx, p.namespace, credentialsViewerModel, "tenant-credential-"+credentialsViewerModel); err != nil {
 		return "", fmt.Errorf("after %s's refused call: %w", viewer.Email, err)
@@ -154,15 +161,21 @@ func (p *credentialsProof) viewerRefused() (string, error) {
 	if after.State != operationPending || before.State != operationPending || etagAfter != etag {
 		return "", fmt.Errorf("%s's operation reads %q at %s after %s's refused POST, want %s at %s", p.admin.Email, after.State, etagAfter, viewer.Email, operationPending, etag)
 	}
-	return fmt.Sprintf("%s (%s): set_organization_model %s refused %q, no ModelConfig, no value, no operation; their POST of %s's operation with its ETag %d, as an unknown operation's, nothing written, the operation %s at %s",
-		viewer.Email, viewerGroup, credentialsViewerModel, excerpt(refusal, 160), p.admin.Email, code, operationPending, etag), nil
+	return fmt.Sprintf("%s (%s): set_organization_model %s refused %q by %s, no ModelConfig, no value; their POST of %s's operation with its ETag %d, as an unknown operation's, nothing written, the operation %s at %s",
+		viewer.Email, viewerGroup, credentialsViewerModel, excerpt(refusal, 160), guard, p.admin.Email, code, operationPending, etag), nil
 }
+
+// sharedSecretRefusal is agent-manager's refusal to prepare a credential a
+// consumer other than the one asking references.
+const sharedSecretRefusal = "another consumer references the credential Secret" // #nosec G101 -- an error text, not a credential
 
 // sharedSecretRefused: the admin prepares a model naming a new Secret;
 // before the save another ModelConfig comes to reference that Secret. The
-// save is refused 409 with nothing written (agent-manager refuses a Secret
-// referenced by another object than the one the operation names), and
-// preparing the model again, with a fresh requestId, is refused conflict.
+// save is refused 409 conflict with nothing written (agent-manager refuses a
+// Secret referenced by another object than the one the operation names; its
+// REST answer drops the reason, so only the status and code are judged,
+// with nothing else changed since the confirmation), and preparing the model
+// again, with a fresh requestId, is refused for that reference.
 func (p *credentialsProof) sharedSecretRefused() (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*musterMCPTimeout)
 	defer cancel()
@@ -220,6 +233,9 @@ func (p *credentialsProof) sharedSecretRefused() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("preparing %s again: %w", credentialsSharedModel, err)
 	}
+	if !strings.Contains(refusal, sharedSecretRefusal) {
+		return "", fmt.Errorf("preparing %s again was refused %q, not for the Secret %s references", credentialsSharedModel, excerpt(refusal, 200), credentialsSharedOther)
+	}
 	if err := nothingWritten(ctx, p.namespace, credentialsSharedModel, credentialsSharedSecret); err != nil {
 		return "", fmt.Errorf("after the refused preparation: %w", err)
 	}
@@ -269,8 +285,12 @@ func (p *credentialsProof) cancelQuietly(rest *credentialREST, operation string)
 	if err != nil || c.State != operationPending {
 		return
 	}
-	if resp, _, err := rest.do(ctx, http.MethodDelete, operation, p.adminToken, http.Header{headerIfMatch: {etag}}, nil); err != nil || resp.StatusCode != http.StatusNoContent {
+	resp, _, err := rest.do(ctx, http.MethodDelete, operation, p.adminToken, http.Header{headerIfMatch: {etag}}, nil)
+	switch {
+	case err != nil:
 		note("cleanup: cancelling operation %s: %v", operation, err)
+	case resp.StatusCode != http.StatusNoContent:
+		note("cleanup: cancelling operation %s answered %d", operation, resp.StatusCode)
 	}
 }
 

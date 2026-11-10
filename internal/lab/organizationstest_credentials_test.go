@@ -463,15 +463,15 @@ func TestConfirmationListsOnly(t *testing.T) {
 	}
 }
 
-// 428 alone from agent-manager 2.23.1 (giantswarm/agent-manager#354); an
+// 428 alone from agent-manager 2.23.0 (giantswarm/agent-manager#354); an
 // older or unreadable version also admits 400 and says so.
 func TestIfMatchRequiredStatuses(t *testing.T) {
-	for _, v := range []string{"2.23.1", "v2.23.2", "2.24.0-rc.1"} {
+	for _, v := range []string{"2.23.0", "v2.23.2", "2.24.0-rc.1"} {
 		got, note := ifMatchRequiredStatuses(v)
 		require.Equal(t, []int{428}, got, v)
 		require.Empty(t, note, v)
 	}
-	for _, v := range []string{"2.23.0", "2.23.1-rc.2", ""} {
+	for _, v := range []string{"2.22.0", "2.23.0-rc.9", ""} {
 		got, note := ifMatchRequiredStatuses(v)
 		require.Equal(t, []int{428, 400}, got, v)
 		require.Contains(t, note, "giantswarm/agent-manager#354", v)
@@ -525,9 +525,4 @@ func TestCredentialsViewerUser(t *testing.T) {
 	}}
 	require.Equal(t, "viewer@lab.test", credentialsViewerUser(cfg).Email)
 	require.Nil(t, credentialsViewerUser(&config.Config{Users: cfg.Users[:2]}))
-}
-
-func TestErrorCode(t *testing.T) {
-	require.Equal(t, "conflict", errorCode([]byte(`{"error":{"code":"conflict","message":"another object references this Secret"}}`)))
-	require.Empty(t, errorCode([]byte(`not json`)))
 }
