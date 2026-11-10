@@ -211,7 +211,8 @@ func TestSlackDriver(t *testing.T) {
 		User      struct{ ID string }
 		Channel   struct{ ID string }
 		Container struct {
-			MessageTS string `json:"message_ts"`
+			MessageTS   string `json:"message_ts"`
+			IsEphemeral bool   `json:"is_ephemeral"`
 		}
 		Message struct {
 			Blocks []map[string]any `json:"blocks"`
@@ -225,10 +226,42 @@ func TestSlackDriver(t *testing.T) {
 	if err := json.Unmarshal([]byte(form.Get("payload")), &click); err != nil {
 		t.Fatal(err)
 	}
+	if click.Container.IsEphemeral {
+		t.Error("a click on a message says is_ephemeral")
+	}
 	if click.Type != "block_actions" || click.User.ID != "UP" || click.Channel.ID != "C1" || click.Container.MessageTS != "9.1" ||
 		len(click.Actions) != 1 || click.Actions[0].ActionID != slackActionApprove || !strings.Contains(click.Actions[0].Value, "task-1") ||
 		!reflect.DeepEqual(click.Message.Blocks, card.Blocks) || !strings.HasSuffix(click.ResponseURL, slackResponsePath) {
 		t.Errorf("click = %+v", click)
+	}
+}
+
+// A click on an ephemeral says so in its container, as Slack's does: the
+// gateway rewrites only an ephemeral prompt through the click's response_url.
+func TestSlackDriverEphemeralClick(t *testing.T) {
+	var payload string
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		payload = r.PostForm.Get("payload")
+	}))
+	defer srv.Close()
+	d := newSlackDriver(srv.URL, "sekrit", startTestFake(t, nil), "C1")
+	prompt := slackMessage{TS: "9.2", Channel: "C1", Method: slackPostEphemeral, Blocks: []map[string]any{{fieldTypeKey: slackBlockActions, slackKeyElements: []any{
+		map[string]any{fieldTypeKey: slackButton, slackKeyActionID: slackActionConnect},
+	}}}}
+	if err := d.click("UP", prompt, slackActionConnect); err != nil {
+		t.Fatal(err)
+	}
+	var click struct {
+		Container struct {
+			IsEphemeral bool `json:"is_ephemeral"`
+		}
+	}
+	if err := json.Unmarshal([]byte(payload), &click); err != nil {
+		t.Fatal(err)
+	}
+	if !click.Container.IsEphemeral {
+		t.Errorf("a click on an ephemeral does not say is_ephemeral: %s", payload)
 	}
 }
 

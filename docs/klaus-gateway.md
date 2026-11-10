@@ -246,8 +246,9 @@ records, muster's dispatch log and the controller:
 - **Accepted**: the click on Sign in is the person's consent: the gateway
   resumes the task with accept (a resume, not a message of the person's)
   before the sign-in, and the prompt reads "Opened the sign-in link". The
-  stage then waits for the task to leave `input-required` (the retry is in
-  flight, parked in muster's sign-in wait of up to five minutes) and holds
+  stage then waits for the task to leave `input-required` (the runtime's
+  retry is in flight; muster holds it in its sign-in wait of up to five
+  minutes, which it does not log, so the stage reads the task) and holds
   the sign-in back for `--hold` (default 10s), failing as soon as the task
   ends or asks again. Only then does the sign-in from the link go through
   Dex and muster, ending on muster's own page; the call runs once in the

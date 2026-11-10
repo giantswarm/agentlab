@@ -38,13 +38,13 @@ func TestSignInPromptIn(t *testing.T) {
 	}
 }
 
-func TestLinkRedirect(t *testing.T) {
-	link := "https://muster.example/oauth/proxy/start?s=1&redirect=http%3A%2F%2F127.0.0.1%3A18090%2Fback%3Fs%3Dabc"
-	if got, want := linkRedirect(link), "http://127.0.0.1:18090/back?s=abc"; got != want {
-		t.Errorf("linkRedirect = %q, want %q", got, want)
-	}
-	if got := linkRedirect("https://muster.example/oauth/proxy/start?s=1"); got != "" {
-		t.Errorf("linkRedirect of a link without one = %q, want empty", got)
+// The prompt shows the link's domain in bold and the whole link in code,
+// escaped as Slack mrkdwn, as klaus-gateway's signInLinkText writes it.
+func TestSignInLinkShown(t *testing.T) {
+	link := "https://muster.example:8443/oauth/proxy/start?state=a&b=<1>"
+	want := "Opens *muster.example*\n`https://muster.example:8443/oauth/proxy/start?state=a&amp;b=&lt;1&gt;`"
+	if got := signInLinkShown(link); got != want {
+		t.Errorf("signInLinkShown = %q, want %q", got, want)
 	}
 }
 

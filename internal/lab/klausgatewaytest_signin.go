@@ -292,12 +292,6 @@ func (s *signInSurfaces) paused(t *slackThread, turn *slackTurn, before int) (*s
 	prompt, _ := signInPromptIn(msgs, before, t.user)
 	button, _ := prompt.action(slackActionConnect)
 	link, _ := button[slackKeyURL].(string)
-	if redirect := linkRedirect(link); redirect != "" {
-		return nil, fmt.Errorf("the sign-in button's link %s carries a redirect %s: the gateway must open the server's link unchanged", linkPath(link), redirect)
-	}
-	if shown := "`" + strings.ReplaceAll(link, "&", "&amp;") + "`"; !strings.Contains(prompt.Text, shown) {
-		return nil, fmt.Errorf("the sign-in prompt does not show the whole link %s before it is opened: %s", linkPath(link), excerpt(prompt.Text, 300))
-	}
 	session, err := s.slack.boundSession(s.api, t)
 	if err != nil {
 		return nil, err
@@ -306,8 +300,15 @@ func (s *signInSurfaces) paused(t *slackThread, turn *slackTurn, before int) (*s
 	if err != nil {
 		return nil, err
 	}
-	if task.Status.State != a2a.TaskStateInputRequired || parseURLElicitationRequest(task.Status.Message) == nil {
+	elicitation := parseURLElicitationRequest(task.Status.Message)
+	if task.Status.State != a2a.TaskStateInputRequired || elicitation == nil {
 		return nil, fmt.Errorf("the thread shows a sign-in prompt for task %s but the controller has it %s without a url_elicitation_request", task.ID, task.Status.State)
+	}
+	if link != elicitation.URL {
+		return nil, fmt.Errorf("the sign-in button opens %s, not the url_elicitation_request's %s: the gateway must open the server's link unchanged", linkPath(link), linkPath(elicitation.URL))
+	}
+	if shown := signInLinkShown(link); !strings.Contains(prompt.Text, shown) {
+		return nil, fmt.Errorf("the sign-in prompt does not show %q before the link is opened: %s", shown, excerpt(prompt.Text, 300))
 	}
 	note("task %s of Session %s paused at input-required (status message %s); the prompt went to %s alone, showing its link %s whole and opening it unchanged",
 		task.ID, session.GetId(), task.Status.Message.ID, prompt.Recipient, linkPath(link))
@@ -569,7 +570,7 @@ func (s *signInSurfaces) accepted(t *slackThread) error {
 	if _, ok := findMessage(turn.msgs, "<@"+t.user+">"+gatewaySignedInLine); !ok {
 		return fmt.Errorf("the thread does not say %q: %s", "<@"+t.user+">"+gatewaySignedInLine, threadLine(turn.msgs))
 	}
-	s.pass("the click on Sign in resumed task %s with accept before the sign-in; its retry stayed %s for %s in muster's sign-in wait; the sign-in from the link, unchanged, ended on muster's page; the call ran once in the same task and the answer carried the fixture's tools", paused.task.ID, parked, s.hold)
+	s.pass("the click on Sign in resumed task %s with accept before the sign-in; the task stayed %s on its retry for %s, muster holding the call until the sign-in; the sign-in from the link, unchanged, ended on muster's page; the call ran once in the same task and the answer carried the fixture's tools", paused.task.ID, parked, s.hold)
 	s.signOut()
 	restartOAuthFixture()
 	return nil
@@ -724,13 +725,16 @@ func signInPromptIn(msgs []slackMessage, before int, user string) (slackMessage,
 	return slackMessage{}, false
 }
 
-// linkRedirect is the post-login redirect a sign-in link carries.
-func linkRedirect(link string) string {
-	u, err := url.Parse(link)
-	if err != nil {
-		return ""
+// signInLinkShown is how the gateway's sign-in prompt shows an ASCII link
+// before it is opened: the domain in bold, then the whole URL in code,
+// escaped as Slack mrkdwn.
+func signInLinkShown(link string) string {
+	host := ""
+	if u, err := url.Parse(link); err == nil {
+		host = u.Hostname()
 	}
-	return u.Query().Get("redirect")
+	escape := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace
+	return "Opens *" + escape(host) + "*\n`" + escape(link) + "`"
 }
 
 // responded reports whether a prompt was rewritten through its response_url
