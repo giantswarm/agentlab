@@ -3031,6 +3031,42 @@ func legacyChartDir(dir string) bool {
 	return !substrate
 }
 
+// skillManagerChartFloor is the first agent-platform release with the
+// skill-manager component (giantswarm/agent-platform#1265). PLACEHOLDER: the
+// minor after 4.177.5, the latest release when the key was added; set it to
+// the release that carries the component.
+var skillManagerChartFloor = semver.MustParse("4.178.0")
+
+// SkillManagerChart reports whether the lab's meta chart runs the
+// skill-manager and so takes its values: a released chart from
+// skillManagerChartFloor on, a branch build, a chart directory whose roster
+// lists the component. The chart's schema is closed, so a chart without it
+// refuses the block.
+func (c *Config) SkillManagerChart() bool {
+	if c.Platform.ChartPath != "" && !c.LegacyChart() {
+		return chartDirHasComponent(c.Platform.ChartPath, "skill-manager")
+	}
+	_, below := c.chartBelow(skillManagerChartFloor)
+	return !below
+}
+
+// chartDirHasComponent reports whether the chart directory's values list the
+// component under components.
+func chartDirHasComponent(dir, component string) bool {
+	data, err := os.ReadFile(filepath.Join(dir, valuesFile)) // #nosec G304 -- the chart directory agentlab.yaml names
+	if err != nil {
+		return false
+	}
+	var values struct {
+		Components map[string]yaml.Node `yaml:"components"`
+	}
+	if yaml.Unmarshal(data, &values) != nil {
+		return false
+	}
+	_, ok := values.Components[component]
+	return ok
+}
+
 // AdminUser returns the first user in platform-admins: the identity the up
 // verification loop and the smoke tests default to.
 func (c *Config) AdminUser() *User {

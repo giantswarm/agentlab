@@ -1114,6 +1114,31 @@ model-manager:
 
 {{- end }}
 
+{{- if .SkillManager }}
+# The skill-manager chart's own values (giantswarm/skill-manager; the meta
+# chart derives its sources, OAuth and callers' namespaces). It lists and
+# pins skills with the credential agent-manager has: the skills GitHub App
+# when one is recorded (githubapp.go; the chart refuses it together with
+# tokenSecret), else the githubToken.source token (githubtoken.go), the
+# Secret's name only. Its own NetworkPolicy defaults on and would cut the
+# pod off the lab Dex on its private address, so it follows
+# platform.networkPolicy like the connectivity chart's and muster's; on,
+# patch 11 adds the Dex peer (networkpolicy.go).
+skill-manager:
+{{- if .GitHubApp }}
+  github:
+    app:
+      secretName: agentlab-github-app
+{{- else if .GitHubToken }}
+  github:
+    tokenSecret:
+      name: agentlab-github-token
+      key: GITHUB_TOKEN
+{{- end }}
+  networkPolicy:
+    enabled: {{ .Platform.NetworkPolicy }}
+{{- end }}
+
 # The cluster-manager chart's own values (the chart pins the Service name,
 # the muster registration and OAuth against global.identity), rendered
 # whether or not the component is on: the meta chart forwards the block only
