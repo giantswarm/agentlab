@@ -764,3 +764,16 @@ agent-platform` gives a lab user the token for it):
 
 `go test ./fixtures/...` checks the definition against what the tools refuse
 at write time and the model it names against the values entry.
+
+## Agent-manager ServiceAccount proof
+
+`agents-test` compares agent-manager's ServiceAccount permissions with an
+unbound ServiceAccount and the grants required by the platform values.
+With `agentPlatformOrganizations.enabled` and agent-manager's `--multi-tenant`
+flag, it requires exactly `get` and `list` on namespaces for organization
+discovery. Kubernetes RBAC cannot restrict a namespace list by label;
+agent-manager filters for organization labels and performs organization
+operations as the caller. Namespace writes, watches, and reads of Secrets
+are not part of that grant and fail the proof. With organizations disabled,
+the discovery grant is not allowed. Older charts using
+`tenants.organizations.enabled` retain their separate reconciler checks.

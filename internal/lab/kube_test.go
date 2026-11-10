@@ -63,8 +63,6 @@ const (
 	fieldMessage     = "message"
 	fieldNamespace   = "namespace"
 	retriesExhausted = "install retries exhausted"
-	verbGet          = "get"
-	verbList         = "list"
 	verbCreate       = "create"
 )
 
