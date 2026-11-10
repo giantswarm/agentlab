@@ -170,8 +170,20 @@ type organizationCheck struct {
 	run               func() (string, error)
 }
 
+// checkSkipped is a run's answer that what it proves cannot be reached on
+// this lab: only the run finds out (a refusal a released component still
+// gives), and reason names the fix, as a skip decided before the run does.
+type checkSkipped struct{ reason string }
+
+func (s *checkSkipped) Error() string { return "skipped: " + s.reason }
+
+// skipCheck ends a run as a SKIP naming its fix.
+func skipCheck(format string, a ...any) error {
+	return &checkSkipped{reason: fmt.Sprintf(format, a...)}
+}
+
 // verdict runs the check, or skips it, and fails naming the surface and the
-// boundary.
+// boundary. A run that answers skipCheck is a SKIP with its reason.
 func (c organizationCheck) verdict() (organizationVerdict, error) {
 	v := organizationVerdict{surface: c.surface, boundary: c.boundary, skip: c.skip}
 	switch {
@@ -182,6 +194,11 @@ func (c organizationCheck) verdict() (organizationVerdict, error) {
 	}
 	step("[%s] %s", c.surface, c.boundary)
 	detail, err := c.run()
+	var skipped *checkSkipped
+	if errors.As(err, &skipped) {
+		v.skip = skipped.reason
+		return v, v.lint()
+	}
 	if err != nil {
 		return v, fmt.Errorf("FAIL [%s] %s: %w", c.surface, c.boundary, err)
 	}

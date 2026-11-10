@@ -451,20 +451,61 @@ printed only as its SHA-256. Each verdict:
 - The form's save, the way the portal's form posts it
   (giantswarm/backstage#3364): `GET /api/v1/credential-operations/{operation}`
   with the person's token answers the confirmation with a strong `ETag` and
-  `Cache-Control: no-store`. Another lab user, bound as an admin of the
-  organization too, prepares an operation of their own (model
+  `Cache-Control: no-store`. Another lab user, in neither `platform-admins`
+  nor `viewers` (the default `dev@lab.local`) and bound by name as an admin
+  of the organization too, prepares an operation of their own (model
   `agentlab-credentials-other`): each reads their own, each read of the
   other's is refused with the status of an operation that does not exist
-  (404 or 403, no oracle), and an anonymous read answers 401. That user then
-  cancels their operation: `DELETE` with a stale `If-Match` answers 412, with
-  its `ETag` 204; it reads `cancelled`, a save of it answers 412 and nothing
-  of that model is written. Back on the admin's operation, a `POST` without
-  `If-Match` (400, or RFC 6585's 428) and one with a stale tag (412) write
-  nothing and leave it pending; `POST` with `If-Match` and only the requested
-  Secret/key returns the receipt, and the original call retried on the
-  2025-11-25 client returns the same receipt (the same pull request on the
-  same branch), the Secret's and the ModelConfig's resourceVersions
-  unchanged. agent-manager binds an operation to the person, the client and
+  (404 or 403, no oracle), and an anonymous read answers 401; the reads of
+  the admin's operation are one verdict, that user's own operation another.
+  That user then cancels their operation: `DELETE` with a stale `If-Match`
+  answers 412, with its `ETag` 204; it reads `cancelled`, a save of it
+  answers 412 and nothing of that model is written. An agent-manager older
+  than 2.24.0-rc.2 refuses that user's own operation with `forbidden:
+  credential state cannot be verified` (it reads the credential Secret as the
+  caller, which `agent-platform:admin` may not): there the verdicts on their
+  own operation and its cancel are a `SKIP` naming giantswarm/agent-manager#360;
+  from 2.24.0-rc.2 on they run, and that refusal fails them.
+- A viewer: a third lab user, in `viewers` only (the default
+  `viewer@lab.local`; never the other admin, never in `platform-admins` or
+  `developers`), bound by name to the organization's read-only role
+  `agent-platform:user`. A lab without three such people fails the part
+  naming the user it lacks. Before any verdict, access reviews with each
+  person's own token must show the viewer listing the organization's
+  ModelConfigs and creating neither Secrets nor ModelConfigs, and the other
+  admin creating both; else the part fails as a wrong fixture. The viewer's
+  `set_organization_model` for a model of their own must be refused with the
+  apiserver's RBAC denial of that user creating the Secret or the ModelConfig
+  in the organization's namespace (agent-manager 2.24.0-rc.2 and newer, whose dry-run create of the Secret as
+  the caller meets it), with nothing written; an older agent-manager refuses
+  every person outside `platform-admins` on reading the Secret first, which
+  is a `SKIP` naming giantswarm/agent-manager#360, and any other refusal
+  fails. A second verdict: their `POST` of the admin's pending operation,
+  with its current `ETag` and a value, answers what an unknown operation
+  answers (404 or 403), nothing is written and the admin's operation stays
+  pending at that `ETag`.
+- A Secret another consumer comes to reference: the admin prepares model
+  `agentlab-credentials-shared` naming `tenant-credential-agentlab-credentials-shared`,
+  then a ModelConfig applied by the lab references that Secret too; the save
+  answers 409 `conflict` with nothing written, and preparing the model again
+  (a fresh `requestId`) is refused `conflict` for that reference. It runs
+  after the save, like the next verdict, so the admin's operation is saved
+  well within its 15 minutes.
+- The confirmations of `set_organization_connector` and
+  `set_organization_egress_policy`, each without its credential: each shows
+  its one write and lists only that object as the Secret's consumer (key
+  `token`), the connector with the URL it sends the value to, the egress
+  policy with exactly the two origins that get the credential and not the
+  one reached without it. Both are cancelled, nothing written.
+- Back on the admin's operation, its confirmation lists only the ModelConfig
+  (key `apiKey`); a `POST` without `If-Match` (428 from agent-manager 2.23.0,
+  giantswarm/agent-manager#354; 400 also admitted, and said, on an older one)
+  and one with a stale tag (412) write nothing and leave it pending; `POST`
+  with `If-Match` and only the requested Secret/key returns the receipt, a
+  second `POST` with the same `ETag` answers the same receipt, and the
+  original call retried on the 2025-11-25 client returns it too (the same
+  pull request on the same branch), the Secret's and the ModelConfig's
+  resourceVersions unchanged. agent-manager binds an operation to the person, the client and
   the MCP session it sees, so the 2026-07-28 client's retry returns that
   receipt too when muster reached agent-manager on one session for both, and
   otherwise stays `input_required` for its own operation. Neither the
@@ -495,13 +536,14 @@ printed only as its SHA-256. Each verdict:
   remove it by hand. A pull request nothing merged is closed and its branch
   deleted.
 - Neither agent-manager's nor muster's logs since the run began carry the
-  value, plain or base64.
+  value, plain or base64; a component of which no line was read fails the
+  verdict, since an empty read proves nothing.
 - Both 2025-11-25 clients listen on their standalone stream from the start:
   a `notifications/elicitation/complete` may only reach the client that
   initiated the elicitation, carrying its `elicitationId`, and the client
   without URL elicitation receives none. A server may send no completion at
-  all (muster from giantswarm/muster#1812 relays none), which the verdict
-  reports.
+  all (muster from giantswarm/muster#1812 relays none, giantswarm/muster#1830),
+  which the verdict reports.
 - A sign-in a server of the organization's namespace needs: an OAuth
   `MCPServer` there, modelled on `lab-oauth-fixture` without a pinned
   client, reads `Auth Required`, and `core_auth_login` for

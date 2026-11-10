@@ -876,6 +876,20 @@ workspaces. **Unblocked by** the kubernetes flavour rendering the controller's
 full egress, or no isolating policy, in giantswarm/agent-platform; the
 deletion then goes from patch 10.
 
+### U48. `organizationstest_credentials.go`: the other organization admin's own credential operation is a SKIP before agent-manager 2.24.0-rc.2 — FIXED upstream
+agent-manager before 2.24.0-rc.2 answers `set_organization_model` for an
+organization admin outside `platform-admins` with `forbidden: credential
+state cannot be verified`: it GETs the credential Secret as the caller, and
+`agent-platform:admin` may write Secrets but never read them. It refuses a
+viewer the same way, before the write's authorization. **Fix in the lab:**
+below `credentialsWriteOnlyFloor` (2.24.0-rc.2), `ownCredentialRefused` turns
+that one refusal of the other admin into a `SKIP` naming the fix
+(`otherBlocked` skips the cancel), and `viewerRefusalVerdict` does the same
+for the viewer; at or above the floor the same refusal fails. **Fixed by**
+giantswarm/agent-manager#360 (closing #359), in 2.24.0-rc.2: once the lab's
+agent-manager floor reaches 2.24.0, `ownCredentialRefused`, `otherBlocked`
+and the viewer's skip go.
+
 ### U38. `postRenderers` patch: agentgateway binds IPv4 — BLOCKED UPSTREAM
 agentgateway binds its readiness (15021) and stats (15020) servers and its
 listeners on the IPv6 wildcard unless IPv6 is switched off

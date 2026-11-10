@@ -3,9 +3,12 @@ package lab
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
 	"filippo.io/age"
@@ -247,16 +250,6 @@ func TestCredentialsSignInManifest(t *testing.T) {
 	require.False(t, obj.Spec.Auth.ForwardToken)
 }
 
-func TestCredentialsOtherUser(t *testing.T) {
-	cfg := &config.Config{Users: []config.User{
-		{Email: "first@lab.test", Groups: []string{platformAdminsGroup}},
-		{Email: "second@lab.test", Groups: []string{platformAdminsGroup}},
-		{Email: "third@lab.test", Groups: []string{developersGroup}},
-	}}
-	require.Equal(t, "third@lab.test", credentialsOtherUser(cfg, &cfg.Users[0]).Email)
-	require.Nil(t, credentialsOtherUser(&config.Config{Users: cfg.Users[:2]}, &cfg.Users[0]))
-}
-
 func TestWithArgs(t *testing.T) {
 	base := map[string]any{"a": 1}
 	got := withArgs(base, map[string]any{"b": 2})
@@ -441,4 +434,172 @@ func TestConformsTo(t *testing.T) {
 	require.Error(t, conformsTo(schema, json.RawMessage(`{"pending":"yes","credentials":[]}`)))
 	require.Error(t, conformsTo(schema, json.RawMessage(`{"pending":true,"credentials":[{}]}`)))
 	require.Error(t, conformsTo(schema, json.RawMessage(`{"pending":true}`)))
+}
+
+// A confirmation passes only with its one write and exactly the expected
+// consumers: another consumer, another key, an origin missing or an origin
+// that gets no credential each fail.
+func TestConfirmationListsOnly(t *testing.T) {
+	egress := credentialReference{Kind: egressPolicyKind, Name: "e", Key: credentialTokenKey, Origins: []string{"https://a.example", "https://b.example"}}
+	write := []credentialChange{{Action: "create", Object: map[string]any{kindKey: egressPolicyKind, crMetadata: map[string]any{nameKey: "e"}}}}
+	ok := confirmation{Changes: write, References: []credentialReference{{Kind: egressPolicyKind, Name: "e", Key: credentialTokenKey, Origins: []string{"https://b.example", "https://a.example"}}}}
+	require.NoError(t, confirmationListsOnly(ok, egressPolicyKind, "e", []credentialReference{egress}))
+	for name, c := range map[string]confirmation{
+		"another consumer": {Changes: write, References: append(slices.Clone(ok.References), credentialReference{Kind: "ModelConfig", Name: "m", Key: credentialTokenKey})},
+		"another key":      {Changes: write, References: []credentialReference{{Kind: egressPolicyKind, Name: "e", Key: "apiKey", Origins: egress.Origins}}},
+		"an origin short":  {Changes: write, References: []credentialReference{{Kind: egressPolicyKind, Name: "e", Key: credentialTokenKey, Origins: egress.Origins[:1]}}},
+		"a plain origin":   {Changes: write, References: []credentialReference{{Kind: egressPolicyKind, Name: "e", Key: credentialTokenKey, Origins: append(slices.Clone(egress.Origins), "https://plain.example")}}},
+		"no reference":     {Changes: write},
+		"another write":    {Changes: []credentialChange{{Action: "create", Object: map[string]any{kindKey: egressPolicyKind, crMetadata: map[string]any{nameKey: "x"}}}}, References: ok.References},
+		"two writes":       {Changes: append(slices.Clone(write), write...), References: ok.References},
+	} {
+		require.Error(t, confirmationListsOnly(c, egressPolicyKind, "e", []credentialReference{egress}), name)
+	}
+}
+
+// 428 alone from agent-manager 2.23.0 (giantswarm/agent-manager#354); an
+// older or unreadable version also admits 400 and says so.
+func TestIfMatchRequiredStatuses(t *testing.T) {
+	for _, v := range []string{"2.23.0", "v2.23.2", "2.24.0-rc.2"} {
+		got, note := ifMatchRequiredStatuses(v)
+		require.Equal(t, []int{428}, got, v)
+		require.Empty(t, note, v)
+	}
+	for _, v := range []string{"2.22.0", "2.23.0-rc.9", ""} {
+		got, note := ifMatchRequiredStatuses(v)
+		require.Equal(t, []int{428, 400}, got, v)
+		require.Contains(t, note, "giantswarm/agent-manager#354", v)
+	}
+}
+
+func TestJudgeComponentLogs(t *testing.T) {
+	value := "s3cr3t-value"
+	lines, err := judgeComponentLogs("muster", "a\n\nb\n", value)
+	require.NoError(t, err)
+	require.Equal(t, 2, lines)
+	_, err = judgeComponentLogs("muster", "\n \n", value)
+	require.ErrorContains(t, err, "read no log line")
+	_, err = judgeComponentLogs("muster", "x "+base64.StdEncoding.EncodeToString([]byte(value))+"\n", value)
+	require.ErrorContains(t, err, "base64-encoded")
+	require.NotContains(t, err.Error(), value)
+}
+
+// A refusal is agent-manager's error result with its code: muster's own
+// error, a result and a pending elicitation are not.
+func TestRefusedWith(t *testing.T) {
+	result := func(isError bool, text string) *musterAnswer {
+		return &musterAnswer{result: &musterToolResult{IsError: isError, Content: []musterToolContent{{Type: toolResultText, Text: text}}}}
+	}
+	text, err := refusedWith(result(true, "forbidden: credential state cannot be verified"), "forbidden")
+	require.NoError(t, err)
+	require.Contains(t, text, "credential state")
+	_, err = refusedWith(result(true, "tool x_agent-manager_set_organization_model not found"), "forbidden")
+	require.Error(t, err)
+	_, err = refusedWith(result(false, `{"pending":true}`), "forbidden")
+	require.Error(t, err)
+	_, err = refusedWith(&musterAnswer{urlRequired: []mcp.ElicitationParams{{Mode: mcp.ElicitationModeURL}}}, "forbidden")
+	require.Error(t, err)
+	_, err = refusedWith(result(true, "conflict: another consumer references the credential Secret"), "forbidden")
+	require.Error(t, err)
+}
+
+// Three different people by role whatever the order of the lab's users: the
+// order admin, viewer, developer gives the developer as the other admin,
+// never the viewer; a viewer who is also an admin or a developer is no
+// viewer; a lab without either role is an error naming it.
+func TestCredentialsPeople(t *testing.T) {
+	admin := config.User{Email: "admin@lab.test", Groups: []string{platformAdminsGroup, developersGroup}}
+	viewer := config.User{Email: "viewer@lab.test", Groups: []string{viewerGroup}}
+	dev := config.User{Email: "dev@lab.test", Groups: []string{developersGroup}}
+	for _, users := range [][]config.User{{admin, viewer, dev}, {admin, dev, viewer}, {viewer, admin, dev}} {
+		cfg := &config.Config{Users: users}
+		other, v, err := credentialsPeople(cfg, &cfg.Users[slices.IndexFunc(users, func(u config.User) bool { return u.Email == admin.Email })])
+		require.NoError(t, err)
+		require.Equal(t, dev.Email, other.Email)
+		require.Equal(t, viewer.Email, v.Email)
+	}
+	const noViewer = "in viewers only"
+	// The lab's default users give dev and viewer.
+	defaults := config.Default()
+	other, v, err := credentialsPeople(defaults, defaults.FindUser("admin@lab.local"))
+	require.NoError(t, err)
+	require.Equal(t, []string{accessDefaultSecond, testPortalViewer}, []string{other.Email, v.Email})
+	for name, tc := range map[string]struct {
+		users []config.User
+		want  string
+	}{
+		"no second admin":                {[]config.User{admin, viewer}, "second organization admin"},
+		"no viewer":                      {[]config.User{admin, dev}, noViewer},
+		"the viewer is a platform admin": {[]config.User{admin, dev, {Email: "v@lab.test", Groups: []string{viewerGroup, platformAdminsGroup}}}, noViewer},
+		"the viewer is a developer":      {[]config.User{admin, dev, {Email: "v@lab.test", Groups: []string{viewerGroup, developersGroup}}}, noViewer},
+	} {
+		cfg := &config.Config{Users: tc.users}
+		_, _, err := credentialsPeople(cfg, &cfg.Users[0])
+		require.ErrorContains(t, err, tc.want, name)
+	}
+}
+
+// The old refusal of a person's own operation is a SKIP only below the
+// release that stops reading Secrets as the caller; from it on, and for any
+// other refusal, it is no SKIP.
+func TestOwnCredentialRefused(t *testing.T) {
+	refused := errors.New("set_organization_model failed: forbidden: credential state cannot be verified")
+	// 2.24.0-rc.1 still reads the Secret; #360 is in rc.2.
+	for _, v := range []string{"2.23.2", "2.24.0-rc.1"} {
+		require.Contains(t, ownCredentialRefused("dev@lab.test", v, refused), "giantswarm/agent-manager#360", v)
+	}
+	for _, v := range []string{"2.24.0-rc.2", "2.24.0"} {
+		require.Empty(t, ownCredentialRefused("dev@lab.test", v, refused), v)
+	}
+	require.Empty(t, ownCredentialRefused("dev@lab.test", "2.23.2", errors.New("set_organization_model failed: forbidden: create ModelConfig")))
+	require.Empty(t, ownCredentialRefused("dev@lab.test", "2.23.2", nil))
+}
+
+// A fixture whose viewer may write, or whose other admin may not, is wrong.
+func TestFixtureProblems(t *testing.T) {
+	viewer := organizationRights{listModelConfigs: true}
+	require.Empty(t, viewerFixtureProblem("v@lab.test", "ns", viewer))
+	for name, r := range map[string]organizationRights{
+		"creates secrets":      {listModelConfigs: true, createSecrets: true},
+		"creates modelconfigs": {listModelConfigs: true, createModelConfigs: true},
+		"reads nothing":        {},
+	} {
+		require.Contains(t, viewerFixtureProblem("v@lab.test", "ns", r), "fixture wrong", name)
+	}
+	admin := organizationRights{listModelConfigs: true, createSecrets: true, createModelConfigs: true}
+	require.Empty(t, otherAdminFixtureProblem("d@lab.test", "ns", admin))
+	require.Contains(t, otherAdminFixtureProblem("d@lab.test", "ns", viewer), "fixture wrong")
+	require.Contains(t, otherAdminFixtureProblem("d@lab.test", "ns", organizationRights{listModelConfigs: true, createSecrets: true}), "fixture wrong")
+}
+
+// The viewer's refusal passes only as the apiserver's denial of that user's
+// create; the read-first refusal of older releases is a SKIP below the
+// floor and a failure from it; another user's denial or another guard fails.
+func TestViewerRefusalVerdict(t *testing.T) {
+	user := "oidc:viewer@lab.test"
+	rbac := `forbidden: dry run of create credential Secret ns/tenant-credential-x: secrets "tenant-credential-x" is forbidden: User "oidc:viewer@lab.test" cannot create resource "secrets" in API group "" in the namespace "ns"; ask an admin`
+	denied, skip, err := viewerRefusalVerdict("2.24.0-rc.2", rbac, user, "ns")
+	require.NoError(t, err)
+	require.Empty(t, skip)
+	require.Equal(t, "create secrets", denied)
+	denied, _, err = viewerRefusalVerdict("2.23.2", `forbidden: dry run of create ModelConfig ns/x: User "oidc:viewer@lab.test" cannot create resource "modelconfigs" in API group "kagent.dev" in the namespace "ns"`, user, "ns")
+	require.NoError(t, err)
+	require.Equal(t, "create modelconfigs", denied)
+
+	old := "forbidden: credential state cannot be verified"
+	for _, v := range []string{"2.23.2", "2.24.0-rc.1"} {
+		_, skip, err = viewerRefusalVerdict(v, old, user, "ns")
+		require.NoError(t, err, v)
+		require.Contains(t, skip, "giantswarm/agent-manager#360", v)
+	}
+	_, _, err = viewerRefusalVerdict("2.24.0-rc.2", old, user, "ns")
+	require.ErrorContains(t, err, "unrelated guard")
+	for name, refusal := range map[string]string{
+		"another user":      strings.ReplaceAll(rbac, "viewer@", "dev@"),
+		"another namespace": strings.ReplaceAll(rbac, `namespace "ns"`, `namespace "other"`),
+		"another guard":     "forbidden: organization agentlab-credentials is being deleted",
+	} {
+		_, _, err = viewerRefusalVerdict("2.24.0-rc.2", refusal, user, "ns")
+		require.ErrorContains(t, err, "unrelated guard", name)
+	}
 }

@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/yosida95/uritemplate/v3"
 	corev1 "k8s.io/api/core/v1"
@@ -501,4 +503,186 @@ func organizationBindingLeftovers(bindings []rbacv1.RoleBinding, org organizatio
 	}
 	slices.Sort(out)
 	return out
+}
+
+// credentialReference is one object a confirmation lists as naming a
+// requested Secret (agent-manager's CredentialReference): for a
+// RemoteMCPServer the URL it sends the value to, for an EgressPolicy the
+// origins.
+type credentialReference struct {
+	Kind    string   `json:"kind"`
+	Name    string   `json:"name"`
+	Key     string   `json:"key"`
+	URL     string   `json:"url,omitempty"`
+	Origins []string `json:"origins,omitempty"`
+}
+
+// credentialChange is one write a confirmation shows before a value is
+// accepted.
+type credentialChange struct {
+	Action string         `json:"action"`
+	Object map[string]any `json:"object"`
+}
+
+// confirmationListsOnly checks a confirmation shows one write, of the object
+// kind/name, and lists exactly want as the objects naming the requested
+// Secret: no other consumer, no other key, and for an EgressPolicy the
+// origins it sends the credential to and no other (in any order).
+func confirmationListsOnly(c confirmation, kind, name string, want []credentialReference) error {
+	if len(c.Changes) != 1 {
+		return fmt.Errorf("the confirmation shows %d writes, want the one of %s %s", len(c.Changes), kind, name)
+	}
+	obj := c.Changes[0].Object
+	objKind, _ := obj[kindKey].(string)
+	meta, _ := obj[crMetadata].(map[string]any)
+	objName, _ := meta[nameKey].(string)
+	if objKind != kind || objName != name {
+		return fmt.Errorf("the confirmation's write is %s %s, want %s %s", objKind, objName, kind, name)
+	}
+	normal := func(refs []credentialReference) []string {
+		out := make([]string, 0, len(refs))
+		for _, r := range refs {
+			origins := slices.Clone(r.Origins)
+			slices.Sort(origins)
+			out = append(out, fmt.Sprintf("%s/%s key=%s url=%s origins=%v", r.Kind, r.Name, r.Key, r.URL, origins))
+		}
+		slices.Sort(out)
+		return out
+	}
+	if got, w := normal(c.References), normal(want); !slices.Equal(got, w) {
+		return fmt.Errorf("the confirmation lists references %v, want %v", got, w)
+	}
+	return nil
+}
+
+// ifMatchRequiredFloor is the first agent-manager that answers a save or a
+// cancel without If-Match 428 Precondition Required (RFC 6585 section 3,
+// giantswarm/agent-manager#354, from 2.23.0-rc.10); before it, 400.
+const ifMatchRequiredFloor = "2.23.0"
+
+// ifMatchRequiredStatuses are the statuses a save without If-Match may get
+// from the agent-manager version the lab runs, and a note when it predates
+// the floor.
+func ifMatchRequiredStatuses(version string) ([]int, string) {
+	if atLeast(version, ifMatchRequiredFloor) {
+		return []int{http.StatusPreconditionRequired}, ""
+	}
+	return []int{http.StatusPreconditionRequired, http.StatusBadRequest},
+		fmt.Sprintf(" (agent-manager %q predates %s, which answers 428 for a missing If-Match (giantswarm/agent-manager#354): 400 accepted)", version, ifMatchRequiredFloor)
+}
+
+// credentialStateUnverifiable is agent-manager's refusal of a person's own
+// credential write when it cannot read the credential Secret as them.
+const credentialStateUnverifiable = "credential state cannot be verified" // #nosec G101 -- an error text, not a credential
+
+// credentialsWriteOnlyFloor is the first agent-manager that never reads a
+// credential Secret as the caller (giantswarm/agent-manager#360, closing
+// #359): an organization admin outside platform-admins prepares and saves
+// credentials, and a person without the rights is refused by the
+// authorization of the write itself.
+const credentialsWriteOnlyFloor = "2.24.0-rc.2" // #nosec G101 -- a version, not a credential
+
+// atLeast says whether version is floor or newer; an unreadable version is
+// not.
+func atLeast(version, floor string) bool {
+	v, err := semver.NewVersion(version)
+	return err == nil && !v.LessThan(semver.MustParse(floor))
+}
+
+// ownCredentialRefused is the SKIP reason when an agent-manager older than
+// credentialsWriteOnlyFloor refused a person's own set_organization_model
+// because it reads the credential Secret as the caller, which
+// agent-platform:admin may not. "" for any other answer, and for any answer
+// of an agent-manager at or above the floor, where that refusal is a
+// failure.
+func ownCredentialRefused(email, version string, err error) string {
+	if err == nil || atLeast(version, credentialsWriteOnlyFloor) || !strings.Contains(err.Error(), credentialStateUnverifiable) {
+		return ""
+	}
+	return fmt.Sprintf("agent-manager %s refuses %s's own set_organization_model (forbidden: %s): it reads the credential Secret as the caller, which agent-platform:admin may not; agent-manager %s or newer writes credentials without reading them (giantswarm/agent-manager#360, closing #359)",
+		version, email, credentialStateUnverifiable, credentialsWriteOnlyFloor)
+}
+
+// viewerFixtureProblem is why the viewer's verdict cannot stand on its
+// person: an access review allows them to create Secrets or ModelConfigs in
+// the organization, so a refusal would not be their missing right, or
+// denies them the read of its ModelConfigs, which agent-manager does before
+// the write. "" for a viewer that reads and does not write.
+func viewerFixtureProblem(email, ns string, r organizationRights) string {
+	switch {
+	case r.createSecrets || r.createModelConfigs:
+		return fmt.Sprintf("fixture wrong: %s, the part's viewer, may create Secrets (%v) or ModelConfigs (%v) in %s: they hold write rights there, so a refusal would not be a viewer's", email, r.createSecrets, r.createModelConfigs, ns)
+	case !r.listModelConfigs:
+		return fmt.Sprintf("fixture wrong: %s, the part's viewer, may not list ModelConfigs in %s: without the read %s grants, agent-manager refuses the read before the write", email, ns, organizationUserRole)
+	}
+	return ""
+}
+
+// otherAdminFixtureProblem is why the other admin's verdicts cannot stand on
+// their person: an access review denies them creating Secrets or
+// ModelConfigs in the organization, so they are no organization admin. ""
+// when both are allowed.
+func otherAdminFixtureProblem(email, ns string, r organizationRights) string {
+	if r.createSecrets && r.createModelConfigs {
+		return ""
+	}
+	return fmt.Sprintf("fixture wrong: %s, bound %s in %s, may not create Secrets or ModelConfigs there: they are no organization admin, so their verdicts would prove nothing of one", email, organizationAdminRole, ns)
+}
+
+// viewerRefusalVerdict judges agent-manager's refusal of the viewer's
+// set_organization_model: it passes, naming the denied write, only when it
+// carries the apiserver's RBAC denial of that user creating the Secret or
+// the ModelConfig in the organization's namespace ns. An agent-manager older than credentialsWriteOnlyFloor
+// refuses on reading the Secret first, for every person outside
+// platform-admins: a skip naming the release. Any other refusal is an
+// unrelated guard and fails.
+func viewerRefusalVerdict(version, refusal, user, ns string) (denied, skip string, err error) {
+	for _, resource := range []string{resourceSecrets, "modelconfigs"} {
+		if strings.Contains(refusal, fmt.Sprintf(`User %q cannot create resource %q`, user, resource)) && strings.Contains(refusal, fmt.Sprintf(`in the namespace %q`, ns)) {
+			return "create " + resource, "", nil
+		}
+	}
+	if strings.Contains(refusal, credentialStateUnverifiable) && !atLeast(version, credentialsWriteOnlyFloor) {
+		return "", fmt.Sprintf("agent-manager %s refuses the viewer on reading the credential Secret (forbidden: %s), as it refuses every person outside platform-admins, before the write's authorization: the viewer's own refusal needs agent-manager %s or newer (giantswarm/agent-manager#360)", version, credentialStateUnverifiable, credentialsWriteOnlyFloor), nil
+	}
+	return "", "", fmt.Errorf("agent-manager %s refused the viewer %q, not with the apiserver's denial of %s creating secrets or modelconfigs: an unrelated guard", version, excerpt(refusal, 300), user)
+}
+
+// judgeComponentLogs checks one component's logs carry the value neither
+// plain nor base64 and returns how many lines were read. No line read is a
+// failure: an empty read proves nothing about what the component logs.
+func judgeComponentLogs(component, logs, value string) (int, error) {
+	lines := 0
+	for line := range strings.SplitSeq(logs, "\n") {
+		if strings.TrimSpace(line) != "" {
+			lines++
+		}
+	}
+	if lines == 0 {
+		return 0, fmt.Errorf("read no log line of %s/%s since the run began: an empty read proves nothing about what it logs", platformNamespace, component)
+	}
+	if how := valueCarried(logs, value); how != "" {
+		return lines, fmt.Errorf("the logs of %s/%s carry the value %s", platformNamespace, component, how)
+	}
+	return lines, nil
+}
+
+// refusedWith checks a tool's answer is agent-manager's error result with
+// code ("forbidden", "conflict"): the refusal of the write itself, not
+// muster's (an unknown tool) nor a pending operation. It returns the
+// result's text.
+func refusedWith(a *musterAnswer, code string) (string, error) {
+	switch {
+	case a == nil:
+		return "", errors.New("no answer")
+	case a.result == nil:
+		return "", fmt.Errorf("answered with %d URL elicitations, not refused", len(a.urlElicitations()))
+	case !a.result.IsError:
+		return "", fmt.Errorf("answered a result, not refused: %s", excerpt(a.result.text(), 200))
+	}
+	text := a.result.text()
+	if !strings.Contains(text, code+": ") {
+		return "", fmt.Errorf("refused with %q, not agent-manager's %s", excerpt(text, 200), code)
+	}
+	return text, nil
 }
