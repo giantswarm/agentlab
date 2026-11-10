@@ -63,14 +63,17 @@ const (
 	adminsAutomation = "automation"
 	// adminsSystemUser is a system: name, never mirrored.
 	adminsSystemUser = "system:agentlab-admins-proof"
+	// adminsHeldUser is the held binding's subject, a person nobody signs
+	// in as, so the binding gives no one of the part a right.
+	adminsHeldUser = apiserverUserPrefix + "agentlab-held@lab.local"
 	// rbac-operator's label on every RoleBinding it writes.
 	rbacOperatorLabel = "giantswarm.io/managed-by"
 	rbacOperatorValue = "rbac-operator"
-	// organizationsAdminRole is the ClusterRole every mirror binds;
+	// organizationsAdminClusterRole is the ClusterRole every mirror binds;
 	// clusterAdminRole the one of rbac-operator's bindings.
-	organizationsAdminRole = "agent-platform:organizations-admin"
-	clusterAdminRole       = "cluster-admin"
-	clusterRoleKind        = "ClusterRole"
+	organizationsAdminClusterRole = "agent-platform:organizations-admin"
+	clusterAdminRole              = "cluster-admin"
+	clusterRoleKind               = "ClusterRole"
 	// copiedFromAnnotation names the parent binding a mirror was made from.
 	copiedFromAnnotation = "agent-platform.giantswarm.io/copied-from"
 	// adminsMirrorWait bounds the operator's reaction to a parent binding.
@@ -140,7 +143,7 @@ func organizationAdminsTest(cfg *config.Config) error {
 func adminsOutsider(cfg *config.Config, members [2]*config.User) *config.User {
 	for i := range cfg.Users {
 		u := &cfg.Users[i]
-		if u.HasGroup(platformAdminsGroup) || u.Email == members[0].Email || u.Email == members[1].Email {
+		if u.HasGroup(platformAdminsGroup) || u.HasGroup(config.GroupTenantA) || u.HasGroup(config.GroupTenantB) || u.Email == members[0].Email || u.Email == members[1].Email {
 			continue
 		}
 		return u
@@ -210,7 +213,7 @@ func (p *adminsProof) setUp() error {
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	defer cancel()
 	step("The Giant Swarm Organizations' namespaces %s and %s, and their bindings as rbac-operator writes them (the lab runs no rbac-operator)", adminsParentA, adminsParentB)
-	held := adminsBinding(adminsParentA, adminsHeldBinding, clusterAdminRole, true, userSubject(p.alice))
+	held := adminsBinding(adminsParentA, adminsHeldBinding, clusterAdminRole, true, rbacv1.Subject{APIGroup: rbacv1.GroupName, Kind: rbacv1.UserKind, Name: adminsHeldUser})
 	held.Finalizers = []string{adminsHoldFinalizer}
 	bindings := []*rbacv1.RoleBinding{
 		adminsBinding(adminsParentA, adminsGroupBinding, clusterAdminRole, true, groupSubject(config.GroupTenantA), serviceAccountSubject(adminsParentA)),
@@ -301,18 +304,19 @@ type adminsCase struct {
 	person *config.User
 	parent string
 	args   map[string]any
-	// admins are the first admins' subject names, as args names them.
+	// admins are the first admins' subjects, kind and name, as args names
+	// them.
 	admins []string
 }
 
 // caseOf is the create of an organization of the part.
 func (p *adminsProof) caseOf(org string) adminsCase {
 	if org == adminsOrgA {
-		admins := []string{groupSubject(config.GroupTenantA).Name}
-		return adminsCase{person: p.alice, parent: adminsParentA, args: map[string]any{"adminGroups": admins}, admins: admins}
+		group := groupSubject(config.GroupTenantA)
+		return adminsCase{person: p.alice, parent: adminsParentA, args: map[string]any{"adminGroups": []string{group.Name}}, admins: []string{group.Kind + " " + group.Name}}
 	}
-	admins := []string{userSubject(p.bob).Name}
-	return adminsCase{person: p.bob, parent: adminsParentB, args: map[string]any{"adminUsers": admins}, admins: admins}
+	user := userSubject(p.bob)
+	return adminsCase{person: p.bob, parent: adminsParentB, args: map[string]any{"adminUsers": []string{user.Name}}, admins: []string{user.Kind + " " + user.Name}}
 }
 
 // createOrganization calls create_organization through muster as the
@@ -366,7 +370,7 @@ func (p *adminsProof) created(org string) func() (string, error) {
 		}
 		switch {
 		case answer.Pending != "":
-			return "", fmt.Errorf("create_organization as %s answered pending: %s", c.person.Email, answer.Pending)
+			return "", fmt.Errorf("create_organization as %s answered pending (the part needs agent-platform-operator 0.2.0 or later, which mirrors rbac-operator's bindings: agent-platform %s or later; %s): %s", c.person.Email, config.DefaultChartVersion, operatorRunning(), answer.Pending)
 		case !answer.Created:
 			return "", fmt.Errorf("create_organization as %s answered created=false: %.500s", c.person.Email, text)
 		case answer.FirstAdmins == nil || !answer.FirstAdmins.Written:
@@ -393,7 +397,7 @@ func (p *adminsProof) created(org string) func() (string, error) {
 		}
 		var got []string
 		for _, s := range binding.Subjects {
-			got = append(got, s.Name)
+			got = append(got, s.Kind+" "+s.Name)
 		}
 		if binding.RoleRef.Name != organizationAdminRole || !slices.Equal(got, want) {
 			return "", fmt.Errorf("RoleBinding %s/%s binds %v to %s, want %v to %s", state.namespace, organizationAdminsBinding, got, binding.RoleRef.Name, want, organizationAdminRole)
@@ -422,8 +426,8 @@ func (p *adminsProof) mirrored(org, name string, want rbacv1.Subject) func() (st
 			return "", fmt.Errorf("the mirror of %s/%s in %s: %w", parent, name, ns, err)
 		}
 		switch {
-		case mirror.RoleRef.Kind != clusterRoleKind || mirror.RoleRef.Name != organizationsAdminRole:
-			return "", fmt.Errorf("RoleBinding %s/%s binds %s %s, want ClusterRole %s", ns, name, mirror.RoleRef.Kind, mirror.RoleRef.Name, organizationsAdminRole)
+		case mirror.RoleRef.Kind != clusterRoleKind || mirror.RoleRef.Name != organizationsAdminClusterRole:
+			return "", fmt.Errorf("RoleBinding %s/%s binds %s %s, want ClusterRole %s", ns, name, mirror.RoleRef.Kind, mirror.RoleRef.Name, organizationsAdminClusterRole)
 		case len(mirror.Subjects) != 1 || mirror.Subjects[0].Kind != want.Kind || mirror.Subjects[0].Name != want.Name:
 			return "", fmt.Errorf("RoleBinding %s/%s binds %s, want %s %s alone", ns, name, subjectsLine(mirror.Subjects), want.Kind, want.Name)
 		case mirror.Annotations[copiedFromAnnotation] != parent+"/"+name:
@@ -438,7 +442,7 @@ func (p *adminsProof) mirrored(org, name string, want rbacv1.Subject) func() (st
 				return "", fmt.Errorf("RoleBinding %s/%s binds %s in the organization namespace", ns, rb.Name, clusterAdminRole)
 			}
 		}
-		return fmt.Sprintf("%s/%s binds %s %s to %s, %s=%s; none of the %d RoleBindings of %s binds %s", ns, name, want.Kind, want.Name, organizationsAdminRole, copiedFromAnnotation, parent+"/"+name, len(all.Items), ns, clusterAdminRole), nil
+		return fmt.Sprintf("%s/%s binds %s %s to %s, %s=%s; none of the %d RoleBindings of %s binds %s", ns, name, want.Kind, want.Name, organizationsAdminClusterRole, copiedFromAnnotation, parent+"/"+name, len(all.Items), ns, clusterAdminRole), nil
 	}
 }
 
@@ -453,8 +457,12 @@ func (p *adminsProof) notMirrored() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if _, err := k.clientset.RbacV1().RoleBindings(ns).Get(ctx, adminsGroupBinding, metav1.GetOptions{}); err != nil {
-		return "", fmt.Errorf("the mirror of %s/%s, which the negative cases are read beside: %w", adminsParentA, adminsGroupBinding, err)
+	// The mirrors of the parent's other labelled bindings, written in the
+	// same reconcile: the absences below are read once both are there.
+	for _, name := range []string{adminsGroupBinding, adminsHeldBinding} {
+		if err := waitMirror(ns, name, true); err != nil {
+			return "", fmt.Errorf("the mirror the negative cases are read beside: %w", err)
+		}
 	}
 	for _, name := range []string{adminsHandBinding, adminsMachinesBinding} {
 		_, err := k.clientset.RbacV1().RoleBindings(ns).Get(ctx, name, metav1.GetOptions{})
@@ -523,7 +531,9 @@ func (p *adminsProof) crossRefused() (string, error) {
 		person *config.User
 		parent string
 	}{{p.bob, adminsParentA}, {p.alice, adminsParentB}} {
-		text, err := p.refusedBeforeWrite(c.person, c.parent)
+		// agent-manager's first check, as the person in the parent:
+		// they hold no right there at all.
+		text, err := p.refusedBeforeWrite(c.person, c.parent, "you may not", c.parent)
 		if err != nil {
 			return "", err
 		}
@@ -574,6 +584,8 @@ func (p *adminsProof) deletingUnmirrored() (string, error) {
 	if err := waitMirror(ns, adminsHeldBinding, false); err != nil {
 		return "", err
 	}
+	ctx, cancel = context.WithTimeout(context.Background(), kubeReadTimeout)
+	defer cancel()
 	held, err := k.clientset.RbacV1().RoleBindings(adminsParentA).Get(ctx, adminsHeldBinding, metav1.GetOptions{})
 	if err != nil {
 		return "", fmt.Errorf("%s/%s is gone, so its mirror's removal does not show a binding being deleted: %w", adminsParentA, adminsHeldBinding, err)
@@ -712,4 +724,24 @@ func removeAdminsFixtures() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// operatorRunning names the agent-platform-operator image the lab runs, for
+// a failure that depends on its release.
+func operatorRunning() string {
+	k, err := labKube()
+	if err != nil {
+		return "its release not read: " + err.Error()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
+	defer cancel()
+	deployment, err := k.clientset.AppsV1().Deployments(platformNamespace).Get(ctx, "agent-platform-operator", metav1.GetOptions{})
+	if err != nil {
+		return "its release not read: " + err.Error()
+	}
+	var images []string
+	for _, c := range deployment.Spec.Template.Spec.Containers {
+		images = append(images, c.Image)
+	}
+	return "the lab runs " + strings.Join(images, ", ")
 }

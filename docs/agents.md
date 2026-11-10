@@ -536,7 +536,9 @@ namespace, through a RoleBinding that rbac-operator writes with the label
 the part writes those bindings itself, as the lab's admin, with that label.
 It needs agent-platform-operator 0.2.0 or later (agent-platform 4.178.0 or
 later), which mirrors the Users and Groups of such a binding into each
-organization namespace as `agent-platform:organizations-admin`.
+organization namespace as `agent-platform:organizations-admin`, and
+agent-manager 2.23.0 or later, whose `create_organization` refuses before
+any write a person whose right will not reach the new namespace.
 
 It keeps two parents, `org-agentlab-admins-a` and `org-agentlab-admins-b`.
 In the first, rbac-operator's binding names the group of `alice@lab.local`
@@ -544,7 +546,8 @@ and a ServiceAccount; in the second, it names `bob@lab.local`. Beside them in
 the first parent: a `cluster-admin` binding without the label, for the first
 lab user outside `platform-admins` (`dev@lab.local` by default), a labelled
 binding whose subjects are a ServiceAccount and a `system:` name, and a
-labelled binding that a finalizer holds. The verdicts:
+labelled binding that a finalizer holds, for a user nobody signs in as.
+The verdicts:
 
 - nobody of the three may create or bind RoleBindings cluster-wide;
 - alice, then bob, calls `create_organization` through muster in mode apply:
