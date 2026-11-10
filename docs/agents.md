@@ -524,7 +524,10 @@ and the person's grant of the workspaces' `github` App, a Ready
 kustomize-controller (`flux-engine.instance.components`), and
 agent-platform-operator's commit-mode flags. muster's
 `mcpServerNamespaceSelector` must select the organization namespace for the
-sign-in verdict.
+sign-in verdict, and its OAuth server must accept a redirect URI on a private
+address (`oauth.server.allowPrivateIPRedirectURIs`, which the lab sets with
+`platform.klausGateway`, HACKS.md U43): in the lab muster's own host resolves to
+the edge's cluster IP, and the tenant server signs in to muster itself.
 
 `organizations-test --part cleanup` runs the orphan cleanup check alone, creating the proof agents and a member-owned session directly through kagent without a model turn. The default run includes this check after all other organization checks. The former `--part erasure` spelling remains an alias. See the operator's [glossary](https://github.com/giantswarm/agent-platform-operator/blob/main/GLOSSARY.md) for the distinction between organization deletion and cleanup.
 

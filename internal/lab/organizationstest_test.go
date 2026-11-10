@@ -10,7 +10,10 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
 	"time"
+
+	"github.com/stretchr/testify/require"
 
 	"gopkg.in/yaml.v3"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -655,4 +658,13 @@ func TestMultiTenantArg(t *testing.T) {
 			t.Errorf("%q: %v, want %v", args, got, want)
 		}
 	}
+}
+
+func TestMusterTenancySelfSignInProblem(t *testing.T) {
+	off, err := parseMusterTenancy("aggregator:\n  oauth:\n    server:\n      allowLocalhostRedirectURIs: true\n")
+	require.NoError(t, err)
+	require.Contains(t, off.selfSignInProblem(), "allowPrivateIPRedirectURIs")
+	on, err := parseMusterTenancy("aggregator:\n  oauth:\n    server:\n      allowPrivateIPRedirectURIs: true\n")
+	require.NoError(t, err)
+	require.Empty(t, on.selfSignInProblem())
 }

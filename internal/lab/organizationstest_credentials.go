@@ -1368,7 +1368,7 @@ func (p *credentialsProof) tenantSignInCheck() organizationCheck {
 		c.run = func() (string, error) { return "", err }
 		return c
 	}
-	if problem := tenancy.problem(nsLabels, organizationMCPServerLabels); problem != "" {
+	if problem := firstNonEmpty(tenancy.problem(nsLabels, organizationMCPServerLabels), tenancy.selfSignInProblem()); problem != "" {
 		c.skip = problem
 		return c
 	}
@@ -1402,6 +1402,9 @@ func (p *credentialsProof) tenantSignIn() (string, error) {
 	answer, err := m.call(ctx, "core_auth_login", map[string]any{serverKey: key}, mcp.MultiRoundTripParams{})
 	if err != nil {
 		return "", err
+	}
+	if answer.result != nil {
+		return "", fmt.Errorf("core_auth_login answered a result, not a sign-in elicitation (isError %v): %s", answer.result.IsError, excerpt(answer.result.text(), 400))
 	}
 	e, err := oneURLElicitation(answer)
 	if err != nil {
