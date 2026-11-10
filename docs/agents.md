@@ -239,13 +239,45 @@ the composed manifests in mode commit.
 
 `agentlab agents-gitops-test` is that edit, headless and as the person: the
 platform's agent-manager composes a release, the proof applies it with the
-Flux labels and reads it back `managed: gitops`; the platform's own
-agent-manager (not pinned to a GitHub App) answers the change's dry run
-`gitops_owned` in mode apply and `unsupported` in mode commit, as its writes
-do; `update_agent` is refused and the live release stays as it was. The
-pull request itself takes an agent-manager pinned to a GitHub App and a
-person who granted that App in a browser, which the proof does not walk. The
-agent goes away at the end of the run.
+Flux labels and reads it back `managed: gitops`; agent-manager answers the
+change's dry run `gitops_owned` in mode apply (and `unsupported` in mode
+commit while it offers no commit mode); `update_agent` is refused and the live
+release stays as it was. The agent goes away at the end of the run. The pull
+requests of mode commit are `agentlab backstage-test`'s commit stage (below).
+
+## Commit mode
+
+The lab's agent-manager offers commit mode (`get_info` reports
+`capabilities.commit`) while the platform runs agents, the workspaces'
+`github` instance renders (`platform.workspaces.github`, its App's ids and
+Secret in place), muster keeps that instance's App (the workspace-manager's
+pin or one provider App per instance) and the agent-manager the install
+resolves is 2.22.0-rc.3 or newer (`components.agent-manager.versionRange` in
+`platform.valuesFiles` admits a release candidate). `agentlab platform`
+prints which.
+
+A commit opens its pull request as the person with their grant of the
+`github` instance's App — the grant they made once for the workspace-manager
+— the way an installation does it without pinning agent-manager's MCP
+registration to an App (agent-manager's `githubTokenExchange`):
+
+- agent-manager presents the person's forwarded ID token to muster's RFC 8693
+  broker (`https://muster.<domain>/oauth/token`, through the edge, under the
+  lab CA) as the confidential client `agent-manager`, whose secret the lab
+  generates once (`certs/agent-manager-commit/`) and places as the Secret
+  `agent-platform/agent-manager-github-exchange`;
+- muster (`muster.oauth.server.tokenExchangeBroker`, the lab Dex its trusted
+  subject issuer) releases that person's own grant of the App
+  (`https://github.com/apps/<appId>`) to that client and for that one
+  audience, `agent-manager-github`; a person without the grant gets
+  `auth_required` on a commit.
+
+Apply mode, every read and every other proof keep the ID token: nothing else
+needs the grant. The App is installed with contents and pull-request write on
+the instance's `proofRepositories`; the first is the commit target of the
+proof. `agentlab backstage-test`'s commit stage ([Backstage](backstage.md#the-agent-platform-proof))
+drives the portal's create, edit and delete as pull requests on it and closes
+every one again.
 
 ## Organizations
 

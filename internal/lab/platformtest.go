@@ -28,6 +28,7 @@ const (
 	stageProvidedAPIs         = "provided APIs"
 	stageFleetAdmission       = "fleet admission"
 	stageChartExceptions      = "chart PolicyExceptions"
+	stagePolicyReports        = "policy reports"
 	stageDexReach             = "Dex reach"
 	stageDownstreamIdentity   = "downstream identity"
 	stageControllerIdentity   = "controller identity"
@@ -315,6 +316,21 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 		return "", err
 	}
 	verdict += "\n" + polex
+
+	// The fleet's Pod policies' reports (reports.go): the reports controller
+	// judged every Running platform Pod, and the verdict of a Pod Security
+	// Standard reads off its PolicyReport, the way a policy proof asserts one.
+	p.begin(stagePolicyReports, "Verifying every Running Pod in %s carries a PolicyReport with the fleet's %s verdict", platformNamespace, reportProbePolicy)
+	reportsCtx, cancelReports := context.WithTimeout(context.Background(), time.Duration(policyReportAttempts)*policyReportInterval+kubeReadTimeout)
+	reported, err := provePolicyReports(reportsCtx)
+	cancelReports()
+	if err != nil {
+		return "", err
+	}
+	for _, v := range reported {
+		note("%s", v)
+	}
+	verdict += fmt.Sprintf("\nPASS: the reports controller judged all %d Running Pods in %s — each PolicyReport carries the fleet's %s verdict (%s)", len(reported), platformNamespace, reportProbePolicy, verdictTally(reported))
 
 	// The lab's Dex bridge: every OAuth resource server the rule selects on
 	// the live Deployments carries the dex-localhost sidecar, runs without a

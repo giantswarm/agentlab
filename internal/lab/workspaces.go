@@ -515,11 +515,11 @@ func WorkspacesNode(cfg *config.Config) string {
 // CSICompanion, the CSI companion's block `workspaces.substrate.csiCompanion`
 // (agent-platform 4.128.0 and newer), which platform.workspaces.csiCompanion
 // needs.
-// Manager is the chart's components.workspace-manager source, which
-// workspaceManagerVersion resolves.
+// Manager and AgentManager are the chart's components.workspace-manager
+// and components.agent-manager sources, which componentVersion resolves.
 type chartWorkspaces struct {
 	Carries, Organizations, CSICompanion bool
-	Manager                              workspaceManagerSource
+	Manager, AgentManager                componentSource
 }
 
 // chartWorkspacesOf probes the chart once: memoized per chart, since a
@@ -557,7 +557,8 @@ var (
 			Carries:       chartValuesCarry(c.Schema, c.Values, valuesWorkspaces),
 			Organizations: chartValuesCarry(c.Schema, c.Values, valuesWorkspaces, valuesWorkspacesOrganizations),
 			CSICompanion:  chartValuesCarry(c.Schema, c.Values, valuesWorkspaces, valuesWorkspacesSubstrate, valuesWorkspacesCSICompanion),
-			Manager:       workspaceManagerSourceOf(c.Values),
+			Manager:       componentSourceOf(workspaceManagerMCPServer, c.Values),
+			AgentManager:  componentSourceOf(agentManagerMCPServer, c.Values),
 		}, nil
 	}
 )

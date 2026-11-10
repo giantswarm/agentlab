@@ -474,12 +474,13 @@ the provenance that Kustomization stamps
 (`kustomize.toolkit.fluxcd.io/name|namespace`). model-manager holds the labels
 to the Kustomization's inventory — an object whose Kustomization is gone, or
 no longer lists it, is applied by nothing and written live — so the labels
-alone are not enough. The lab's Flux engine runs no kustomize-controller and
-serves no Kustomization API: where none is served the fixture brings a
-`kustomize.toolkit.fluxcd.io/v1` CustomResourceDefinition of its own
-(labelled `app.kubernetes.io/managed-by: agentlab`, every field kept), applies
-the Kustomization suspended and writes the inventory itself; the step removes
-the labels, the Kustomization and that CustomResourceDefinition again. Wire,
+alone are not enough. The lab serves Flux's Kustomization API — `agentlab up`
+applies its CustomResourceDefinition with the lab's other provided APIs
+([Lab-specific deviations](platform.md#lab-specific-deviations-from-a-real-management-cluster))
+— and runs no kustomize-controller, so the fixture applies the Kustomization
+suspended and writes the inventory itself; the step removes the labels and
+the Kustomization again. A lab installed before it provided the API is told
+to run `agentlab platform`. Wire,
 unwire and delete (`unwire=true`) must answer `gitops_owned` pointing at mode
 commit, the object and the model untouched.
 

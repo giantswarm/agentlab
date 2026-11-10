@@ -40,16 +40,8 @@ func prepareOrganizationInventory(ctx context.Context, organization *unstructure
 			return nil, fmt.Errorf("operator already uses another installation Kustomization")
 		}
 	}
-	crd, err := getObject(ctx, gvrCRDs, "", kustomizationCRDName)
-	ownAPI := apierrors.IsNotFound(err) || (err == nil && crd.GetLabels()[organizationsTestLabel] == organizationsTestMark)
-	if err != nil && !ownAPI {
+	if err := requireKustomizationAPI(ctx); err != nil {
 		return nil, err
-	}
-	if ownAPI {
-		apiManifest := strings.Replace(string(kustomizationCRD()), "spec:", fmt.Sprintf("    %s: %s\nspec:", organizationsTestLabel, organizationsTestMark), 1)
-		if _, err := applyManifests(ctx, []byte(apiManifest)); err != nil {
-			return nil, err
-		}
 	}
 	if err := organizationInventoryAccess(ctx); err != nil {
 		return nil, err
@@ -118,20 +110,7 @@ func prepareOrganizationInventory(ctx context.Context, organization *unstructure
 		if err := k.clientset.RbacV1().RoleBindings(platformNamespace).Delete(cleanup, organizationCleanupFixture, metav1.DeleteOptions{}); err != nil {
 			return err
 		}
-		if err := k.clientset.RbacV1().Roles(platformNamespace).Delete(cleanup, organizationCleanupFixture, metav1.DeleteOptions{}); err != nil {
-			return err
-		}
-		if ownAPI {
-			remaining, err := listObjects(cleanup, kustomizationGVR, "", "")
-			if err != nil {
-				return err
-			}
-			if len(remaining) != 0 {
-				return fmt.Errorf("retaining fixture Kustomization API: %d other Kustomizations exist", len(remaining))
-			}
-			return deleteObject(cleanup, gvrCRDs, "", kustomizationCRDName, gitopsFixtureWait)
-		}
-		return nil
+		return k.clientset.RbacV1().Roles(platformNamespace).Delete(cleanup, organizationCleanupFixture, metav1.DeleteOptions{})
 	}, nil
 }
 

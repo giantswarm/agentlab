@@ -268,6 +268,7 @@ agentlab beekeeper-decisions-test  # beekeeper serve behind muster puts decision
 agentlab beekeeper-central-test --part notes  # beekeeper's central notes through two lab users' CLIs: note add --for the other, listed and answered on the other's machine, the answer printed once by the filer's watch across a restart; a withdrawal only its filer may make; a fold into and a park on a central note, the park settled with the answer once
 agentlab test            # RBAC assertions for every configured user
 agentlab backstage-test  # headless Backstage sign-in for every user, the portal's Agent Platform and Models pages (--agent kagent/<name>: on an existing agent, no create or delete)
+agentlab roadmap-test    # the fake pro (a fixture board) registered with muster as pro: x_pro_list_issues as the person, with backstage.hive the portal's roadmap-backend routes reading it; --keep leaves it for the Hive spec (docs/backstage.md "The roadmap board fixture")
 agentlab organizations-test  # platform.organizations: two AgentPlatformOrganizations, alice and bob each an editor of one by group: each creates and runs an agent in their own; every surface (Kubernetes, kagent API, Slack; the Dev Portal skipped until backstage#3363) gives each the same agents; the negative cross-organization tests per surface and boundary (Kubernetes RBAC, kagent API and A2A, muster, the other organization's model, in-cluster 443 through the egress gateway); the profile tests (object-count quota, a PolicyException that does not lift the sandbox policies, the credential provider's grants, each component's Secret reads (ate-controller, both credential providers, the connectivity hooks); the Orphaned erasure skipped, HACKS.md U41)
 agentlab coding-test     # platform.coding: the coding Harness from the values, agent-manager's guards, a coding agent's sandbox floor (uid split, forwarder paths, a write tool refused, no credentials, DNS canary, egress), a workspace Session's MCP call audited by muster as the person, nothing in the sandbox running between turns, the instruction fixture, suspend/resume, the turn's usage, a share refused, no muster call of the actor accepted after delete_session
 agentlab coding-test --step egress  # one stage of coding-test and the stages it builds on (here create and the sandbox turn); the rest listed as skipped by the step
@@ -490,7 +491,7 @@ Load-bearing invariants (details in docs/):
   engine on.
 - **The fleet's admission is in the lab**: `agentlab up` installs Kyverno
   (the fleet's kyverno-crds and kyverno app charts from gsoci, Kyverno
-  3.7.2, admission controller only)
+  3.7.2, admission and reports controllers)
   with the fleet's `flux-multi-tenancy` ClusterPolicy in Enforce, verbatim
   from management-cluster-bases (`internal/lab/templates/flux-multi-tenancy.yaml`),
   the platform namespace exempt in code next to the fleet's three, and the
@@ -505,6 +506,13 @@ Load-bearing invariants (details in docs/):
   renders them with `kyvernoPolicies.enabled: true` and the tenants on and
   dry-runs each against the lab's Kyverno, PolicyExceptions on as on the
   fleet (`polextest.go`).
+  At apply time, discovery removes unserved Flux kinds and their otherwise
+  empty rules from the lab's policy copy (`withoutUnservedKinds`); failed
+  discovery stops the install rather than dropping enforcement rules.
+  The fleet's Pod policies run in Audit because the platform's exceptions
+  are not installed. `platform-test` reads their verdicts from each Running
+  platform Pod's PolicyReport (`reports.go`). Both Kyverno controllers must
+  finish rolling out and the policy webhook answer before policies apply.
 - The lab's credentials are throwaway by design; plaintext passwords in
   `agentlab.yaml` are fine.
 

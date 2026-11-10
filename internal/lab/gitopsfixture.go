@@ -22,13 +22,11 @@ import (
 // lists it, is applied by nothing and written live — so the labels alone
 // make nothing GitOps-owned.
 //
-// The lab's Flux engine runs no kustomize-controller and serves no
-// Kustomization API, so the fixture brings the API for its own length — a
-// CustomResourceDefinition of kustomize.toolkit.fluxcd.io/v1 that keeps
-// every field, labelled agentlab's and removed again afterwards — and writes
-// the inventory itself, as kustomize-controller records it after an apply.
-// A lab that serves the real API keeps it; the Kustomization is suspended,
-// so a controller there leaves the inventory as written.
+// The lab serves Flux's Kustomization API (its CRD is one of the provided
+// APIs, providedapis.go) and runs no kustomize-controller, so the fixture
+// writes the inventory itself, as kustomize-controller records it after an
+// apply. The Kustomization is suspended, so a controller that does run
+// leaves the inventory as written.
 
 // kustomizationGVR is Flux's Kustomization, the version model-manager reads.
 var kustomizationGVR = schema.GroupVersionResource{Group: "kustomize.toolkit.fluxcd.io", Version: "v1", Resource: "kustomizations"}
@@ -39,34 +37,17 @@ var kustomizationCRDName = kustomizationGVR.Resource + "." + kustomizationGVR.Gr
 // gitopsFixtureWait bounds the fixture's removal.
 const gitopsFixtureWait = time.Minute
 
-// kustomizationCRD is the fixture's Kustomization API: served and stored at
-// v1 with a status subresource, every field kept.
-func kustomizationCRD() []byte {
-	return fmt.Appendf(nil, `apiVersion: apiextensions.k8s.io/v1
-kind: CustomResourceDefinition
-metadata:
-  name: %s
-  labels:
-    %s: %s
-spec:
-  group: %s
-  scope: Namespaced
-  names:
-    kind: Kustomization
-    listKind: KustomizationList
-    plural: kustomizations
-    singular: kustomization
-  versions:
-    - name: %s
-      served: true
-      storage: true
-      subresources:
-        status: {}
-      schema:
-        openAPIV3Schema:
-          type: object
-          x-kubernetes-preserve-unknown-fields: true
-`, kustomizationCRDName, managedByLabel, managedByAgentlabValue, kustomizationGVR.Group, kustomizationGVR.Version)
+// requireKustomizationAPI fails, naming the fix, when the apiserver serves
+// no Kustomization API: a lab whose platform was installed before the lab
+// provided it.
+func requireKustomizationAPI(ctx context.Context) error {
+	if _, err := getObject(ctx, gvrCRDs, "", kustomizationCRDName); err != nil {
+		if apierrors.IsNotFound(err) {
+			return fmt.Errorf("the apiserver serves no Flux Kustomization API (%s) — the lab provides it; run `agentlab platform` to apply it", kustomizationCRDName)
+		}
+		return err
+	}
+	return nil
 }
 
 // gitopsFixtureKustomization is the fixture's Kustomization: valid against
@@ -117,34 +98,21 @@ func inventoryStatus(objs ...*unstructured.Unstructured) ([]byte, error) {
 }
 
 // applyGitOpsFixture applies the Kustomization agentlab-gitops-fixture with
-// obj in its inventory — and the Kustomization API first, where the lab does
-// not serve it — and returns its removal: the Kustomization, then the API
-// if the fixture brought it.
+// obj in its inventory and returns its removal.
 func applyGitOpsFixture(obj *unstructured.Unstructured) (func(), error) {
-	ctx, cancel := context.WithTimeout(context.Background(), crdEstablishTimeout+kubeReadTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*kubeReadTimeout)
 	defer cancel()
-	crd, err := getObject(ctx, gvrCRDs, "", kustomizationCRDName)
-	ownAPI := apierrors.IsNotFound(err) || (err == nil && crd.GetLabels()[managedByLabel] == managedByAgentlabValue)
-	if err != nil && !apierrors.IsNotFound(err) {
+	if err := requireKustomizationAPI(ctx); err != nil {
 		return nil, err
 	}
 	remove := func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*gitopsFixtureWait)
+		ctx, cancel := context.WithTimeout(context.Background(), gitopsFixtureWait)
 		defer cancel()
 		if err := deleteObject(ctx, kustomizationGVR, platformNamespace, gitopsFluxFixture, gitopsFixtureWait); err != nil {
 			note("cleanup: deleting the Kustomization %s/%s: %v", platformNamespace, gitopsFluxFixture, err)
 		}
-		if ownAPI {
-			if err := deleteObject(ctx, gvrCRDs, "", kustomizationCRDName, gitopsFixtureWait); err != nil {
-				note("cleanup: deleting the CustomResourceDefinition %s: %v", kustomizationCRDName, err)
-			}
-		}
 	}
-	manifests := gitopsFixtureKustomization()
-	if ownAPI {
-		manifests = append(append(kustomizationCRD(), "---\n"...), manifests...)
-	}
-	if _, err := applyManifests(ctx, manifests); err != nil {
+	if _, err := applyManifests(ctx, gitopsFixtureKustomization()); err != nil {
 		remove()
 		return nil, err
 	}
@@ -163,10 +131,6 @@ func applyGitOpsFixture(obj *unstructured.Unstructured) (func(), error) {
 		remove()
 		return nil, fmt.Errorf("recording the inventory of %s: %w", describe(kustomizationGVR, platformNamespace, gitopsFluxFixture), err)
 	}
-	api := "the lab's"
-	if ownAPI {
-		api = "the fixture's own"
-	}
-	note("Kustomization %s/%s (%s Kustomization API), status.inventory [%s]", platformNamespace, gitopsFluxFixture, api, inventoryEntryOf(obj).ID)
+	note("Kustomization %s/%s, status.inventory [%s]", platformNamespace, gitopsFluxFixture, inventoryEntryOf(obj).ID)
 	return remove, nil
 }

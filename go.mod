@@ -12,22 +12,22 @@ require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/a2aproject/a2a-go/v2 v2.8.0
 	github.com/aws/aws-sdk-go-v2 v1.47.8
-	github.com/aws/aws-sdk-go-v2/credentials v1.20.16
+	github.com/aws/aws-sdk-go-v2/credentials v1.20.17
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.9
 	github.com/charmbracelet/x/ansi v0.11.9
 	github.com/giantswarm/go-selfupdate v1.7.6
 	github.com/giantswarm/klaus-gateway v1.21.0
-	github.com/giantswarm/pagekit v0.3.7
-	github.com/giantswarm/selfupdate-cosign v0.3.26
-	github.com/giantswarm/telemetrydeck-go v0.3.17
-	github.com/giantswarm/vm-manager v0.25.31
+	github.com/giantswarm/pagekit v0.3.8
+	github.com/giantswarm/selfupdate-cosign v0.3.27
+	github.com/giantswarm/telemetrydeck-go v0.3.18
+	github.com/giantswarm/vm-manager v0.26.0
 	github.com/google/go-github/v93 v93.0.0
 	github.com/google/uuid v1.6.0
 	github.com/smallstep/truststore v0.13.0
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.12.1
 	golang.org/x/crypto v0.58.0
-	golang.org/x/sys v0.49.0
+	golang.org/x/sys v0.50.0
 	golang.org/x/term v0.47.0
 	google.golang.org/grpc v1.85.0
 	google.golang.org/protobuf v1.36.12
@@ -199,7 +199,7 @@ require (
 	github.com/sigstore/sigstore-go v1.3.0 // indirect
 	github.com/sigstore/timestamp-authority/v2 v2.1.3 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
-	github.com/spf13/pflag v1.0.10 // indirect
+	github.com/spf13/pflag v1.1.0 // indirect
 	github.com/tetratelabs/wabin v0.0.0-20230304001439-f6f874872834 // indirect
 	github.com/tetratelabs/wazero v1.12.0 // indirect
 	github.com/theupdateframework/go-tuf/v2 v2.4.2 // indirect

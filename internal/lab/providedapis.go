@@ -31,11 +31,21 @@ import (
 //     the schema an installation enforces — and enforce nothing here, nothing
 //     reads them. A lab-only difference: docs/platform.md "Lab-specific
 //     deviations from a real management cluster".
+//   - Flux's Kustomization CRD (kustomize.toolkit.fluxcd.io/v1, from the Flux
+//     release the chart's flux-engine pins): every management cluster runs
+//     kustomize-controller, and model-manager and the agent-platform operator
+//     read a Kustomization's status.inventory to tell GitOps-owned objects
+//     from live ones. The lab's engine runs source- and helm-controller only;
+//     with the CRD alone a proof applies a Kustomization and writes its
+//     inventory (gitopsfixture.go), reconciled by nothing. The CRD only — no
+//     controller, nothing that runs.
 var (
 	//go:embed templates/gateway-api-crds.yaml
 	gatewayAPICRDs []byte
 	//go:embed templates/cilium-crds.yaml
 	ciliumCRDs []byte
+	//go:embed templates/flux-kustomization-crd.yaml
+	fluxKustomizationCRD []byte
 )
 
 // providedAPI is one bundle: what the boot's step line says it installs, and
@@ -49,6 +59,7 @@ type providedAPI struct {
 var providedAPIs = []providedAPI{
 	{what: "the Gateway API CRDs (standard channel)", manifests: gatewayAPICRDs},
 	{what: "the Cilium policy CRDs (cilium.io/v2 — served, enforced by nothing)", manifests: ciliumCRDs},
+	{what: "the Flux Kustomization CRD (kustomize.toolkit.fluxcd.io/v1 — served, reconciled by nothing)", manifests: fluxKustomizationCRD},
 }
 
 // installProvidedAPIs applies every bundle. An idempotent re-apply, and

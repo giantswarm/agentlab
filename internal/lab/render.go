@@ -89,7 +89,10 @@ type tmplData struct {
 	OAuthFixtureServer string
 	// OAuthSubjectFixtureServer is the fixture's subject-scoped twin.
 	OAuthSubjectFixtureServer string
-	GitHubMCPServer           string
+	// The fake pro's MCPServer, the board it serves and that board's default
+	// team (profake.go): the portal's roadmap block under backstage.hive.
+	ProFakeServer, ProFakeBoard, ProFakeTeam string
+	GitHubMCPServer                          string
 	// GitHubMCPClientSecret is the OAuth client Secret the MCPServer
 	// references, platform.github.secret resolved (githubmcp.go).
 	GitHubMCPClientSecret config.SecretRef
@@ -152,6 +155,10 @@ type tmplData struct {
 	// of each, side by side, with the registration pinned to none
 	// (workspaceProviderAppsFor), nil otherwise.
 	WorkspaceProviderApps []string
+	// AgentManagerCommit is agent-manager's commit mode on the person's
+	// grant of the github instance's App, released by muster's broker
+	// (agentmanagercommit.go), nil while it is off.
+	AgentManagerCommit *agentManagerCommitValues
 	// WorkspaceReleasable is the instance muster's credential provider
 	// releases while no instance renders (workspaceReleasableFor), nil with
 	// workspaces off.
@@ -343,6 +350,9 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		ExtraModels:                  cfg.Platform.ExtraModels,
 		OAuthFixtureServer:           oauthFixtureServer,
 		OAuthSubjectFixtureServer:    oauthSubjectFixtureServer,
+		ProFakeServer:                proFakeServer,
+		ProFakeBoard:                 proFakeBoard,
+		ProFakeTeam:                  proFakeTeam,
 		GitHubMCPServer:              gitHubMCPServer,
 		GitHubMCPClientSecret:        cfg.Platform.GitHub.ClientSecret(),
 		GitHubSignIn:                 gitHubSignInValuesFor(cfg),
@@ -364,6 +374,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		WorkspaceProviders:           workspaceProviders,
 		WorkspaceGrant:               workspaceGrantFor(cfg, workspaceProviders),
 		WorkspaceProviderApps:        workspaceProviderAppsFor(cfg, workspaceProviders),
+		AgentManagerCommit:           agentManagerCommitFor(cfg, workspaceProviders, workspaceGrantFor(cfg, workspaceProviders), workspaceProviderAppsFor(cfg, workspaceProviders)),
 		WorkspaceReleasable:          workspaceReleasableFor(cfg),
 		WorkspaceAdmission:           workspaceAdmissionValuesFor(cfg, workspacesChart.Carries),
 		OrganizationsEnabled:         cfg.OrganizationsEnabled(),
