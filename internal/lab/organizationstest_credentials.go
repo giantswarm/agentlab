@@ -125,6 +125,12 @@ type credentialsProof struct {
 	// otherBlocked is why the other person could not prepare an operation
 	// of their own: the SKIP of the checks that need it.
 	otherBlocked string
+	// lostOperation is the other person's operation whose save is refused
+	// once they lose the right, lostETag its ETag before; otherRemoved says
+	// the other person is out of the organization's admins binding, which
+	// cleanup restores.
+	lostOperation, lostETag string
+	otherRemoved            bool
 	// started is when the run began: the logs judged for the value are
 	// read from it.
 	started             time.Time
@@ -215,6 +221,7 @@ func (p *credentialsProof) checks() []organizationCheck {
 	generations := firstNonEmpty(uiSkip, p.pre.generationsSkip())
 	commit := firstNonEmpty(uiSkip, p.pre.commitSkip())
 	flux := firstNonEmpty(commit, p.pre.fluxSkip())
+	lostRights := firstNonEmpty(uiSkip, lostRightsSkip(p.agentManagerVersion))
 	return []organizationCheck{
 		{surface: surfaceAgentManager, boundary: "a model without a key is not written: no ModelConfig, no tenant credential value, a pending credential operation", skip: uiSkip, run: p.modelWithoutKey},
 		{surface: surfaceAgentManager, boundary: "an MCP 2026-07-28 client declaring URL elicitation gets input_required, its message attributed to agent-manager by muster, and stays input_required when it retries having accepted", skip: generations, run: p.modernGeneration},
@@ -230,6 +237,8 @@ func (p *credentialsProof) checks() []organizationCheck {
 		{surface: surfaceCredentialAPI, boundary: "the form's save: GET with a strong ETag and the consumer the confirmation lists, a POST without If-Match (428) or with a stale one refused with nothing written, POST with If-Match and only the requested pair returns the receipt, a second POST and each client generation's retry the same receipt", skip: uiSkip, run: p.save},
 		{surface: surfaceCredentialAPI, boundary: "a save whose Secret another consumer came to reference is refused 409 with nothing written, and preparing it again is refused", skip: uiSkip, run: p.sharedSecretRefused},
 		{surface: surfaceCredentialAPI, boundary: "the confirmations of set_organization_connector and set_organization_egress_policy list the one consumer each and, for the EgressPolicy, exactly the origins it sends the credential to; both cancelled with nothing written", skip: uiSkip, run: p.connectorAndEgressConfirmations},
+		{surface: surfaceCredentialAPI, boundary: "an organization admin who prepared an operation and then lost the right (access reviews before and after) is refused its save with that ETag 403 forbidden, their read naming the denied write, with nothing written", skip: lostRights, run: p.lostRightsSaveRefused},
+		{surface: surfaceCredentialAPI, boundary: "with the right given back, the operation the refused save left reads pending at the same ETag, and the save with it writes the Secret and the ModelConfig", skip: lostRights, run: p.lostRightsRestoredSave},
 		{surface: surfaceGitHub, boundary: "the save opens a pull request as the person, its Secret SOPS-encrypted", skip: commit, run: p.pullRequest},
 		{surface: surfaceFlux, boundary: "the merged pull request is applied and decrypted by the organization's Kustomization: the Secret's SHA-256 matches and the ModelConfig exists", skip: flux, run: p.fluxApplied},
 		{surface: surfaceCredentialAPI, boundary: "neither agent-manager's nor muster's logs carry the value, plain or base64, each read with at least one line", skip: uiSkip, run: p.valueNotLogged},
@@ -1715,6 +1724,7 @@ func (p *credentialsProof) cleanup() {
 			m.close()
 		}
 	}
+	p.restoreOtherAdmin()
 	if p.namespace != "" {
 		removeCredentialsSignInServer(p.namespace)
 	}
