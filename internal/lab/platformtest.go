@@ -199,9 +199,11 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 	if !slices.ContainsFunc(toolNames, func(name string) bool { return strings.HasPrefix(name, toolPrefix) }) {
 		// The person has not signed in to mcp-kubernetes yet
 		// (signInToKubernetesMCP): sign in on this session, then list again.
+		// The wrapper numbers its requests from 11, apart from the inline
+		// calls' ids; each request is its own POST either way.
 		session := &musterSession{client: client, url: mcpURL, token: token, id: sessionID, seq: 10}
-		if err := signInToKubernetesMCP(cfg, session, user); err != nil {
-			return "", fmt.Errorf("muster aggregates no %s tools: %w", toolPrefix, err)
+		if err := signInToKubernetesMCP(context.Background(), cfg, session, user); err != nil {
+			return "", fmt.Errorf("muster aggregates no %s tools (it lists %s): %w", toolPrefix, strings.Join(toolNames, ", "), err)
 		}
 		if toolNames, err = listTools(); err != nil {
 			return "", err
@@ -823,8 +825,10 @@ func parseMCPResponse(raw []byte) (map[string]any, error) {
 }
 
 // proveDownstreamIdentity shows that mcp-kubernetes acts as the signed-in
-// user: muster forwards each session's Dex id_token (auth.forwardToken), the
-// server validates it and presents it to the kind apiserver
+// user: muster presents the access token mcp-kubernetes issued to the person
+// at their sign-in (signInToKubernetesMCP; on the 3.x line muster forwards
+// the session's Dex id_token instead), and the server presents the person's
+// Dex identity, audience kubernetes, to the kind apiserver
 // (enableDownstreamOAuth), so the user's RBAC — not a ServiceAccount's —
 // decides. Listing kube-system Secrets separates the lab's groups cleanly: the
 // `view` ClusterRole bound to oidc:viewers excludes Secrets, cluster-admin
@@ -859,7 +863,7 @@ func proveDownstreamIdentity(cfg *config.Config, toolPrefix string) error {
 		session.setHeader(userIDHeader, forgedIdentity)
 		text, err := session.callServerTool(toolPrefix+"list", args)
 		if err != nil && strings.Contains(err.Error(), statusAuthRequired) {
-			if err := signInToKubernetesMCP(cfg, session, tc.user); err != nil {
+			if err := signInToKubernetesMCP(context.Background(), cfg, session, tc.user); err != nil {
 				return err
 			}
 			text, err = session.callServerTool(toolPrefix+"list", args)
@@ -889,12 +893,12 @@ func proveDownstreamIdentity(cfg *config.Config, toolPrefix string) error {
 // the server accepts only an access token it issued, so muster lists and
 // calls its tools only for a person who signed in to it (the MCPServer reads
 // Auth Required until then).
-func signInToKubernetesMCP(cfg *config.Config, session *musterSession, user *config.User) error {
+func signInToKubernetesMCP(ctx context.Context, cfg *config.Config, session *musterSession, user *config.User) error {
 	challenge, err := signInChallenge(cfg, session, cfg.MCPServerName())
 	if err != nil {
 		return fmt.Errorf("muster offers no sign-in to %s: %w", cfg.MCPServerName(), err)
 	}
-	if err := completeConsentBrokerSignIn(context.Background(), cfg, user, challenge.authURL); err != nil {
+	if err := completeConsentBrokerSignIn(ctx, cfg, user, challenge.authURL); err != nil {
 		return fmt.Errorf("signing %s in to %s through muster: %w", user.Email, cfg.MCPServerName(), err)
 	}
 	note("signed %s in to %s through muster", user.Email, cfg.MCPServerName())

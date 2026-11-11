@@ -230,11 +230,7 @@ func consentMCPRead(ctx context.Context, configuration *config.Config, user *con
 	}
 	text := innerText(result)
 	if aggregated && !strings.Contains(text, platformNamespace) {
-		challenge, err := signInChallenge(configuration, session, configuration.MCPServerName())
-		if err != nil {
-			return err
-		}
-		if err := completeConsentBrokerSignIn(ctx, configuration, user, challenge.authURL); err != nil {
+		if err := signInToKubernetesMCP(ctx, configuration, session, user); err != nil {
 			return err
 		}
 		result, err = session.callTool(tool, arguments)
