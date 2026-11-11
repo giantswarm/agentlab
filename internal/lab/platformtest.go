@@ -230,6 +230,19 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 	if err != nil {
 		return "", err
 	}
+	// Family tools can already be listed while this person's downstream
+	// session still needs sign-in. Authenticate on the call's challenge too,
+	// then retry once and judge the namespace response normally.
+	if strings.Contains(innerText(res), statusAuthRequired) {
+		session := &musterSession{client: client, url: mcpURL, token: token, id: sessionID, seq: 20}
+		if err := signInToKubernetesMCP(context.Background(), cfg, session, user); err != nil {
+			return "", err
+		}
+		res, err = call(payload)
+		if err != nil {
+			return "", err
+		}
+	}
 	// Tool results are double-wrapped: result.content[0].text is JSON whose
 	// content[0].text is the actual payload — two decode hops.
 	var wrapped struct {
