@@ -40,11 +40,11 @@ func TestOrganizationVerdictLint(t *testing.T) {
 	if line := good.line(); !strings.HasPrefix(line, "PASS ["+surfaceKubernetes+"] "+testBoundary) {
 		t.Errorf("line = %q", line)
 	}
-	skipped := organizationVerdict{surface: surfacePortal, boundary: "the picker", skip: "backstage#3363"}
+	skipped := organizationVerdict{surface: surfaceSlack, boundary: "the roster", skip: "--skip-slack"}
 	if err := skipped.lint(); err != nil {
 		t.Errorf("a skip: %v", err)
 	}
-	if line := skipped.line(); !strings.HasPrefix(line, "SKIP ["+surfacePortal+"] the picker — backstage#3363") {
+	if line := skipped.line(); !strings.HasPrefix(line, "SKIP ["+surfaceSlack+"] the roster — --skip-slack") {
 		t.Errorf("skip line = %q", line)
 	}
 	for name, v := range map[string]organizationVerdict{

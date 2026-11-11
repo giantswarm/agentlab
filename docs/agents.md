@@ -355,8 +355,7 @@ the namespace's atespace from that namespace only. Then:
   tenant's agents in `kagent` are not judged (they go with
   giantswarm/agent-manager#166). The Dev Portal surface is a page, proven in
   a browser by the portal's own suite (giantswarm/backstage
-  `e2e/agentlab/organizations.spec.ts`), so its verdict here is a SKIP naming
-  that spec.
+  `e2e/agentlab/organizations.spec.ts`), not by this proof.
 - **The negative cross-organization tests.** Each is a verdict that names
   its surface and the boundary it proves, and each has a twin in the
   member's own organization that is admitted, so a refusal for another

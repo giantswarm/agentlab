@@ -415,8 +415,8 @@ is the frontend's own guard, exercised by the plugin's tests, not by a portal
 API the lab can drive.
 
 **Per organization**: the browser suite's `organizations.spec.ts` is the
-portal half of `agentlab organizations-test`, whose `[Dev Portal]` verdict is
-a SKIP naming it ([The organizations proof](agents.md#the-organizations-proof)):
+portal half of `agentlab organizations-test`
+([The organizations proof](agents.md#the-organizations-proof)):
 what each person is offered on the New agent form, lists on the agents list
 and on `/organizations`, and is told on an organization they are not a member
 of, in a browser.
