@@ -28,6 +28,29 @@ agentlab portal dev                          # the checkout at ../backstage, nex
 agentlab portal dev --checkout ~/src/backstage
 ```
 
+**Prerequisites.**
+
+- **`.env` in the checkout.** `yarn start` runs under `env-cmd`, which fails
+  without one. Copy the checkout's `.env.example`; the only line the lab needs
+  is `NODE_OPTIONS=--no-node-snapshot`. The rest is for a Backstage run against
+  other environments.
+- **Lab hosts resolvable on this machine.** The backend runs on the host with
+  the system resolver, not CoreDNS. A resolver that filters loopback answers
+  (DNS-rebinding protection on a corporate or VPN DNS server) returns nothing
+  for `*.127.0.0.1.nip.io`, and every muster call fails with `ENOTFOUND`.
+  Check with `dscacheutil -q host -a name muster.127.0.0.1.nip.io`. Fix: map
+  the lab hosts to `127.0.0.1` in `/etc/hosts` (or use a resolver that
+  answers):
+
+  ```
+  127.0.0.1 portal.127.0.0.1.nip.io muster.127.0.0.1.nip.io dex.127.0.0.1.nip.io agentgateway.127.0.0.1.nip.io observability.127.0.0.1.nip.io
+  ```
+
+  Add any further `<name>.<platform.domain>` the lab serves that a call
+  reports as unresolved (`mcp-prometheus`, `models`, `skillhost`,
+  `workspace-manager`). With another `platform.domain`, use that domain.
+  `/etc/hosts` has no wildcards, and the browser uses the same entries.
+
 Open `http://localhost:3000` and sign in as a lab user (`admin@lab.local`,
 password `password`). The portal signs in through the lab Dex and calls the
 lab's muster, kagent API and apiserver with the signed-in person's own token —
