@@ -497,6 +497,28 @@ printed only as its SHA-256. Each verdict:
   `token`), the connector with the URL it sends the value to, the egress
   policy with exactly the two origins that get the credential and not the
   one reached without it. Both are cancelled, nothing written.
+- A save after lost rights (giantswarm/agentlab#1250): the other admin,
+  whose access review allows creating Secrets and ModelConfigs in the
+  organization, prepares model `agentlab-credentials-lost` and reads its
+  confirmation and `ETag`. The lab then removes them from the
+  `organization-admins` RoleBinding, and their access review must deny both
+  creates within 15 seconds; else the verdict fails as a wrong fixture.
+  Their `POST` of the value with that `ETag` must answer 403 `forbidden`
+  (not 404, another person's; not 412, a stale `ETag`; not 409, an expired
+  operation), their `GET` of the operation 403 naming the denied create of
+  that model's ModelConfig or Secret in the organization's namespace and
+  `agent-platform:admin`, and nothing is written. agent-manager checks the
+  person's rights again on each read, save and cancel, before it writes or
+  changes the operation. A second verdict binds them again: the operation
+  reads `pending` at the same `ETag`, and the save with it writes the Secret
+  (its SHA-256 compared) and the ModelConfig. Both run after the save, so
+  the admin's operation is not kept waiting. The binding is given back in
+  the cleanup too, so a failed run leaves the organization usable; a run
+  interrupted between the two verdicts (Ctrl-C) leaves it removed, and the
+  next run creates the organization again. Below
+  agent-manager 2.24.0-rc.2 both are a `SKIP` naming
+  giantswarm/agent-manager#360: that user cannot prepare an operation of
+  their own, and the first admin, a platform admin, cannot lose the right.
 - Back on the admin's operation, its confirmation lists only the ModelConfig
   (key `apiKey`); a `POST` without `If-Match` (428 from agent-manager 2.23.0,
   giantswarm/agent-manager#354; 400 also admitted, and said, on an older one)
