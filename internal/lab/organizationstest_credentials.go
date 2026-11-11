@@ -266,7 +266,7 @@ func (p *credentialsProof) setUp() error {
 	if err := markProofOrganization(credentialsOrganization); err != nil {
 		return err
 	}
-	if err := bindOrganizationRole(ns, organizationAdminsBinding, organizationAdminRole, []rbacv1.Subject{groupSubject(platformAdminsGroup), userSubject(p.other)}); err != nil {
+	if err := bindOrganizationRole(ns, organizationAdminsBinding, organizationAdminRole, p.adminsSubjects(true)); err != nil {
 		return err
 	}
 	step("%s bound to %s, the organization's read-only role, in %s", p.viewer.Email, organizationUserRole, ns)

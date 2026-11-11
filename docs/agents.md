@@ -511,8 +511,11 @@ printed only as its SHA-256. Each verdict:
   person's rights again on each read, save and cancel, before it writes or
   changes the operation. A second verdict binds them again: the operation
   reads `pending` at the same `ETag`, and the save with it writes the Secret
-  (its SHA-256 compared) and the ModelConfig. The binding is given back in
-  the cleanup too, so a failed run leaves the organization usable. Below
+  (its SHA-256 compared) and the ModelConfig. Both run after the save, so
+  the admin's operation is not kept waiting. The binding is given back in
+  the cleanup too, so a failed run leaves the organization usable; a run
+  interrupted between the two verdicts (Ctrl-C) leaves it removed, and the
+  next run creates the organization again. Below
   agent-manager 2.24.0-rc.2 both are a `SKIP` naming
   giantswarm/agent-manager#360: that user cannot prepare an operation of
   their own, and the first admin, a platform admin, cannot lose the right.

@@ -93,6 +93,7 @@ func TestLostRightsRefusal(t *testing.T) {
 	}
 	for name, message := range map[string]string{
 		"another namespace": strings.ReplaceAll(modelDenied, "org-ns", "other-ns"),
+		"denied elsewhere":  strings.Replace(modelDenied, "in org-ns;", "in other-ns;", 1),
 		"another model":     strings.ReplaceAll(modelDenied, "/agentlab-credentials-lost", "/agentlab-credentials-other"),
 		"another verb":      strings.ReplaceAll(modelDenied, "may not create", "may not update"),
 		"another guard":     "forbidden: organization agentlab-credentials is being deleted",
