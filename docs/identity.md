@@ -155,8 +155,9 @@ not ready: <reason>`, and the reason names the Secret and the Role.
 The Dev Portal (Backstage with giantswarm/backstage#3161) reads the same
 model as the person, through its own backend routes. What the retired
 tenants proof asserted over `org-<name>` namespaces (steps P, [The Agent
-Platform proof](backstage.md#the-agent-platform-proof)); `organizations-test`
-skips the portal until giantswarm/backstage#3363:
+Platform proof](backstage.md#the-agent-platform-proof)); the organizations'
+portal surface is the browser suite's `organizations.spec.ts`, not
+`organizations-test`:
 
 - **The roster per tenant.** The portal asks the controller which namespaces
   hold an agent the person may list (`GET /api/agent-platform/kagent/agent-namespaces`,
@@ -181,7 +182,7 @@ skips the portal until giantswarm/backstage#3363:
   never an authorization input. `GET /kagent/me` answers the token's claims
   on kagent 1.19: its `email` is the person, its `sub` is Dex's subject. The
   portal's "Created by: Me" compares the creator with that `sub`, so it keeps
-  nothing (giantswarm/backstage#3161; the browser suite's `tenants.spec.ts`
+  nothing (giantswarm/backstage#3161; the browser suite's `organizations.spec.ts`
   shows it).
 - **No tenant, no agent**: a person bound in no organization, with no platform
   agent, reads an empty roster, not an error. The chart binds

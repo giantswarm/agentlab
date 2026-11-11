@@ -101,7 +101,6 @@ skips with the reason, and a skipped spec is unproven.
 | `AGENTLAB_INSTALLATIONS_PAGE=1` | `backstage.installationsPage: true`: the installations specs (`installations-versions`, `installations-session-expiry`, the Installations link in `agents-list-states`) |
 | `AGENTLAB_HIVE=1` | `backstage.hive: true`: `hive.spec.ts`, from mocked plans- and roadmap-backend routes |
 | `AGENTLAB_ROADMAP_FIXTURE=1` | with `AGENTLAB_HIVE=1`, the fake pro `agentlab roadmap-test --keep` left in place: `hive.spec.ts` leaves the roadmap routes unmocked, and its Roadmap test reads the fixture board through the portal's roadmap-backend and muster ([The roadmap board fixture](#the-roadmap-board-fixture)) |
-| `AGENTLAB_TENANTS=1` | the tenants mode of an agent-platform chart before 4.175.0 (which removed it; the lab no longer turns it on, giantswarm/backstage#3363 moves the portal to the organizations): `tenants.spec.ts`, agents per tenant in an organization namespace it labels and binds (with `AGENTLAB_KUBECONFIG`; run it first or alone, its empty state needs a platform tenant with no agent) |
 
 The agent-platform chart lists `page:gs/installations` in
 `backstage.disabledExtensions`, and the Backstage app ships the page off, so a
@@ -415,14 +414,12 @@ versioned persisted query cache (a stale v1alpha2 entry never renders) — that
 is the frontend's own guard, exercised by the plugin's tests, not by a portal
 API the lab can drive.
 
-**Per organization**: `agentlab organizations-test` skips the Dev Portal
-surface until the portal's organization page and New agent picker land
-(giantswarm/backstage#3363): its verdict reads `SKIP [Dev Portal]`. The
-portal steps of the retired tenants proof (steps P: the roster per tenant,
-the create flow's tenants, the access reviews behind Edit and Delete) read
-`org-<name>` namespaces of the tenants mode, which agent-platform 4.175.0
-removed; the organizations' portal surface is written against #3363's routes
-when it lands ([The organizations proof](agents.md#the-organizations-proof)).
+**Per organization**: the browser suite's `organizations.spec.ts` is the
+portal half of `agentlab organizations-test`, whose `[Dev Portal]` verdict is
+a SKIP naming it ([The organizations proof](agents.md#the-organizations-proof)):
+what each person is offered on the New agent form, lists on the agents list
+and on `/organizations`, and is told on an organization they are not a member
+of, in a browser.
 
 **Against an existing agent**: `agentlab backstage-test --agent
 kagent/<name>` writes and deletes no agent. The sign-ins, the MCP servers page
