@@ -190,6 +190,15 @@ one allowance is the configuration: the stages `platform.agents: false` or
 3.x line has no route or family member for, are listed as `SKIP` with that
 reason and the proof still passes.
 
+From agent-platform 4.176.4 the chart registers mcp-kubernetes with
+`auth.forwardToken: false` (giantswarm/agent-platform#1309): the server
+takes only an access token it issued, so its MCPServer reads `Auth Required`
+and muster lists no `x_kubernetes_` tool until the person signs in to it.
+The `Kubernetes tools` and `downstream identity` stages sign each person in
+to it through muster first (`core_auth_login`, then the sign-in as a browser
+does it, the way `oauth-consent-test` does), and note
+`signed <email> in to <server> through muster`.
+
 ```
 ==> [00:01] 19 stages in 1.1s
     PASS    78ms  Dex token

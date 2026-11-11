@@ -196,6 +196,19 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 	// selecting the lab's member by its name (kubernetesTool: the server's
 	// own tools on the 3.x line).
 	toolPrefix := kubernetesTool(cfg, "")
+	if !slices.ContainsFunc(toolNames, func(name string) bool { return strings.HasPrefix(name, toolPrefix) }) {
+		// The person has not signed in to mcp-kubernetes yet
+		// (signInToKubernetesMCP): sign in on this session, then list again.
+		// The wrapper numbers its requests from 11, apart from the inline
+		// calls' ids; each request is its own POST either way.
+		session := &musterSession{client: client, url: mcpURL, token: token, id: sessionID, seq: 10}
+		if err := signInToKubernetesMCP(context.Background(), cfg, session, user); err != nil {
+			return "", fmt.Errorf("muster aggregates no %s tools (it lists %s): %w", toolPrefix, strings.Join(toolNames, ", "), err)
+		}
+		if toolNames, err = listTools(); err != nil {
+			return "", err
+		}
+	}
 	shown := 0
 	for _, name := range toolNames {
 		if strings.HasPrefix(name, toolPrefix) && shown < 8 {
@@ -387,11 +400,11 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 	// The user's identity, not a ServiceAccount: the same tool as two users
 	// with different RBAC must answer differently — and a forged identity
 	// header changes nothing, the bearer decides.
-	p.begin(stageDownstreamIdentity, "Downstream identity: the forwarded Dex id_token decides at the apiserver, not a ServiceAccount")
+	p.begin(stageDownstreamIdentity, "Downstream identity: the person's Dex identity decides at the apiserver, not a ServiceAccount")
 	if err := proveDownstreamIdentity(cfg, toolPrefix); err != nil {
 		return "", err
 	}
-	verdict += "\nPASS: the forwarded Dex id_token reaches the apiserver — kube-system Secrets: platform-admin allowed, viewer forbidden (user RBAC, not the ServiceAccount's; a forged x-user-id changes nothing)"
+	verdict += "\nPASS: the person's Dex identity reaches the apiserver — kube-system Secrets: platform-admin allowed, viewer forbidden (user RBAC, not the ServiceAccount's; a forged x-user-id changes nothing)"
 	if cfg.Platform.Agents {
 		// The kagent controller behind the JWT policy on its route, and
 		// agent-manager writing as the caller: the same forged header.
@@ -812,8 +825,10 @@ func parseMCPResponse(raw []byte) (map[string]any, error) {
 }
 
 // proveDownstreamIdentity shows that mcp-kubernetes acts as the signed-in
-// user: muster forwards each session's Dex id_token (auth.forwardToken), the
-// server validates it and presents it to the kind apiserver
+// user: muster presents the access token mcp-kubernetes issued to the person
+// at their sign-in (signInToKubernetesMCP; on the 3.x line muster forwards
+// the session's Dex id_token instead), and the server presents the person's
+// Dex identity, audience kubernetes, to the kind apiserver
 // (enableDownstreamOAuth), so the user's RBAC — not a ServiceAccount's —
 // decides. Listing kube-system Secrets separates the lab's groups cleanly: the
 // `view` ClusterRole bound to oidc:viewers excludes Secrets, cluster-admin
@@ -847,6 +862,12 @@ func proveDownstreamIdentity(cfg *config.Config, toolPrefix string) error {
 		// apiserver must still see the token's user.
 		session.setHeader(userIDHeader, forgedIdentity)
 		text, err := session.callServerTool(toolPrefix+"list", args)
+		if err != nil && strings.Contains(err.Error(), statusAuthRequired) {
+			if err := signInToKubernetesMCP(context.Background(), cfg, session, tc.user); err != nil {
+				return err
+			}
+			text, err = session.callServerTool(toolPrefix+"list", args)
+		}
 		switch {
 		case tc.allowed && err != nil:
 			return fmt.Errorf("%s could not list kube-system Secrets through %slist: %w", tc.user.Email, toolPrefix, err)
@@ -862,6 +883,25 @@ func proveDownstreamIdentity(cfg *config.Config, toolPrefix string) error {
 			note("%s: %s", tc.user.Email, excerpt(err.Error(), 160))
 		}
 	}
+	return nil
+}
+
+// signInToKubernetesMCP signs user in to the lab's mcp-kubernetes through
+// muster on session, as a browser would (oauth-consent-test does the same).
+// From agent-platform 4.176.4 (giantswarm/agent-platform#1309) the
+// connectivity chart registers mcp-kubernetes with auth.forwardToken false:
+// the server accepts only an access token it issued, so muster lists and
+// calls its tools only for a person who signed in to it (the MCPServer reads
+// Auth Required until then).
+func signInToKubernetesMCP(ctx context.Context, cfg *config.Config, session *musterSession, user *config.User) error {
+	challenge, err := signInChallenge(cfg, session, cfg.MCPServerName())
+	if err != nil {
+		return fmt.Errorf("muster offers no sign-in to %s: %w", cfg.MCPServerName(), err)
+	}
+	if err := completeConsentBrokerSignIn(ctx, cfg, user, challenge.authURL); err != nil {
+		return fmt.Errorf("signing %s in to %s through muster: %w", user.Email, cfg.MCPServerName(), err)
+	}
+	note("signed %s in to %s through muster", user.Email, cfg.MCPServerName())
 	return nil
 }
 
