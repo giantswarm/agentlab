@@ -1,9 +1,13 @@
 package lab
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -93,6 +97,33 @@ func TestAgentManagerCommitFor(t *testing.T) {
 	cfg.Platform.Agents = false
 	if agentManagerCommitFor(cfg, providers, grant, nil) != nil {
 		t.Error("commit mode without agents")
+	}
+}
+
+func TestAgentManagerCommitReleaseFloor(t *testing.T) {
+	for _, scenario := range []struct {
+		version string
+		commit  bool
+	}{
+		{"3.0.0-rc.5", false},
+		{"3.0.0-rc.9", false},
+		{"3.0.0-rc.10", true},
+		{"3.0.0", true},
+	} {
+		t.Run(scenario.version, func(t *testing.T) {
+			configuration, providers, grant := commitLab(t)
+			configuration.Platform.Devctl.Enabled = true
+			stubAgentManagerTags(t, scenario.version)
+			overlay := filepath.Join(t.TempDir(), "agent-manager.yaml")
+			require.NoError(t, os.WriteFile(overlay, []byte("components:\n  agent-manager:\n    versionRange: "+scenario.version+"\n"), 0o600))
+			configuration.Platform.ValuesFiles = []string{overlay}
+			values := agentManagerCommitFor(configuration, providers, grant, nil)
+			if scenario.commit {
+				require.NotNil(t, values)
+			} else {
+				require.Nil(t, values)
+			}
+		})
 	}
 }
 

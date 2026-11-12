@@ -54,7 +54,7 @@ const (
 
 // agentManagerCommitFloor is the first agent-manager whose chart takes
 // github.tokenExchange.
-var agentManagerCommitFloor = semver.MustParse("3.0.0-rc.5")
+var agentManagerCommitFloor = semver.MustParse("3.0.0-rc.10")
 
 // agentManagerCommitValues is what the values template renders for commit
 // mode: agent-manager's exchange client (muster's public token endpoint,

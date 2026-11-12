@@ -253,7 +253,7 @@ The lab's agent-manager offers commit mode (`get_info` reports
 Secret in place), muster keeps that instance's App as the provider App
 `github` (one provider App per instance, or the workspace-manager's pin with
 `platform.devctl` on; the pin alone keeps none) and the agent-manager the install
-resolves is 3.0.0-rc.5 or newer (`components.agent-manager.versionRange` in
+resolves is 3.0.0-rc.10 or newer (`components.agent-manager.versionRange` in
 `platform.valuesFiles` admits a release candidate). `agentlab platform`
 prints which.
 
