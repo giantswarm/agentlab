@@ -32,9 +32,10 @@ import (
 // (`agentlab backstage-test`, backstagetest_commit.go).
 //
 // The lab wires it while the platform runs agents, the github instance
-// renders, muster keeps that instance's App (the workspace-manager's pin or
-// one provider App per instance) and the agent-manager the install resolves
-// takes github.tokenExchange (agentManagerCommitFloor and newer).
+// renders, muster keeps that instance's App as the provider App github (one
+// provider App per instance, or the workspace-manager's pin with devctl on)
+// and the agent-manager the install resolves takes github.tokenExchange
+// (agentManagerCommitFloor and newer).
 
 const (
 	// agentManagerCommitClientID is muster's confidential broker client
@@ -71,6 +72,20 @@ type agentManagerCommitValues struct {
 	SubjectIssuer, JWKSURL, JWKSHost string
 }
 
+// musterKeepsProviderApp says whether muster keeps a provider App named
+// instance, the name agent-manager's grant_required answer and its
+// registration's auth.providerApps carry, from which muster builds the
+// sign-in link: one provider App per instance (apps), or the pinned github
+// App kept as the provider App github beside the pin while devctl is on.
+// The pin alone keeps no provider App, and muster answers an App it does
+// not keep with an error instead of a link.
+func musterKeepsProviderApp(cfg *config.Config, grant *workspaceGrantValues, apps []string, instance string) bool {
+	if slices.Contains(apps, instance) {
+		return true
+	}
+	return grant != nil && grant.Provider == instance && instance == config.WorkspaceProviderGitHub && cfg.DevctlEnabled()
+}
+
 // agentManagerCommitFor is the commit wiring for the rendered instances,
 // nil while any precondition is missing.
 func agentManagerCommitFor(cfg *config.Config, providers []workspaceProviderValues, grant *workspaceGrantValues, apps []string) *agentManagerCommitValues {
@@ -87,7 +102,7 @@ func agentManagerCommitFor(cfg *config.Config, providers []workspaceProviderValu
 	if gh == nil {
 		return nil
 	}
-	if (grant == nil || grant.Provider != instance) && !slices.Contains(apps, instance) {
+	if !musterKeepsProviderApp(cfg, grant, apps, instance) {
 		return nil
 	}
 	if !agentManagerTakesCommit(cfg) {
@@ -161,7 +176,7 @@ func ensureAgentManagerCommitFiles() (map[string]string, error) {
 // agentManagerCommitHint is the platform-up summary line of commit mode.
 func agentManagerCommitHint(c *agentManagerCommitValues) string {
 	if c == nil {
-		return "  agent-manager offers no commit mode (it needs platform.workspaces' github instance, muster keeping its App, and agent-manager " + agentManagerCommitFloor.Original() + " or newer)."
+		return "  agent-manager offers no commit mode (it needs platform.workspaces' github instance, muster keeping its App as the provider App github, and agent-manager " + agentManagerCommitFloor.Original() + " or newer)."
 	}
 	return fmt.Sprintf("  agent-manager commit mode: pull requests as the person, on their grant of the %s instance's App (muster's broker at %s).\n"+
 		"  Proof: `agentlab backstage-test` (its commit stage).", c.Instance, c.TokenEndpoint)

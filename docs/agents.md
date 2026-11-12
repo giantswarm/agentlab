@@ -250,8 +250,9 @@ requests of mode commit are `agentlab backstage-test`'s commit stage (below).
 The lab's agent-manager offers commit mode (`get_info` reports
 `capabilities.commit`) while the platform runs agents, the workspaces'
 `github` instance renders (`platform.workspaces.github`, its App's ids and
-Secret in place), muster keeps that instance's App (the workspace-manager's
-pin or one provider App per instance) and the agent-manager the install
+Secret in place), muster keeps that instance's App as the provider App
+`github` (one provider App per instance, or the workspace-manager's pin with
+`platform.devctl` on; the pin alone keeps none) and the agent-manager the install
 resolves is 3.0.0-rc.5 or newer (`components.agent-manager.versionRange` in
 `platform.valuesFiles` admits a release candidate). `agentlab platform`
 prints which.
@@ -271,9 +272,9 @@ registration to an App (agent-manager's `github.enabled` with
 - muster (`muster.oauth.server.tokenExchangeBroker`, the lab Dex its trusted
   subject issuer) releases that person's own grant of the App
   (`https://github.com/apps/<appId>`) to that client and for that one
-  audience, `github`, the provider App muster keeps the grant under and
-  agent-manager's registration lists in `auth.providerApps`; a person
-  without the grant gets `grant_required` on a commit.
+  audience, `github`, the provider App agent-manager's registration lists
+  in `auth.providerApps`; a commit without the person's grant answers
+  `grant_required`, which muster turns into that App's sign-in link.
 
 Apply mode, every read and every other proof keep the ID token: nothing else
 needs the grant. The App is installed with contents and pull-request write on

@@ -42,10 +42,12 @@ func stubAgentManagerTags(t *testing.T, tags ...string) {
 }
 
 // Commit mode renders only with every precondition: agents, the github
-// instance rendered, muster keeping its App (the pin or a provider App), and
-// an agent-manager that takes github.tokenExchange.
+// instance rendered, muster keeping its App as the provider App github (one
+// per instance, or the pin with devctl on), and an agent-manager that takes
+// github.tokenExchange.
 func TestAgentManagerCommitFor(t *testing.T) {
 	cfg, providers, grant := commitLab(t)
+	cfg.Platform.Devctl.Enabled = true
 
 	stubAgentManagerTags(t, "2.22.0", "3.0.0-rc.4")
 	if c := agentManagerCommitFor(cfg, providers, grant, nil); c != nil {
@@ -55,7 +57,7 @@ func TestAgentManagerCommitFor(t *testing.T) {
 	stubAgentManagerTags(t, "2.22.0", "3.0.0")
 	c := agentManagerCommitFor(cfg, providers, grant, nil)
 	if c == nil {
-		t.Fatal("an agent-manager resolving to 3.0.0 with the pinned github instance offers no commit mode")
+		t.Fatal("an agent-manager resolving to 3.0.0 with the pinned github instance kept as the provider App github (devctl) offers no commit mode")
 	}
 	if c.Audience != config.WorkspaceProviderGitHub {
 		t.Errorf("the exchange asks for %s, want the provider App muster keeps the grant under, %s", c.Audience, config.WorkspaceProviderGitHub)
@@ -76,6 +78,11 @@ func TestAgentManagerCommitFor(t *testing.T) {
 	if agentManagerCommitFor(cfg, providers, nil, nil) != nil {
 		t.Error("commit mode without muster keeping the github App: no grant could be released")
 	}
+	cfg.Platform.Devctl.Enabled = false
+	if c := agentManagerCommitFor(cfg, providers, grant, nil); c != nil {
+		t.Errorf("commit mode on the pin alone, which keeps no provider App github for muster to answer grant_required with: %+v", c)
+	}
+	cfg.Platform.Devctl.Enabled = true
 	gitlab := &workspaceGrantValues{Provider: config.WorkspaceProviderGitLab}
 	if agentManagerCommitFor(cfg, providers, gitlab, nil) != nil {
 		t.Error("commit mode while muster pins the gitlab instance")

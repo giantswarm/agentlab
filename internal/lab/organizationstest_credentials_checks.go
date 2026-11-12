@@ -113,7 +113,7 @@ func (c credentialPrerequisites) uiURLSkip() string {
 func (c credentialPrerequisites) commitSkip() string {
 	switch {
 	case c.agentManager[flagTokenExchange] == "":
-		return "agent-manager runs without github.tokenExchange (no --" + flagTokenExchange + "): commit mode needs platform.workspaces' github instance, muster keeping its App and agent-manager " + agentManagerCommitFloor.Original() + " or newer (docs/agents.md \"Commit mode\"), then `agentlab platform`"
+		return "agent-manager runs without github.tokenExchange (no --" + flagTokenExchange + "): commit mode needs platform.workspaces' github instance, muster keeping its App as the provider App github and agent-manager " + agentManagerCommitFloor.Original() + " or newer (docs/agents.md \"Commit mode\"), then `agentlab platform`"
 	case c.agentManager[flagOrgsRepository] == "":
 		return "agent-manager offers no commit mode for organizations (no --" + flagOrgsRepository + "): put agent-manager.tenants.commit.repository (the first platform.workspaces.github.proofRepositories entry) and tenants.commit.objectsPath in a platform.valuesFiles overlay (agent-manager docs/organizations-commit-mode.md), then `agentlab platform`"
 	case c.grant != "":
