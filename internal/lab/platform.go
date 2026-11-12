@@ -618,8 +618,11 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	// agent-manager's commit mode (agentmanagercommit.go): the broker
 	// client's Secret placed ahead of the install that names it.
 	agentManagerCommit := agentManagerCommitFor(cfg, workspaceProviders, workspaceGrant, workspaceApps)
+	if cfg.Platform.ManagerGitHubProof && agentManagerCommit == nil {
+		return fmt.Errorf("manager GitHub proof requires the workspace github provider and its credential binding")
+	}
 	if agentManagerCommit != nil {
-		if err := agentManagerCommitUp(); err != nil {
+		if err := agentManagerCommitUp(agentManagerCommit); err != nil {
 			return err
 		}
 	}

@@ -580,6 +580,8 @@ type Platform struct {
 	// values the lab template does not know. Paths are absolute or relative
 	// to the lab directory; each must exist.
 	ValuesFiles []string `yaml:"valuesFiles,omitempty"`
+	// ManagerGitHubProof pins all four managers and shares the workspace GitHub App.
+	ManagerGitHubProof bool `yaml:"managerGitHubProof,omitempty"`
 	// Additional kagent ModelConfigs beyond the chart-rendered default
 	// (aiModel): self-hosted OpenAI-compatible endpoints (vLLM, Ollama),
 	// OpenRouter, Gemini, plain OpenAI. Rendered as lab-labeled ModelConfig
@@ -2306,6 +2308,9 @@ func ValidateImageRef(s string) error {
 }
 
 func (c *Config) Validate() error {
+	if err := c.validateManagerGitHubProof(); err != nil {
+		return err
+	}
 	if err := ValidateClusterName(c.ClusterName); err != nil {
 		return fmt.Errorf("cluster name %q: %w", c.ClusterName, err)
 	}

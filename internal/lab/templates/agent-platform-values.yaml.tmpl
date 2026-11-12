@@ -178,14 +178,18 @@ components:
   dicebear:
     enabled: false
 {{- $musterPatches := index .PostRenderers "muster" }}
-{{- if or $musterPatches ($.ChatGPTRange "muster") }}
+{{- if or $musterPatches ($.ChatGPTRange "muster") .Platform.ManagerGitHubProof }}
   muster:
+{{- if .Platform.ManagerGitHubProof }}
+    versionRange: "5.63.2"
+{{- else }}
 {{- with $.ChatGPTRange "muster" }}
     # The first muster with the ChatGPT provider App and up
     # (platform.chatgptSubscription; chatgptsubscription.go): the chart's own
     # range admits older releases, and the chart wires no ChatGPT login on
     # them.
     versionRange: "{{ . }}"
+{{- end }}
 {{- end }}
 {{- with $musterPatches }}
     postRenderers:
@@ -272,6 +276,9 @@ components:
   # the caller), on whenever kagent is — the standalone umbrella's contract.
   agent-manager:
     enabled: true
+{{- if .Platform.ManagerGitHubProof }}
+    versionRange: "3.0.0-rc.10"
+{{- end }}
 {{- with index .PostRenderers "agent-manager" }}
     postRenderers:
 {{ . | indent 6 }}
@@ -287,8 +294,16 @@ components:
   # discovery against the lab Dex's localhost address without a backend to
   # front — so the lab's toggle off is the component off, not left to the
   # chart's default.
+{{- if .Platform.ManagerGitHubProof }}
+  skill-manager:
+    enabled: true
+    versionRange: "0.2.0-rc.1"
+{{- end }}
   model-manager:
-    enabled: {{ .ModelManagerEnabled }}
+    enabled: {{ or .ModelManagerEnabled .Platform.ManagerGitHubProof }}
+{{- if .Platform.ManagerGitHubProof }}
+    versionRange: "1.20.0-rc.10"
+{{- end }}
 {{- if .ModelManagerEnabled }}
 {{- with index .PostRenderers "model-manager" }}
     postRenderers:
@@ -350,7 +365,7 @@ components:
 {{ . | indent 6 }}
 {{- end }}
 {{- end }}
-{{- if .ClusterManagerEnabled }}
+{{- if or .ClusterManagerEnabled .Platform.ManagerGitHubProof }}
   # The cluster write surface (cluster-manager), which the chart ships off:
   # on while platform.devImages names its image — the lab's one switch for
   # it — with the lab's patches (the dex-localhost sidecar, the dev-image
@@ -359,6 +374,9 @@ components:
   # the roster's end.
   cluster-manager:
     enabled: true
+{{- if .Platform.ManagerGitHubProof }}
+    versionRange: "0.37.0-rc.1"
+{{- end }}
 {{- with index .PostRenderers "cluster-manager" }}
     postRenderers:
 {{ . | indent 6 }}
@@ -604,14 +622,18 @@ muster:
             allowPrivateIPJWKSHosts: ["{{ .JWKSHost }}"]
         tokenExchangeBroker:
           clientAudiences:
-            {{ .ClientID }}: [{{ .Audience }}]
+{{- range .BrokerClients }}
+            {{ .Name }}: [{{ $.AgentManagerCommit.Audience }}]
+{{- end }}
           targets:
             {{ .Audience }}:
               grantIssuer: "{{ .GrantIssuer }}"
           brokerClients:
-            {{ .ClientID }}:
+{{- range .BrokerClients }}
+            {{ .Name }}:
               clientCredentialsSecretRef:
                 name: {{ .Secret }}
+{{- end }}
 {{- end }}
 {{- if and .WorkspacesEnabled .WorkspacesChart (not .WorkspaceProviders) }}
 {{- with .WorkspaceReleasable }}
@@ -1078,7 +1100,7 @@ agent-manager:
 {{- end }}
 {{- end }}
 
-{{- if .ModelManagerEnabled }}
+{{- if or .ModelManagerEnabled .Platform.ManagerGitHubProof }}
 # The model-manager chart's own values (the chart pins the Service name, the
 # kagent namespace, the muster registration and OAuth against global.identity).
 # ONE model-manager fronts every host model server of
@@ -1093,7 +1115,20 @@ agent-manager:
 # downstream OAuth (the ModelConfigs it writes as the caller) to pass the kind
 # apiserver.
 model-manager:
-{{- if eq (len .ModelManagerBackends) 1 }}
+{{- with .AgentManagerCommit }}
+{{- if .Proof }}
+  github:
+    enabled: true
+    tokenExchange:
+      tokenEndpoint: {{ .TokenEndpoint }}
+      audience: {{ .Audience }}
+      existingSecret: model-manager-github-exchange
+      caSecretName: {{ .CASecret }}
+{{- end }}
+{{- end }}
+{{- if .Platform.ManagerGitHubProof }}
+  backend: kserve
+{{- else if eq (len .ModelManagerBackends) 1 }}
   backend: {{ index .ModelManagerBackends 0 }}
 {{- else }}
   backends:
@@ -1118,7 +1153,7 @@ model-manager:
 
 {{- end }}
 
-{{- if .SkillManager }}
+{{- if or .SkillManager .Platform.ManagerGitHubProof }}
 # The skill-manager chart's own values (giantswarm/skill-manager; the meta
 # chart derives its sources, OAuth and callers' namespaces). It lists and
 # pins skills as the skills GitHub App when one is recorded (githubapp.go),
@@ -1127,8 +1162,21 @@ model-manager:
 # platform.networkPolicy like the connectivity chart's and muster's; on,
 # patch 11 adds the Dex peer (networkpolicy.go).
 skill-manager:
-{{- if .GitHubApp }}
+{{- with .AgentManagerCommit }}
+{{- if .Proof }}
   github:
+    enabled: true
+    tokenExchange:
+      tokenEndpoint: {{ .TokenEndpoint }}
+      audience: {{ .Audience }}
+      existingSecret: skill-manager-github-exchange
+      caSecretName: {{ .CASecret }}
+{{- end }}
+{{- end }}
+{{- if .GitHubApp }}
+{{- if not .Platform.ManagerGitHubProof }}
+  github:
+{{- end }}
     app:
       secretName: agentlab-github-app
 {{- end }}
@@ -1147,6 +1195,17 @@ skill-manager:
 # headless session's x_cluster-manager_* tools do not exist while the
 # MCPServer reads Connected.
 cluster-manager:
+{{- with .AgentManagerCommit }}
+{{- if .Proof }}
+  github:
+    enabled: true
+    tokenExchange:
+      tokenEndpoint: {{ .TokenEndpoint }}
+      audience: {{ .Audience }}
+      existingSecret: cluster-manager-github-exchange
+      caSecretName: {{ .CASecret }}
+{{- end }}
+{{- end }}
   muster:
     mcpServer:
       auth:

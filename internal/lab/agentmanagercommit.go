@@ -70,6 +70,21 @@ type agentManagerCommitValues struct {
 	// SubjectIssuer is the lab Dex; JWKSURL and JWKSHost where muster reads
 	// its keys in the cluster.
 	SubjectIssuer, JWKSURL, JWKSHost string
+	Proof                            bool
+}
+
+type managerGitHubClient struct {
+	Name, Secret string
+}
+
+func (c *agentManagerCommitValues) BrokerClients() []managerGitHubClient {
+	clients := []managerGitHubClient{{agentManagerCommitClientID, AgentManagerCommitSecretName}}
+	if c.Proof {
+		for _, name := range []string{clusterManager, modelManagerMCPServer, componentSkillManager} {
+			clients = append(clients, managerGitHubClient{name, name + "-github-exchange"})
+		}
+	}
+	return clients
 }
 
 // musterKeepsProviderApp says whether muster keeps a provider App named
@@ -111,6 +126,7 @@ func agentManagerCommitFor(cfg *config.Config, providers []workspaceProviderValu
 	t := &tmplData{Config: cfg}
 	jwksHost := t.DexJWKSHost()
 	return &agentManagerCommitValues{
+		Proof:         cfg.Platform.ManagerGitHubProof,
 		TokenEndpoint: cfg.MusterBaseURL() + agentManagerCommitTokenPath,
 		ClientID:      agentManagerCommitClientID,
 		Audience:      instance,
@@ -128,6 +144,9 @@ func agentManagerCommitFor(cfg *config.Config, providers []workspaceProviderValu
 // resolves is agentManagerCommitFloor or newer; one that cannot be
 // resolved is a note and false.
 func agentManagerTakesCommit(cfg *config.Config) bool {
+	if cfg.Platform.ManagerGitHubProof {
+		return true
+	}
 	version, err := componentVersion(cfg, agentManagerMCPServer, workspacesChartFor(cfg).AgentManager, agentManagerCommitFloor)
 	if err != nil {
 		note("agent-manager's chart version could not be resolved (%v): commit mode stays off", err)
@@ -142,31 +161,38 @@ func agentManagerTakesCommit(cfg *config.Config) bool {
 
 // agentManagerCommitUp places the broker client's Secret, its secret
 // generated once and kept, ahead of the install that names it.
-func agentManagerCommitUp() error {
-	files, err := ensureAgentManagerCommitFiles()
-	if err != nil {
-		return err
+func agentManagerCommitUp(configuration *agentManagerCommitValues) error {
+	for _, client := range configuration.BrokerClients() {
+		files, err := ensureManagerGitHubFiles(client.Name)
+		if err != nil {
+			return err
+		}
+		if err := ensureSecretFromFiles(platformNamespace, client.Secret, files); err != nil {
+			return err
+		}
 	}
-	return ensureSecretFromFiles(platformNamespace, AgentManagerCommitSecretName, files)
+	return nil
 }
 
-// ensureAgentManagerCommitFiles writes the client id (public) and a random
-// secret into agentManagerCommitDir, an existing secret kept, and returns
-// the Secret's keys and their files.
-func ensureAgentManagerCommitFiles() (map[string]string, error) {
-	if err := os.MkdirAll(agentManagerCommitDir, 0o750); err != nil {
+// ensureManagerGitHubFiles keeps each broker client's credentials in its own directory.
+func ensureManagerGitHubFiles(clientID string) (map[string]string, error) {
+	directory := filepath.Join("certs", clientID+"-commit")
+	if clientID == agentManagerCommitClientID {
+		directory = agentManagerCommitDir
+	}
+	if err := os.MkdirAll(directory, 0o750); err != nil {
 		return nil, err
 	}
-	id := filepath.Join(agentManagerCommitDir, config.GitHubClientIDKey)
-	if err := os.WriteFile(id, []byte(agentManagerCommitClientID), 0o600); err != nil {
+	id := filepath.Join(directory, config.GitHubClientIDKey)
+	if err := os.WriteFile(id, []byte(clientID), 0o600); err != nil {
 		return nil, err
 	}
-	secret := filepath.Join(agentManagerCommitDir, config.GitHubClientSecretKey)
+	secret := filepath.Join(directory, config.GitHubClientSecretKey)
 	if _, err := os.Stat(secret); errors.Is(err, os.ErrNotExist) {
 		if err := os.WriteFile(secret, []byte(randomHex(32)), 0o600); err != nil {
 			return nil, err
 		}
-		fmt.Printf("Generated agent-manager's broker client secret in %s\n", agentManagerCommitDir)
+		fmt.Printf("Generated %s's broker client secret in %s\n", clientID, directory)
 	} else if err != nil {
 		return nil, err
 	}
