@@ -17,34 +17,32 @@ import (
 // request as the person in the repository that owns the agents. The lab
 // gives agent-manager the person's GitHub App user grant the way an
 // installation does without pinning its MCP registration to an App
-// (agent-manager's githubTokenExchange): agent-manager presents the
+// (agent-manager's github.tokenExchange): agent-manager presents the
 // person's forwarded ID token to muster's RFC 8693 broker
 // (muster.oauth.server.tokenExchangeBroker) as the confidential client
 // agent-manager, and muster releases the person's own grant of the
 // workspaces' github instance App — the grant the person made once for the
 // workspace-manager, filed under that App's issuer — never a token of its
-// own. Apply mode, every read and every other proof keep the ID token: a
-// person without the grant gets auth_required on a commit and nothing else
-// changes. The App is installed with contents and pull-request write on the
-// instance's proof repositories, the first of which is the commit proofs'
-// target (`agentlab backstage-test`, backstagetest_commit.go).
+// own. The audience it asks for is the name muster keeps the App under, the
+// provider App the MCP registration lists (auth.providerApps). Apply mode,
+// every read and every other proof keep the ID token: a person without the
+// grant gets grant_required on a commit and nothing else changes. The App
+// is installed with contents and pull-request write on the instance's proof
+// repositories, the first of which is the commit proofs' target
+// (`agentlab backstage-test`, backstagetest_commit.go).
 //
 // The lab wires it while the platform runs agents, the github instance
 // renders, muster keeps that instance's App (the workspace-manager's pin or
 // one provider App per instance) and the agent-manager the install resolves
-// takes githubTokenExchange (agentManagerCommitFloor and newer).
+// takes github.tokenExchange (agentManagerCommitFloor and newer).
 
 const (
 	// agentManagerCommitClientID is muster's confidential broker client
 	// agent-manager authenticates as.
 	agentManagerCommitClientID = "agent-manager"
-	// agentManagerCommitAudience is the broker target that releases the
-	// person's grant of the github instance's App, the only audience the
-	// client may request.
-	agentManagerCommitAudience = "agent-manager-github"
 	// AgentManagerCommitSecretName is the Secret of the broker client in the
 	// platform namespace: client-id and client-secret, read by muster's
-	// brokerClients and, client-secret only, by agent-manager.
+	// brokerClients and by agent-manager.
 	AgentManagerCommitSecretName = "agent-manager-github-exchange" // #nosec G101 -- Secret NAME, not a credential
 	// agentManagerCommitDir keeps the client's secret, generated once, beside
 	// the lab's other credentials.
@@ -54,16 +52,17 @@ const (
 )
 
 // agentManagerCommitFloor is the first agent-manager whose chart takes
-// githubTokenExchange.
-var agentManagerCommitFloor = semver.MustParse("2.22.0-rc.3")
+// github.tokenExchange.
+var agentManagerCommitFloor = semver.MustParse("3.0.0-rc.5")
 
 // agentManagerCommitValues is what the values template renders for commit
 // mode: agent-manager's exchange client (muster's public token endpoint,
-// which pods reach through the edge, and the lab CA it is served under) and
-// muster's broker (the client, its one target, the grant's issuer, and the
-// lab Dex as the trusted issuer of the subject token).
+// which pods reach through the edge, and the lab CA it is served under; the
+// client id from its Secret) and muster's broker (the client, its one
+// target named after the provider App, the grant's issuer, and the lab Dex
+// as the trusted issuer of the subject token).
 type agentManagerCommitValues struct {
-	Endpoint, ClientID, Audience, Secret, CASecret string
+	TokenEndpoint, ClientID, Audience, Secret, CASecret string
 	// Instance and GrantIssuer are the workspaces instance whose App grant
 	// muster releases and that App's issuer key.
 	Instance, GrantIssuer string
@@ -97,9 +96,9 @@ func agentManagerCommitFor(cfg *config.Config, providers []workspaceProviderValu
 	t := &tmplData{Config: cfg}
 	jwksHost := t.DexJWKSHost()
 	return &agentManagerCommitValues{
-		Endpoint:      cfg.MusterBaseURL() + agentManagerCommitTokenPath,
+		TokenEndpoint: cfg.MusterBaseURL() + agentManagerCommitTokenPath,
 		ClientID:      agentManagerCommitClientID,
-		Audience:      agentManagerCommitAudience,
+		Audience:      instance,
 		Secret:        AgentManagerCommitSecretName,
 		CASecret:      labCASecret,
 		Instance:      instance,
@@ -165,5 +164,5 @@ func agentManagerCommitHint(c *agentManagerCommitValues) string {
 		return "  agent-manager offers no commit mode (it needs platform.workspaces' github instance, muster keeping its App, and agent-manager " + agentManagerCommitFloor.Original() + " or newer)."
 	}
 	return fmt.Sprintf("  agent-manager commit mode: pull requests as the person, on their grant of the %s instance's App (muster's broker at %s).\n"+
-		"  Proof: `agentlab backstage-test` (its commit stage).", c.Instance, c.Endpoint)
+		"  Proof: `agentlab backstage-test` (its commit stage).", c.Instance, c.TokenEndpoint)
 }
