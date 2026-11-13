@@ -136,7 +136,7 @@ func platformValuesWith(cfg *config.Config, mutate func(*tmplData)) (map[string]
 	if err := f.Close(); err != nil {
 		return nil, err
 	}
-	return helmValuesFiles(append([]string{f.Name()}, cfg.Platform.ValuesFiles...)...)
+	return platformValuesFiles(f.Name(), cfg.Platform.ValuesFiles)
 }
 
 // resolveGatewayImage fills an empty image with the component's (a binary

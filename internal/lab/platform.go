@@ -166,7 +166,7 @@ func platformTopologyFor(cfg *config.Config) (platformTopology, error) {
 		_, valuesPath, err := renderManifest(cfg, platformValuesTemplate)
 		if err == nil {
 			var values map[string]any
-			if values, err = helmValuesFiles(append([]string{valuesPath}, cfg.Platform.ValuesFiles...)...); err == nil {
+			if values, err = platformValuesFiles(valuesPath, cfg.Platform.ValuesFiles); err == nil {
 				if err := refuseUnreleasedComponents(chart, values); err != nil {
 					return platformTopology{}, err
 				}
@@ -316,7 +316,7 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	var line KagentLine
 	if _, valuesPath, err := renderManifest(cfg, platformValuesTemplate); err != nil {
 		return err
-	} else if values, err := helmValuesFiles(append([]string{valuesPath}, cfg.Platform.ValuesFiles...)...); err != nil {
+	} else if values, err := platformValuesFiles(valuesPath, cfg.Platform.ValuesFiles); err != nil {
 		return err
 	} else if err := refuseUnreleasedComponents(chart, values); err != nil {
 		return err
@@ -650,7 +650,7 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	// the lab's render first, then platform.valuesFiles in order (the overlays
 	// win) — a lab that points a component at another chart source or forwards
 	// values the template does not know.
-	values, err := helmValuesFiles(append([]string{valuesPath}, cfg.Platform.ValuesFiles...)...)
+	values, err := platformValuesFiles(valuesPath, cfg.Platform.ValuesFiles)
 	if err != nil {
 		return err
 	}
@@ -790,7 +790,7 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	}); err != nil {
 		return err
 	}
-	if values, err = helmValuesFiles(append([]string{valuesPath}, cfg.Platform.ValuesFiles...)...); err != nil {
+	if values, err = platformValuesFiles(valuesPath, cfg.Platform.ValuesFiles); err != nil {
 		return err
 	}
 	if dev != nil {
