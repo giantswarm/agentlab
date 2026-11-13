@@ -474,7 +474,8 @@ func (t *tmplData) ExtraPostRenderers() map[string]string {
 		vmManagerMCPServer:           t.VMManagerEnabled,
 		klausGatewayComponent:        t.KlausGatewayEnabled,
 		clusterManager:               t.ClusterManagerEnabled,
-		llmisvcResourcesComponent:    t.ServingEnabled,
+		componentSkillManager:        t.Platform.ManagerGitHubProof,
+		llmisvcResourcesComponent:    t.ServingEnabled || t.Platform.ManagerGitHubProof,
 	}
 	extra := map[string]string{}
 	for component, postRenderers := range t.PostRenderers {

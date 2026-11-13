@@ -479,7 +479,7 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	// Certificate and its webhook configurations take their CA from the
 	// cainjector, so the component's HelmRelease fails on the missing kinds
 	// without it.
-	if cfg.ServingEnabled() {
+	if cfg.ServingEnabled() || cfg.Platform.ManagerGitHubProof {
 		if err := certManagerUp(cfg); err != nil {
 			return err
 		}

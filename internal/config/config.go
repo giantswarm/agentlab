@@ -26,6 +26,7 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/yaml.v3"
+	"k8s.io/apimachinery/pkg/util/validation"
 
 	"github.com/giantswarm/agentlab/pkg/project"
 )
@@ -1135,9 +1136,20 @@ func ValidateSecretSource(s string) error {
 		}
 		return nil
 	}
+	if rest, ok := strings.CutPrefix(s, "k8s://"); ok {
+		target, path, hasPath := strings.Cut(rest, "#")
+		parts := strings.Split(target, "/")
+		if len(parts) != 4 || slices.Contains(parts, "") || hasPath && path == "" {
+			return fmt.Errorf("a Kubernetes reference is k8s://<context>/<namespace>/<secret>/<key>[#<dotted.path>]")
+		}
+		if len(validation.IsDNS1123Label(parts[1])) > 0 || len(validation.IsDNS1123Subdomain(parts[2])) > 0 || len(validation.IsConfigMapKey(parts[3])) > 0 {
+			return fmt.Errorf("a Kubernetes reference requires a valid namespace, Secret name and key")
+		}
+		return nil
+	}
 	file, path, ok := strings.Cut(strings.TrimPrefix(s, "sops://"), "#")
 	if !ok || file == "" || path == "" {
-		return fmt.Errorf("a reference, never a value: op://<vault>/<item>/<field> or <file>#<dotted.path>")
+		return fmt.Errorf("a reference, never a value: op://<vault>/<item>/<field>, k8s://<context>/<namespace>/<secret>/<key> or <file>#<dotted.path>")
 	}
 	return nil
 }

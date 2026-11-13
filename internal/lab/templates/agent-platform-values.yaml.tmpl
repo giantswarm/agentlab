@@ -298,6 +298,10 @@ components:
   skill-manager:
     enabled: true
     versionRange: "0.2.0-rc.1"
+{{- with index .PostRenderers "skill-manager" }}
+    postRenderers:
+{{ . | indent 6 }}
+{{- end }}
 {{- end }}
   model-manager:
     enabled: {{ or .ModelManagerEnabled .Platform.ManagerGitHubProof }}
@@ -310,7 +314,7 @@ components:
 {{ . | indent 6 }}
 {{- end }}
 {{- end }}
-{{- if .ServingEnabled }}
+{{- if or .ServingEnabled .Platform.ManagerGitHubProof }}
   # Model serving on llm-d (platform.serving; serving.go): the
   # LLMInferenceService CRDs and their controller, the well-known
   # LLMInferenceServiceConfigs it composes from, and the modelServing switch
@@ -334,8 +338,10 @@ components:
 {{- end }}
   kserve-runtime-configs:
     enabled: true
+{{- if .ServingEnabled }}
   modelServing:
     enabled: true
+{{- end }}
 {{- end }}
 {{- if .VMManagerEnabled }}
   # The VM provisioner (platform.vmManager): vm-manager as a pod of the node
