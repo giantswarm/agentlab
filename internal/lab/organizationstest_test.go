@@ -194,7 +194,7 @@ func TestOrganizationAgentRelease(t *testing.T) {
 	if sa, _, _ := unstructured.NestedString(u.Object, "spec", "serviceAccountName"); sa != kagentFluxServiceAccount {
 		t.Errorf("serviceAccountName %q", sa)
 	}
-	for _, field := range []string{"chart", "valuesFrom", "postRenderers", "kubeConfig", "targetNamespace", "storageNamespace"} {
+	for _, field := range []string{"chart", "valuesFrom", postRenderersKey, "kubeConfig", "targetNamespace", "storageNamespace"} {
 		if _, found, _ := unstructured.NestedFieldNoCopy(u.Object, "spec", field); found {
 			t.Errorf("spec.%s set: the field lock refuses it", field)
 		}

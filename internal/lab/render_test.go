@@ -182,7 +182,7 @@ func TestPlatformValuesLabShape(t *testing.T) {
 		t.Errorf("components.dicebear.enabled = %v, want false", at("components", "dicebear", "enabled"))
 	}
 	for _, c := range []string{componentMuster, componentBackstage, componentKagent, componentMCPKubernetes, modelManagerMCPServer, agentManagerMCPServer, clusterManager} {
-		if _, ok := at("components", c, "postRenderers").([]any); !ok {
+		if _, ok := at("components", c, postRenderersKey).([]any); !ok {
 			t.Errorf("components.%s.postRenderers missing: %v", c, at("components", c))
 		}
 	}
@@ -193,7 +193,7 @@ func TestPlatformValuesLabShape(t *testing.T) {
 	// audience is in place either way: the meta chart forwards the block only
 	// while the component is on.
 	for _, c := range []string{clusterManager, config.ConnectivityChartName, substrateComponent} {
-		if comp, _ := at("components", c).(map[string]any); len(comp) != 1 || comp["postRenderers"] == nil {
+		if comp, _ := at("components", c).(map[string]any); len(comp) != 1 || comp[postRenderersKey] == nil {
 			t.Errorf("components.%s: want the postRenderers only, got %v", c, comp)
 		}
 	}
@@ -209,7 +209,7 @@ func TestPlatformValuesLabShape(t *testing.T) {
 		t.Errorf("%s block rendered without a proxy dev image: %v", agentgatewayComponent, at(agentgatewayComponent))
 	}
 	// The dev image rides the component's postRenderers as a kustomize image.
-	kagent := at("components", componentKagent, "postRenderers").([]any)[0].(map[string]any)["kustomize"].(map[string]any)
+	kagent := at("components", componentKagent, postRenderersKey).([]any)[0].(map[string]any)["kustomize"].(map[string]any)
 	if imgs, _ := kagent["images"].([]any); len(imgs) != 1 || imgs[0].(map[string]any)["newTag"] != "dev-9f8e" {
 		t.Errorf("kagent dev image not in its postRenderers: %v", kagent["images"])
 	}
@@ -238,7 +238,7 @@ func TestPlatformValuesLabShape(t *testing.T) {
 	for _, c := range []string{componentMCPKubernetes, componentKagent, componentBackstage, modelManagerMCPServer} {
 		comp := at("components", c).(map[string]any)
 		for key := range comp {
-			if key != "enabled" && key != "postRenderers" {
+			if key != "enabled" && key != postRenderersKey {
 				t.Errorf("components.%s.%s: wiring keys belong in the top-level %s block", c, key, c)
 			}
 		}
@@ -307,7 +307,7 @@ func TestPlatformValuesExtraPostRenderers(t *testing.T) {
 				t.Fatalf("%v\n%s", err, out)
 			}
 			for component := range gateways {
-				if list, ok := values.Components[component]["postRenderers"].([]any); !ok || len(list) != 1 {
+				if list, ok := values.Components[component][postRenderersKey].([]any); !ok || len(list) != 1 {
 					t.Errorf("components.%s.postRenderers: want the one entry, got %v", component, values.Components[component])
 				}
 			}
@@ -317,12 +317,12 @@ func TestPlatformValuesExtraPostRenderers(t *testing.T) {
 			for component := range sidecars {
 				comp := values.Components[component]
 				if component == modelManagerMCPServer && !cfg.ModelManagerEnabled() {
-					if _, patched := comp["postRenderers"]; comp["enabled"] != false || patched {
+					if _, patched := comp[postRenderersKey]; comp["enabled"] != false || patched {
 						t.Errorf("components.%s with the toggle off: want enabled false and no patch, got %v", component, comp)
 					}
 					continue
 				}
-				list, ok := comp["postRenderers"].([]any)
+				list, ok := comp[postRenderersKey].([]any)
 				if !ok || len(list) != 1 {
 					t.Errorf("components.%s.postRenderers: want the one entry, got %v", component, comp)
 				}
@@ -335,7 +335,7 @@ func TestPlatformValuesExtraPostRenderers(t *testing.T) {
 			// The controller's patch lands on the roster's agentgateway block,
 			// which the range never doubles.
 			if _, on := cfg.Platform.DevImages[config.DevImageAgentgatewayController]; on {
-				if list, ok := values.Components[agentgatewayComponent]["postRenderers"].([]any); !ok || len(list) != 1 {
+				if list, ok := values.Components[agentgatewayComponent][postRenderersKey].([]any); !ok || len(list) != 1 {
 					t.Errorf("components.%s.postRenderers with a controller dev image: want the one entry, got %v", agentgatewayComponent, values.Components[agentgatewayComponent])
 				}
 			}
@@ -394,7 +394,7 @@ func TestPlatformValuesDevImageTargets(t *testing.T) {
 	}
 	kustomize := func(component string) map[string]any {
 		t.Helper()
-		prs, _ := at("components", component, "postRenderers").([]any)
+		prs, _ := at("components", component, postRenderersKey).([]any)
 		if len(prs) != 1 {
 			t.Fatalf("components.%s.postRenderers: want the one entry, got %v", component, at("components", component))
 		}
@@ -1152,10 +1152,10 @@ func TestPlatformValuesKlausGateway(t *testing.T) {
 	// The lab's two patches without a dev image: the Slack Web API base on the
 	// Service in front of klaus-gateway-test's fake, and the lab CA trusted
 	// for muster's public URL.
-	prs, _ := at("components", klausGatewayComponent, "postRenderers").([]any)
+	prs, _ := at("components", klausGatewayComponent, postRenderersKey).([]any)
 	if len(prs) != 1 || !strings.Contains(fmt.Sprint(prs), "name: "+slackAPIBaseEnv) || !strings.Contains(fmt.Sprint(prs), "value: "+klausGatewaySlackAPIBase) ||
 		!strings.Contains(fmt.Sprint(prs), "name: "+sslCertFileEnv) || !strings.Contains(fmt.Sprint(prs), "secretName: "+labCASecret) {
-		t.Errorf("without a dev image the lab patches the Slack Web API base and the lab CA: %v", at("components", klausGatewayComponent, "postRenderers"))
+		t.Errorf("without a dev image the lab patches the Slack Web API base and the lab CA: %v", at("components", klausGatewayComponent, postRenderersKey))
 	}
 	// The block's keys as dotted paths under klausGateway.
 	checks := map[string]any{
@@ -1210,9 +1210,9 @@ func TestPlatformValuesKlausGateway(t *testing.T) {
 	// Deployment's container.
 	cfg.Platform.DevImages = map[string]string{klausGatewayComponent: "klaus-gateway:dev-5a6b"}
 	at = render(cfg)
-	prs, _ = at("components", klausGatewayComponent, "postRenderers").([]any)
+	prs, _ = at("components", klausGatewayComponent, postRenderersKey).([]any)
 	if len(prs) != 1 {
-		t.Fatalf("postRenderers with a dev image: %v", at("components", klausGatewayComponent, "postRenderers"))
+		t.Fatalf("postRenderers with a dev image: %v", at("components", klausGatewayComponent, postRenderersKey))
 	}
 	kustomize := prs[0].(map[string]any)["kustomize"].(map[string]any)
 	imgs, _ := kustomize["images"].([]any)
@@ -1458,7 +1458,7 @@ func TestPlatformValuesWorkspaceManagerDevImage(t *testing.T) {
 	if _, ok := wm["enabled"]; ok {
 		t.Errorf("components.%s.enabled = %v: the component follows workspaces.enabled, the roster sets none", workspaceManager, wm["enabled"])
 	}
-	prs, _ := wm["postRenderers"].([]any)
+	prs, _ := wm[postRenderersKey].([]any)
 	if len(prs) != 1 {
 		t.Fatalf("components.%s.postRenderers: want the one entry, got %v", workspaceManager, wm)
 	}

@@ -120,6 +120,12 @@ func NoteChartUnderTest(cfg *config.Config) (*installedChart, error) {
 			warn("%s", drift)
 		}
 	}
+	// An overlay the release in place was installed with that agentlab.yaml
+	// no longer lists — an earlier proof's, its lease released with the
+	// config restored — still runs: the verdict would be that proof's.
+	for _, file := range staleOverlays(cfg, installed) {
+		warn("the release in place still carries the overlay %s, which %s no longer lists (an earlier proof's state): `agentlab platform` drops it", file, config.File)
+	}
 	// A field a hand wrote on a platform workload is not under test either
 	// (foreignfields.go).
 	warnForeignFields(context.Background())

@@ -90,10 +90,18 @@ The lab installs it in its **lab shape**:
   the pin over the cluster, the boot naming the downgrade.
 - A `platform.valuesFiles` overlay changes what the lab runs without
   changing the chart version: a proof's `components.<name>.versionRange`
-  pins a component the chart's own range does not admit. `agentlab status`
+  pins a component the chart's own range does not admit. Overlays merge the
+  way `helm -f` does (maps merge, lists replace, the later file wins), with
+  one exception: a component's `postRenderers` list is appended to the
+  lab's own patches, never replacing them (an entry already there is
+  skipped), so a proof's patch on the connectivity chart keeps the lab's
+  HSTS-dropping filter on the portal's route; an overlay that states the
+  key as `null` removes the lab's patches on purpose. `agentlab status`
   names every overlay with the values it sets, and the ones the release in
   place was installed with (each platform run records them in its
-  revision's description) that `agentlab.yaml` no longer lists. Before a
+  revision's description) that `agentlab.yaml` no longer lists — every
+  proof warns of those too, as an earlier proof's state that `agentlab
+  platform` drops. Before a
   shared lab is handed on, `agentlab configure --released` drops the proof
   state (overlays, dev images, a chart directory, the dev channel, a local
   guest image) and `agentlab platform` installs the released platform, so
