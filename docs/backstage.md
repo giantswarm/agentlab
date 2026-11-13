@@ -390,6 +390,18 @@ skipped with its reason; with agent-manager wired for it (its Deployment
 carries `--github-token-exchange-endpoint`) and no capability reported, it
 fails.
 
+Before its first proof step, `agentlab backstage-test` prints a host model
+plan: the backend, selected downloaded model and its size in bytes from
+`list_models`. It prefers the backend's proof model, otherwise the smallest
+downloaded model. The final Models verdict repeats the model and size.
+`agentlab backstage-test --plan` only reads and prints that plan, so callers
+can reserve host memory before running the proof. The inventory size is the
+backend's reported model size, not a measurement of peak RAM use.
+`--skip-model-write` keeps the Models read while skipping the host-model load
+and unload. No host backend, no downloaded model, or no selected admin prints
+“no host model: the Models write is skipped” with the reason. A changed model
+or size between planning and the write fails before loading it.
+
 **The Models page** (with `platform.modelManager` or `platform.serving`, as
 the admin, a viewer as the boundary; first, as it needs no agent): the portal reaches model-manager through
 the installation's muster as the person, `x_model-manager_*` over the same

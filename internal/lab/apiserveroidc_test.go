@@ -119,7 +119,7 @@ func TestProofsRunApiserverOIDCFirst(t *testing.T) {
 	refused := errors.New("the apiserver refuses a fresh Dex token")
 	calls := 0
 	prev := apiserverAcceptsDex
-	apiserverAcceptsDex = func(context.Context, *config.Config) error {
+	apiserverAcceptsDex = func(context.Context, *config.Config, func(string, ...any)) error {
 		calls++
 		return refused
 	}
