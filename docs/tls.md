@@ -47,6 +47,20 @@ hostname, and `export NODE_EXTRA_CA_CERTS=~/.local/state/agentlab/labs/<lab>/cer
 clients. The headless `*-test` commands trust `certs/ca.crt` directly and
 never need any of this.
 
+## Dex on localhost
+
+The issuer stays `https://localhost:<dexPort>/dex`: muster requires a
+hostname, and the certificate verifies `localhost`. kind publishes that
+port on `127.0.0.1` only. On a host whose system resolver returns `::1` for
+`localhost`, a client can therefore try an address with no Dex listener.
+
+agentlab's HTTP and gRPC clients dial the configured localhost Dex port
+directly on `127.0.0.1`, preserving the issuer URL, HTTP Host and TLS server
+name. This needs no `GODEBUG` resolver override and applies to every proof
+using the shared lab transport. Other localhost ports keep their normal
+resolution; an externally provisioned `dex.<domain>` issuer uses the lab's
+existing domain-to-edge mapping.
+
 ## No HSTS, one domain per lab
 
 The lab's edge sends no `Strict-Transport-Security`: Backstage's own header

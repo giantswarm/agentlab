@@ -1064,6 +1064,18 @@ Form coverage: `go test ./...` drives the real huh form with scripted
 keystrokes (accept defaults, edit fields, toggle components) and unit-tests
 the post-renderer against a synthetic Helm release.
 
+### U46. `oidc.go`: dial the localhost Dex port on IPv4 — ACCEPTED
+
+kind publishes the Dex NodePort on `127.0.0.1` only. A host resolver returning
+`::1` for `localhost` can make the CLI's OIDC stage fail before reaching Dex;
+switching Go's resolver with `GODEBUG=netdns=go` happened to avoid that on the
+affected host. The shared lab dialer now sends the configured localhost Dex
+port to `127.0.0.1` directly. The issuer and TLS server name stay `localhost`
+(muster refuses an IP-literal issuer), other localhost ports keep their usual
+resolution, and the external-TLS issuer keeps the existing domain mapping.
+Inherent to the lab's IPv4-only host port publication; see docs/tls.md
+"Dex on localhost" and https://github.com/giantswarm/agentlab/issues/1208.
+
 ### U34. `exec.go`: the lab's containers run with SELinux separation off — ACCEPTED
 On an SELinux-enforcing host (Fedora) under a rootful engine (Podman through
 `sudo`), a container's process may not read or execute a bind-mounted file
