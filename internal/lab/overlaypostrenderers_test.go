@@ -41,7 +41,7 @@ func connectivityPostRenderers(t *testing.T, values map[string]any) []string {
 	t.Helper()
 	components, _ := values["components"].(map[string]any)
 	block, _ := components[config.ConnectivityChartName].(map[string]any)
-	list, _ := block["postRenderers"].([]any)
+	list, _ := block[postRenderersKey].([]any)
 	out := make([]string, 0, len(list))
 	for _, entry := range list {
 		raw, err := yaml.Marshal(entry)
@@ -112,9 +112,9 @@ func TestOverlayKeepsLabPostRenderers(t *testing.T) {
 	}
 
 	// An overlay that repeats the lab's own patch adds nothing either.
-	labList := plain["components"].(map[string]any)[config.ConnectivityChartName].(map[string]any)["postRenderers"]
+	labList := plain["components"].(map[string]any)[config.ConnectivityChartName].(map[string]any)[postRenderersKey]
 	repeat := writeValues(t, dir, "repeat.yaml", yamlString(t, map[string]any{
-		"components": map[string]any{config.ConnectivityChartName: map[string]any{"postRenderers": labList}},
+		"components": map[string]any{config.ConnectivityChartName: map[string]any{postRenderersKey: labList}},
 	}))
 	repeated, err := platformValuesFiles(lab, []string{repeat, overlay})
 	if err != nil {
@@ -152,7 +152,7 @@ func TestOverlayPostRenderersNull(t *testing.T) {
 `)
 	list := func(values map[string]any, component string) []any {
 		block, _ := values["components"].(map[string]any)[component].(map[string]any)
-		l, _ := block["postRenderers"].([]any)
+		l, _ := block[postRenderersKey].([]any)
 		return l
 	}
 	values, err := platformValuesFiles(lab, []string{null})

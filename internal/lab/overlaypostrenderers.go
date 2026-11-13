@@ -56,13 +56,16 @@ func platformValuesFiles(valuesPath string, overlays []string) (map[string]any, 
 			continue
 		}
 		if len(combined[component]) == 0 {
-			delete(block, "postRenderers")
+			delete(block, postRenderersKey)
 			continue
 		}
-		block["postRenderers"] = combined[component]
+		block[postRenderersKey] = combined[component]
 	}
 	return values, nil
 }
+
+// postRenderersKey is a component's values key for its Flux post-renderers.
+const postRenderersKey = "postRenderers"
 
 // statedPostRenderers is every `components.<name>.postRenderers` a values
 // set states, keyed by component: the list, or nil where the set states the
@@ -75,7 +78,7 @@ func statedPostRenderers(values map[string]any) map[string][]any {
 		if !ok {
 			continue
 		}
-		v, ok := m["postRenderers"]
+		v, ok := m[postRenderersKey]
 		if !ok {
 			continue
 		}
