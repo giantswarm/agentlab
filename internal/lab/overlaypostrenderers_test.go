@@ -93,7 +93,7 @@ func TestOverlayKeepsLabPostRenderers(t *testing.T) {
 		t.Errorf("the overlay's versionRange must still win, got %v", block["versionRange"])
 	}
 
-	// The same overlay twice, or one repeating the lab's patch, adds nothing.
+	// The same overlay twice adds nothing.
 	again, err := platformValuesFiles(lab, []string{overlay, overlay})
 	if err != nil {
 		t.Fatal(err)
@@ -109,6 +109,19 @@ func TestOverlayKeepsLabPostRenderers(t *testing.T) {
 	}
 	if got := connectivityPostRenderers(t, plain); len(got) != 1 || !strings.Contains(got[0], hstsHeader) {
 		t.Errorf("no overlay: want the lab's one patch, got %q", got)
+	}
+
+	// An overlay that repeats the lab's own patch adds nothing either.
+	labList := plain["components"].(map[string]any)[config.ConnectivityChartName].(map[string]any)["postRenderers"]
+	repeat := writeValues(t, dir, "repeat.yaml", yamlString(t, map[string]any{
+		"components": map[string]any{config.ConnectivityChartName: map[string]any{"postRenderers": labList}},
+	}))
+	repeated, err := platformValuesFiles(lab, []string{repeat, overlay})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := connectivityPostRenderers(t, repeated); len(got) != 2 || !strings.Contains(got[0], hstsHeader) || !strings.Contains(got[1], "value: mcp-kubernetes") {
+		t.Errorf("an overlay repeating the lab's patch: want the lab's patch once, then the proof's, got %q", got)
 	}
 }
 
