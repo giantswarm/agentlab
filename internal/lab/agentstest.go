@@ -913,7 +913,8 @@ var chartSourceGrant = saGrant{resource: fluxOCIRepositoryResource, names: []str
 //     (internal/organizations/namespaces.go);
 //   - agentplatformorganizations get/list: list_organizations reads the
 //     organizations and answers only those the caller's access reviews allow
-//     (agent-manager 2.24.0 on, giantswarm/agent-manager#361; optional, as an
+//     (agent-manager 2.24.0 on, since
+//     https://github.com/giantswarm/agent-manager/pull/361; optional, as an
 //     earlier release in the chart's range renders namespaces alone).
 var organizationDiscoveryGrants = []saGrant{
 	{resource: "namespaces", verbs: []string{verbGet, verbList}, by: "agentPlatformOrganizations.enabled: find the organization namespaces by label"},

@@ -251,7 +251,7 @@ func TestAgentManagerGrants(t *testing.T) {
 // namespaces get/list while enabled, allow AgentPlatformOrganizations
 // get/list beside it (agent-manager 2.24.0 on), and never inherit the
 // reconciler's write grants.
-func TestOrganizationNamespaceGrants(t *testing.T) {
+func TestOrganizationDiscoveryGrants(t *testing.T) {
 	const discovery = "namespaces  []  []  [get list]"
 	organizations := organizationResource + "  []  []  [get list]"
 	for _, tc := range []struct {
