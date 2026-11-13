@@ -872,9 +872,14 @@ at write time and the model it names against the values entry.
 unbound ServiceAccount and the grants required by the platform values.
 With `agentPlatformOrganizations.enabled` and agent-manager's `--multi-tenant`
 flag, it requires exactly `get` and `list` on namespaces for organization
-discovery. Kubernetes RBAC cannot restrict a namespace list by label;
-agent-manager filters for organization labels and performs organization
-operations as the caller. Namespace writes, watches, and reads of Secrets
-are not part of that grant and fail the proof. With organizations disabled,
-the discovery grant is not allowed. Older charts using
+discovery, and allows `get` and `list` on `agentplatformorganizations` beside
+it: agent-manager 2.24.0 and later render that row in the same ClusterRole
+(`agent-manager-namespaces`) for `list_organizations`, which answers only the
+organizations the caller's access reviews allow; an earlier release renders
+the namespaces row alone. Kubernetes RBAC cannot restrict a list by label or
+by caller; agent-manager filters for organization labels and performs
+organization operations as the caller. Namespace or organization writes,
+watches, name-scoped variants and reads of Secrets are not part of that grant
+and fail the proof. With organizations disabled, neither discovery row is
+allowed. Older charts using
 `tenants.organizations.enabled` retain their separate reconciler checks.
