@@ -1254,7 +1254,7 @@ func TestPlatformValuesServing(t *testing.T) {
 	cfg.Platform.ChartVersion = "4.40.0"
 	cfg.Platform.ModelManager.Enabled = false
 	values, _ := render(t, cfg)
-	for _, key := range []string{"kserve-crd", "kserve-resources", "kserve-llmisvc-crd", "kserve-llmisvc-resources", "kserve-runtime-configs", "modelServing"} {
+	for _, key := range []string{"kserve-crd", "kserve-resources", llmisvcCRDComponent, llmisvcResourcesComponent, llmisvcRuntimeConfigsComponent, "modelServing"} {
 		if _, ok := components(values)[key]; ok {
 			t.Errorf("components.%s rendered while platform.serving is off", key)
 		}
@@ -1268,7 +1268,7 @@ func TestPlatformValuesServing(t *testing.T) {
 	// The llm-d control plane alone: the classic KServe controller went with
 	// the classic InferenceService path (giantswarm/agent-platform#574), and a
 	// roster entry for it fails the chart's render.
-	for _, key := range []string{"kserve-llmisvc-crd", "kserve-llmisvc-resources", "kserve-runtime-configs", "modelServing"} {
+	for _, key := range []string{llmisvcCRDComponent, llmisvcResourcesComponent, llmisvcRuntimeConfigsComponent, "modelServing"} {
 		comp, _ := components(values)[key].(map[string]any)
 		if comp["enabled"] != true {
 			t.Errorf("components.%s = %v, want enabled: true", key, comp)

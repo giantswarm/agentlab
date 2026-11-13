@@ -771,9 +771,12 @@ the lab's own is in place (`--workspaces-github-app-id` and
 With `platform.workspaces.github.privateKeySource` and `clientSecretSource`
 recorded (`--workspaces-github-private-key-source`,
 `--workspaces-github-client-secret-source`), every `up` and `platform` places the two keys through the
-operator's secret tooling, so a recreated lab keeps the instance; without
-them the Secret is placed by hand, and a lab without it renders no `github`
-instance.
+operator's secret tooling. A 1Password or SOPS source restores the binding
+when the lab is recreated. An existing Kubernetes binding can be reused
+with `k8s://kind-agentlab/agent-platform/workspace-github/private-key` and
+`k8s://kind-agentlab/agent-platform/workspace-github/client-secret`, with the
+lab's lease held in beekeeper. Without sources the Secret is placed by
+hand, and a lab without it renders no `github` instance.
 
 The App is registered once, by an owner of the organization that holds it,
 in GitHub's UI (Settings, Developer settings, GitHub Apps), and serves every

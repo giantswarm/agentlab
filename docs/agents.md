@@ -247,6 +247,43 @@ requests of mode commit are `agentlab backstage-test`'s commit stage (below).
 
 ## Commit mode
 
+For a four-manager GitHub proof, set `platform.managerGitHubProof: true` in
+the proof lab. This enables and pins agent-manager 3.0.0-rc.10,
+cluster-manager 0.37.0-rc.1, model-manager 1.20.0-rc.10, skill-manager
+0.2.0-rc.1 and muster 5.63.2. Model-manager uses its Kubernetes backend;
+cert-manager and the KServe LLMInferenceService CRDs, controller and runtime
+configs are enabled with it. No host model server is needed. Use a meta chart that
+admits these releases and the skill catalog values.
+
+All four managers use the workspace GitHub App's provider App `github`.
+Each has separate broker credentials and may exchange only for that target.
+Configure `platform.workspaces.github.appId` and `clientId`, and bind the
+existing App's private key and OAuth client secret through the workspace
+credential tooling. Enable `platform.devctl` to expose the pinned workspace
+App as provider App `github`, or use the workspace `providerApps` mode.
+Set `githubApp.installationId` to the App installation covering the proof
+repositories; its private-key source comes from `platform.workspaces.github`.
+These are references and public identifiers, never inline credentials.
+An already bound Kubernetes Secret can be the source:
+`k8s://kind-agentlab/agent-platform/workspace-github/private-key`.
+The credential tooling requires the caller to hold that lab's lease.
+Configure the workspace App's two `proofRepositories` and authorize its
+installation for them. Its OAuth callback allowlist must include the proof
+lab's muster `/oauth/proxy/callback` URL.
+
+Run `agentlab --lab agentlab platform --open=false --trust=false` with the
+proof binary after the binding is complete. A configured provider whose
+credential binding is missing fails the install. The existing lab behavior
+is retained when `managerGitHubProof` is false.
+
+Before granting `github`, check read tools on all four managers and private
+skill listings. Commit dry runs and private skill resolution must identify
+the missing `github` grant and offer its sign-in link. Grant it once, repeat
+the calls twice, and verify no additional prompt. Check delegated callers
+are refused. Use only the configured proof repositories for PR creation;
+do not merge proof PRs. An account already holding a grant does not prove
+the first-grant behavior, and a credential binding alone does not prove consent.
+
 The lab's agent-manager offers commit mode (`get_info` reports
 `capabilities.commit`) while the platform runs agents, the workspaces'
 `github` instance renders (`platform.workspaces.github`, its App's ids and
