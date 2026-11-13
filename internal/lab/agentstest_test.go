@@ -248,9 +248,12 @@ func TestAgentManagerGrants(t *testing.T) {
 }
 
 // Organization discovery replaces the legacy reconciler: require exactly
-// namespaces get/list while enabled, and never inherit its write grants.
-func TestOrganizationNamespaceGrants(t *testing.T) {
+// namespaces get/list while enabled, allow AgentPlatformOrganizations
+// get/list beside it (agent-manager 2.24.0 on), and never inherit the
+// reconciler's write grants.
+func TestOrganizationDiscoveryGrants(t *testing.T) {
 	const discovery = "namespaces  []  []  [get list]"
+	organizations := organizationResource + "  []  []  [get list]"
 	for _, tc := range []struct {
 		name                 string
 		enabled, multiTenant bool
@@ -271,10 +274,20 @@ func TestOrganizationNamespaceGrants(t *testing.T) {
 			if _, err := rulesBeyondGrants(nil, grants); (err != nil) != wantDiscovery {
 				t.Errorf("missing discovery: %v; required %v", err, wantDiscovery)
 			}
+			got, err = rulesBeyondGrants([]string{discovery, organizations}, grants)
+			if wantDiscovery && (err != nil || len(got) != 0) {
+				t.Errorf("agent-manager 2.24.0's ClusterRole: remaining %v, error %v", got, err)
+			}
+			if !wantDiscovery && !slices.Contains(got, organizations) {
+				t.Errorf("organizations read without discovery on: remaining %v, error %v", got, err)
+			}
 			if !wantDiscovery {
 				return
 			}
 			for _, row := range []string{
+				organizationResource + "  []  []  [get list watch]",
+				organizationResource + "  []  []  [create]",
+				organizationResource + "  []  [one]  [get list]",
 				"namespaces  []  []  [get list watch]",
 				"namespaces  []  []  [get list create]",
 				"namespaces  []  []  [delete]",

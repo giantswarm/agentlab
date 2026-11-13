@@ -403,7 +403,7 @@ func AgentsTest(cfg *config.Config, email string, opts AgentsTestOptions) error 
 		}
 	}
 
-	step("The agent-manager ServiceAccount holds no RBAC of its own beyond what the lab's switches grant — skills.mintGitAuthSecret the skills-Secret Role, agentPlatformOrganizations.enabled namespace discovery, tenants.organizations.enabled the legacy tenant reconciler's ClusterRole, the chart-source Role on the agent chart's OCIRepository always (auth can-i --list --as=%s, against a ServiceAccount no binding names)", agentManagerServiceAccount)
+	step("The agent-manager ServiceAccount holds no RBAC of its own beyond what the lab's switches grant — skills.mintGitAuthSecret the skills-Secret Role, agentPlatformOrganizations.enabled namespace and organization discovery (read-only), tenants.organizations.enabled the legacy tenant reconciler's ClusterRole, the chart-source Role on the agent chart's OCIRepository always (auth can-i --list --as=%s, against a ServiceAccount no binding names)", agentManagerServiceAccount)
 	rules, err := serviceAccountRules(agentManagerServiceAccount, kagentNamespace)
 	if err != nil {
 		return err
@@ -901,6 +901,26 @@ const (
 // OCIRepository by name, get and update like the skills-Secret Role.
 var chartSourceGrant = saGrant{resource: fluxOCIRepositoryResource, names: []string{agentChartOCIRepository}, verbs: mintGrantVerbs, optional: true, by: "agent-manager's chart-source Role"}
 
+// organizationDiscoveryGrants are the rows of agent-manager's ClusterRole
+// agent-manager-namespaces (templates/tenants-rbac.yaml), which the chart
+// renders with tenants.enabled — the meta chart's
+// agentPlatformOrganizations.enabled, the Deployment's --multi-tenant=true —
+// and never with the organizations off. Both are read-only, as RBAC cannot
+// narrow a list by label or by the caller; every organization operation
+// itself runs as the caller:
+//   - namespaces get/list: agent-manager finds the organization namespaces
+//     by their label agent-platform.giantswarm.io/organization
+//     (internal/organizations/namespaces.go);
+//   - agentplatformorganizations get/list: list_organizations reads the
+//     organizations and answers only those the caller's access reviews allow
+//     (agent-manager 2.24.0 on, since
+//     https://github.com/giantswarm/agent-manager/pull/361; optional, as an
+//     earlier release in the chart's range renders namespaces alone).
+var organizationDiscoveryGrants = []saGrant{
+	{resource: "namespaces", verbs: []string{verbGet, verbList}, by: "agentPlatformOrganizations.enabled: find the organization namespaces by label"},
+	{resource: organizationResource, verbs: []string{verbGet, verbList}, optional: true, by: "agentPlatformOrganizations.enabled: list_organizations reads the organizations"},
+}
+
 // tenantFluxClusterRole is the ClusterRole the tenant reconciler binds in
 // each tenant, the one name its `bind` grant carries (agent-manager's
 // tenantFluxClusterRole helper).
@@ -965,9 +985,10 @@ func (g saGrant) String() string {
 // the agent-manager ServiceAccount hold in the kagent namespace
 // according to the enabled mode:
 //   - agentPlatformOrganizations.enabled, with --multi-tenant: get and list
-//     namespaces for organization discovery (templates/tenants-rbac.yaml).
-//     Organization operations themselves run as the caller; no reconciler
-//     writes or Secret reads belong to the ServiceAccount;
+//     namespaces and AgentPlatformOrganizations for organization discovery
+//     (organizationDiscoveryGrants). Organization operations themselves run
+//     as the caller; no reconciler writes or Secret reads belong to the
+//     ServiceAccount. With the organizations off the chart renders neither;
 //   - agent-manager.skills.mintGitAuthSecret: the skills-Secret Role
 //     (templates/skills-token.yaml), secrets get and update by the minted
 //     names;
@@ -992,7 +1013,7 @@ func agentManagerGrants(values map[string]any, multiTenant bool) []saGrant {
 	}
 	if organizations, ok := values["agentPlatformOrganizations"].(map[string]any); ok {
 		if enabled, _ := organizations[valuesEnabled].(bool); enabled && multiTenant {
-			grants = append(grants, saGrant{resource: "namespaces", verbs: []string{verbGet, verbList}, by: "agentPlatformOrganizations.enabled"})
+			grants = append(grants, organizationDiscoveryGrants...)
 		}
 		return grants
 	}
