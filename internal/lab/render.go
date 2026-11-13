@@ -346,8 +346,8 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		GitHubToken:                  gitHubTokenWired(cfg),
 		GitHubApp:                    gitHubAppWired(cfg),
 		PortalGitHubApp:              portalGitHubAppWired(cfg),
-		SkillManager:                 skillManagerChartCarries(cfg),
-		ModelManagerEnabled:          cfg.ModelManagerEnabled(),
+		SkillManager:                 skillManagerChartCarries(cfg) || cfg.Platform.ManagerGitHubProof,
+		ModelManagerEnabled:          cfg.ModelManagerEnabled() || cfg.Platform.ManagerGitHubProof,
 		LegacyChart:                  cfg.LegacyChart(),
 		FamilylessChart:              cfg.FamilylessChart(),
 		ModelManagerBackends:         cfg.ChartBackends(),
@@ -368,7 +368,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		DevctlEnabled:                cfg.DevctlEnabled(),
 		RefusalNotices:               cfg.RefusalNoticesChart(),
 		KlausGateway:                 klausGatewayValuesFor(cfg),
-		ClusterManagerEnabled:        cfg.ClusterManagerEnabled(),
+		ClusterManagerEnabled:        cfg.ClusterManagerEnabled() || cfg.Platform.ManagerGitHubProof,
 		AgentgatewayDevImage:         agentgatewayDevImage(cfg),
 		ServingEnabled:               cfg.ServingEnabled(),
 		Serving:                      servingValuesFor(),
@@ -474,7 +474,8 @@ func (t *tmplData) ExtraPostRenderers() map[string]string {
 		vmManagerMCPServer:           t.VMManagerEnabled,
 		klausGatewayComponent:        t.KlausGatewayEnabled,
 		clusterManager:               t.ClusterManagerEnabled,
-		llmisvcResourcesComponent:    t.ServingEnabled,
+		componentSkillManager:        t.Platform.ManagerGitHubProof,
+		llmisvcResourcesComponent:    t.ServingEnabled || t.Platform.ManagerGitHubProof,
 	}
 	extra := map[string]string{}
 	for component, postRenderers := range t.PostRenderers {

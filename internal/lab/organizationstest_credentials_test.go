@@ -53,7 +53,7 @@ func TestCredentialPrerequisites(t *testing.T) {
 		want   string
 	}{
 		{"no ui url", func(c *credentialPrerequisites) { delete(c.agentManager, flagCredentialUIURL) }, credentialPrerequisites.uiURLSkip, "agent-manager.credentials.uiURL"},
-		{"no token exchange", func(c *credentialPrerequisites) { delete(c.agentManager, flagTokenExchange) }, credentialPrerequisites.commitSkip, "githubTokenExchange"},
+		{"no token exchange", func(c *credentialPrerequisites) { delete(c.agentManager, flagTokenExchange) }, credentialPrerequisites.commitSkip, "github.tokenExchange"},
 		{"no organizations repository", func(c *credentialPrerequisites) { delete(c.agentManager, flagOrgsRepository) }, credentialPrerequisites.commitSkip, "tenants.commit.repository"},
 		{"no grant", func(c *credentialPrerequisites) { c.grant = "admin has not granted" }, credentialPrerequisites.commitSkip, "admin has not granted"},
 		{"muster on 2025-11-25", func(c *credentialPrerequisites) { c.musterModern = false }, credentialPrerequisites.generationsSkip, "giantswarm/muster#1812"},

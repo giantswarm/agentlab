@@ -105,7 +105,7 @@ func proveCommitPath(cfg *config.Config, primary *portalSession, spec agentSpec,
 			return nil, err
 		}
 		if wired {
-			return nil, fmt.Errorf("agent-manager runs with githubTokenExchange (Deployment %s/%s) but get_info reports no commit capability", platformNamespace, agentManagerMCPServer)
+			return nil, fmt.Errorf("agent-manager runs with github.tokenExchange (Deployment %s/%s) but get_info reports no commit capability", platformNamespace, agentManagerMCPServer)
 		}
 		why := strings.TrimSpace(agentManagerCommitHint(nil))
 		note("commit stage skipped: %s", why)
@@ -523,7 +523,7 @@ spec:
 }
 
 // agentManagerCommitWired says whether the lab's agent-manager Deployment
-// runs with githubTokenExchange (the flag the chart renders from it).
+// runs with github.tokenExchange (the flag the chart renders from it).
 func agentManagerCommitWired() (bool, error) {
 	k, err := labKube()
 	if err != nil {

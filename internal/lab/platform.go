@@ -479,7 +479,7 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	// Certificate and its webhook configurations take their CA from the
 	// cainjector, so the component's HelmRelease fails on the missing kinds
 	// without it.
-	if cfg.ServingEnabled() {
+	if cfg.ServingEnabled() || cfg.Platform.ManagerGitHubProof {
 		if err := certManagerUp(cfg); err != nil {
 			return err
 		}
@@ -618,8 +618,11 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	// agent-manager's commit mode (agentmanagercommit.go): the broker
 	// client's Secret placed ahead of the install that names it.
 	agentManagerCommit := agentManagerCommitFor(cfg, workspaceProviders, workspaceGrant, workspaceApps)
+	if cfg.Platform.ManagerGitHubProof && agentManagerCommit == nil {
+		return fmt.Errorf("manager GitHub proof requires the workspace github provider and its credential binding")
+	}
 	if agentManagerCommit != nil {
-		if err := agentManagerCommitUp(); err != nil {
+		if err := agentManagerCommitUp(agentManagerCommit); err != nil {
 			return err
 		}
 	}

@@ -169,11 +169,7 @@ a SKIP with the same reason.
 `agentlab up`/`platform` place **or update** the Secret `agentlab-github-token` (key `GITHUB_TOKEN`) in
 `agent-platform`: the portal takes it through `extraEnvVarsSecrets` and the
 lab's app-config overlay (`integrations.github[].token: ${GITHUB_TOKEN}`),
-agent-manager through the chart's `skills.github.tokenSecret`, and, on a
-chart that runs the skill-manager (its values schema or defaults carry the
-`skill-manager` key, read from the chart itself, so a release, a branch build
-and a chart directory are judged alike), the skill-manager through its
-`github.tokenSecret`. All
+and agent-manager through the chart's `skills.github.tokenSecret`. Both
 then call GitHub authenticated (5000 requests an hour; the rate-limit headers
 say so). A copy in `kagent` that an earlier agentlab placed is removed. A fine-grained token with public read access is enough; a token that
 reads a private skill repository lets agent-manager resolve skills from it.
@@ -182,7 +178,7 @@ The token travels vault -> Secret through beekeeper only and never enters
 log line or a process's argv. Re-running after a rotation in the vault
 rotates the Secret.
 
-**A skills GitHub App** is the way a lab reaches GitHub without any token: agent-manager's chart takes a read-only App (`skills.github.app.secretName`) and resolves skills with its installation tokens, at the App's rate limit. `agentlab configure --github-app-id <id> --github-app-installation-id <id> --github-app-private-key-source op://<vault>/<item>/<field>` records it as `githubApp` in `agentlab.yaml` (the ids are public; the key is a reference). A lab that already records the workspaces GitHub App (`platform.workspaces.github`, docs/workspaces.md) records only its installation, `agentlab configure --github-app-installation-id <id>`: agent-manager then resolves skills as that App, its id and private key source taken from the workspaces entry. With the workspaces App's OAuth client recorded too (`clientId` and `clientSecretSource`, or `githubApp.clientId` and `githubApp.clientSecretSource` for an App of its own), the portal's skill discovery calls GitHub as the same App: every `up` and `platform` write the Secret `agentlab-portal-github-app` (`GITHUB_APP_ID` and `GITHUB_APP_CLIENT_ID` applied, `GITHUB_APP_PRIVATE_KEY` and `GITHUB_APP_CLIENT_SECRET` placed by beekeeper), the portal's `extraEnvVarsSecrets` take it, and the overlay's `integrations.github` lists the App with `publicAccess: true`, so a public repository of any owner gets an installation token. Every `up` and `platform` apply the ids to the Secret `agentlab-github-app` in `agent-platform` and hand the key to `beekeeper secret copy --to-secret` (key `private-key`, never read by agentlab; a failed placement fails the run), and the values name the Secret for agent-manager and, on a chart that runs it, the skill-manager (`skill-manager.github.app.secretName`). The chart refuses the App together with `tokenSecret`, so `githubApp` and `githubToken.source` are not recorded together.
+**A skills GitHub App** is the way a lab reaches GitHub without any token: agent-manager's chart takes a read-only App (`skills.github.app.secretName`) and resolves skills with its installation tokens, at the App's rate limit. `agentlab configure --github-app-id <id> --github-app-installation-id <id> --github-app-private-key-source op://<vault>/<item>/<field>` records it as `githubApp` in `agentlab.yaml` (the ids are public; the key is a reference). A lab that already records the workspaces GitHub App (`platform.workspaces.github`, docs/workspaces.md) records only its installation, `agentlab configure --github-app-installation-id <id>`: agent-manager then resolves skills as that App, its id and private key source taken from the workspaces entry. With the workspaces App's OAuth client recorded too (`clientId` and `clientSecretSource`, or `githubApp.clientId` and `githubApp.clientSecretSource` for an App of its own), the portal's skill discovery calls GitHub as the same App: every `up` and `platform` write the Secret `agentlab-portal-github-app` (`GITHUB_APP_ID` and `GITHUB_APP_CLIENT_ID` applied, `GITHUB_APP_PRIVATE_KEY` and `GITHUB_APP_CLIENT_SECRET` placed by beekeeper), the portal's `extraEnvVarsSecrets` take it, and the overlay's `integrations.github` lists the App with `publicAccess: true`, so a public repository of any owner gets an installation token. Every `up` and `platform` apply the ids to the Secret `agentlab-github-app` in `agent-platform` and hand the key to `beekeeper secret copy --to-secret` (key `private-key`, never read by agentlab; a failed placement fails the run), and the values name the Secret for agent-manager and, on a chart that runs the skill-manager (its values schema or defaults carry the `skill-manager` key, read from the chart itself, so a release, a branch build and a chart directory are judged alike), the skill-manager (`skill-manager.github.app.secretName`), which takes no token: without the App it reads public repositories anonymously. agent-manager's chart refuses the App together with `tokenSecret`, so `githubApp` and `githubToken.source` are not recorded together.
 
 Without either the lab is as before: the values name no Secret, the
 consumers call GitHub unauthenticated, and a Secret an earlier run created
@@ -251,30 +247,71 @@ requests of mode commit are `agentlab backstage-test`'s commit stage (below).
 
 ## Commit mode
 
+For a four-manager GitHub proof, set `platform.managerGitHubProof: true` in
+the proof lab. This enables and pins agent-manager 3.0.0-rc.10,
+cluster-manager 0.37.0-rc.1, model-manager 1.20.0-rc.10, skill-manager
+0.2.0-rc.1 and muster 5.63.2. Model-manager uses its Kubernetes backend;
+cert-manager and the KServe LLMInferenceService CRDs, controller and runtime
+configs are enabled with it. No host model server is needed. Use a meta chart that
+admits these releases and the skill catalog values.
+
+All four managers use the workspace GitHub App's provider App `github`.
+Each has separate broker credentials and may exchange only for that target.
+Configure `platform.workspaces.github.appId` and `clientId`, and bind the
+existing App's private key and OAuth client secret through the workspace
+credential tooling. Enable `platform.devctl` to expose the pinned workspace
+App as provider App `github`, or use the workspace `providerApps` mode.
+Set `githubApp.installationId` to the App installation covering the proof
+repositories; its private-key source comes from `platform.workspaces.github`.
+These are references and public identifiers, never inline credentials.
+An already bound Kubernetes Secret can be the source:
+`k8s://kind-agentlab/agent-platform/workspace-github/private-key`.
+The credential tooling requires the caller to hold that lab's lease.
+Configure the workspace App's two `proofRepositories` and authorize its
+installation for them. Its OAuth callback allowlist must include the proof
+lab's muster `/oauth/proxy/callback` URL.
+
+Run `agentlab --lab agentlab platform --open=false --trust=false` with the
+proof binary after the binding is complete. A configured provider whose
+credential binding is missing fails the install. The existing lab behavior
+is retained when `managerGitHubProof` is false.
+
+Before granting `github`, check read tools on all four managers and private
+skill listings. Commit dry runs and private skill resolution must identify
+the missing `github` grant and offer its sign-in link. Grant it once, repeat
+the calls twice, and verify no additional prompt. Check delegated callers
+are refused. Use only the configured proof repositories for PR creation;
+do not merge proof PRs. An account already holding a grant does not prove
+the first-grant behavior, and a credential binding alone does not prove consent.
+
 The lab's agent-manager offers commit mode (`get_info` reports
 `capabilities.commit`) while the platform runs agents, the workspaces'
 `github` instance renders (`platform.workspaces.github`, its App's ids and
-Secret in place), muster keeps that instance's App (the workspace-manager's
-pin or one provider App per instance) and the agent-manager the install
-resolves is 2.22.0-rc.3 or newer (`components.agent-manager.versionRange` in
+Secret in place), muster keeps that instance's App as the provider App
+`github` (one provider App per instance, or the workspace-manager's pin with
+`platform.devctl` on; the pin alone keeps none) and the agent-manager the install
+resolves is 3.0.0-rc.10 or newer (`components.agent-manager.versionRange` in
 `platform.valuesFiles` admits a release candidate). `agentlab platform`
 prints which.
 
 A commit opens its pull request as the person with their grant of the
 `github` instance's App — the grant they made once for the workspace-manager
 — the way an installation does it without pinning agent-manager's MCP
-registration to an App (agent-manager's `githubTokenExchange`):
+registration to an App (agent-manager's `github.enabled` with
+`github.tokenExchange`):
 
 - agent-manager presents the person's forwarded ID token to muster's RFC 8693
   broker (`https://muster.<domain>/oauth/token`, through the edge, under the
   lab CA) as the confidential client `agent-manager`, whose secret the lab
   generates once (`certs/agent-manager-commit/`) and places as the Secret
-  `agent-platform/agent-manager-github-exchange`;
+  `agent-platform/agent-manager-github-exchange`, which also holds the
+  client id agent-manager reads (`client-id`);
 - muster (`muster.oauth.server.tokenExchangeBroker`, the lab Dex its trusted
   subject issuer) releases that person's own grant of the App
   (`https://github.com/apps/<appId>`) to that client and for that one
-  audience, `agent-manager-github`; a person without the grant gets
-  `auth_required` on a commit.
+  audience, `github`, the provider App agent-manager's registration lists
+  in `auth.providerApps`; a commit without the person's grant answers
+  `grant_required`, which muster turns into that App's sign-in link.
 
 Apply mode, every read and every other proof keep the ID token: nothing else
 needs the grant. The App is installed with contents and pull-request write on
@@ -587,7 +624,7 @@ by it, except the SOPS age Secret the organizations' Kustomizations decrypt
 with: the lab places its own only where none exists or agentlab wrote it.
 Each missing piece is a `SKIP` naming its fix: agent-manager's
 `credentials.uiURL` (its `--credential-ui-url`), muster speaking MCP
-2026-07-28, commit mode (`githubTokenExchange`, `tenants.commit.repository`)
+2026-07-28, commit mode (`github.tokenExchange`, `tenants.commit.repository`)
 and the person's grant of the workspaces' `github` App, a Ready
 kustomize-controller (`flux-engine.instance.components`), and
 agent-platform-operator's commit-mode flags. muster's

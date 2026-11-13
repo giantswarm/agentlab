@@ -21,32 +21,26 @@ func skillManagerTestConfig(t *testing.T) *config.Config {
 	return gitHubTokenTestConfig()
 }
 
-// TestSkillManagerReadsWithTheLabsGitHubCredential: the skill-manager lists
-// and pins skills with the credential agent-manager has, the App when one is
-// recorded (the chart refuses both), else the token, by the Secret's name.
-func TestSkillManagerReadsWithTheLabsGitHubCredential(t *testing.T) {
+// TestSkillManagerReadsWithTheSkillsApp: the skill-manager lists and pins
+// skills as the skills GitHub App when one is recorded; the token
+// githubToken.source places is never its credential, the chart takes none.
+func TestSkillManagerReadsWithTheSkillsApp(t *testing.T) {
 	cfg := skillManagerTestConfig(t)
 	cfg.GitHubToken.Source = gitHubTokenTestSource
+	cfg.GitHubApp = gitHubAppTestConfig().GitHubApp
 	s := renderGitHubTokenSurfaces(t, cfg)
-	token := []string{componentSkillManager, skillManagerGitHub, "tokenSecret"}
-	if got := dig(s.values, append(token, nameKey)...); got != gitHubTokenSecret {
-		t.Errorf("skill-manager.github.tokenSecret.name = %v, want %s\n%s", got, gitHubTokenSecret, s.valuesRaw)
+	if got := dig(s.values, componentSkillManager, skillManagerGitHub, "app", "secretName"); got != gitHubAppSecret {
+		t.Errorf("skill-manager.github.app.secretName = %v, want %s", got, gitHubAppSecret)
 	}
-	if got := dig(s.values, append(token, fieldKey)...); got != gitHubTokenSecretKey {
-		t.Errorf("skill-manager.github.tokenSecret.key = %v, want %s", got, gitHubTokenSecretKey)
+	if got := dig(s.values, componentSkillManager, skillManagerGitHub, "tokenSecret"); got != nil {
+		t.Errorf("skill-manager.github.tokenSecret = %v, want nothing", got)
 	}
 
 	cfg = skillManagerTestConfig(t)
 	cfg.GitHubToken.Source = gitHubTokenTestSource
-	cfg.GitHubApp = gitHubAppTestConfig().GitHubApp
-	s = renderGitHubTokenSurfaces(t, cfg)
-	if got := dig(s.values, componentSkillManager, skillManagerGitHub, "app", "secretName"); got != gitHubAppSecret {
-		t.Errorf("skill-manager.github.app.secretName = %v, want %s", got, gitHubAppSecret)
+	if got := dig(renderGitHubTokenSurfaces(t, cfg).values, componentSkillManager, skillManagerGitHub); got != nil {
+		t.Errorf("skill-manager.github = %v with the token alone, want nothing", got)
 	}
-	if got := dig(s.values, token...); got != nil {
-		t.Errorf("skill-manager.github.tokenSecret = %v next to the App, want nothing", got)
-	}
-
 	if got := dig(renderGitHubTokenSurfaces(t, skillManagerTestConfig(t)).values, componentSkillManager, skillManagerGitHub); got != nil {
 		t.Errorf("skill-manager.github = %v without a recorded credential, want nothing", got)
 	}

@@ -1,8 +1,13 @@
 package lab
 
 import (
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -24,7 +29,7 @@ func commitLab(t *testing.T) (*config.Config, []workspaceProviderValues, *worksp
 func stubAgentManagerTags(t *testing.T, tags ...string) {
 	t.Helper()
 	stubWorkspacesChart(t, chartWorkspaces{Carries: true, Organizations: true,
-		AgentManager: componentSource{repository: testWorkspaceManagerRepository, versionRange: ">=2.0.0 <3.0.0"}})
+		AgentManager: componentSource{repository: testWorkspaceManagerRepository, versionRange: ">=2.0.0 <4.0.0"}})
 	clear := func() {
 		componentVersionMu.Lock()
 		componentVersionCache = map[componentVersionKey]string{}
@@ -41,26 +46,31 @@ func stubAgentManagerTags(t *testing.T, tags ...string) {
 }
 
 // Commit mode renders only with every precondition: agents, the github
-// instance rendered, muster keeping its App (the pin or a provider App), and
-// an agent-manager that takes githubTokenExchange.
+// instance rendered, muster keeping its App as the provider App github (one
+// per instance, or the pin with devctl on), and an agent-manager that takes
+// github.tokenExchange.
 func TestAgentManagerCommitFor(t *testing.T) {
 	cfg, providers, grant := commitLab(t)
+	cfg.Platform.Devctl.Enabled = true
 
-	stubAgentManagerTags(t, "2.21.1", "2.22.0-rc.10")
+	stubAgentManagerTags(t, "2.22.0", "3.0.0-rc.4")
 	if c := agentManagerCommitFor(cfg, providers, grant, nil); c != nil {
-		t.Errorf("an agent-manager resolving to 2.21.1 is wired for commit mode: %+v", c)
+		t.Errorf("an agent-manager resolving to 2.22.0 is wired for commit mode: %+v", c)
 	}
 
-	stubAgentManagerTags(t, "2.21.1", "2.22.0")
+	stubAgentManagerTags(t, "2.22.0", "3.0.0")
 	c := agentManagerCommitFor(cfg, providers, grant, nil)
 	if c == nil {
-		t.Fatal("an agent-manager resolving to 2.22.0 with the pinned github instance offers no commit mode")
+		t.Fatal("an agent-manager resolving to 3.0.0 with the pinned github instance kept as the provider App github (devctl) offers no commit mode")
+	}
+	if c.Audience != config.WorkspaceProviderGitHub {
+		t.Errorf("the exchange asks for %s, want the provider App muster keeps the grant under, %s", c.Audience, config.WorkspaceProviderGitHub)
 	}
 	if c.GrantIssuer != grant.Issuer || c.Instance != config.WorkspaceProviderGitHub {
 		t.Errorf("the broker releases %s of %s, want the pinned App's issuer %s", c.GrantIssuer, c.Instance, grant.Issuer)
 	}
-	if c.Endpoint != cfg.MusterBaseURL()+"/oauth/token" || !strings.HasPrefix(c.Endpoint, "https://") {
-		t.Errorf("the exchange endpoint is %s, want muster's public token endpoint over HTTPS", c.Endpoint)
+	if c.TokenEndpoint != cfg.MusterBaseURL()+"/oauth/token" || !strings.HasPrefix(c.TokenEndpoint, "https://") {
+		t.Errorf("the exchange endpoint is %s, want muster's public token endpoint over HTTPS", c.TokenEndpoint)
 	}
 	if c.SubjectIssuer != cfg.Issuer() || c.CASecret != labCASecret || c.Secret != AgentManagerCommitSecretName {
 		t.Errorf("unexpected wiring: %+v", c)
@@ -72,6 +82,11 @@ func TestAgentManagerCommitFor(t *testing.T) {
 	if agentManagerCommitFor(cfg, providers, nil, nil) != nil {
 		t.Error("commit mode without muster keeping the github App: no grant could be released")
 	}
+	cfg.Platform.Devctl.Enabled = false
+	if c := agentManagerCommitFor(cfg, providers, grant, nil); c != nil {
+		t.Errorf("commit mode on the pin alone, which keeps no provider App github for muster to answer grant_required with: %+v", c)
+	}
+	cfg.Platform.Devctl.Enabled = true
 	gitlab := &workspaceGrantValues{Provider: config.WorkspaceProviderGitLab}
 	if agentManagerCommitFor(cfg, providers, gitlab, nil) != nil {
 		t.Error("commit mode while muster pins the gitlab instance")
@@ -85,16 +100,44 @@ func TestAgentManagerCommitFor(t *testing.T) {
 	}
 }
 
-// The values: agent-manager's githubTokenExchange against muster's public
-// token endpoint under the lab CA, and muster's broker releasing the pinned
-// App's grant to that client alone, the lab Dex its subject tokens' issuer.
+func TestAgentManagerCommitReleaseFloor(t *testing.T) {
+	for _, scenario := range []struct {
+		version string
+		commit  bool
+	}{
+		{"3.0.0-rc.5", false},
+		{"3.0.0-rc.9", false},
+		{"3.0.0-rc.10", true},
+		{"3.0.0", true},
+	} {
+		t.Run(scenario.version, func(t *testing.T) {
+			configuration, providers, grant := commitLab(t)
+			configuration.Platform.Devctl.Enabled = true
+			stubAgentManagerTags(t, scenario.version)
+			overlay := filepath.Join(t.TempDir(), "agent-manager.yaml")
+			require.NoError(t, os.WriteFile(overlay, []byte("components:\n  agent-manager:\n    versionRange: "+scenario.version+"\n"), 0o600))
+			configuration.Platform.ValuesFiles = []string{overlay}
+			values := agentManagerCommitFor(configuration, providers, grant, nil)
+			if scenario.commit {
+				require.NotNil(t, values)
+			} else {
+				require.Nil(t, values)
+			}
+		})
+	}
+}
+
+// The values: agent-manager's github.tokenExchange against muster's public
+// token endpoint under the lab CA, the client id from its Secret, and
+// muster's broker releasing the pinned App's grant to that client alone
+// under the provider App's name, the lab Dex its subject tokens' issuer.
 // Without commit mode neither block renders.
 func TestPlatformValuesAgentManagerCommit(t *testing.T) {
 	stubWorkspacesProbe(t, true)
 	cfg, providers, grant := commitLab(t)
 	commit := &agentManagerCommitValues{
-		Endpoint: cfg.MusterBaseURL() + agentManagerCommitTokenPath, ClientID: agentManagerCommitClientID,
-		Audience: agentManagerCommitAudience, Secret: AgentManagerCommitSecretName, CASecret: labCASecret,
+		TokenEndpoint: cfg.MusterBaseURL() + agentManagerCommitTokenPath, ClientID: agentManagerCommitClientID,
+		Audience: config.WorkspaceProviderGitHub, Secret: AgentManagerCommitSecretName, CASecret: labCASecret,
 		Instance: config.WorkspaceProviderGitHub, GrantIssuer: grant.Issuer,
 		SubjectIssuer: cfg.Issuer(), JWKSURL: "https://dex.dex.svc.cluster.local:5556/dex/keys", JWKSHost: "dex.dex.svc.cluster.local",
 	}
@@ -108,28 +151,33 @@ func TestPlatformValuesAgentManagerCommit(t *testing.T) {
 	}
 
 	values := render(commit)
-	exchange := mapAt(values, "agent-manager", "githubTokenExchange")
+	if got := mapAt(values, "agent-manager", "github")["enabled"]; got != true {
+		t.Errorf("agent-manager.github.enabled = %v, want true", got)
+	}
+	exchange := mapAt(values, "agent-manager", "github", "tokenExchange")
 	if exchange == nil {
-		t.Fatal("no agent-manager.githubTokenExchange rendered")
+		t.Fatal("no agent-manager.github.tokenExchange rendered")
 	}
-	for key, want := range map[string]string{"endpoint": commit.Endpoint, "clientID": agentManagerCommitClientID, "audience": agentManagerCommitAudience, "secretName": AgentManagerCommitSecretName, "caSecretName": labCASecret} {
-		if got := exchange[key]; got != want {
-			t.Errorf("agent-manager.githubTokenExchange.%s = %v, want %s", key, got, want)
-		}
+	want := map[string]any{"tokenEndpoint": commit.TokenEndpoint, "audience": config.WorkspaceProviderGitHub, "existingSecret": AgentManagerCommitSecretName, "caSecretName": labCASecret}
+	if !reflect.DeepEqual(exchange, want) {
+		t.Errorf("agent-manager.github.tokenExchange = %v, want %v", exchange, want)
 	}
-	if gh := mapAt(values, "agent-manager", "github"); gh != nil {
-		t.Errorf("agent-manager's registration pinned to an App (github: %v): every tool would need the grant", gh)
+	if pin := mapAt(values, "agent-manager", "github", "authorizationServer"); pin != nil {
+		t.Errorf("agent-manager's registration pinned to an App (authorizationServer: %v): every tool would need the grant", pin)
+	}
+	if mapAt(values, "agent-manager", "githubTokenExchange") != nil {
+		t.Error("agent-manager.githubTokenExchange rendered: the chart refuses it")
 	}
 	server := mapAt(values, "muster", "muster", "oauth", "server")
 	broker, _ := server["tokenExchangeBroker"].(map[string]any)
 	if broker == nil {
 		t.Fatalf("no muster tokenExchangeBroker rendered: %v", server)
 	}
-	if got := mapAt(broker, "targets", agentManagerCommitAudience)["grantIssuer"]; got != grant.Issuer {
+	if got := mapAt(broker, "targets", config.WorkspaceProviderGitHub)["grantIssuer"]; got != grant.Issuer {
 		t.Errorf("the broker target releases %v, want the pinned App's grant (%s)", got, grant.Issuer)
 	}
-	if got := mapAt(broker, "clientAudiences")[agentManagerCommitClientID]; len(asSlice(got)) != 1 || asSlice(got)[0] != agentManagerCommitAudience {
-		t.Errorf("the client may request %v, want only %s", got, agentManagerCommitAudience)
+	if got := mapAt(broker, "clientAudiences")[agentManagerCommitClientID]; len(asSlice(got)) != 1 || asSlice(got)[0] != config.WorkspaceProviderGitHub {
+		t.Errorf("the client may request %v, want only %s", got, config.WorkspaceProviderGitHub)
 	}
 	if got := mapAt(broker, "brokerClients", agentManagerCommitClientID, "clientCredentialsSecretRef")["name"]; got != AgentManagerCommitSecretName {
 		t.Errorf("the broker client is seeded from %v, want %s", got, AgentManagerCommitSecretName)
@@ -140,8 +188,8 @@ func TestPlatformValuesAgentManagerCommit(t *testing.T) {
 	}
 
 	values = render(nil)
-	if mapAt(values, "agent-manager", "githubTokenExchange") != nil {
-		t.Error("githubTokenExchange rendered without commit mode")
+	if mapAt(values, "agent-manager", "github") != nil {
+		t.Error("agent-manager.github rendered without commit mode")
 	}
 	server = mapAt(values, "muster", "muster", "oauth", "server")
 	if server["tokenExchangeBroker"] != nil || server["trustedIssuers"] != nil {
