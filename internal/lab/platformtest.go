@@ -163,110 +163,15 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 		return parsed, nil
 	}
 
-	// listTools is the session's tool names: one page with every tool, since
-	// list_tools pages at 50 by default and the family tools sort after the
-	// platform servers'.
-	listTools := func() ([]string, error) {
-		res, err := call(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_tools","arguments":{"limit":1000}}}`)
-		if err != nil {
-			return nil, err
-		}
-		var toolList struct {
-			Tools []struct {
-				Name string `json:"name"`
-			} `json:"tools"`
-		}
-		if err := json.Unmarshal([]byte(innerText(res)), &toolList); err != nil {
-			return nil, fmt.Errorf("parsing list_tools payload: %w", err)
-		}
-		names := make([]string, 0, len(toolList.Tools))
-		for _, t := range toolList.Tools {
-			names = append(names, t.Name)
-		}
-		return names, nil
-	}
-
-	p.begin(stageKubernetesTools, "Kubernetes tools muster is aggregating")
-	toolNames, err := listTools()
+	session := &musterSession{client: client, url: mcpURL, token: token, id: sessionID, seq: 10}
+	toolNames, names, err := platformNamespaces(cfg, p, session, func(s *musterSession) error {
+		return signInToKubernetesMCP(context.Background(), cfg, s, user)
+	})
 	if err != nil {
 		return "", err
-	}
-	// The lab's mcp-kubernetes is the kubernetes family's member, so muster
-	// exposes the family's tools: x_kubernetes_<tool>, management_cluster
-	// selecting the lab's member by its name (kubernetesTool: the server's
-	// own tools on the 3.x line).
-	toolPrefix := kubernetesTool(cfg, "")
-	if !slices.ContainsFunc(toolNames, func(name string) bool { return strings.HasPrefix(name, toolPrefix) }) {
-		// The person has not signed in to mcp-kubernetes yet
-		// (signInToKubernetesMCP): sign in on this session, then list again.
-		// The wrapper numbers its requests from 11, apart from the inline
-		// calls' ids; each request is its own POST either way.
-		session := &musterSession{client: client, url: mcpURL, token: token, id: sessionID, seq: 10}
-		if err := signInToKubernetesMCP(context.Background(), cfg, session, user); err != nil {
-			return "", fmt.Errorf("muster aggregates no %s tools (it lists %s): %w", toolPrefix, strings.Join(toolNames, ", "), err)
-		}
-		if toolNames, err = listTools(); err != nil {
-			return "", err
-		}
-	}
-	shown := 0
-	for _, name := range toolNames {
-		if strings.HasPrefix(name, toolPrefix) && shown < 8 {
-			note("%s", name)
-			shown++
-		}
-	}
-	if shown == 0 {
-		return "", fmt.Errorf("muster aggregates no %s tools (it lists %s)", toolPrefix, strings.Join(toolNames, ", "))
-	}
-
-	p.begin(stageMCPToolCall, "Calling %slist namespaces on %s through muster", toolPrefix, cfg.MCPServerName())
-	listArgs, err := json.Marshal(kubernetesArgs(cfg, map[string]any{"resourceType": "namespaces"}))
-	if err != nil {
-		return "", err
-	}
-	payload := fmt.Sprintf(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"call_tool","arguments":{"name":%q,"arguments":%s}}}`, toolPrefix+"list", listArgs)
-	res, err := call(payload)
-	if err != nil {
-		return "", err
-	}
-	// Family tools can already be listed while this person's downstream
-	// session still needs sign-in. Authenticate on the call's challenge too,
-	// then retry once and judge the namespace response normally.
-	if strings.Contains(innerText(res), statusAuthRequired) {
-		session := &musterSession{client: client, url: mcpURL, token: token, id: sessionID, seq: 20}
-		if err := signInToKubernetesMCP(context.Background(), cfg, session, user); err != nil {
-			return "", err
-		}
-		res, err = call(payload)
-		if err != nil {
-			return "", err
-		}
-	}
-	// Tool results are double-wrapped: result.content[0].text is JSON whose
-	// content[0].text is the actual payload — two decode hops.
-	var wrapped struct {
-		Content []struct {
-			Text string `json:"text"`
-		} `json:"content"`
-	}
-	if err := json.Unmarshal([]byte(innerText(res)), &wrapped); err != nil || len(wrapped.Content) == 0 {
-		return "", fmt.Errorf("unexpected call_tool payload shape")
-	}
-	var nsList struct {
-		Items []struct {
-			Name string `json:"name"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal([]byte(wrapped.Content[0].Text), &nsList); err != nil {
-		// A failed call answers with the tool's own error text, not a list.
-		return "", fmt.Errorf("%slist namespaces answered no namespace list: %s", toolPrefix, strings.TrimSpace(wrapped.Content[0].Text))
-	}
-	names := make([]string, 0, len(nsList.Items))
-	for _, item := range nsList.Items {
-		names = append(names, item.Name)
 	}
 	note("namespaces: %s", strings.Join(names, ", "))
+	toolPrefix := kubernetesTool(cfg, "")
 
 	verdict := "PASS: Claude Code -> muster (Dex) -> mcp-kubernetes -> kind apiserver"
 
@@ -958,4 +863,106 @@ func kagentControllerMonitored() (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// platformNamespaces discovers and calls the Kubernetes tools on the proof's
+// existing MCP session. signIn is the browser boundary; discovery and the
+// namespace response are judged here so the complete retry path is testable.
+func platformNamespaces(cfg *config.Config, p *proofStages, session *musterSession, signIn func(*musterSession) error) ([]string, []string, error) {
+	// listTools is the session's tool names: one page with every tool, since
+	// list_tools pages at 50 by default and the family tools sort after the
+	// platform servers'.
+	listTools := func() ([]string, error) {
+		res, err := session.callTool("list_tools", map[string]any{"limit": 1000})
+		if err != nil {
+			return nil, err
+		}
+		var toolList struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		}
+		if err := json.Unmarshal([]byte(innerText(res)), &toolList); err != nil {
+			return nil, fmt.Errorf("parsing list_tools payload: %w", err)
+		}
+		names := make([]string, 0, len(toolList.Tools))
+		for _, t := range toolList.Tools {
+			names = append(names, t.Name)
+		}
+		return names, nil
+	}
+
+	p.begin(stageKubernetesTools, "Kubernetes tools muster is aggregating")
+	toolNames, err := listTools()
+	if err != nil {
+		return nil, nil, err
+	}
+	// The lab's mcp-kubernetes is the kubernetes family's member, so muster
+	// exposes the family's tools: x_kubernetes_<tool>, management_cluster
+	// selecting the lab's member by its name (kubernetesTool: the server's
+	// own tools on the 3.x line).
+	toolPrefix := kubernetesTool(cfg, "")
+	if !slices.ContainsFunc(toolNames, func(name string) bool { return strings.HasPrefix(name, toolPrefix) }) {
+		// The person has not signed in to mcp-kubernetes yet
+		// (signInToKubernetesMCP): sign in on this session, then list again.
+		if err := signIn(session); err != nil {
+			return nil, nil, fmt.Errorf("muster aggregates no %s tools (it lists %s): %w", toolPrefix, strings.Join(toolNames, ", "), err)
+		}
+		if toolNames, err = listTools(); err != nil {
+			return nil, nil, err
+		}
+	}
+	shown := 0
+	for _, name := range toolNames {
+		if strings.HasPrefix(name, toolPrefix) && shown < 8 {
+			note("%s", name)
+			shown++
+		}
+	}
+	if shown == 0 {
+		return nil, nil, fmt.Errorf("muster aggregates no %s tools (it lists %s)", toolPrefix, strings.Join(toolNames, ", "))
+	}
+
+	p.begin(stageMCPToolCall, "Calling %slist namespaces on %s through muster", toolPrefix, cfg.MCPServerName())
+	args := map[string]any{"name": toolPrefix + "list", "arguments": kubernetesArgs(cfg, map[string]any{"resourceType": "namespaces"})}
+	res, err := session.callTool("call_tool", args)
+	if err != nil {
+		return nil, nil, err
+	}
+	// Family tools can already be listed while this person's downstream
+	// session still needs sign-in. Authenticate on the call's challenge too,
+	// then retry once and judge the namespace response normally.
+	if strings.Contains(innerText(res), statusAuthRequired) {
+		if err := signIn(session); err != nil {
+			return nil, nil, err
+		}
+		res, err = session.callTool("call_tool", args)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	// Tool results are double-wrapped: result.content[0].text is JSON whose
+	// content[0].text is the actual payload — two decode hops.
+	var wrapped struct {
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal([]byte(innerText(res)), &wrapped); err != nil || len(wrapped.Content) == 0 {
+		return nil, nil, fmt.Errorf("unexpected call_tool payload shape")
+	}
+	var nsList struct {
+		Items []struct {
+			Name string `json:"name"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(wrapped.Content[0].Text), &nsList); err != nil {
+		// A failed call answers with the tool's own error text, not a list.
+		return nil, nil, fmt.Errorf("%slist namespaces answered no namespace list: %s", toolPrefix, strings.TrimSpace(wrapped.Content[0].Text))
+	}
+	names := make([]string, 0, len(nsList.Items))
+	for _, item := range nsList.Items {
+		names = append(names, item.Name)
+	}
+	return toolNames, names, nil
 }
