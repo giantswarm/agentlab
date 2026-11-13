@@ -245,8 +245,8 @@ github.com/giantswarm/selfupdate-cosign v0.3.28 h1:HERE1xBN2aZCfzxWYHtBMr2hwb8en
 github.com/giantswarm/selfupdate-cosign v0.3.28/go.mod h1:SJAwn34MAlODL5B01X6cCOtGPI1b+maJIO+iC08e87I=
 github.com/giantswarm/telemetrydeck-go v0.3.19 h1:8YnYHVhbFbU+lmE+fz+XA+4Fc/Aask+mrO80girm284=
 github.com/giantswarm/telemetrydeck-go v0.3.19/go.mod h1:BitlH7nTrQmWvVEtnAa8pNM+FjI0+9S7JA9tl1PVvzo=
-github.com/giantswarm/vm-manager v0.26.4 h1:u5e1/hG3Glswaka8RbZqij0PB6gMcv9wxgE9vtoZ/IE=
-github.com/giantswarm/vm-manager v0.26.4/go.mod h1:extvwpcWLyZ/HsWMPic/u68yOzvwJLpea+afja5hU2g=
+github.com/giantswarm/vm-manager v0.26.7 h1:xa63I8cLivIDofWeYJ1wnAH27YG1a0kKFUB9psdYKBk=
+github.com/giantswarm/vm-manager v0.26.7/go.mod h1:gFJSXpNm3dsmdp8ejPGQIVTeK1WdXC49H5YKdRxB/C4=
 github.com/go-chi/chi/v5 v5.5.0 h1:xdKQ1dJmVJsmgahrXSKhUx8NyVPzpwdlyrrQFpMPJgg=
 github.com/go-chi/chi/v5 v5.5.0/go.mod h1:d1IG7GtKPSjPyBP365PH8sAGVHk3qfB/IhjFNRH1wWM=
 github.com/go-errors/errors v1.5.1 h1:ZwEMSLRCapFLflTpT7NKaAc7ukJ8ZPEjzlxt8rPN8bk=
@@ -716,8 +716,8 @@ golang.org/x/net v0.0.0-20190404232315-eb5bcb51f2a3/go.mod h1:t9HGtf8HONx5eT2rtn
 golang.org/x/net v0.0.0-20210226172049-e18ecbb05110/go.mod h1:m0MpNAwzfU5UDzcl9v0D8zg8gWTRqZa9RBIspLL5mdg=
 golang.org/x/net v0.62.0 h1:18ELalfM5+XNRwzM2nYqXsZQ9ByS1uhj2O/U7+5jqRY=
 golang.org/x/net v0.62.0/go.mod h1:WgDCOTH8iwtB66T4/GfI94AHo/hhdb7Hah9NDseQfiI=
-golang.org/x/oauth2 v0.37.0 h1:JUlcxA8oAtauLfiH8FX2/FkAWHAdi0QtGCGc+hofE98=
-golang.org/x/oauth2 v0.37.0/go.mod h1:IxwZNxUULJmpBFf9K/9NTMSIfZZuvuTy1gGxhigP/58=
+golang.org/x/oauth2 v0.38.0 h1:uW7XQbcu1eoiQS7uMJvLOjPMl04bTbmY1VeRPxvbspI=
+golang.org/x/oauth2 v0.38.0/go.mod h1:IxwZNxUULJmpBFf9K/9NTMSIfZZuvuTy1gGxhigP/58=
 golang.org/x/sync v0.25.0 h1:dJnifr0nMV8/SBnBvdo4eSGGnrc3O4FFx6IqvtLcmRs=
 golang.org/x/sync v0.25.0/go.mod h1:sUUOizhqBxiL6pEWpqNLUiaJn1ShEbZ6BBqskPbjZm0=
 golang.org/x/sys v0.0.0-20190215142949-d0b11bdaac8a/go.mod h1:STP8DvDyc/dI5b8T5hshtkjS+E42TnysNCUPdjciGhY=
