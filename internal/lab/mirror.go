@@ -146,7 +146,7 @@ func ensureRegistryMirror(cfg *config.Config) {
 	}
 	if !cfg.RegistryMirrorOn() {
 		if removed := removeMirrorHosts(nodes); len(removed) > 0 {
-			note("registryMirror is off: %s pull %s directly again (%s stays for the other labs; `agentlab down --mirror` removes it)", strings.Join(removed, ", "), mirrorUpstream, mirrorName)
+			note("registryMirror is off: the %s pulls of %s go to it directly again (%s stays for the other labs; `agentlab down --mirror` removes it)", mirrorUpstream, strings.Join(removed, ", "), mirrorName)
 		}
 		return
 	}
@@ -177,7 +177,7 @@ func ensureRegistryMirror(cfg *config.Config) {
 		attempts = mirrorProbeAttempts
 	}
 	if waitFor(attempts, time.Second, func() bool { return mirrorAnswers(wrote[0]) }) {
-		note("%s pull %s through %s (zot %s), %s itself the fallback", strings.Join(wrote, ", "), mirrorUpstream, mirrorName, zotTag(image), mirrorUpstream)
+		note("the %s pulls of %s go through %s (zot %s), %s itself the fallback", mirrorUpstream, strings.Join(wrote, ", "), mirrorName, zotTag(image), mirrorUpstream)
 		return
 	}
 	warn("%s does not answer %s on %s/v2/ (`docker logs %s`); its pulls fall back to %s until it does", mirrorName, wrote[0], mirrorEndpoint, mirrorName, mirrorUpstream)
