@@ -224,9 +224,14 @@ func removeMirrorHosts(nodes []string) []string {
 }
 
 // RemoveRegistryMirror removes the mirror and its cache, for `agentlab down
-// --mirror`. The other labs' nodes keep their hosts.toml and pull from gsoci
-// meanwhile; their next `up` or `platform` creates the mirror again.
+// --mirror`, and the bandwidth shaper first, which joins the mirror and
+// cannot run without it. The other labs' nodes keep their hosts.toml and
+// pull from gsoci meanwhile; their next `up` or `platform` creates the
+// mirror (and, with bandwidthShaper on, the shaper) again.
 func RemoveRegistryMirror() {
+	if err := RemoveShaper(); err != nil {
+		note("%v", err)
+	}
 	removeZot(mirrorName, "the registry mirror")
 }
 

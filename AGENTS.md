@@ -324,6 +324,8 @@ agentlab substrate-step-test --to <release>  # a suspended conversation and its 
 agentlab kagent-step-test --to <kagent> | --chart <agent-platform>  # a suspended conversation and a file on its durable volume survive: it resumes, takes a turn reading both back, suspends and deletes across a kagent step (a kagent pin, a platform candidate — chart-only included — or both)
 agentlab harness-matrix-test  # what each Harness does with a Shared subagent (prompt only, with a skill, with an MCP tool, nested) and, on claude, a Claude-format package's subagents and commands: per cell the controller's refusal or one turn whose child answers a codeword only its own prompt holds; observations in state/harness-matrix.txt, no verdict (codex's shared-prompt on the mockllm's delegation script unless --codex-model-config)
 agentlab substrate-tunnel-test  # a gRPC call through atenet-router to an HTTP/1.1-only actor fails at once, not with its client's timeout (--substrate <release> pins one for the run)
+agentlab shaper-test     # the bandwidth shaper on a 20 Mbit/s link with ~400 ms of FIFO in unprivileged namespaces: the person's download gets half the link, their median latency stays near the base (--baseline: unshaped first)
+agentlab shaper          # the bandwidth shaper every lab shares: status; auto | max <rate> | pause | off for this machine; remove
 agentlab down            # delete the cluster (certs/ kept, trust stores untouched)
 agentlab down --purge    # the whole lab for good: cluster, its CA from the trust stores, its folders and registration (asks; --yes off a terminal)
 agentlab trust           # install the lab CA into the system + NSS trust stores (sudo)
@@ -433,6 +435,12 @@ The lab's own e2e checks are the `*-test` subcommands, not `go test`.
   hashed string resets every user in the TelemetryDeck dashboard** — the
   pinned digest in the tests is there to make that deliberate. Details in
   docs/telemetry.md.
+- `internal/shaper` — the bandwidth shaper `agentlab-shaper` runs
+  (`agentlab shaper run`): the latency controller, the ICMP probes, the CAKE
+  qdisc and the mirror's veth over rtnetlink with `x/sys/unix` (no `tc`, no
+  netlink dependency), and `shaper-test`'s namespace proof. The lab side,
+  `ensureShaper` and the status line, is `internal/lab/shaper.go`
+  (docs/bandwidth.md).
 - `internal/update` — `agentlab self-update` (creativeprojects/go-selfupdate
   against the GitHub releases; the command muster and mcp-kubernetes ship).
   A release binary is installed only after its cosign Sigstore bundle
@@ -561,7 +569,22 @@ Load-bearing invariants (details in docs/):
   fallback); a mirror that cannot be made is a warning. zot is not pinned:
   the lab registry and the mirror follow the newest v2 release at or above
   `config.ZotFloor`, resolved once per run, and `zotVersion` holds a lab
-  registry back (zot.go, mirror.go, docs/registries.md).
+  registry back (zot.go, mirror.go, docs/registries.md). A tag every node
+  holds is not pulled on the host again (`withoutNodeImages`): a component
+  release costs the machine one download.
+- **The bandwidth shaper never fails a run either**: `bandwidthShaper` (off
+  by default) has `up`/`platform` ensure `agentlab-shaper`, one per machine
+  beside the mirror, running this agentlab (`agentlab shaper run`) in the
+  probe image with the host's network namespace, the mirror's PID namespace
+  (the veth is found by the mirror's netns id, never through the docker
+  socket), NET_ADMIN and NET_RAW. One CAKE qdisc on the mirror's host-side
+  veth, its bandwidth set every 500 ms from the uplink's latency
+  (internal/shaper, the controller tested against a fluid model and a
+  recorded Wi-Fi trace); unlimited when no reflector answers; CAKE off on
+  SIGTERM. The override is the machine's (`agentlab shaper auto|max|pause|
+  off`), not a lab's. Skipped with one line on macOS builds, rootless
+  engines and kernels without `sch_cake`. `shaper-test` is its proof
+  (docs/bandwidth.md).
 - The lab's credentials are throwaway by design; plaintext passwords in
   `agentlab.yaml` are fine.
 

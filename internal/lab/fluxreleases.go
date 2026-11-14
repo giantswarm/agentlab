@@ -921,22 +921,39 @@ func filteredNote(filtered []string) string {
 // sideloadPlatformImages pulls the platform images on the host and side-loads
 // them into the node, naming what landed: the boot log is the record that
 // nothing of the topology is left to the kubelet under the install's wait.
+// What every node already holds — a component release the nodes pulled
+// through the registry mirror — is neither pulled on the host nor loaded:
+// a release costs the machine one download, not two.
 func sideloadPlatformImages(cfg *config.Config, images []string) {
 	if len(images) == 0 {
 		return
 	}
-	res := sideloadImages(cfg, hostPullImages(images))
+	missing, onNodes := withoutNodeImages(cfg, images)
+	if len(missing) == 0 {
+		note("all %d platform images are already on the node", len(images))
+		return
+	}
+	pulled := hostPullImages(missing)
+	if len(pulled) == 0 {
+		note("none of the %d platform images missing on the node could be pulled on the host; the node pulls them", len(missing))
+		return
+	}
+	res := sideloadImages(cfg, pulled)
 	loaded := ""
 	if res.n > 0 {
 		loaded = ":\n      " + strings.Join(res.refs, "\n      ")
 	}
+	already := ""
+	if onNodes > 0 {
+		already = fmt.Sprintf("; %d already on the node", onNodes)
+	}
 	switch {
 	case res.err != nil && res.n > 0:
-		note("side-loaded %d of %d platform images (%s); the rest failed (%v) and the node pulls them%s", res.n, len(images), res.d, res.err, loaded)
+		note("side-loaded %d of %d platform images (%s%s); the rest failed (%v) and the node pulls them%s", res.n, len(images), res.d, already, res.err, loaded)
 	case res.err != nil:
 		note("side-loading failed (%v); the node pulls anything missing", res.err)
 	case res.n > 0:
-		note("side-loaded %d of %d platform images (%s)%s", res.n, len(images), res.d, loaded)
+		note("side-loaded %d of %d platform images (%s%s)%s", res.n, len(images), res.d, already, loaded)
 	default:
 		note("all %d platform images are already on the node", len(images))
 	}

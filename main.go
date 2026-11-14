@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -29,6 +30,7 @@ import (
 	"github.com/giantswarm/agentlab/internal/forms"
 	"github.com/giantswarm/agentlab/internal/lab"
 	"github.com/giantswarm/agentlab/internal/labs"
+	"github.com/giantswarm/agentlab/internal/shaper"
 	"github.com/giantswarm/agentlab/internal/telemetry"
 	"github.com/giantswarm/agentlab/internal/update"
 	"github.com/giantswarm/agentlab/pkg/project"
@@ -151,6 +153,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		inGroup(groupTesting, beekeeperSubscriptionsTestCmd()),
 		inGroup(groupTesting, backstageTestCmd()),
 		inGroup(groupTesting, roadmapTestCmd()),
+		inGroup(groupTesting, shaperTestCmd()),
 
 		inGroup(groupCleanup, downCmd()),
 		inGroup(groupCleanup, readOnlyLabCmd("untrust", "Remove the lab CA from the system and browser trust stores", lab.Untrust)),
@@ -160,6 +163,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		inGroup(groupAdvanced, certsCmd()),
 		inGroup(groupAdvanced, renderCmd()),
 		inGroup(groupAdvanced, labCmd("reload", "Re-render and re-apply the Dex config (after editing agentlab.yaml)", lab.ApplyDex)),
+		inGroup(groupAdvanced, shaperCmd()),
 		inGroup(groupAdvanced, selfUpdateCmd()),
 
 		browserCmd(),
@@ -253,6 +257,155 @@ func skillHostCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&listen, "listen", "0.0.0.0:8080", "address to serve the git host on")
+	return cmd
+}
+
+// shaperCmd is `agentlab shaper`: the bandwidth shaper every lab on this
+// machine shares, and the person's override for it — the machine's, not a
+// lab's, since one shaper caps the one mirror (docs/bandwidth.md).
+func shaperCmd() *cobra.Command {
+	var output string
+	status := func(cmd *cobra.Command, _ []string) error {
+		if output != "" && output != outputJSON {
+			return fmt.Errorf("--output %q: the one format besides the default is json", output)
+		}
+		return lab.PrintShaperStatus(cmd.OutOrStdout(), output == outputJSON)
+	}
+	cmd := &cobra.Command{
+		Use:   "shaper",
+		Short: "The bandwidth shaper on the registry mirror every lab shares: what it does, and this machine's override (auto, max <rate>, pause, off)",
+		Long: `The bandwidth shaper (bandwidthShaper in agentlab.yaml, docs/bandwidth.md) caps
+what the registry mirror downloads by the uplink's latency: the labs take what
+you leave idle and give it back within seconds. One shaper serves every lab on
+this machine, so its override is this machine's:
+
+  agentlab shaper              what it does now (status)
+  agentlab shaper auto         follow the link (the default)
+  agentlab shaper max 5mbit    follow the link, never above 5 Mbit/s (a metered hotspot)
+  agentlab shaper pause        hold the mirror at 128 kbit/s: pulls crawl but don't time out
+  agentlab shaper off          don't limit the mirror; the shaper keeps running
+  agentlab shaper remove       remove the shaper; the next up or platform with bandwidthShaper on creates it again`,
+		Args: cobra.NoArgs,
+		RunE: status,
+	}
+	cmd.Flags().StringVarP(&output, "output", "o", "", "json: the status as JSON, for scripts")
+	statusCmd := &cobra.Command{Use: "status", Short: "What the shaper does now", Args: cobra.NoArgs, RunE: status}
+	statusCmd.Flags().StringVarP(&output, "output", "o", "", "json: the status as JSON, for scripts")
+	setMode := func(m shaper.Mode) func(*cobra.Command, []string) error {
+		return func(cmd *cobra.Command, _ []string) error { return lab.SetShaperMode(cmd.OutOrStdout(), m) }
+	}
+	cmd.AddCommand(
+		statusCmd,
+		&cobra.Command{Use: "auto", Short: "Let the mirror follow the link (the default)", Args: cobra.NoArgs, RunE: setMode(shaper.Mode{Kind: shaper.ModeAuto})},
+		&cobra.Command{
+			Use: "max <rate>", Short: "Follow the link, never above <rate> (500kbit, 5mbit, 1gbit)", Args: cobra.ExactArgs(1),
+			RunE: func(cmd *cobra.Command, args []string) error {
+				v, err := shaper.ParseRate(args[0])
+				if err != nil {
+					return err
+				}
+				return lab.SetShaperMode(cmd.OutOrStdout(), shaper.Mode{Kind: shaper.ModeAuto, Max: v})
+			},
+		},
+		&cobra.Command{Use: "pause", Short: "Hold the mirror at 128 kbit/s: its pulls crawl but don't time out", Args: cobra.NoArgs, RunE: setMode(shaper.Mode{Kind: shaper.ModePause})},
+		&cobra.Command{Use: "off", Short: "Don't limit the mirror; the shaper keeps running", Args: cobra.NoArgs, RunE: setMode(shaper.Mode{Kind: shaper.ModeOff})},
+		&cobra.Command{Use: "remove", Short: "Remove the shaper, its cap taken off the mirror", Args: cobra.NoArgs, RunE: func(*cobra.Command, []string) error { return lab.RemoveShaper() }},
+		shaperRunCmd(),
+		&cobra.Command{
+			Use: "cleanup", Short: "Take CAKE off the mirror's veth (run in the shaper's container)", Args: cobra.NoArgs, Hidden: true,
+			RunE: func(*cobra.Command, []string) error { return lab.CleanupShaper() },
+		},
+	)
+	return cmd
+}
+
+// shaperRunCmd is the shaper itself, run in its container (or by
+// shaper-test in its namespaces): plumbing, hidden, never typed by a person.
+func shaperRunCmd() *cobra.Command {
+	cfg := shaper.DefaultConfig()
+	var reflectors string
+	cmd := &cobra.Command{
+		Use:    "run",
+		Short:  "Shape the registry mirror's downloads (run in agentlab-shaper's container)",
+		Args:   cobra.NoArgs,
+		Hidden: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if reflectors != "" {
+				cfg.Reflectors = nil
+				for _, r := range strings.Split(reflectors, ",") {
+					a, err := netip.ParseAddr(strings.TrimSpace(r))
+					if err != nil {
+						return fmt.Errorf("--reflectors: %w", err)
+					}
+					cfg.Reflectors = append(cfg.Reflectors, a)
+				}
+			}
+			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			return lab.RunShaper(ctx, cfg)
+		},
+	}
+	cmd.Flags().StringVar(&cfg.StateDir, "state-dir", "", "the directory the shaper publishes its state in and reads the mode from")
+	cmd.Flags().IntVar(&cfg.MirrorPID, "mirror-pid", cfg.MirrorPID, "a process in the mirror's network namespace (1: the mirror's own, whose PID namespace the container joins)")
+	cmd.Flags().StringVar(&reflectors, "reflectors", "", "IPv4 hosts to measure the latency against, comma-separated (default: four public resolvers)")
+	cmd.Flags().DurationVar(&cfg.Target, "target", cfg.Target, "the queue over the latency baseline at which the mirror backs off")
+	return cmd
+}
+
+// shaperTestCmd is `agentlab shaper-test`: the shaper against a bloated link
+// in namespaces of its own, no lab and no root needed. Its hidden flags are
+// the proof's own plumbing: the run inside its namespaces and the traffic.
+func shaperTestCmd() *cobra.Command {
+	var baseline, inNamespace bool
+	var role, listen, from, duration string
+	var streams int
+	var startAt int64
+	cmd := &cobra.Command{
+		Use:   "shaper-test",
+		Short: "The bandwidth shaper on a 20 Mbit/s link with ~400 ms of FIFO, in unprivileged namespaces: the person's download gets half the link and their latency stays near its base while the mirror pulls",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			switch role {
+			case "serve":
+				return shaper.ServeBulk(ctx, listen)
+			case "fetch":
+				d, err := time.ParseDuration(duration)
+				if err != nil {
+					return fmt.Errorf("--for: %w", err)
+				}
+				return shaper.FetchBulk(ctx, cmd.OutOrStdout(), from, streams, time.UnixMilli(startAt), d)
+			case "":
+			default:
+				return fmt.Errorf("--role %q: want serve or fetch", role)
+			}
+			binary, err := os.Executable()
+			if err != nil {
+				return err
+			}
+			opts := shaper.ProofOptions{Binary: binary, Baseline: baseline, Out: cmd.OutOrStdout()}
+			if inNamespace {
+				err := shaper.ProofInNamespace(ctx, opts)
+				if errors.Is(err, shaper.ErrProofFailed) {
+					os.Exit(1) // its FAIL lines said why; the outer run reports the failure once
+				}
+				return err
+			}
+			return shaper.Proof(ctx, opts)
+		},
+	}
+	cmd.Flags().BoolVar(&baseline, "baseline", false, "also run the link without the shaper first, for comparison (twice the time)")
+	cmd.Flags().BoolVar(&inNamespace, "in-namespace", false, "run inside the proof's namespaces")
+	cmd.Flags().StringVar(&role, "role", "", "serve or fetch: the proof's traffic")
+	cmd.Flags().StringVar(&listen, "listen", "", "serve: the address to accept connections on")
+	cmd.Flags().StringVar(&from, "from", "", "fetch: the address to download from")
+	cmd.Flags().IntVar(&streams, "streams", 1, "fetch: how many connections")
+	cmd.Flags().Int64Var(&startAt, "start-at", 0, "fetch: when to start, in Unix milliseconds")
+	cmd.Flags().StringVar(&duration, "for", "", "fetch: how long to download")
+	for _, f := range []string{"in-namespace", "role", "listen", "from", "streams", "start-at", "for"} {
+		_ = cmd.Flags().MarkHidden(f)
+	}
 	return cmd
 }
 
@@ -1209,7 +1362,7 @@ func configureCmd() *cobra.Command {
 	var vmManagerImageDir, aiKeySource, gitHubTokenSource, portal string
 	var gitHubAppID, gitHubAppInstallationID, gitHubAppPrivateKeySource, gitHubAppClientID, gitHubAppClientSecretSource string
 	var chartVersion, chartPath, chartBranch, clusterName, mcpPrometheusChartVersion string
-	var upgradeSeed, adoptChart, released, codexHostModel, usageData, registryMirror bool
+	var upgradeSeed, adoptChart, released, codexHostModel, usageData, registryMirror, bandwidthShaper bool
 	var zotVersion string
 	cmd := &cobra.Command{
 		Use:   "configure",
@@ -1265,6 +1418,9 @@ func configureCmd() *cobra.Command {
 			}
 			if cmd.Flags().Changed("registry-mirror") {
 				cfg.SetRegistryMirror(registryMirror)
+			}
+			if cmd.Flags().Changed("bandwidth-shaper") {
+				cfg.SetBandwidthShaper(bandwidthShaper)
 			}
 			if cmd.Flags().Changed("zot-version") {
 				if err := config.CheckZotVersion(zotVersion); err != nil {
@@ -1548,6 +1704,7 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&backstage, "backstage", false, "enable/disable Backstage (implies the platform)")
 	cmd.Flags().BoolVar(&usageData, "telemetry", false, "enable/disable the anonymous usage data this lab and its portal send to TelemetryDeck (docs/telemetry.md)")
 	cmd.Flags().BoolVar(&registryMirror, "registry-mirror", false, "pull the nodes' gsoci images through the registry mirror every lab on this machine shares (the zot container agentlab-mirror, gsoci itself the fallback; on by default); --registry-mirror=false sends the nodes to gsoci directly from the next up or platform, no recreate (docs/registries.md)")
+	cmd.Flags().BoolVar(&bandwidthShaper, "bandwidth-shaper", false, "let the registry mirror's downloads yield to your own traffic: up and platform ensure the bandwidth shaper every lab on this machine shares (the container agentlab-shaper, which caps the mirror by the uplink's latency; off by default); --bandwidth-shaper=false leaves a running one to the other labs (docs/bandwidth.md)")
 	cmd.Flags().StringVar(&zotVersion, "zot-version", "", "hold the lab registry's zot at this release (a v2 release tag of "+config.ZotRepository+", v"+config.ZotFloor.String()+" or newer) instead of the newest; \"\" follows zot's releases again; the shared mirror always follows the newest (docs/registries.md)")
 	cmd.Flags().BoolVar(&installationsPage, "installations-page", false, "enable the portal's Installations page (page:gs/installations and its nav item, off in the agent-platform chart) for the portal's installations e2e specs, run with AGENTLAB_INSTALLATIONS_PAGE=1; the next agentlab platform rolls Backstage onto it; --installations-page=false turns it off again")
 	cmd.Flags().BoolVar(&hive, "hive", false, "enable the portal's Hive (/hive and the pages it replaced, off in the Backstage app) with its roadmap-backend on the muster server pro, the fake board `agentlab roadmap-test` registers, for the portal's Hive e2e spec, run with AGENTLAB_HIVE=1; the next agentlab platform rolls Backstage onto it; --hive=false turns it off again")

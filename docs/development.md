@@ -132,6 +132,7 @@ internal/labs/                   the registry of the labs on this machine, the o
 internal/xdg/                    the freedesktop folders: configuration, state, cache, ~/.local/bin
 internal/telemetry/              the anonymous usage signals (TelemetryDeck): one per command, one per platform install
   machineid/                       the identifier the OS keeps for the computer (kern.uuid / machine-id / MachineGuid)
+internal/shaper/                 the bandwidth shaper on the registry mirror (agentlab shaper run): the latency controller, the probes, CAKE and the veth lookup over rtnetlink, the namespace proof
 internal/update/                 agentlab self-update + the newer-release hint before every command (go-selfupdate)
 pkg/project/                     version, commit, build time: ldflags from make/CI, else Go's VCS build info
 internal/lab/                    everything operational:
@@ -148,6 +149,7 @@ internal/lab/                    everything operational:
   postrenderers.go                 the lab's per-component postRenderers patches (hostNetwork, sidecar, nodePort, dev-image overrides)
   devimages.go                     the dev-image swap: image names resolved from the component renders, the lab registry + the digest-pinned Harness image
   zot.go mirror.go                 the lab's zot containers (the release each run resolves, agentlab's configuration, the storage volume, the one-time move); the gsoci mirror the labs on a machine share and the nodes' hosts.toml
+  shaper.go                        the bandwidth shaper's container beside the mirror (ensureShaper, its removal that takes CAKE off, the status line, the machine's override)
   agentgateway.go                  the agentgateway proxy's dev image as the chart's proxy.image values, and the wait for the controller to roll it
   fluxreleases.go                  image preload from the chart's rendered OCIRepositories/HelmReleases, each at the version Flux would pull (semverFilter included)
   helm.go restclient.go            the embedded Helm 4 (upgrade-or-install with the kstatus wait, offline renders, probes, uninstalls); the lab kubeconfig as a client-go REST client getter

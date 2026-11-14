@@ -174,6 +174,9 @@ type Status struct {
 	// Mirror is the registry mirror the labs on this machine share
 	// (mirror.go), and whether this lab's nodes use it.
 	Mirror *MirrorStatus `json:"mirror,omitempty"`
+	// Shaper is the bandwidth shaper on that mirror (shaper.go); nil for a
+	// lab that has it off while no shaper is in place.
+	Shaper *ShaperStatus `json:"shaper,omitempty"`
 	// Overlays are agentlab.yaml's platform.valuesFiles with what each sets
 	// (overlays.go); none without.
 	Overlays []Overlay `json:"overlays,omitempty"`
@@ -203,6 +206,7 @@ func LabStatus(cfg *config.Config, dir string) (*Status, error) {
 	s.Overlays = readOverlays(cfg, dir, installed)
 	s.StaleOverlays = staleOverlays(cfg, installed)
 	s.Mirror = readMirrorStatus(cfg)
+	s.Shaper = readShaperStatus(cfg)
 	if cfg.Platform.Enabled {
 		s.Registry = devRegistryState(cfg)
 		s.RegistryRelease = devRegistryRelease(cfg)
@@ -257,6 +261,9 @@ func PrintStatus(w io.Writer, s *Status, asJSON bool) error {
 	}
 	if s.Mirror != nil {
 		fmt.Fprintf(&b, "    mirror      %s\n", s.Mirror)
+	}
+	if s.Shaper != nil {
+		fmt.Fprintf(&b, "    shaper      %s\n", s.Shaper)
 	}
 	if s.Workspaces != nil {
 		fmt.Fprintf(&b, "    workspaces  %s\n", s.Workspaces)

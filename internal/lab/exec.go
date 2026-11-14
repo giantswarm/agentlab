@@ -63,6 +63,10 @@ func dockerRun(name, network string, flags ...string) []string {
 	return dockerContainer("run", name, network, flags...)
 }
 
+// dockerRemoveOnExit is `docker run`'s flag that removes the container
+// once it exits: the proofs' one-shot containers and the shaper's cleanup.
+const dockerRemoveOnExit = "--rm"
+
 // dockerContainer is dockerRun for another verb that makes a container
 // (`docker create`: made, not started).
 func dockerContainer(verb, name, network string, flags ...string) []string {

@@ -1694,6 +1694,14 @@ type Config struct {
 	// release whatever a lab says here: gsoci backs it, and two labs holding
 	// it at different releases would recreate it in turn.
 	ZotVersion string `yaml:"zotVersion,omitempty"`
+	// BandwidthShaper is whether `up` and `platform` ensure the bandwidth
+	// shaper every lab on this machine shares: one container,
+	// agentlab-shaper, that caps what the registry mirror downloads from the
+	// uplink's latency, so the labs take what the person leaves idle and
+	// give it back within seconds (docs/bandwidth.md). Unset is off
+	// (BandwidthShaperOn) while it proves itself; a lab that chose either
+	// way carries the key. Off leaves a running shaper to the other labs.
+	BandwidthShaper *bool `yaml:"bandwidthShaper,omitempty"`
 
 	// The Claude model both AI consumers use: the platform agents' default
 	// ModelConfig (kagent) and Backstage's ai-chat. The API key is NOT config:
