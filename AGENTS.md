@@ -555,6 +555,13 @@ Load-bearing invariants (details in docs/):
   are not installed. `platform-test` reads their verdicts from each Running
   platform Pod's PolicyReport (`reports.go`). Both Kyverno controllers must
   finish rolling out and the policy webhook answer before policies apply.
+- **The registry mirror never fails a run**: `registryMirror` (on by
+  default) sends every lab's nodes through one zot per machine,
+  `agentlab-mirror`, for gsoci (a `hosts.toml` in each node, gsoci the
+  fallback); a mirror that cannot be made is a warning. zot is not pinned:
+  the lab registry and the mirror follow the newest v2 release at or above
+  `config.ZotFloor`, resolved once per run, and `zotVersion` holds a lab
+  registry back (zot.go, mirror.go, docs/registries.md).
 - The lab's credentials are throwaway by design; plaintext passwords in
   `agentlab.yaml` are fine.
 

@@ -335,7 +335,9 @@ and the boot log names both (`read on this host as
 oci://localhost:5001/charts/kagent`). A registry that does not answer there
 stops the boot before the install, naming the container to check. Every `up`
 and `platform` run ensures the lab registry — created when missing, started
-when stopped — since atelet and the node's containerd point at it whether or
+when stopped, recreated on its volume when zot's release or agentlab's
+configuration of it moved ([The lab's registries](registries.md#the-lab-registry)) —
+since atelet and the node's containerd point at it whether or
 not a dev image is configured; `agentlab status` names it on its `registry`
 line, and it goes with `agentlab down`. Removing the overlay and re-running `agentlab platform`
 puts the released chart back.

@@ -1678,6 +1678,23 @@ type Config struct {
 	// Fixed at `kind create`, like every node of the cluster.
 	SubstrateNodes int `yaml:"substrateNodes,omitempty"`
 
+	// RegistryMirror is whether the nodes pull gsoci.azurecr.io through the
+	// registry mirror every lab on this machine shares: one zot container on
+	// the kind network that fetches each image once and serves it to every
+	// node, gsoci itself the fallback (docs/registries.md). A node setting:
+	// every `up` and `platform` writes or removes the nodes' hosts.toml, so
+	// switching either way needs no recreate. Unset is on
+	// (RegistryMirrorOn), and SetRegistryMirror leaves it unset for on, so
+	// only a lab that turned it off carries a key older releases refuse.
+	RegistryMirror *bool `yaml:"registryMirror,omitempty"`
+	// ZotVersion holds the lab registry's zot at one release (a v2 release
+	// tag, v2.1.23) instead of the newest on gsoci; "" follows zot's
+	// releases. The way back from a zot release that breaks the lab
+	// registry, which has no fallback. The shared mirror follows the newest
+	// release whatever a lab says here: gsoci backs it, and two labs holding
+	// it at different releases would recreate it in turn.
+	ZotVersion string `yaml:"zotVersion,omitempty"`
+
 	// The Claude model both AI consumers use: the platform agents' default
 	// ModelConfig (kagent) and Backstage's ai-chat. The API key is NOT config:
 	// it lands only in Kubernetes Secrets, never in this file or in rendered
@@ -2355,6 +2372,9 @@ func (c *Config) Validate() error {
 	}
 	if c.SubstrateNodes > 0 && (!c.Platform.Agents || c.LegacyChart()) {
 		return fmt.Errorf("substrateNodes: %d needs Agent Substrate, which only the agents of the 4.x line run (platform.agents on, no 3.x chart)", c.SubstrateNodes)
+	}
+	if err := ValidateZotVersion(c.ZotVersion); err != nil {
+		return fmt.Errorf("zotVersion %q: %w", c.ZotVersion, err)
 	}
 	if len(c.Users) == 0 {
 		return fmt.Errorf("at least one user is required")

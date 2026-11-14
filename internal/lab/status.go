@@ -168,6 +168,12 @@ type Status struct {
 	// Registry is the lab registry container's docker state (devimages.go),
 	// "missing" when there is none; "" when the platform is disabled.
 	Registry string `json:"registry,omitempty"`
+	// RegistryRelease is the zot release the lab registry runs; "" when
+	// there is no such container.
+	RegistryRelease string `json:"registryRelease,omitempty"`
+	// Mirror is the registry mirror the labs on this machine share
+	// (mirror.go), and whether this lab's nodes use it.
+	Mirror *MirrorStatus `json:"mirror,omitempty"`
 	// Overlays are agentlab.yaml's platform.valuesFiles with what each sets
 	// (overlays.go); none without.
 	Overlays []Overlay `json:"overlays,omitempty"`
@@ -196,8 +202,10 @@ func LabStatus(cfg *config.Config, dir string) (*Status, error) {
 	}
 	s.Overlays = readOverlays(cfg, dir, installed)
 	s.StaleOverlays = staleOverlays(cfg, installed)
+	s.Mirror = readMirrorStatus(cfg)
 	if cfg.Platform.Enabled {
 		s.Registry = devRegistryState(cfg)
+		s.RegistryRelease = devRegistryRelease(cfg)
 		chart := platformChartFor(cfg)
 		s.Configured = chart.String()
 		if drift := driftBetween(installed, chart); drift != nil {
@@ -245,7 +253,10 @@ func PrintStatus(w io.Writer, s *Status, asJSON bool) error {
 		fmt.Fprintf(&b, "    workloads   %s\n", workloadsLine(s.ForeignFields))
 	}
 	if s.Registry != "" {
-		fmt.Fprintf(&b, "    registry    %s\n", registryLine(s.Name, s.Registry))
+		fmt.Fprintf(&b, "    registry    %s\n", registryLine(s.Name, s.Registry, s.RegistryRelease))
+	}
+	if s.Mirror != nil {
+		fmt.Fprintf(&b, "    mirror      %s\n", s.Mirror)
 	}
 	if s.Workspaces != nil {
 		fmt.Fprintf(&b, "    workspaces  %s\n", s.Workspaces)
@@ -258,16 +269,20 @@ func PrintStatus(w io.Writer, s *Status, asJSON bool) error {
 }
 
 // registryLine is `agentlab status`'s line on the lab registry: its docker
-// state, and the fix for one that does not serve.
-func registryLine(cluster, state string) string {
+// state and zot release, and the fix for one that does not serve.
+func registryLine(cluster, state, release string) string {
 	name := registryContainerName(cluster)
+	zot := ""
+	if release != "" {
+		zot = " (zot " + release + ")"
+	}
 	switch state {
 	case stateRunning:
-		return name + " running"
+		return name + " running" + zot
 	case registryMissing:
 		return name + " missing — dev images, the guest image and a local connectivity chart cannot be pulled; `agentlab platform` recreates it"
 	default:
-		return name + " " + state + " — `agentlab platform` starts it"
+		return name + " " + state + zot + " — `agentlab platform` starts it"
 	}
 }
 

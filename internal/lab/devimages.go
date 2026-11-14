@@ -7,6 +7,7 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
@@ -69,16 +70,25 @@ import (
 //     as the image of that runtime's kagent.harnesses entry (coding.go),
 //     which the chart renders into the Harness instead of its own image.
 
-// devRegistryImage is the registry the lab runs for the `harness` dev image
-// and the vm-manager guest image: zot, the OCI-native registry the fleet's
-// installations run in-cluster too, from its gsoci mirror. Its image serves
-// the distribution API on devRegistryContainerPort over plain HTTP with the
-// configuration it ships; nothing is mounted or configured.
-const devRegistryImage = "gsoci.azurecr.io/giantswarm/zot:v2.1.21"
+// devRegistryConfig is the configuration of the registry the lab runs for
+// the `harness` dev image and the vm-manager guest image: zot, the
+// OCI-native registry the fleet's installations run in-cluster too, at the
+// release this run resolves (zot.go). zot's shipped configuration without
+// its extensions — no search, so no CVE scanning and none of the Trivy
+// databases it downloads every two hours, nothing in the lab uses its UI or
+// management API — and Docker's manifest types accepted (docker2s2), the
+// ones a build pushed from docker carries. The distribution API on
+// zotContainerPort over plain HTTP.
+var devRegistryConfig = []byte(`{
+  "storage": { "rootDirectory": "` + zotStorageDir + `" },
+  "http": { "address": "0.0.0.0", "port": "` + strconv.Itoa(zotContainerPort) + `", "compat": ["docker2s2"] },
+  "log": { "level": "info" }
+}
+`)
 
-// devRegistryContainerPort is the port the registry listens on inside its
-// container; the kind-network endpoint atelet dials.
-const devRegistryContainerPort = 5000
+// devRegistryConfigFile is where the lab writes the lab registry's
+// configuration, under the lab's state.
+var devRegistryConfigFile = filepath.Join(StateDir, "registry", "config.json")
 
 // devRegistryWaitAttempts bounds the wait for a freshly created registry to
 // answer /v2/ (one second apart).
@@ -460,7 +470,7 @@ func devRegistryState(cfg *config.Config) string {
 // the container's name (docker's embedded DNS resolves it, and CoreDNS
 // forwards to the node's resolver) and its own port.
 func devRegistryEndpoint(cfg *config.Config) string {
-	return devRegistryName(cfg) + ":" + strconv.Itoa(devRegistryContainerPort)
+	return devRegistryName(cfg) + ":" + strconv.Itoa(zotContainerPort)
 }
 
 // devRegistryHost is the registry as the host spells it — and as the Harness
@@ -476,38 +486,46 @@ func devRegistryURL(cfg *config.Config) string {
 	return "http://127.0.0.1:" + strconv.Itoa(cfg.Platform.DevRegistryPort)
 }
 
+// devRegistryContainer is the lab registry as a zot container: published on
+// the configured host port, at the lab's zotVersion when it holds one.
+func devRegistryContainer(cfg *config.Config) (zotContainer, error) {
+	configPath, err := filepath.Abs(devRegistryConfigFile)
+	if err != nil {
+		return zotContainer{}, err
+	}
+	return zotContainer{
+		name:       devRegistryName(cfg),
+		what:       "the lab registry",
+		configPath: configPath,
+		config:     devRegistryConfig,
+		flags:      []string{"-p", fmt.Sprintf("127.0.0.1:%d:%d", cfg.Platform.DevRegistryPort, zotContainerPort)},
+		pin:        cfg.ZotVersion,
+	}, nil
+}
+
 // ensureDevRegistry has the lab registry running on the kind network and
-// published on the configured host port, creating or restarting the
-// container as needed, and waits for its API. An existing registry that
-// publishes another port is refused rather than silently used: the Harness
-// ref carries the configured port.
+// published on the configured host port — on the zot this run resolves,
+// with agentlab's configuration and its storage in its volume, creating,
+// recreating or restarting the container as needed (zotContainer.ensure) —
+// and waits for its API. An existing registry that publishes another port is
+// refused rather than silently used: the Harness ref carries the configured
+// port.
 func ensureDevRegistry(cfg *config.Config) error {
-	name := devRegistryName(cfg)
-	state, err := nodeState(name)
-	switch {
-	case err != nil:
-		hostPullImages([]string{devRegistryImage})
-		args := dockerRun(name, kindDockerNetwork, "-d", "--restart=always",
-			"-p", fmt.Sprintf("127.0.0.1:%d:%d", cfg.Platform.DevRegistryPort, devRegistryContainerPort), devRegistryImage)
-		if err := runQuiet(dockerBin, args...); err != nil {
-			return fmt.Errorf("creating the lab registry %s: %w\n(another process holding 127.0.0.1:%d? set platform.devRegistryPort to a free port)", name, err, cfg.Platform.DevRegistryPort)
+	z, err := devRegistryContainer(cfg)
+	if err != nil {
+		return err
+	}
+	name := z.name
+	if _, _, err := z.ensure(); err != nil {
+		if _, missing := nodeState(name); missing != nil {
+			return fmt.Errorf("%w\n(another process holding 127.0.0.1:%d? set platform.devRegistryPort to a free port)", err, cfg.Platform.DevRegistryPort)
 		}
-		note("created the lab registry %s (%s on the %s network, published on %s)", name, devRegistryImage, kindDockerNetwork, devRegistryHost(cfg))
-	case state == stateRunning:
-	case state == statePaused:
-		if err := runQuiet(dockerBin, verbUnpause, name); err != nil {
-			return fmt.Errorf("resuming the lab registry %s: %w", name, err)
-		}
-	default:
-		if err := runQuiet(dockerBin, verbStart, name); err != nil {
-			return fmt.Errorf("starting the lab registry %s (%s): %w", name, state, err)
-		}
-		note("started the lab registry %s (was %s)", name, state)
+		return err
 	}
 	if port, err := devRegistryPublishedPort(name); err != nil {
 		return err
 	} else if port != cfg.Platform.DevRegistryPort {
-		return fmt.Errorf("the lab registry %s publishes 127.0.0.1:%d, but platform.devRegistryPort is %d: `docker rm -f %s` and re-run, or set the port back", name, port, cfg.Platform.DevRegistryPort, name)
+		return fmt.Errorf("the lab registry %s publishes 127.0.0.1:%d, but platform.devRegistryPort is %d: `docker rm -f %s` and re-run (its volume keeps what it holds), or set the port back", name, port, cfg.Platform.DevRegistryPort, name)
 	}
 	url := devRegistryURL(cfg) + "/v2/"
 	client := &http.Client{Timeout: 3 * time.Second}
@@ -527,14 +545,14 @@ func ensureDevRegistry(cfg *config.Config) error {
 // devRegistryPublishedPort reads the host port the registry container
 // publishes its registry port on.
 func devRegistryPublishedPort(name string) (int, error) {
-	format := fmt.Sprintf(`{{(index (index .NetworkSettings.Ports "%d/tcp") 0).HostPort}}`, devRegistryContainerPort)
+	format := fmt.Sprintf(`{{(index (index .NetworkSettings.Ports "%d/tcp") 0).HostPort}}`, zotContainerPort)
 	out, err := outputQuiet(dockerBin, "inspect", "-f", format, name)
 	if err != nil {
 		return 0, fmt.Errorf("reading the lab registry's published port: %w", err)
 	}
 	port, err := strconv.Atoi(strings.TrimSpace(out))
 	if err != nil {
-		return 0, fmt.Errorf("the lab registry %s publishes no port %d/tcp (%q)", name, devRegistryContainerPort, strings.TrimSpace(out))
+		return 0, fmt.Errorf("the lab registry %s publishes no port %d/tcp (%q)", name, zotContainerPort, strings.TrimSpace(out))
 	}
 	return port, nil
 }
@@ -549,18 +567,21 @@ func devRegistryOwnPort(cfg *config.Config) int {
 	return port
 }
 
-// removeDevRegistry removes the lab registry container with its storage;
-// nothing to do when there is none. Best-effort, for `agentlab down`.
+// removeDevRegistry removes the lab registry container with its storage
+// volume; nothing to do when there is neither. Best-effort, for `agentlab
+// down`.
 func removeDevRegistry(cfg *config.Config) {
-	name := devRegistryName(cfg)
-	if _, err := nodeState(name); err != nil {
-		return
+	removeZot(devRegistryName(cfg), "the lab registry")
+}
+
+// devRegistryRelease is the zot release the lab registry runs, "" when there
+// is no such container.
+func devRegistryRelease(cfg *config.Config) string {
+	have, ok := inspectZot(devRegistryName(cfg))
+	if !ok {
+		return ""
 	}
-	if err := runQuiet(dockerBin, "rm", "-f", "-v", name); err != nil {
-		note("removing the lab registry %s failed (%v); `docker rm -f -v %s` removes it", name, err, name)
-		return
-	}
-	note("removed the lab registry %s", name)
+	return zotTag(have.image)
 }
 
 // pushDevImage tags the local build into the lab registry, pushes it, and

@@ -60,7 +60,13 @@ const goosDarwin = "darwin"
 // user_home_t, which a rootful engine on an enforcing host refuses to a
 // container's process; relabelling them would change the user's own files.
 func dockerRun(name, network string, flags ...string) []string {
-	return append([]string{"run", "--name", name, "--network", network, "--security-opt", "label=disable"}, flags...)
+	return dockerContainer("run", name, network, flags...)
+}
+
+// dockerContainer is dockerRun for another verb that makes a container
+// (`docker create`: made, not started).
+func dockerContainer(verb, name, network string, flags ...string) []string {
+	return append([]string{verb, "--name", name, "--network", network, "--security-opt", "label=disable"}, flags...)
 }
 
 // command builds the exec.Cmd behind the helpers below. The child inherits

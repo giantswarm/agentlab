@@ -137,6 +137,9 @@ func PlatformUp(cfg *config.Config, offers Offers) error {
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
 	}
+	// registryMirror applies to a running lab too: the nodes' hosts.toml is
+	// read on every pull, so no recreate either way (mirror.go).
+	ensureRegistryMirror(cfg)
 	// The standalone entry point skips Up's overlapped preload, so join a
 	// synchronous one here: on a live cluster the node filter makes it a
 	// no-op, and after a half-failed boot it heals the missing side-loads

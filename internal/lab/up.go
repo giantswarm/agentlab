@@ -105,6 +105,10 @@ func Up(cfg *config.Config, offers Offers) error {
 		}
 		warnHostKernelChanges(hostKernel)
 	}
+	// The nodes pull gsoci through the registry mirror the labs on this
+	// machine share before anything pulls (Dex first); off, their hosts.toml
+	// goes (mirror.go). Never a reason to stop: the nodes fall back to gsoci.
+	ensureRegistryMirror(cfg)
 	// From here on the embedded Helm and the Kubernetes client run against
 	// the cluster's exported kubeconfig (restclient.go, kube.go), the one
 	// file they are built from. The user's own kubeconfig and current-context
