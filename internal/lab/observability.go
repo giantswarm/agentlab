@@ -222,6 +222,12 @@ const ociChartInstallTimeout = 5 * time.Minute
 // platform; see preload.go). The observability stack and the fleet's Kyverno
 // (admission.go) install this way.
 func installOCIChart(cfg *config.Config, namespace, release, chartRef, version string, values map[string]any, timeout time.Duration) error {
+	return installOCIChartWith(cfg, namespace, release, chartRef, version, values, timeout, helmInstallOptions{CreateNamespace: true})
+}
+
+// installOCIChartWith is installOCIChart with the install options given: the
+// fleet's Pod policies (reports.go) wait for their hooks alone.
+func installOCIChartWith(cfg *config.Config, namespace, release, chartRef, version string, values map[string]any, timeout time.Duration, opts helmInstallOptions) error {
 	// Best-effort: anything missed is pulled in-node under the wait timeout,
 	// and the snapshot manifest catches it for the next boot.
 	if rendered, _, err := helmTemplate(namespace, release, chartRef, version, values, nil); err == nil {
@@ -231,7 +237,7 @@ func installOCIChart(cfg *config.Config, namespace, release, chartRef, version s
 			}
 		}
 	}
-	return helmUpgradeInstall(namespace, release, chartRef, version, values, timeout, helmInstallOptions{CreateNamespace: true})
+	return helmUpgradeInstall(namespace, release, chartRef, version, values, timeout, opts)
 }
 
 // observabilityDown removes what observabilityUp and mcpPrometheusUp

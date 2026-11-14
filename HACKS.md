@@ -910,6 +910,33 @@ a resumable pull and a pod whose readiness does not wait for the download, or
 a meta chart default timeout that fits it. The rendered timeout and the link
 sample then go; the sizing note may stay.
 
+### U50. `reports.go`: Helm waits for the kyverno-policies release's hooks alone — BLOCKED UPSTREAM
+A fresh `agentlab up` could fail its admission step seconds into the 5m
+install timeout with `INSTALL FAILED: resource
+ClusterPolicy//disallow-capabilities-strict not ready. status: InProgress,
+message: Not Ready`, in the same second the policy turned Ready; a second
+`up` upgraded the failed release cleanly. Two upstream behaviours meet there.
+kstatus cannot read a Kyverno ClusterPolicy's readiness: Kyverno writes no
+`status.observedGeneration`, and a policy it has not reconciled yet carries
+no condition, which kstatus reads as Current
+(`fluxcd/cli-utils` `status.Compute`); Kyverno's first status write is then
+`Ready=False` "Not Ready" until its resource webhook carries the policy
+([helm/helm#32066](https://github.com/helm/helm/issues/32066) is the same
+early Current for other custom resources). Helm's kstatus waiter
+(`helm.sh/helm/v4` `pkg/kube/statuswait.go`, v4.2.4 and main) ends its wait
+on the first event that has every resource Current, cancelling the watch,
+but judges the statuses the watch still delivers after that cancel: an
+informer handler past its context check sends its update anyway and the
+event funnel drains it. So the policies' first, early Current ended the wait
+and Kyverno's "Not Ready", already in flight, failed it. **Fix in the lab:**
+the kyverno-policies release installs and upgrades with `--wait=hookOnly`
+(`kyvernoPoliciesOptions`, `helmInstallOptions.HooksOnly`), and
+`waitPoliciesReady`, which reads every policy's `Ready` condition, is its
+only wait. **Unblocked by** Helm's waiter judging the statuses that ended its
+wait (its observer keeps them and later events leave the outcome alone); the
+hooks-only wait may then go, while `waitPoliciesReady` stays as long as
+kstatus reads a policy without a condition as Current.
+
 ### U38. `postRenderers` patch: agentgateway binds IPv4 — BLOCKED UPSTREAM
 agentgateway binds its readiness (15021) and stats (15020) servers and its
 listeners on the IPv6 wildcard unless IPv6 is switched off
