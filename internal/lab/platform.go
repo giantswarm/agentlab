@@ -113,7 +113,9 @@ const (
 // wait. The embedded Helm's wait is kstatus over the chart's objects, the
 // platform HelmReleases included, so the install returns when every
 // component is Ready — a first boot side-loads the images, but the engine
-// (source- and helm-controller) still pulls its own on the way.
+// (source- and helm-controller) still pulls its own on the way. vm-manager's
+// guest image download extends it by the allowance its release gets
+// (vmManagerGuestImageFetch.extraWait).
 const helmInstallTimeout = 15 * time.Minute
 
 // PlatformUp installs the Giant Swarm agent platform into the lab cluster and
@@ -723,6 +725,16 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	if err := preflightWorkerPoolArch(ctx, renders); err != nil {
 		return err
 	}
+	// vm-manager's pod downloads its guest image before it is Ready, with
+	// its own client — nothing the side-load or a mirror reaches. Sized off
+	// the render, the release's timeout and the install's wait cover it; a
+	// link too slow for that is refused here (vmmanagerguestimage.go).
+	var vmGuestImage *vmManagerGuestImageFetch
+	if cfg.VMManagerEnabled() {
+		if vmGuestImage, err = sizeVMManagerGuestImage(ctx, cfg.Platform.VMManager.ImageDir, renders); err != nil {
+			return err
+		}
+	}
 	// A chart whose render carries the workspace driver's CSIDriverConfig
 	// registers it with Substrate: the lab's own from an earlier install goes
 	// first, since Helm adopts no object another manager created. One that
@@ -790,6 +802,7 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 	if _, valuesPath, err = renderManifestWith(cfg, platformValuesTemplate, func(t *tmplData) {
 		clusterPins(t)
 		t.PostRenderers = postRenderers
+		t.VMManagerReleaseTimeout = vmGuestImage.timeoutValue()
 	}); err != nil {
 		return err
 	}
@@ -858,7 +871,7 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 		return err
 	} else if rev > 0 {
 		note("chart agent-platform %s already installed with these values — nothing to do (Helm revision %d stays)", chart.version, rev)
-	} else if err := helmUpgradeInstall(platformNamespace, platformRelease, chart.ref, chart.version, values, helmInstallTimeout, platformInstallOptions(cfg)); err != nil {
+	} else if err := helmUpgradeInstall(platformNamespace, platformRelease, chart.ref, chart.version, values, helmInstallTimeout+vmGuestImage.extraWait(), platformInstallOptions(cfg)); err != nil {
 		reportPlatformReleases()
 		return err
 	}

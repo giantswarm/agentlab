@@ -359,8 +359,9 @@ type renderedWorkload struct {
 		Template struct {
 			Metadata renderedMetadata `yaml:"metadata"`
 			Spec     struct {
-				HostNetwork bool                `yaml:"hostNetwork"`
-				Containers  []renderedContainer `yaml:"containers"`
+				HostNetwork    bool                `yaml:"hostNetwork"`
+				InitContainers []renderedContainer `yaml:"initContainers"`
+				Containers     []renderedContainer `yaml:"containers"`
 			} `yaml:"spec"`
 		} `yaml:"template"`
 	} `yaml:"spec"`

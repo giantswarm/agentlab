@@ -890,6 +890,26 @@ giantswarm/agent-manager#360 (closing #359), in 2.24.0-rc.2: once the lab's
 agent-manager floor reaches 2.24.0, `ownCredentialRefused`, `otherBlocked`
 and the viewer's skip go.
 
+### U49. `vmmanagerguestimage.go`: the vm-manager release's timeout is sized for its guest image download — BLOCKED UPSTREAM
+vm-manager's pod downloads its guest image (1,677 MiB for 0.24.10) in its
+`guest-image` init container, with its own registry client, before the pod is
+Ready. The meta chart's `components.vm-manager` sets no `timeout`, so
+helm-controller's 5m default bounds a fresh install. On a 2 MB/s uplink the
+install timed out, install remediation uninstalled the release and its state
+claim, and `vm-manager image pull` started from an empty directory again: two
+failed installs in a row, until the lab's 15-minute wait gave up with
+`resource HelmRelease/agent-platform/vm-manager not ready`. **Fix in the
+lab:** `agentlab platform` sizes the artifact off the vm-manager render and
+the registry's manifest and renders `components.vm-manager.timeout` as 5m
+plus the download at 1 MiB/s (`33m` for 0.24.10). It extends its own install
+wait by as much and, unless the running pod already holds the image, samples
+the link and refuses one too slow for that bound before the install.
+**Unblocked by**
+[giantswarm/vm-manager#240](https://github.com/giantswarm/vm-manager/issues/240):
+a resumable pull and a pod whose readiness does not wait for the download, or
+a meta chart default timeout that fits it. The rendered timeout and the link
+sample then go; the sizing note may stay.
+
 ### U38. `postRenderers` patch: agentgateway binds IPv4 — BLOCKED UPSTREAM
 agentgateway binds its readiness (15021) and stats (15020) servers and its
 listeners on the IPv6 wildcard unless IPv6 is switched off

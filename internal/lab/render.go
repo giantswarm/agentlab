@@ -105,9 +105,12 @@ type tmplData struct {
 	// VMManagerEnabled turns the chart's vm-manager component on
 	// (vmmanager.go); VMManagerGuestImage is the chart's guestImage block for
 	// a local build pushed into the lab registry, nil for the release's
-	// published artifact.
-	VMManagerEnabled    bool
-	VMManagerGuestImage *vmManagerGuestImage
+	// published artifact. VMManagerReleaseTimeout is the component release's
+	// spec.timeout, sized from the guest image the pod downloads
+	// (vmmanagerguestimage.go); empty keeps Flux's default.
+	VMManagerEnabled        bool
+	VMManagerGuestImage     *vmManagerGuestImage
+	VMManagerReleaseTimeout string
 	// KlausGatewayEnabled turns the chart's klaus-gateway component on
 	// (klausgateway.go); KlausGateway carries the names and URLs its
 	// `klausGateway:` block needs.
