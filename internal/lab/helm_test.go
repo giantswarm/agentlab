@@ -269,6 +269,22 @@ func TestLabUpgradeTakesFieldsOver(t *testing.T) {
 	}
 }
 
+// TestLabInstallHooksOnly: a release installed with HooksOnly is waited on
+// for its hooks alone, on install and on upgrade — the fleet's Pod policies,
+// whose readiness kstatus cannot read and the lab waits for itself.
+func TestLabInstallHooksOnly(t *testing.T) {
+	cfg := &action.Configuration{}
+	if !kyvernoPoliciesOptions.HooksOnly || !kyvernoPoliciesOptions.CreateNamespace {
+		t.Errorf("kyvernoPoliciesOptions = %+v, want HooksOnly and CreateNamespace", kyvernoPoliciesOptions)
+	}
+	if got := newLabInstall(cfg, kyvernoNamespace, kyvernoPoliciesRelease, time.Minute, false, kyvernoPoliciesOptions).WaitStrategy; got != kube.HookOnlyStrategy {
+		t.Errorf("install wait = %q, want %q", got, kube.HookOnlyStrategy)
+	}
+	if got := newLabUpgrade(cfg, kyvernoNamespace, time.Minute, 10, kyvernoPoliciesOptions).WaitStrategy; got != kube.HookOnlyStrategy {
+		t.Errorf("upgrade wait = %q, want %q", got, kube.HookOnlyStrategy)
+	}
+}
+
 // TestWithConflictRemedy: a conflict server-side apply could not resolve
 // ends in the one line naming the remedy, however Helm wraps and joins it;
 // any other error passes unchanged.

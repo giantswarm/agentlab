@@ -351,6 +351,19 @@ type helmInstallOptions struct {
 	// Description is `--description`: the revision's log line in `helm
 	// history`, in place of Helm's "Install complete"/"Upgrade complete".
 	Description string
+	// HooksOnly is `--wait=hookOnly`: Helm waits for the chart's hooks but
+	// not for the release's objects, for a release whose readiness kstatus
+	// cannot read. The caller waits for those objects itself.
+	HooksOnly bool
+}
+
+// waitStrategy is the wait the options ask for: the kstatus wait on every
+// object of the release, or on its hooks alone.
+func (o helmInstallOptions) waitStrategy() kube.WaitStrategy {
+	if o.HooksOnly {
+		return kube.HookOnlyStrategy
+	}
+	return kube.StatusWatcherStrategy
 }
 
 // helmUpgradeInstall is `helm upgrade --install <release> <chart> -n <ns> -f
@@ -362,7 +375,8 @@ type helmInstallOptions struct {
 // --reuse-values (the rendered values are the whole configuration, so an
 // unchanged re-run is a new revision with no drift); hooks on; the history
 // capped at Helm's default — and the kstatus wait until every object of the
-// release, custom resources included, is Current. Ctrl-C cancels the
+// release, custom resources included, is Current (the hooks alone with
+// HooksOnly, `--wait=hookOnly`). Ctrl-C cancels the
 // operation the way it cancels the CLI: the release is marked failed instead
 // of staying pending forever.
 func helmUpgradeInstall(namespace, releaseName, ref, version string, vals map[string]any, timeout time.Duration, opts helmInstallOptions) error {
@@ -412,7 +426,7 @@ func newLabInstall(cfg *action.Configuration, namespace, releaseName string, tim
 	install.CreateNamespace = opts.CreateNamespace
 	install.TakeOwnership = opts.TakeOwnership
 	install.Timeout = timeout
-	install.WaitStrategy = kube.StatusWatcherStrategy
+	install.WaitStrategy = opts.waitStrategy()
 	install.ForceConflicts = true
 	install.Replace = replace
 	install.Labels = opts.Labels
@@ -433,7 +447,7 @@ func newLabUpgrade(cfg *action.Configuration, namespace string, timeout time.Dur
 	upgrade.Install = true
 	upgrade.Namespace = namespace
 	upgrade.Timeout = timeout
-	upgrade.WaitStrategy = kube.StatusWatcherStrategy
+	upgrade.WaitStrategy = opts.waitStrategy()
 	upgrade.ForceConflicts = true
 	upgrade.TakeOwnership = opts.TakeOwnership
 	upgrade.MaxHistory = maxHistory

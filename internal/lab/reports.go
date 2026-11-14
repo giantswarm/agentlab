@@ -101,6 +101,19 @@ func fleetPodPoliciesUp(cfg *config.Config) error {
 	return nil
 }
 
+// kyvernoPoliciesOptions installs the kyverno-policies release with Helm
+// waiting for its hooks alone: waitPoliciesReady, which reads each policy's
+// Ready condition, is the release's wait. kstatus cannot read a
+// ClusterPolicy's readiness. Kyverno writes no observedGeneration, and a
+// policy it has not reconciled yet carries no condition, which kstatus reads
+// as Current; Kyverno's first status write is then Ready=False "Not Ready",
+// until its resource webhook carries the policy. Helm's watcher ends its
+// wait on the first reading that has every policy Current, yet judges the
+// statuses the watch delivers after it ended it, so a fresh install can fail
+// seconds into its timeout, on a policy InProgress that turns Ready a moment
+// later.
+var kyvernoPoliciesOptions = helmInstallOptions{CreateNamespace: true, HooksOnly: true}
+
 // installPodPolicies installs the kyverno-policies release, once more when
 // Kyverno's policy webhook timed out on it. A just-started admission
 // controller can take longer than the webhook's 10 s deadline to validate a
@@ -109,7 +122,7 @@ func fleetPodPoliciesUp(cfg *config.Config) error {
 // the webhook answered a Pod policy again, upgrades the failed release.
 func installPodPolicies(cfg *config.Config) error {
 	install := func() error {
-		return installOCIChart(cfg, kyvernoNamespace, kyvernoPoliciesRelease, kyvernoPoliciesChartRef, kyvernoPoliciesChartVersion, nil, kyvernoInstallTimeout)
+		return installOCIChartWith(cfg, kyvernoNamespace, kyvernoPoliciesRelease, kyvernoPoliciesChartRef, kyvernoPoliciesChartVersion, nil, kyvernoInstallTimeout, kyvernoPoliciesOptions)
 	}
 	err := install()
 	if err == nil || !webhookTimedOut(err) {
