@@ -301,7 +301,7 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 		}
 	}
 	if len(audienceManagers) > 0 {
-		names, err := listTools()
+		names, err := session.listTools()
 		if err != nil {
 			return "", err
 		}
@@ -471,7 +471,7 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 	// agent-platform-values.yaml.tmpl).
 	promPrefix := familyTool(familyPrometheus, "")
 	p.begin(stagePrometheusTools, "Prometheus tools muster is aggregating")
-	shown = 0
+	shown := 0
 	for _, name := range toolNames {
 		if strings.HasPrefix(name, promPrefix) && shown < 8 {
 			note("%s", name)
@@ -869,31 +869,8 @@ func kagentControllerMonitored() (bool, error) {
 // existing MCP session. signIn is the browser boundary; discovery and the
 // namespace response are judged here so the complete retry path is testable.
 func platformNamespaces(cfg *config.Config, p *proofStages, session *musterSession, signIn func(*musterSession) error) ([]string, []string, error) {
-	// listTools is the session's tool names: one page with every tool, since
-	// list_tools pages at 50 by default and the family tools sort after the
-	// platform servers'.
-	listTools := func() ([]string, error) {
-		res, err := session.callTool("list_tools", map[string]any{"limit": 1000})
-		if err != nil {
-			return nil, err
-		}
-		var toolList struct {
-			Tools []struct {
-				Name string `json:"name"`
-			} `json:"tools"`
-		}
-		if err := json.Unmarshal([]byte(innerText(res)), &toolList); err != nil {
-			return nil, fmt.Errorf("parsing list_tools payload: %w", err)
-		}
-		names := make([]string, 0, len(toolList.Tools))
-		for _, t := range toolList.Tools {
-			names = append(names, t.Name)
-		}
-		return names, nil
-	}
-
 	p.begin(stageKubernetesTools, "Kubernetes tools muster is aggregating")
-	toolNames, err := listTools()
+	toolNames, err := session.listTools()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -908,7 +885,7 @@ func platformNamespaces(cfg *config.Config, p *proofStages, session *musterSessi
 		if err := signIn(session); err != nil {
 			return nil, nil, fmt.Errorf("muster aggregates no %s tools (it lists %s): %w", toolPrefix, strings.Join(toolNames, ", "), err)
 		}
-		if toolNames, err = listTools(); err != nil {
+		if toolNames, err = session.listTools(); err != nil {
 			return nil, nil, err
 		}
 	}
