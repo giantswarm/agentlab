@@ -10,7 +10,6 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -20,6 +19,29 @@ import (
 // inNamespaceEnv marks the test binary re-run inside its own user and
 // network namespace.
 const inNamespaceEnv = "AGENTLAB_SHAPER_TEST_IN_NAMESPACE"
+
+// What a veth pair is made with (linux/netlink.h, linux/if_link.h,
+// linux/veth.h); the shaper itself never makes one.
+const (
+	nlmFExcl     = 0x200
+	iflaNetNsPid = 19
+	iflaInfoData = 2
+	vethInfoPeer = 1
+)
+
+// addVeth makes the veth pair name/peer with the peer already in pid's network
+// namespace. It goes over netlink, not ip: BusyBox's ip, the one CI images
+// carry, ignores the peer's name.
+func addVeth(nl *rtnl, name, peer string, pid int) error {
+	ifname := func(n string) []byte { return encodeAttr(iflaIfname, append([]byte(n), 0)) }
+	peerMsg := append(make([]byte, sizeofIfInfomsg), ifname(peer)...)
+	peerMsg = append(peerMsg, encodeAttr(iflaNetNsPid, u32(uint32(pid)))...) // #nosec G115 -- a pid
+	info := append(encodeAttr(iflaInfoKind, []byte(vethKind)), encodeAttr(iflaInfoData, encodeAttr(vethInfoPeer, peerMsg))...)
+	body := append(make([]byte, sizeofIfInfomsg), ifname(name)...)
+	body = append(body, encodeAttr(iflaLinkinfo, info)...)
+	_, err := nl.do(rtmNewLink, nlmFCreate|nlmFExcl, body)
+	return err
+}
 
 // The shaper's kernel side against the kernel: in an unprivileged user and
 // network namespace (skipped where the kernel or a sandbox refuses one) a
@@ -31,7 +53,7 @@ const inNamespaceEnv = "AGENTLAB_SHAPER_TEST_IN_NAMESPACE"
 func TestKernelSideInANamespace(t *testing.T) {
 	if os.Getenv(inNamespaceEnv) != "1" {
 		if _, err := exec.LookPath("ip"); err != nil {
-			t.Skip("no ip (iproute2) to make the veth pair with")
+			t.Skip("no ip to address the veth pair with")
 		}
 		cmd := exec.Command(os.Args[0], "-test.run=^TestKernelSideInANamespace$", "-test.v") // #nosec G204 G702 -- the test binary itself
 		cmd.Env = append(os.Environ(), inNamespaceEnv+"=1")
@@ -72,16 +94,17 @@ ip link set eth0 up && exec sleep 60`)
 	}
 	t.Cleanup(func() { _ = holder.Process.Kill(); _ = holder.Wait() })
 	pid := holder.Process.Pid
-	ip("link", "add", "vmirror", "type", "veth", "peer", "name", "eth0")
-	ip("link", "set", "eth0", "netns", strconv.Itoa(pid))
-	ip("addr", "add", "10.99.0.1/24", "dev", "vmirror")
-	ip("link", "set", "vmirror", "up")
 
 	nl, err := dialRoute()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer nl.close()
+	if err := addVeth(nl, "vmirror", "eth0", pid); err != nil {
+		t.Fatalf("making the veth pair: %v", err)
+	}
+	ip("addr", "add", "10.99.0.1/24", "dev", "vmirror")
+	ip("link", "set", "vmirror", "up")
 	if _, err := nl.mirrorVeth(os.Getpid()); err == nil {
 		t.Error("a process of this namespace has no veth leading to it, but one was found")
 	}
@@ -94,7 +117,7 @@ ip link set eth0 up && exec sleep 60`)
 	}
 
 	if err := nl.replaceCake(dev.index, 20e6); err != nil {
-		if errors.Is(err, syscall.ENOENT) {
+		if errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.EOPNOTSUPP) {
 			t.Skipf("the kernel has no sch_cake: %v", err)
 		}
 		t.Fatalf("replaceCake: %v", err)
