@@ -226,7 +226,8 @@ func installOCIChart(cfg *config.Config, namespace, release, chartRef, version s
 }
 
 // installOCIChartWith is installOCIChart with the install options given: the
-// fleet's Pod policies (reports.go) wait for their hooks alone.
+// fleet's Pod policies (reports.go) are waited on through the lab's Kyverno
+// policy status reader.
 func installOCIChartWith(cfg *config.Config, namespace, release, chartRef, version string, values map[string]any, timeout time.Duration, opts helmInstallOptions) error {
 	// Best-effort: anything missed is pulled in-node under the wait timeout,
 	// and the snapshot manifest catches it for the next boot.

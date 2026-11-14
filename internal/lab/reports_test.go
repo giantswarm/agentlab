@@ -6,8 +6,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fluxcd/cli-utils/pkg/kstatus/polling/statusreaders"
+	"github.com/fluxcd/cli-utils/pkg/kstatus/status"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 // seccompPolicy, resultPass and resultFail name a fleet policy and the
@@ -64,6 +68,89 @@ func TestPolicyReadiness(t *testing.T) {
 	}
 	if want := []string{"disallow-capabilities", "disallow-host-path"}; !slices.Equal(pending, want) {
 		t.Errorf("pending = %v, want %v", pending, want)
+	}
+}
+
+// kyvernoTestMapper maps Kyverno's policies and a core kind, as the
+// cluster's REST mapper does.
+func kyvernoTestMapper() meta.RESTMapper {
+	m := meta.NewDefaultRESTMapper(nil)
+	m.Add(schema.GroupVersionKind{Group: kyvernoGroup, Version: "v1", Kind: kindClusterPolicy}, meta.RESTScopeRoot)
+	m.Add(schema.GroupVersionKind{Group: kyvernoGroup, Version: "v1", Kind: "Policy"}, meta.RESTScopeNamespace)
+	m.Add(schema.GroupVersionKind{Version: "v1", Kind: kindConfigMap}, meta.RESTScopeNamespace)
+	return m
+}
+
+// clusterPolicyWithReady is a ClusterPolicy with the Ready condition at
+// status, none for "".
+func clusterPolicyWithReady(name, status string) unstructured.Unstructured {
+	obj := policyWithReady(name, status)
+	obj.SetAPIVersion(kyvernoGroup + "/v1")
+	obj.SetKind(kindClusterPolicy)
+	return obj
+}
+
+// TestKyvernoPolicyStatus: Helm's wait reads a Kyverno policy Current only
+// with its Ready condition True; before Kyverno wrote one and while it is
+// False it is InProgress, never Failed, with Kyverno's message.
+func TestKyvernoPolicyStatus(t *testing.T) {
+	notReady := clusterPolicyWithReady(seccompPolicy, "False")
+	notReady.Object[crStatus] = map[string]any{crConditions: []any{
+		map[string]any{fieldType: conditionReady, crStatus: "False", fieldMessage: "Not Ready"},
+	}}
+	deleting := clusterPolicyWithReady(seccompPolicy, conditionTrue)
+	now := metav1.Now()
+	deleting.SetDeletionTimestamp(&now)
+	for _, tc := range []struct {
+		name    string
+		policy  unstructured.Unstructured
+		want    status.Status
+		message string
+	}{
+		{"not reconciled", clusterPolicyWithReady(seccompPolicy, ""), status.InProgressStatus, "Kyverno has not reconciled the policy yet"},
+		{"not ready", notReady, status.InProgressStatus, "Not Ready"},
+		{"ready", clusterPolicyWithReady(seccompPolicy, conditionTrue), status.CurrentStatus, conditionReady},
+		{"deleting", deleting, status.TerminatingStatus, "Resource scheduled for deletion"},
+	} {
+		got, err := kyvernoPolicyStatus(&tc.policy)
+		if err != nil || got.Status != tc.want || got.Message != tc.message {
+			t.Errorf("%s: %+v, %v; want %s %q", tc.name, got, err, tc.want, tc.message)
+		}
+	}
+}
+
+// TestKyvernoPolicyStatusReaderGoesFirst: in the delegating reader Helm's
+// wait builds from its readers (statusreaders.NewStatusReader), the Kyverno
+// reader answers for the policies and leaves every other kind to kstatus. A
+// policy Kyverno has not reconciled is InProgress through it, where kstatus
+// alone reads it Current — once kstatus reads it InProgress too, the reader
+// and HACKS.md U50 can go.
+func TestKyvernoPolicyStatusReaderGoesFirst(t *testing.T) {
+	mapper := kyvernoTestMapper()
+	unreconciled := clusterPolicyWithReady(seccompPolicy, "")
+	plain, err := statusreaders.NewStatusReader(mapper).ReadStatusForObject(t.Context(), nil, &unreconciled)
+	if err != nil || plain.Status != status.CurrentStatus {
+		t.Errorf("kstatus alone on an unreconciled policy: %+v, %v; HACKS.md U50 expects Current — if kstatus now reads it InProgress, drop the reader", plain, err)
+	}
+	sr := statusreaders.NewStatusReader(mapper, newKyvernoPolicyStatusReader(mapper))
+	if got, err := sr.ReadStatusForObject(t.Context(), nil, &unreconciled); err != nil || got.Status != status.InProgressStatus {
+		t.Errorf("with the reader, an unreconciled policy: %+v, %v; want InProgress", got, err)
+	}
+	cm := unstructured.Unstructured{Object: map[string]any{fieldAPIVersion: "v1", kindKey: kindConfigMap, crMetadata: map[string]any{nameKey: "c", namespaceKey: platformNamespace}}}
+	if got, err := sr.ReadStatusForObject(t.Context(), nil, &cm); err != nil || got.Status != status.CurrentStatus {
+		t.Errorf("with the reader, a ConfigMap: %+v, %v; want kstatus' Current", got, err)
+	}
+	reader := newKyvernoPolicyStatusReader(mapper)
+	for gk, want := range map[schema.GroupKind]bool{
+		{Group: kyvernoGroup, Kind: kindClusterPolicy}:      true,
+		{Group: kyvernoGroup, Kind: "Policy"}:               true,
+		{Group: kyvernoGroup, Kind: "ClusterCleanupPolicy"}: false,
+		{Group: "wgpolicyk8s.io", Kind: "PolicyReport"}:     false,
+		{Kind: kindConfigMap}:                               false,
+	} {
+		if got := reader.Supports(gk); got != want {
+			t.Errorf("Supports(%s) = %t, want %t", gk, got, want)
+		}
 	}
 }
 

@@ -9,9 +9,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fluxcd/cli-utils/pkg/kstatus/polling/engine"
+	"github.com/fluxcd/cli-utils/pkg/kstatus/polling/statusreaders"
+	"github.com/fluxcd/cli-utils/pkg/kstatus/status"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -45,6 +50,8 @@ const (
 	// kyvernoPoliciesSelector selects every ClusterPolicy of that release.
 	kyvernoPoliciesSelector = "app.kubernetes.io/instance=" + kyvernoPoliciesRelease
 
+	// kyvernoGroup is the API group of Kyverno's policies.
+	kyvernoGroup = "kyverno.io"
 	// kindClusterPolicy and kindPod are the kinds a policy and the reports
 	// about Pods name.
 	kindClusterPolicy = "ClusterPolicy"
@@ -101,18 +108,67 @@ func fleetPodPoliciesUp(cfg *config.Config) error {
 	return nil
 }
 
-// kyvernoPoliciesOptions installs the kyverno-policies release with Helm
-// waiting for its hooks alone: waitPoliciesReady, which reads each policy's
-// Ready condition, is the release's wait. kstatus cannot read a
-// ClusterPolicy's readiness. Kyverno writes no observedGeneration, and a
-// policy it has not reconciled yet carries no condition, which kstatus reads
-// as Current; Kyverno's first status write is then Ready=False "Not Ready",
-// until its resource webhook carries the policy. Helm's watcher ends its
-// wait on the first reading that has every policy Current, yet judges the
-// statuses the watch delivers after it ended it, so a fresh install can fail
-// seconds into its timeout, on a policy InProgress that turns Ready a moment
-// later.
-var kyvernoPoliciesOptions = helmInstallOptions{CreateNamespace: true, HooksOnly: true}
+// kyvernoPoliciesOptions installs and upgrades the kyverno-policies release
+// with Helm's wait reading each policy's readiness from its Ready condition
+// (kyvernoPolicyStatusReader).
+var kyvernoPoliciesOptions = helmInstallOptions{
+	CreateNamespace: true,
+	StatusReaders:   []func(meta.RESTMapper) engine.StatusReader{newKyvernoPolicyStatusReader},
+}
+
+// kyvernoPolicyKinds are the Kyverno policies whose readiness is their Ready
+// condition.
+var kyvernoPolicyKinds = []schema.GroupKind{
+	{Group: kyvernoGroup, Kind: kindClusterPolicy},
+	{Group: kyvernoGroup, Kind: "Policy"},
+}
+
+// kyvernoPolicyStatusReader reads a Kyverno policy's readiness for Helm's
+// kstatus wait from its Ready condition, where kstatus' own reader cannot:
+// Kyverno writes no observedGeneration, and a policy it has not reconciled
+// yet carries no condition, which kstatus reads as Current. Kyverno's first
+// status write is then Ready=False "Not Ready", until its resource webhook
+// carries the policy. Read by kstatus, a fresh install's policies were all
+// Current before Kyverno had judged one, and Helm's waiter, which judges the
+// statuses its watch delivers after it ended the wait, failed the install on
+// the "Not Ready" that came next (HACKS.md U50). Read here, the wait ends
+// only once every policy reads Ready=True, past Kyverno's Not Ready.
+type kyvernoPolicyStatusReader struct {
+	engine.StatusReader
+}
+
+// newKyvernoPolicyStatusReader is the reader on the cluster's REST mapper,
+// which it needs to read a policy by its identifier.
+func newKyvernoPolicyStatusReader(mapper meta.RESTMapper) engine.StatusReader {
+	return kyvernoPolicyStatusReader{statusreaders.NewGenericStatusReader(mapper, kyvernoPolicyStatus)}
+}
+
+// Supports names the Kyverno policies; every other kind is kstatus'.
+func (kyvernoPolicyStatusReader) Supports(gk schema.GroupKind) bool {
+	return slices.Contains(kyvernoPolicyKinds, gk)
+}
+
+// kyvernoPolicyStatus is a policy's kstatus from its Ready condition:
+// Current once True, InProgress before Kyverno wrote one and while it is
+// False — never Failed, which Helm's wait leaves out of its aggregate and
+// would end the wait on.
+func kyvernoPolicyStatus(u *unstructured.Unstructured) (*status.Result, error) {
+	if u.GetDeletionTimestamp() != nil {
+		return &status.Result{Status: status.TerminatingStatus, Message: "Resource scheduled for deletion"}, nil
+	}
+	switch conditionStatus(u, conditionReady) {
+	case conditionTrue:
+		return &status.Result{Status: status.CurrentStatus, Message: conditionReady}, nil
+	case "":
+		return &status.Result{Status: status.InProgressStatus, Message: "Kyverno has not reconciled the policy yet"}, nil
+	default:
+		msg := conditionMessage(u, conditionReady)
+		if msg == "" {
+			msg = "Not Ready"
+		}
+		return &status.Result{Status: status.InProgressStatus, Message: msg}, nil
+	}
+}
 
 // installPodPolicies installs the kyverno-policies release, once more when
 // Kyverno's policy webhook timed out on it. A just-started admission
@@ -145,7 +201,9 @@ func webhookTimedOut(err error) bool {
 // waitPoliciesReady waits until every ClusterPolicy the selector names
 // reports Ready, and returns their names. Kyverno sets Ready once its
 // resource webhook configuration carries the policy, so a Pod applied after
-// this is judged by it.
+// this is judged by it. After an install or upgrade Helm's wait has read the
+// same condition (kyvernoPolicyStatusReader) and this reads them Ready at
+// once; on an unchanged release, which Helm leaves alone, it is the wait.
 func waitPoliciesReady(ctx context.Context, selector string) ([]string, error) {
 	gvr, err := gvrFor(clusterPolicyResource)
 	if err != nil {
