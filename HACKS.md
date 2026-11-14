@@ -910,32 +910,35 @@ a resumable pull and a pod whose readiness does not wait for the download, or
 a meta chart default timeout that fits it. The rendered timeout and the link
 sample then go; the sizing note may stay.
 
-### U50. `reports.go`: Helm waits for the kyverno-policies release's hooks alone — BLOCKED UPSTREAM
-A fresh `agentlab up` could fail its admission step seconds into the 5m
-install timeout with `INSTALL FAILED: resource
-ClusterPolicy//disallow-capabilities-strict not ready. status: InProgress,
-message: Not Ready`, in the same second the policy turned Ready; a second
-`up` upgraded the failed release cleanly. Two upstream behaviours meet there.
-kstatus cannot read a Kyverno ClusterPolicy's readiness: Kyverno writes no
+### U50. `reports.go`: Helm reads a Kyverno policy's readiness from its Ready condition — BLOCKED UPSTREAM
+kstatus cannot read a Kyverno policy's readiness: Kyverno writes no
 `status.observedGeneration`, and a policy it has not reconciled yet carries
 no condition, which kstatus reads as Current
 (`fluxcd/cli-utils` `status.Compute`); Kyverno's first status write is then
-`Ready=False` "Not Ready" until its resource webhook carries the policy
+`Ready=False` "Not Ready", until its resource webhook carries the policy
 ([helm/helm#32066](https://github.com/helm/helm/issues/32066) is the same
-early Current for other custom resources). Helm's kstatus waiter
-(`helm.sh/helm/v4` `pkg/kube/statuswait.go`, v4.2.4 and main) ends its wait
-on the first event that has every resource Current, cancelling the watch,
-but judges the statuses the watch still delivers after that cancel: an
-informer handler past its context check sends its update anyway and the
-event funnel drains it. So the policies' first, early Current ended the wait
-and Kyverno's "Not Ready", already in flight, failed it. **Fix in the lab:**
-the kyverno-policies release installs and upgrades with `--wait=hookOnly`
-(`kyvernoPoliciesOptions`, `helmInstallOptions.HooksOnly`), and
-`waitPoliciesReady`, which reads every policy's `Ready` condition, is its
-only wait. **Unblocked by** Helm's waiter judging the statuses that ended its
-wait (its observer keeps them and later events leave the outcome alone); the
-hooks-only wait may then go, while `waitPoliciesReady` stays as long as
-kstatus reads a policy without a condition as Current.
+early Current for other custom resources). Read by kstatus, a fresh
+install's policies were all Current before Kyverno had judged one, and Helm's
+kstatus waiter (`helm.sh/helm/v4` `pkg/kube/statuswait.go`, v4.2.4 and main),
+which ends its wait on that reading but still judges the statuses its watch
+delivers after it, failed a fresh `agentlab up` seconds into the 5m install
+timeout: `INSTALL FAILED: resource
+ClusterPolicy//disallow-capabilities-strict not ready. status: InProgress,
+message: Not Ready`. **Fix in the lab:** the kyverno-policies release
+installs and upgrades with Helm's kstatus wait and a status reader of the
+lab's for Kyverno's ClusterPolicy and Policy (`kyvernoPolicyStatusReader`,
+passed with `kube.WithKStatusReaders`): Current once the policy's `Ready`
+condition is True, InProgress before Kyverno wrote one and while it is
+False, never Failed. The wait so ends only past Kyverno's "Not Ready", and
+whatever the watch delivers after it reads Ready as well. `waitPoliciesReady`
+reads the same condition: after an install it finds every policy Ready at
+once; on an unchanged release, which Helm leaves alone, it is the wait.
+**Unblocked by** kstatus reading a custom resource that carries no condition
+yet as not Current (helm/helm#32066): the reader goes then, and
+`TestKyvernoPolicyStatusReaderGoesFirst` fails to say so. Helm's waiter
+judging what its watch delivers after it ended the wait stays a Helm defect
+for kinds without such a reader; its fix is queued for upstream Helm, and the
+lab does not depend on it.
 
 ### U38. `postRenderers` patch: agentgateway binds IPv4 — BLOCKED UPSTREAM
 agentgateway binds its readiness (15021) and stats (15020) servers and its

@@ -21,6 +21,7 @@ import (
 	"helm.sh/helm/v4/pkg/storage/driver"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/cli-runtime/pkg/genericclioptions"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -246,7 +247,7 @@ func TestLabUpgradeTakesFieldsOver(t *testing.T) {
 	cfg := &action.Configuration{}
 	opts := helmInstallOptions{CreateNamespace: true, TakeOwnership: true, Labels: map[string]string{chartChannelLabel: config.ChartChannelPath}, Description: "agentlab dev: the chart directory /src"}
 
-	upgrade := newLabUpgrade(cfg, observabilityNamespace, time.Minute, 10, opts)
+	upgrade := newLabUpgrade(cfg, observabilityNamespace, time.Minute, 10, opts, nil)
 	if !upgrade.ForceConflicts {
 		t.Error("the upgrade must force conflicts")
 	}
@@ -257,7 +258,7 @@ func TestLabUpgradeTakesFieldsOver(t *testing.T) {
 		t.Errorf("the upgrade must carry the release's marks: labels %v, description %q", upgrade.Labels, upgrade.Description)
 	}
 
-	install := newLabInstall(cfg, observabilityNamespace, kpsRelease, time.Minute, true, opts)
+	install := newLabInstall(cfg, observabilityNamespace, kpsRelease, time.Minute, true, opts, nil)
 	if !install.ForceConflicts {
 		t.Error("the install must force conflicts")
 	}
@@ -269,19 +270,29 @@ func TestLabUpgradeTakesFieldsOver(t *testing.T) {
 	}
 }
 
-// TestLabInstallHooksOnly: a release installed with HooksOnly is waited on
-// for its hooks alone, on install and on upgrade — the fleet's Pod policies,
-// whose readiness kstatus cannot read and the lab waits for itself.
-func TestLabInstallHooksOnly(t *testing.T) {
+// TestKyvernoPoliciesWait: the kyverno-policies release is installed and
+// upgraded with Helm's kstatus wait, given the Kyverno policy reader built on
+// the cluster's REST mapper; a release without status readers asks for no
+// mapper and passes no wait options.
+func TestKyvernoPoliciesWait(t *testing.T) {
+	if opts, err := (helmInstallOptions{}).waitOptions(nil); err != nil || opts != nil {
+		t.Errorf("no status readers: %v, %v; want nil, nil", opts, err)
+	}
+	if !kyvernoPoliciesOptions.CreateNamespace || len(kyvernoPoliciesOptions.StatusReaders) != 1 {
+		t.Errorf("kyvernoPoliciesOptions = %+v, want CreateNamespace and the Kyverno policy reader", kyvernoPoliciesOptions)
+	}
+	waitOpts, err := kyvernoPoliciesOptions.waitOptions(genericclioptions.NewTestConfigFlags().WithRESTMapper(kyvernoTestMapper()))
+	if err != nil || len(waitOpts) != 1 {
+		t.Fatalf("wait options = %d, %v; want one", len(waitOpts), err)
+	}
 	cfg := &action.Configuration{}
-	if !kyvernoPoliciesOptions.HooksOnly || !kyvernoPoliciesOptions.CreateNamespace {
-		t.Errorf("kyvernoPoliciesOptions = %+v, want HooksOnly and CreateNamespace", kyvernoPoliciesOptions)
+	install := newLabInstall(cfg, kyvernoNamespace, kyvernoPoliciesRelease, time.Minute, false, kyvernoPoliciesOptions, waitOpts)
+	if install.WaitStrategy != kube.StatusWatcherStrategy || len(install.WaitOptions) != 1 {
+		t.Errorf("install wait = %q with %d options, want %q with the reader", install.WaitStrategy, len(install.WaitOptions), kube.StatusWatcherStrategy)
 	}
-	if got := newLabInstall(cfg, kyvernoNamespace, kyvernoPoliciesRelease, time.Minute, false, kyvernoPoliciesOptions).WaitStrategy; got != kube.HookOnlyStrategy {
-		t.Errorf("install wait = %q, want %q", got, kube.HookOnlyStrategy)
-	}
-	if got := newLabUpgrade(cfg, kyvernoNamespace, time.Minute, 10, kyvernoPoliciesOptions).WaitStrategy; got != kube.HookOnlyStrategy {
-		t.Errorf("upgrade wait = %q, want %q", got, kube.HookOnlyStrategy)
+	upgrade := newLabUpgrade(cfg, kyvernoNamespace, time.Minute, 10, kyvernoPoliciesOptions, waitOpts)
+	if upgrade.WaitStrategy != kube.StatusWatcherStrategy || len(upgrade.WaitOptions) != 1 {
+		t.Errorf("upgrade wait = %q with %d options, want %q with the reader", upgrade.WaitStrategy, len(upgrade.WaitOptions), kube.StatusWatcherStrategy)
 	}
 }
 

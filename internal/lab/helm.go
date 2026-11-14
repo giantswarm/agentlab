@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/fluxcd/cli-utils/pkg/kstatus/polling/engine"
 	"helm.sh/helm/v4/pkg/action"
 	"helm.sh/helm/v4/pkg/chart"
 	"helm.sh/helm/v4/pkg/chart/common"
@@ -38,6 +39,7 @@ import (
 	release "helm.sh/helm/v4/pkg/release/v1"
 	"helm.sh/helm/v4/pkg/storage/driver"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/klog/v2"
 	"oras.land/oras-go/v2/registry/remote/errcode"
 
@@ -351,19 +353,28 @@ type helmInstallOptions struct {
 	// Description is `--description`: the revision's log line in `helm
 	// history`, in place of Helm's "Install complete"/"Upgrade complete".
 	Description string
-	// HooksOnly is `--wait=hookOnly`: Helm waits for the chart's hooks but
-	// not for the release's objects, for a release whose readiness kstatus
-	// cannot read. The caller waits for those objects itself.
-	HooksOnly bool
+	// StatusReaders read the readiness of kinds kstatus reads wrongly, for
+	// Helm's wait on the release: each is built on the cluster's REST mapper
+	// and is asked before kstatus' own readers for the kinds it supports.
+	StatusReaders []func(meta.RESTMapper) engine.StatusReader
 }
 
-// waitStrategy is the wait the options ask for: the kstatus wait on every
-// object of the release, or on its hooks alone.
-func (o helmInstallOptions) waitStrategy() kube.WaitStrategy {
-	if o.HooksOnly {
-		return kube.HookOnlyStrategy
+// waitOptions are the options of Helm's kstatus wait on the release: the
+// status readers the options name, built on the getter's REST mapper, which
+// is asked for only when there are any.
+func (o helmInstallOptions) waitOptions(getter action.RESTClientGetter) ([]kube.WaitOption, error) {
+	if len(o.StatusReaders) == 0 {
+		return nil, nil
 	}
-	return kube.StatusWatcherStrategy
+	mapper, err := getter.ToRESTMapper()
+	if err != nil {
+		return nil, fmt.Errorf("the REST mapper for the release's status readers: %w", err)
+	}
+	readers := make([]engine.StatusReader, 0, len(o.StatusReaders))
+	for _, newReader := range o.StatusReaders {
+		readers = append(readers, newReader(mapper))
+	}
+	return []kube.WaitOption{kube.WithKStatusReaders(readers...)}, nil
 }
 
 // helmUpgradeInstall is `helm upgrade --install <release> <chart> -n <ns> -f
@@ -375,8 +386,8 @@ func (o helmInstallOptions) waitStrategy() kube.WaitStrategy {
 // --reuse-values (the rendered values are the whole configuration, so an
 // unchanged re-run is a new revision with no drift); hooks on; the history
 // capped at Helm's default — and the kstatus wait until every object of the
-// release, custom resources included, is Current (the hooks alone with
-// HooksOnly, `--wait=hookOnly`). Ctrl-C cancels the
+// release, custom resources included, is Current (read by the options'
+// StatusReaders for the kinds they support). Ctrl-C cancels the
 // operation the way it cancels the CLI: the release is marked failed instead
 // of staying pending forever.
 func helmUpgradeInstall(namespace, releaseName, ref, version string, vals map[string]any, timeout time.Duration, opts helmInstallOptions) error {
@@ -389,12 +400,16 @@ func helmUpgradeInstall(namespace, releaseName, ref, version string, vals map[st
 	if err != nil {
 		return h.fail(invocation, err)
 	}
+	waitOpts, err := opts.waitOptions(h.cfg.RESTClientGetter)
+	if err != nil {
+		return h.fail(invocation, err)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	if newest == nil || revisionUninstalled(newest) {
-		install := newLabInstall(h.cfg, namespace, releaseName, timeout, newest != nil, opts)
+		install := newLabInstall(h.cfg, namespace, releaseName, timeout, newest != nil, opts, waitOpts)
 		ch, err := h.loadChart(&install.ChartPathOptions, ref, version)
 		if err != nil {
 			return h.fail(invocation, err)
@@ -405,7 +420,7 @@ func helmUpgradeInstall(namespace, releaseName, ref, version string, vals map[st
 		return nil
 	}
 
-	upgrade := newLabUpgrade(h.cfg, namespace, timeout, h.settings.MaxHistory, opts)
+	upgrade := newLabUpgrade(h.cfg, namespace, timeout, h.settings.MaxHistory, opts, waitOpts)
 	ch, err := h.loadChart(&upgrade.ChartPathOptions, ref, version)
 	if err != nil {
 		return h.fail(invocation, err)
@@ -418,15 +433,17 @@ func helmUpgradeInstall(namespace, releaseName, ref, version string, vals map[st
 
 // newLabInstall is the install half of helmUpgradeInstall: `helm install`
 // with --wait and --force-conflicts; replace reuses the name of a release
-// whose last revision is an uninstalled one kept in history, as the CLI does.
-func newLabInstall(cfg *action.Configuration, namespace, releaseName string, timeout time.Duration, replace bool, opts helmInstallOptions) *action.Install {
+// whose last revision is an uninstalled one kept in history, as the CLI does;
+// waitOpts are the options' waitOptions.
+func newLabInstall(cfg *action.Configuration, namespace, releaseName string, timeout time.Duration, replace bool, opts helmInstallOptions, waitOpts []kube.WaitOption) *action.Install {
 	install := action.NewInstall(cfg)
 	install.ReleaseName = releaseName
 	install.Namespace = namespace
 	install.CreateNamespace = opts.CreateNamespace
 	install.TakeOwnership = opts.TakeOwnership
 	install.Timeout = timeout
-	install.WaitStrategy = opts.waitStrategy()
+	install.WaitStrategy = kube.StatusWatcherStrategy
+	install.WaitOptions = waitOpts
 	install.ForceConflicts = true
 	install.Replace = replace
 	install.Labels = opts.Labels
@@ -441,13 +458,14 @@ func newLabInstall(cfg *action.Configuration, namespace, releaseName string, tim
 // false, initialDelaySeconds: 0) count as changed on every re-apply, so a
 // release whose objects Helm's client-side apply wrote (manager "helm",
 // operation Update), or a binary of another name, failed on every such field
-// instead of taking it over.
-func newLabUpgrade(cfg *action.Configuration, namespace string, timeout time.Duration, maxHistory int, opts helmInstallOptions) *action.Upgrade {
+// instead of taking it over. waitOpts are the options' waitOptions.
+func newLabUpgrade(cfg *action.Configuration, namespace string, timeout time.Duration, maxHistory int, opts helmInstallOptions, waitOpts []kube.WaitOption) *action.Upgrade {
 	upgrade := action.NewUpgrade(cfg)
 	upgrade.Install = true
 	upgrade.Namespace = namespace
 	upgrade.Timeout = timeout
-	upgrade.WaitStrategy = opts.waitStrategy()
+	upgrade.WaitStrategy = kube.StatusWatcherStrategy
+	upgrade.WaitOptions = waitOpts
 	upgrade.ForceConflicts = true
 	upgrade.TakeOwnership = opts.TakeOwnership
 	upgrade.MaxHistory = maxHistory

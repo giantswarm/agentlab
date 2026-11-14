@@ -261,7 +261,7 @@ func policyExceptionsOf(source, manifest string) ([]renderedPolicyException, err
 	}
 	var found []renderedPolicyException
 	for _, obj := range objs {
-		if obj.GetKind() == policyExceptionKind && obj.GroupVersionKind().Group == "kyverno.io" {
+		if obj.GetKind() == policyExceptionKind && obj.GroupVersionKind().Group == kyvernoGroup {
 			found = append(found, renderedPolicyException{source: source, obj: obj})
 		}
 	}
