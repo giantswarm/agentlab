@@ -41,7 +41,9 @@ runtimeConfig:
 # The node image's containerd leaves the CRI registry config_path empty, so a
 # hosts.toml under /etc/containerd/certs.d would be ignored — and that
 # directory is how a node learns that localhost:5001 is the kind-registry
-# container, the registry Substrate resolves actor images through.
+# container, the registry Substrate resolves actor images through, and that
+# gsoci's images come through the registry mirror the labs on this machine
+# share (mirror.go writes that hosts.toml into the running node).
 containerdConfigPatches:
   - |-
     [plugins."io.containerd.grpc.v1.cri".registry]

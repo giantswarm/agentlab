@@ -357,10 +357,10 @@ func loadReadOnly() (*config.Config, error) {
 // downCmd is `agentlab down`: the kind cluster, or with --purge the whole
 // lab, asked first on a terminal and refused off one without --yes.
 func downCmd() *cobra.Command {
-	var purge, yes bool
+	var purge, yes, mirror bool
 	cmd := &cobra.Command{
 		Use:   "down",
-		Short: "Destroy the kind cluster (--purge: the whole lab, its CA included)",
+		Short: "Destroy the kind cluster (--purge: the whole lab, its CA included; --mirror: the shared registry mirror too)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !purge {
@@ -371,20 +371,30 @@ func downCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				return lab.Down(cfg)
+				if err := lab.Down(cfg); err != nil {
+					return err
+				}
+			} else {
+				cfg, err := loadToPurge()
+				if err != nil {
+					return err
+				}
+				if ok, err := confirmPurge(cfg.ClusterName, yes); err != nil || !ok {
+					return err
+				}
+				if err := lab.Purge(cfg); err != nil {
+					return err
+				}
 			}
-			cfg, err := loadToPurge()
-			if err != nil {
-				return err
+			if mirror {
+				lab.RemoveRegistryMirror()
 			}
-			if ok, err := confirmPurge(cfg.ClusterName, yes); err != nil || !ok {
-				return err
-			}
-			return lab.Purge(cfg)
+			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&purge, "purge", false, "also remove the lab CA from the trust stores, then the lab's directory, configuration and registry entry")
 	cmd.Flags().BoolVar(&yes, "yes", false, "with --purge: remove the lab without asking")
+	cmd.Flags().BoolVar(&mirror, "mirror", false, "also remove the registry mirror every lab on this machine shares (agentlab-mirror) and its cache; the other labs pull from gsoci until their next up or platform creates it again")
 	return cmd
 }
 
@@ -1199,7 +1209,8 @@ func configureCmd() *cobra.Command {
 	var vmManagerImageDir, aiKeySource, gitHubTokenSource, portal string
 	var gitHubAppID, gitHubAppInstallationID, gitHubAppPrivateKeySource, gitHubAppClientID, gitHubAppClientSecretSource string
 	var chartVersion, chartPath, chartBranch, clusterName, mcpPrometheusChartVersion string
-	var upgradeSeed, adoptChart, released, codexHostModel, usageData bool
+	var upgradeSeed, adoptChart, released, codexHostModel, usageData, registryMirror bool
+	var zotVersion string
 	cmd := &cobra.Command{
 		Use:   "configure",
 		Short: "Discover this machine, then ask for the lab configuration (or keep it with --defaults) and save agentlab.yaml",
@@ -1251,6 +1262,15 @@ func configureCmd() *cobra.Command {
 			}
 			if cmd.Flags().Changed("telemetry") {
 				cfg.SetTelemetry(usageData)
+			}
+			if cmd.Flags().Changed("registry-mirror") {
+				cfg.SetRegistryMirror(registryMirror)
+			}
+			if cmd.Flags().Changed("zot-version") {
+				if err := config.CheckZotVersion(zotVersion); err != nil {
+					return fmt.Errorf("--zot-version %q: %w", zotVersion, err)
+				}
+				cfg.ZotVersion = zotVersion
 			}
 			if cmd.Flags().Changed("backstage") {
 				cfg.Backstage.Enabled = backstage
@@ -1527,6 +1547,8 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&observability, "observability", false, "enable/disable the observability stack (Prometheus + mcp-prometheus)")
 	cmd.Flags().BoolVar(&backstage, "backstage", false, "enable/disable Backstage (implies the platform)")
 	cmd.Flags().BoolVar(&usageData, "telemetry", false, "enable/disable the anonymous usage data this lab and its portal send to TelemetryDeck (docs/telemetry.md)")
+	cmd.Flags().BoolVar(&registryMirror, "registry-mirror", false, "pull the nodes' gsoci images through the registry mirror every lab on this machine shares (the zot container agentlab-mirror, gsoci itself the fallback; on by default); --registry-mirror=false sends the nodes to gsoci directly from the next up or platform, no recreate (docs/registries.md)")
+	cmd.Flags().StringVar(&zotVersion, "zot-version", "", "hold the lab registry's zot at this release (a v2 release tag of "+config.ZotRepository+", v"+config.ZotFloor.String()+" or newer) instead of the newest; \"\" follows zot's releases again; the shared mirror always follows the newest (docs/registries.md)")
 	cmd.Flags().BoolVar(&installationsPage, "installations-page", false, "enable the portal's Installations page (page:gs/installations and its nav item, off in the agent-platform chart) for the portal's installations e2e specs, run with AGENTLAB_INSTALLATIONS_PAGE=1; the next agentlab platform rolls Backstage onto it; --installations-page=false turns it off again")
 	cmd.Flags().BoolVar(&hive, "hive", false, "enable the portal's Hive (/hive and the pages it replaced, off in the Backstage app) with its roadmap-backend on the muster server pro, the fake board `agentlab roadmap-test` registers, for the portal's Hive e2e spec, run with AGENTLAB_HIVE=1; the next agentlab platform rolls Backstage onto it; --hive=false turns it off again")
 	cmd.Flags().StringVar(&portal, "portal", "", fmt.Sprintf("the Backstage portal `mode` (%s): %s serves the Agent Platform shell (app.portals.agentPlatform), %s the classic Platform Portal alone; the next agentlab platform rolls Backstage onto it", strings.Join(config.PortalModes, ", "), config.PortalAgentPlatform, config.PortalClassic))
