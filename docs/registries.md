@@ -190,4 +190,5 @@ can take a few seconds on a busy one.
 
 To see what the mirror did, read its log: `docker logs agentlab-mirror`. A
 `syncing image` line is a download from gsoci. A pull it served from its
-cache has no such line.
+cache has none: a request by tag logs only `successfully synced image` after
+its check against gsoci.
