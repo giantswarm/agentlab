@@ -54,6 +54,20 @@ platform:
   A `platform.devImages.vm-manager` build is side-loaded into the node and
   swapped in like model-manager's (both containers of the pod run it). The run
   waits until muster reports the registration reachable.
+- **The release's guest image download is sized before the install.** The
+  pod's init container downloads the artifact (1,677 MiB for 0.24.10) with
+  vm-manager's own client before the pod is Ready, and Flux's default
+  5-minute timeout does not fit that on a home uplink: the install would time
+  out, be uninstalled and download from zero again
+  ([giantswarm/vm-manager#240](https://github.com/giantswarm/vm-manager/issues/240)).
+  `agentlab platform` reads the reference off the vm-manager render, sizes
+  the artifact from its manifest and sets `components.vm-manager.timeout` to
+  5 minutes plus the download at 1 MiB/s (`33m` for 0.24.10); its own install
+  wait grows by as much. Unless the running pod already holds that image, it
+  samples the link on the artifact's largest file (8 MiB or 8 s) and refuses
+  a link too slow for that bound before anything is installed, with the
+  measured rate, the estimate and the fixes. A local build (`imageDir`) comes
+  from the lab registry and is not sized.
 - **`agentlab vm-manager-test`** is the proof (below).
 
 An agentlab before 0.44 registered a vm-manager running on the host

@@ -345,11 +345,18 @@ components:
 {{- end }}
 {{- if .VMManagerEnabled }}
   # The VM provisioner (platform.vmManager): vm-manager as a pod of the node
-  # — privileged, the node's /dev/kvm and /dev/vhost-vsock, the image
-  # directory mounted from the node (its own values are in the `vm-manager:`
+  # — privileged, the node's /dev/kvm and /dev/vhost-vsock, the guest image
+  # fetched by its init container (its own values are in the `vm-manager:`
   # block below).
   vm-manager:
     enabled: true
+{{- with .VMManagerReleaseTimeout }}
+    # The pod's init container downloads the guest image before the pod is
+    # Ready: Flux's 5m default plus that download at 1 MiB/s, sized from the
+    # artifact (vmmanagerguestimage.go). A timed-out install is uninstalled
+    # and its retry downloads from zero.
+    timeout: {{ . }}
+{{- end }}
 {{- with index .PostRenderers "vm-manager" }}
     postRenderers:
 {{ . | indent 6 }}

@@ -198,6 +198,24 @@ whole lab. Neither can be raised from inside the node.
 
 ## vm-manager
 
+- **`vm-manager's pod fetches its guest image … and this link is too slow
+  for it`** stops `up` or `platform` before the install. The pod's init
+  container downloads the release's guest image (about 1.7 GiB) with
+  vm-manager's own client before the pod is Ready, so neither the image
+  side-load nor a registry mirror helps. The lab gives the vm-manager release
+  5 minutes plus that download at 1 MiB/s (33 minutes for 0.24.x) and samples
+  the link on the artifact's largest file first. A link slower than that
+  would time out the release, and the install remediation would uninstall
+  it and start the download over
+  ([giantswarm/vm-manager#240](https://github.com/giantswarm/vm-manager/issues/240)).
+  On an otherwise fast uplink, a VPN that resolves the registry to a private
+  path is the usual cause: compare `getent ahosts gsoci.azurecr.io` on the
+  host with the same command in the node
+  (`docker exec <clusterName>-control-plane getent ahosts gsoci.azurecr.io`).
+  Otherwise boot a local guest image build from the lab registry
+  (`agentlab configure --vm-manager-image-dir <dir>`) or turn vm-manager off
+  (`agentlab configure --vm-manager=false`). The sample is skipped while the
+  running pod already holds the same guest image.
 - **`vm-manager-test` fails at `get_vm_attestation` with `golden mismatch:
   pcr 0` after the lab followed a vm-manager release.** The golden values on
   the pod's state claim were recorded for another firmware: PCR 0 is the OVMF
