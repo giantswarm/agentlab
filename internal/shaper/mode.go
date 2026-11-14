@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"syscall"
 )
 
 // The modes a person sets for the machine (`agentlab shaper auto|max|pause|
@@ -71,7 +70,7 @@ func ParseMode(s string) (Mode, error) {
 // and a bad one is never echoed into the error.
 func readModeFile(path string) (Mode, error) {
 	auto := Mode{Kind: ModeAuto}
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0) // #nosec G304 -- the shaper's own mode file
+	f, err := os.OpenFile(path, os.O_RDONLY|modeFileFlags, 0) // #nosec G304 -- the shaper's own mode file
 	if errors.Is(err, os.ErrNotExist) {
 		return auto, nil
 	}
