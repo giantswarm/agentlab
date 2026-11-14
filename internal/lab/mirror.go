@@ -146,7 +146,11 @@ func ensureRegistryMirror(cfg *config.Config) {
 	}
 	if !cfg.RegistryMirrorOn() {
 		if removed := removeMirrorHosts(nodes); len(removed) > 0 {
-			note("registryMirror is off: the %s pulls of %s go to it directly again (%s stays for the other labs; `agentlab down --mirror` removes it)", mirrorUpstream, strings.Join(removed, ", "), mirrorName)
+			stays := ""
+			if _, ok := inspectZot(mirrorName); ok {
+				stays = fmt.Sprintf(" (%s stays for the other labs; `agentlab down --mirror` removes it)", mirrorName)
+			}
+			note("registryMirror is off: the %s pulls of %s go to it directly again%s", mirrorUpstream, strings.Join(removed, ", "), stays)
 		}
 		return
 	}
