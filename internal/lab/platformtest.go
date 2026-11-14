@@ -196,12 +196,15 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 	// selecting the lab's member by its name (kubernetesTool: the server's
 	// own tools on the 3.x line).
 	toolPrefix := kubernetesTool(cfg, "")
+	// The person signs in to mcp-kubernetes (signInToKubernetesMCP) on this
+	// session when muster asks for it. The wrapper numbers its requests from
+	// 11, apart from the inline calls' ids; each request is its own POST
+	// either way.
+	session := &musterSession{client: client, url: mcpURL, token: token, id: sessionID, seq: 10}
+	signedIn := false
 	if !slices.ContainsFunc(toolNames, func(name string) bool { return strings.HasPrefix(name, toolPrefix) }) {
-		// The person has not signed in to mcp-kubernetes yet
-		// (signInToKubernetesMCP): sign in on this session, then list again.
-		// The wrapper numbers its requests from 11, apart from the inline
-		// calls' ids; each request is its own POST either way.
-		session := &musterSession{client: client, url: mcpURL, token: token, id: sessionID, seq: 10}
+		// No family tool listed yet: sign in, then list again.
+		signedIn = true
 		if err := signInToKubernetesMCP(context.Background(), cfg, session, user); err != nil {
 			return "", fmt.Errorf("muster aggregates no %s tools (it lists %s): %w", toolPrefix, strings.Join(toolNames, ", "), err)
 		}
@@ -226,28 +229,46 @@ func platformTest(cfg *config.Config, user *config.User, p *proofStages) (string
 		return "", err
 	}
 	payload := fmt.Sprintf(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"call_tool","arguments":{"name":%q,"arguments":%s}}}`, toolPrefix+"list", listArgs)
-	res, err := call(payload)
+	// listNamespaces is the tool's own answer. Tool results are
+	// double-wrapped: result.content[0].text is JSON whose content[0].text is
+	// the actual payload — two decode hops.
+	listNamespaces := func() (string, error) {
+		res, err := call(payload)
+		if err != nil {
+			return "", err
+		}
+		var wrapped struct {
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+		}
+		if err := json.Unmarshal([]byte(innerText(res)), &wrapped); err != nil || len(wrapped.Content) == 0 {
+			return "", fmt.Errorf("unexpected call_tool payload shape")
+		}
+		return wrapped.Content[0].Text, nil
+	}
+	text, err := listNamespaces()
 	if err != nil {
 		return "", err
 	}
-	// Tool results are double-wrapped: result.content[0].text is JSON whose
-	// content[0].text is the actual payload — two decode hops.
-	var wrapped struct {
-		Content []struct {
-			Text string `json:"text"`
-		} `json:"content"`
-	}
-	if err := json.Unmarshal([]byte(innerText(res)), &wrapped); err != nil || len(wrapped.Content) == 0 {
-		return "", fmt.Errorf("unexpected call_tool payload shape")
+	if !signedIn && strings.Contains(text, statusAuthRequired) {
+		// muster lists a family's tools while the person has not signed in
+		// to this member: the call is what asks for the sign-in.
+		if err := signInToKubernetesMCP(context.Background(), cfg, session, user); err != nil {
+			return "", err
+		}
+		if text, err = listNamespaces(); err != nil {
+			return "", err
+		}
 	}
 	var nsList struct {
 		Items []struct {
 			Name string `json:"name"`
 		} `json:"items"`
 	}
-	if err := json.Unmarshal([]byte(wrapped.Content[0].Text), &nsList); err != nil {
+	if err := json.Unmarshal([]byte(text), &nsList); err != nil {
 		// A failed call answers with the tool's own error text, not a list.
-		return "", fmt.Errorf("%slist namespaces answered no namespace list: %s", toolPrefix, strings.TrimSpace(wrapped.Content[0].Text))
+		return "", fmt.Errorf("%slist namespaces answered no namespace list: %s", toolPrefix, strings.TrimSpace(text))
 	}
 	names := make([]string, 0, len(nsList.Items))
 	for _, item := range nsList.Items {
@@ -890,9 +911,9 @@ func proveDownstreamIdentity(cfg *config.Config, toolPrefix string) error {
 // muster on session, as a browser would (oauth-consent-test does the same).
 // From agent-platform 4.176.4 (giantswarm/agent-platform#1309) the
 // connectivity chart registers mcp-kubernetes with auth.forwardToken false:
-// the server accepts only an access token it issued, so muster lists and
-// calls its tools only for a person who signed in to it (the MCPServer reads
-// Auth Required until then).
+// the server accepts only an access token it issued, so muster calls its
+// tools only for a person who signed in to it (the MCPServer reads Auth
+// Required until then; muster may list the family's tools before).
 func signInToKubernetesMCP(ctx context.Context, cfg *config.Config, session *musterSession, user *config.User) error {
 	challenge, err := signInChallenge(cfg, session, cfg.MCPServerName())
 	if err != nil {

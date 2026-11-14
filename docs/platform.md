@@ -201,9 +201,11 @@ reason and the proof still passes.
 From agent-platform 4.176.4 the chart registers mcp-kubernetes with
 `auth.forwardToken: false` (giantswarm/agent-platform#1309): the server
 takes only an access token it issued, so its MCPServer reads `Auth Required`
-and muster lists no `x_kubernetes_` tool until the person signs in to it.
-The `Kubernetes tools` and `downstream identity` stages sign each person in
-to it through muster first (`core_auth_login`, then the sign-in as a browser
+until the person signs in to it. muster may still list the kubernetes
+family's `x_kubernetes_` tools then, and a call answers `auth_required`.
+The `Kubernetes tools`, `MCP tool call` and `downstream identity` stages
+sign each person in through muster when muster lists no such tool or a call
+answers `auth_required` (`core_auth_login`, then the sign-in as a browser
 does it, the way `oauth-consent-test` does), and note
 `signed <email> in to <server> through muster`.
 
