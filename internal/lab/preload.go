@@ -61,6 +61,39 @@ type preloadResult struct {
 	err  error
 }
 
+// withoutNodeImages drops the refs every node of the cluster already holds
+// and says how many it dropped: no host pull and no side-load needs to bring
+// those. The node lane pulls a component release through the registry
+// mirror (mirror.go) before a run gets to it, and pulling the same tags into
+// the host cache once more would download every release twice. A cluster
+// whose nodes cannot be listed (one being created, a stopped node) keeps
+// every ref: they are pulled and loaded as before.
+func withoutNodeImages(cfg *config.Config, images []string) ([]string, int) {
+	if len(images) == 0 {
+		return images, 0
+	}
+	nodes, err := kindNodeNames(cfg.ClusterName)
+	if err != nil || len(nodes) == 0 {
+		return images, 0
+	}
+	var everywhere map[string]bool
+	for _, node := range nodes {
+		tags, err := nodeImageTags(node)
+		if err != nil {
+			return images, 0
+		}
+		on := make(map[string]bool, len(tags))
+		for _, tag := range tags {
+			if everywhere == nil || everywhere[tag] {
+				on[tag] = true
+			}
+		}
+		everywhere = on
+	}
+	missing := slices.DeleteFunc(slices.Clone(images), func(img string) bool { return everywhere[img] })
+	return missing, len(images) - len(missing)
+}
+
 // hostPullImages ensures every ref is in the host docker cache, pulling the
 // missing ones concurrently, and returns the refs that are available there
 // (already cached or freshly pulled), sorted. Failed pulls are dropped:
@@ -91,16 +124,12 @@ func hostPullImages(images []string) []string {
 	return have
 }
 
-// sideloadImages side-loads the given host-cached refs into the node,
-// skipping what the node already has — on a re-run over a live cluster that
-// skip usually covers everything.
+// sideloadImages side-loads the given host-cached refs into the nodes,
+// skipping what every node already has — on a re-run over a live cluster
+// that skip usually covers everything.
 func sideloadImages(cfg *config.Config, images []string) preloadResult {
 	start := time.Now()
-	if have, err := nodeImageTags(cfg.ControlPlaneNode()); err == nil {
-		images = slices.DeleteFunc(images, func(img string) bool {
-			return slices.Contains(have, img)
-		})
-	}
+	images, _ = withoutNodeImages(cfg, images)
 	if len(images) == 0 {
 		return preloadResult{}
 	}
@@ -301,7 +330,13 @@ func pullLabImages(cfg *config.Config) <-chan []string {
 		done <- nil
 		return done
 	}
-	go func() { done <- hostPullImages(images) }()
+	go func() {
+		// Over a live cluster, what every node holds is not pulled into the
+		// host cache again (withoutNodeImages); a cluster still being
+		// created lists nothing, and everything is pulled.
+		missing, _ := withoutNodeImages(cfg, images)
+		done <- hostPullImages(missing)
+	}()
 	return done
 }
 

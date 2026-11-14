@@ -1249,7 +1249,7 @@ func gatewayArgs(f gatewayFlags) []string {
 // of the host, which cannot write the caller's run directory; keep-id maps
 // the caller's uid to itself.
 func dockerRunArgs(image, name, network, runDir, caFile string, uid, gid int, args []string) []string {
-	flags := []string{"--rm"}
+	flags := []string{dockerRemoveOnExit}
 	if rootlessPodmanOnLinux() {
 		flags = append(flags, "--userns=keep-id")
 	}

@@ -284,6 +284,7 @@ check above.
 | [Workspaces](docs/workspaces.md) | The workspace storage switch (the NFS server, the NFS CSI driver behind its mTLS proxy, the read-write-many class, the proof) and the workspace-manager's provider instances, a GitHub App of the lab's own and a GitLab |
 | [GitHub sign-in](docs/github-signin.md) | GitHub as a second way into the lab: the App and its callback, the client secret placed as a Secret, what a GitHub user is in the lab |
 | [The lab's registries](docs/registries.md) | The lab registry and the gsoci mirror every lab on the machine shares (`registryMirror`), zot following its releases, holding the lab registry back (`zotVersion`) |
+| [Bandwidth](docs/bandwidth.md) | The shaper that lets the mirror's downloads yield to your own traffic (`bandwidthShaper`): how it decides, the machine's override (`agentlab shaper`), what it shapes and what not, the namespace proof |
 | [Troubleshooting](docs/troubleshooting.md) | The gotchas that cost time |
 | [Usage data](docs/telemetry.md) | The anonymous usage signals — one per command, one per platform install naming the chart line, the lab portal's under the same deployment ID — and how to opt out |
 | [Development environment](docs/dev-environment.md) | Developing a platform component against the lab: hot reload, dev images, unreleased charts |

@@ -111,15 +111,25 @@ layer, so it survives a node restart and goes with the node.
 - No search extension: no CVE scanning and no Trivy downloads.
 
 **Removing it:** `agentlab down` leaves the mirror and its cache, because the
-other labs use them. `agentlab down --mirror` removes the lab and then the
-mirror container and its volume. Other labs keep their `hosts.toml` and pull
-from gsoci until their next `up` or `platform` creates the mirror again.
+other labs use them. `agentlab down --mirror` removes the lab, then the
+[bandwidth shaper](bandwidth.md) when there is one (it joins the mirror),
+then the mirror container and its volume. Other labs keep their `hosts.toml`
+and pull from gsoci until their next `up` or `platform` creates the mirror
+again.
+
+**Its downloads yield to yours:** with `bandwidthShaper` on, a container
+beside the mirror caps what the mirror downloads by the uplink's latency, so
+the labs take what you leave idle and give it back within seconds. See
+[Bandwidth](bandwidth.md).
 
 **What the mirror does not cover:**
 
 - **The host's preload.** `up` and `platform` pull a boot's images into the
   host docker cache and side-load them into the node (`preload.go`). The host
-  cache is shared by every lab already, but a new tag is still pulled from
+  cache is shared by every lab already, and a tag every node of the lab holds
+  already (a component release the nodes pulled through the mirror) is not
+  pulled on the host again, so a release costs the machine one download. A
+  tag some node lacks, and a first boot's whole preload, is still pulled from
   gsoci on the host. docker's `registry-mirrors` setting applies to Docker Hub
   only.
 - **atelet's Harness images.** atelet pulls them into its own layer cache,
@@ -183,7 +193,8 @@ covers a broken one.
 ```
 
 The mirror's line also says when this lab is off it, and what brings a
-missing or stopped mirror back. In JSON these are `registry`,
+missing or stopped mirror back. With the [bandwidth shaper](bandwidth.md#status)
+on, a `shaper` line follows with the mirror's cap. In JSON these are `registry`,
 `registryRelease` and `mirror` (`on`, `state`, `release`, `size`). The size
 comes from `docker system df -v`, which sizes every volume on the host and
 can take a few seconds on a busy one.

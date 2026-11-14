@@ -84,7 +84,7 @@ func startFakeContainer(cfg *config.Config, binary string, spec fakeContainerSpe
 	}
 	name := cfg.ClusterName + "-" + spec.suffix
 	_ = command(dockerBin, "rm", "-f", name).Run()
-	flags := []string{"-d", "--rm",
+	flags := []string{"-d", dockerRemoveOnExit,
 		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
 		"-p", "127.0.0.1::" + strconv.Itoa(fakeContainerPort),
 		"-v", binary + ":" + fakeBinaryPath + ":ro",

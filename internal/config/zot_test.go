@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -124,6 +125,29 @@ func TestRegistryMirrorIsOnWithoutAKey(t *testing.T) {
 		}
 		if got := strings.Contains(string(raw), "registryMirror:"); got != tc.wantKey {
 			t.Errorf("SetRegistryMirror(%v): the file carries registryMirror: %v, want %v", tc.on, got, tc.wantKey)
+		}
+	}
+}
+
+// TestBandwidthShaperIsOffWithoutAKey: the shaper is off by default while
+// it proves itself, and a lab's choice either way is recorded, so a later
+// default leaves it as it is.
+func TestBandwidthShaperIsOffWithoutAKey(t *testing.T) {
+	cfg := Default()
+	if cfg.BandwidthShaperOn() {
+		t.Fatal("BandwidthShaperOn() = true for the default lab, want false")
+	}
+	for _, on := range []bool{true, false} {
+		cfg.SetBandwidthShaper(on)
+		if cfg.BandwidthShaperOn() != on {
+			t.Errorf("SetBandwidthShaper(%v): BandwidthShaperOn() = %v", on, cfg.BandwidthShaperOn())
+		}
+		raw, err := yaml.Marshal(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := fmt.Sprintf("bandwidthShaper: %v", on); !strings.Contains(string(raw), want) {
+			t.Errorf("SetBandwidthShaper(%v): the file lacks %q", on, want)
 		}
 	}
 }
