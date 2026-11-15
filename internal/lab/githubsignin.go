@@ -13,11 +13,11 @@ import (
 // GitHub App whose callback is the lab Dex's own callback URL. The client id
 // is public and comes from agentlab.yaml; the client secret is the Secret
 // platform.githubSignIn.secret names in the Dex namespace, which the
-// operator's secret tooling places (`beekeeper secret copy <ref> --to-secret
-// kind-<cluster>/dex/<name>/client-secret`) and the Dex pod reads as the
-// environment variable the rendered connector references. agentlab reads
-// which keys the Secret carries and never a value: nothing of the client
-// secret reaches agentlab.yaml, state/, a log line or a process's argv.
+// operator places (`agentlab place-secret <ref> dex/<name>/client-secret`,
+// secretsource.go) and the Dex pod reads as the environment variable the
+// rendered connector references. A run reads which keys the Secret carries
+// and never a value: nothing of the client secret reaches agentlab.yaml,
+// state/, a log line or a process's argv.
 
 // gitHubSignInConnectorID is the connector's id, the `connector_id` claim a
 // token signed in through it carries. Not an installation's
@@ -85,8 +85,8 @@ func gitHubSignInFor(cfg *config.Config) (*gitHubSignInValues, error) {
 	}
 	if len(missing) > 0 {
 		warn("platform.githubSignIn is on but %s -- Dex keeps its local users; the GitHub connector follows on the next up, platform or reload", secretGap(ref.Namespace, ref.Name, missing))
-		warn("  register (or reuse) a GitHub App with the callback URL %s and place its client secret, which agentlab never reads:", values.RedirectURI)
-		warn("  beekeeper secret copy <ref to the client secret> --to-secret kind-%s/%s/%s/%s", cfg.ClusterName, ref.Namespace, ref.Name, config.GitHubClientSecretKey)
+		warn("  register (or reuse) a GitHub App with the callback URL %s and place its client secret (it never reaches an argument, a file or the output):", values.RedirectURI)
+		warn("  agentlab place-secret <ref to the client secret> %s/%s/%s", ref.Namespace, ref.Name, config.GitHubClientSecretKey)
 		return nil, nil
 	}
 	values.SecretVersion = obj.GetResourceVersion()

@@ -143,9 +143,12 @@ with Dex doing the logins.
   and each lab organization's `tenant-credential-anthropic` (organizations.go)
   — never in `agentlab.yaml` or `state/` — which
   every `up`/`platform` fills (anthropic.go): from the reference
-  `aiKey.source` records through `beekeeper secret copy --to-secret`
-  (agentlab never reads the value; a source that cannot be placed fails the
-  run), else from `$ANTHROPIC_API_KEY` on the host, else with a placeholder
+  `aiKey.source` records, read in agentlab's process through `op`, `sops` or
+  the embedded client and merge-patched into the key (secretsource.go,
+  docs/secrets.md; never an argument, a file or the output — the run prints
+  the length; beekeeper's `secret copy` instead where it is on PATH; a held
+  key stays, a source that cannot be placed fails the run), else from
+  `$ANTHROPIC_API_KEY` on the host, else with a placeholder
   so the ModelConfig resolves (agent turns then fail until the key is
   placed). Never inline a real key in config, templates, or rendered values.
   `platform.extraModels` adds further ModelConfigs (self-hosted
@@ -265,7 +268,9 @@ with Dex doing the logins.
 - The cluster's admin kubeconfig (`state/kubeconfig`, context `kind-agentlab`)
   bypasses the platform and OIDC entirely; use it only to debug the lab's own
   plumbing, never to demonstrate platform behavior. The lab never reads the
-  shell's kubeconfig: every cluster-facing command exports the kind cluster's
+  shell's kubeconfig for its own cluster (a `k8s://` secret source names a
+  context of it to read one key of another cluster's Secret, the one read it
+  makes; secretsource.go): every cluster-facing command exports the kind cluster's
   kubeconfig to `state/kubeconfig`, and its embedded Helm and Kubernetes
   client are built from that file alone (restclient.go, kube.go), so the
   proofs are deterministic about the cluster whatever the current-context is
@@ -336,6 +341,7 @@ agentlab portal dev       # your giantswarm/backstage checkout (../backstage) wi
 agentlab portal build     # that checkout's image as CI builds it, recorded as platform.devImages.backstage and rolled in
 agentlab login <email>   # headless password grant; --browser for the real Dex login page
 agentlab render          # write every manifest to state/ without applying
+agentlab place-secret <ref> <ns>/<secret>/<key>  # one credential from op://, a SOPS file or k8s:// into a lab Secret, never an argument, a file or the output
 agentlab self-update     # replace the binary with the latest GitHub release (--check only reports; exit 125 when outdated; --pre follows release candidates)
 ```
 

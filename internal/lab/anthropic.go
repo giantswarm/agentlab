@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -47,14 +46,13 @@ var (
 	portalAnthropicKey = anthropicKeySecret{platformNamespace, portalAnthropicSecret, "Backstage's AI chat"}
 )
 
-// secretTool is the operator's secret tooling a recorded source is handed to:
-// beekeeper (github.com/giantswarm/beekeeper), whose `secret copy <ref>
-// --to-secret kind-<cluster>/<ns>/<name>/<key>` reads the value in its own
-// process and writes it into the lab's Secret through the kind admin
+// secretTool is beekeeper (github.com/giantswarm/beekeeper), which places a
+// recorded source where it is on PATH (secretsource.go): its `secret copy
+// <ref> --to-secret kind-<cluster>/<ns>/<name>/<key>` reads the value in its
+// own process and writes it into the lab's Secret through the kind admin
 // kubeconfig it holds — the one key, the Secret created when absent. It
 // answers the value's length, never the value; agentlab prints that answer.
-// The second subprocess of the lab next to the container engine (exec.go),
-// run only while agentlab.yaml records a source.
+// Without it agentlab reads the source itself (readSecretSource).
 const secretTool = "beekeeper" // #nosec G101 -- a tool's NAME, not a credential
 
 // runSecretTool runs the tooling and answers its stdout; the seam the tests
@@ -78,12 +76,12 @@ func secretTarget(cfg *config.Config, ns, name, key string) string {
 // lab — a fresh one included — and reports whether it wrote it (so callers
 // can roll an already-running consumer exactly once). In order:
 //
-//   - a source in agentlab.yaml (aiKey.source): the Secret is placed from it
-//     through the secret tooling, and its failure fails the run — a lab whose
-//     configuration says where the key is never runs on a placeholder. A
-//     Secret that already holds a real key is left alone (delete it and
-//     re-run to rotate, or place the value directly); the placeholder and a
-//     missing key are replaced.
+//   - a source in agentlab.yaml (aiKey.source): the key is placed from it
+//     (ensureSourcedKey, secretsource.go), and its failure fails the run — a
+//     lab whose configuration says where the key is never runs on a
+//     placeholder. A Secret that already holds a real key is left alone
+//     (delete it and re-run to rotate, or `agentlab place-secret`); the
+//     placeholder and a missing key are replaced.
 //   - $ANTHROPIC_API_KEY in the host environment: the Secret is created from
 //     it, in-process, so the key never appears in a process's argv or in a
 //     file; a real key already there is left alone, the placeholder replaced.
@@ -105,32 +103,12 @@ func ensurePortalAnthropicSecret(cfg *config.Config) (wrote bool, err error) {
 }
 
 func ensureAnthropicKey(cfg *config.Config, s anthropicKeySecret) (wrote bool, err error) {
-	ctx := context.Background()
-	state, err := anthropicSecretState(ctx, s.ns, s.name)
+	if source := cfg.AIKey.Source; source != "" {
+		return ensureSourcedKey(cfg, sourcedSecretKey{ns: s.ns, name: s.name, key: anthropicSecretKey, field: "aiKey.source", source: source, consumer: s.consumer})
+	}
+	state, err := anthropicSecretState(context.Background(), s.ns, s.name)
 	if err != nil {
 		return false, err
-	}
-	target := secretTarget(cfg, s.ns, s.name, anthropicSecretKey)
-	if source := cfg.AIKey.Source; source != "" {
-		if state == anthropicKeyReal {
-			note("secret %s/%s already holds a key, leaving it alone (delete it and re-run to place %s again)", s.ns, s.name, source)
-			return false, nil
-		}
-		args := secretCopyArgs(source, target)
-		answer, err := runSecretTool(args...)
-		if err != nil {
-			return false, fmt.Errorf("secret %s/%s key %s from aiKey.source %s: %w\n  %s cannot reach Anthropic without it; when %s answers, re-run `agentlab platform`",
-				s.ns, s.name, anthropicSecretKey, source, err, s.consumer, secretTool)
-		}
-		if state, err = anthropicSecretState(ctx, s.ns, s.name); err != nil {
-			return false, err
-		}
-		if state != anthropicKeyReal {
-			return false, fmt.Errorf("secret %s/%s key %s: %s answered %q, but the Secret still lacks a key from aiKey.source %s",
-				s.ns, s.name, anthropicSecretKey, secretTool, strings.TrimSpace(answer), source)
-		}
-		note("secret %s/%s key %s placed from %s by %s (%s); agentlab never read the value", s.ns, s.name, anthropicSecretKey, source, secretTool, strings.TrimSpace(answer))
-		return true, nil
 	}
 	if key := os.Getenv(AnthropicKeyEnv); key != "" {
 		if state == anthropicKeyReal {
@@ -150,13 +128,13 @@ func ensureAnthropicKey(cfg *config.Config, s anthropicKeySecret) (wrote bool, e
 		note("secret %s/%s already holds a key, leaving it alone (delete it and re-run to rotate)", s.ns, s.name)
 		return false, nil
 	case anthropicKeyPlaceholder:
-		warnAnthropicPlaceholder(cfg, s, target, "still holds")
+		warnAnthropicPlaceholder(cfg, s, "still holds")
 		return false, nil
 	}
 	if err := ensureSecret(s.ns, s.name, corev1.SecretTypeOpaque, map[string][]byte{anthropicSecretKey: []byte(placeholderAPIKey)}); err != nil {
 		return false, err
 	}
-	warnAnthropicPlaceholder(cfg, s, target, "holds")
+	warnAnthropicPlaceholder(cfg, s, "holds")
 	return true, nil
 }
 
@@ -164,24 +142,27 @@ func ensureAnthropicKey(cfg *config.Config, s anthropicKeySecret) (wrote bool, e
 // placeholder means and the three ways to the real key. The portal's copy
 // says it once, in a line of its own; the three ways follow with the agents'
 // Secret, or with the portal's on a lab without agents.
-func warnAnthropicPlaceholder(cfg *config.Config, s anthropicKeySecret, target, verb string) {
+func warnAnthropicPlaceholder(cfg *config.Config, s anthropicKeySecret, verb string) {
 	if s == portalAnthropicKey {
 		warn("secret %s/%s %s a placeholder key: Backstage's AI chat answers nothing until the key is placed", s.ns, s.name, verb)
 		if cfg.Platform.Agents {
 			return
 		}
-		warn("  %s secret copy op://<vault>/<item>/<field> --to-secret %s   (agentlab never reads the value)", secretTool, target)
-		warn("  or record the source so every `agentlab up` restores it: agentlab configure --ai-key-source op://<vault>/<item>/<field>, then `agentlab platform`")
-		warn("  or export %s=... and re-run `agentlab platform`", AnthropicKeyEnv)
+		warnAnthropicKeyWays(s)
 		return
 	}
 	warn("secret %s/%s %s a placeholder key: ModelConfig %s resolves and agents start, but every turn on it fails at Anthropic until the key is placed:", s.ns, s.name, verb, renderedDefaultModelConfig(cfg))
-	warn("  %s secret copy op://<vault>/<item>/<field> --to-secret %s   (agentlab never reads the value)", secretTool, target)
-	warn("  or record the source so every `agentlab up` restores it: agentlab configure --ai-key-source op://<vault>/<item>/<field>, then `agentlab platform`")
-	warn("  or export %s=... and re-run `agentlab platform`", AnthropicKeyEnv)
+	warnAnthropicKeyWays(s)
 	if cfg.Backstage.Enabled {
 		warn("  Backstage's AI chat answers nothing on the placeholder either")
 	}
+}
+
+// warnAnthropicKeyWays are the three ways to the real key.
+func warnAnthropicKeyWays(s anthropicKeySecret) {
+	warn("  record the source so every `agentlab up` places it: agentlab configure --ai-key-source op://<vault>/<item>/<field>, then `agentlab platform`")
+	warn("  or place it once: agentlab place-secret op://<vault>/<item>/<field> %s/%s/%s   (the value never reaches an argument, a file or the output)", s.ns, s.name, anthropicSecretKey)
+	warn("  or export %s=... and re-run `agentlab platform`", AnthropicKeyEnv)
 }
 
 // anthropicKeyState is what kagent/kagent-anthropic carries under the key.

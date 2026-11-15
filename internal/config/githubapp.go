@@ -9,17 +9,17 @@ import (
 // with: installation tokens at the App's rate limit instead of a static
 // token or GitHub's anonymous window. The App id and installation id are
 // public; the private key is never this file: PrivateKeySource names where
-// the operator's secret tooling finds it, and `agentlab up` and `platform`
-// hand the reference to that tooling, which writes the key straight into the
-// lab's Secret agentlab-github-app (internal/lab/githubapp.go).
+// it lives, and `agentlab up` and `platform` read it from there into the
+// lab's Secret agentlab-github-app within their own process
+// (internal/lab/githubapp.go, secretsource.go).
 type GitHubApp struct {
 	// AppID is the App's numeric id.
 	AppID string `yaml:"appId,omitempty"`
 	// InstallationID is the numeric id of the App's installation whose
 	// repositories the skills come from.
 	InstallationID string `yaml:"installationId,omitempty"`
-	// PrivateKeySource is a reference `beekeeper secret copy` resolves to the
-	// App's private key (PEM), in the form AIKey.Source takes.
+	// PrivateKeySource is a reference to the App's private key (PEM), in the
+	// form AIKey.Source takes.
 	PrivateKeySource string `yaml:"privateKeySource,omitempty"`
 	// ClientID and ClientSecretSource are the App's OAuth client: the
 	// portal's GitHub integration takes an App only with both, so the

@@ -357,8 +357,14 @@ func TestWorkspaceGitHubForReadsTheSecretsKeys(t *testing.T) {
 // recorded key into agent-platform/workspace-github, none without a source
 // or without the instance, and a placement that fails fails the run.
 func TestEnsureWorkspaceGitHubSecret(t *testing.T) {
+	newFakeLab(t)
 	cfg := workspaceGitHubLab()
-	calls := fakeSecretTool(t, func() error { return nil })
+	const (
+		keySource    = "op://Lab/workspaces-app/private-key"   // #nosec G101 -- a reference, not a credential
+		secretSource = "op://Lab/workspaces-app/client-secret" // #nosec G101 -- a reference, not a credential
+	)
+	values := map[string]string{keySource: "pem", secretSource: "client secret"}
+	calls := fakeSecretSources(t, values)
 	if err := ensureWorkspaceSecrets(cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -366,10 +372,6 @@ func TestEnsureWorkspaceGitHubSecret(t *testing.T) {
 		t.Fatalf("placed without a source: %v", *calls)
 	}
 
-	const (
-		keySource    = "op://Lab/workspaces-app/private-key"   // #nosec G101 -- a reference, not a credential
-		secretSource = "op://Lab/workspaces-app/client-secret" // #nosec G101 -- a reference, not a credential
-	)
 	cfg.Platform.Workspaces.GitHub = config.WorkspaceGitHub{
 		AppID: testWorkspaceAppID, ClientID: testWorkspaceClientID,
 		PrivateKeySource: keySource, ClientSecretSource: secretSource,
@@ -377,22 +379,23 @@ func TestEnsureWorkspaceGitHubSecret(t *testing.T) {
 	if err := ensureWorkspaceSecrets(cfg); err != nil {
 		t.Fatal(err)
 	}
-	target := "kind-" + cfg.ClusterName + "/agent-platform/" + config.WorkspaceGitHubSecretName + "/"
-	want := [][]string{
-		secretCopyArgs(keySource, target+config.WorkspaceGitHubPrivateKeyKey),
-		secretCopyArgs(secretSource, target+config.GitHubClientSecretKey),
+	if want := []string{keySource, secretSource}; !reflect.DeepEqual(*calls, want) {
+		t.Errorf("sources read %v, want %v", *calls, want)
 	}
-	if !reflect.DeepEqual(*calls, want) {
-		t.Errorf("placements %v, want %v", *calls, want)
+	for key, source := range map[string]string{config.WorkspaceGitHubPrivateKeyKey: keySource, config.GitHubClientSecretKey: secretSource} {
+		if got, err := secretDataKey(t.Context(), platformNamespace, config.WorkspaceGitHubSecretName, key); err != nil || string(got) != values[source] {
+			t.Errorf("%s/%s key %s = %q (err %v), want the value of %s", platformNamespace, config.WorkspaceGitHubSecretName, key, got, err, source)
+		}
 	}
 
-	fakeSecretTool(t, nil)
+	newFakeLab(t)
+	fakeSecretSources(t, nil)
 	if err := ensureWorkspaceSecrets(cfg); err == nil || !strings.Contains(err.Error(), "privateKeySource") {
 		t.Errorf("a failed placement answered %v, want the run failed naming the source", err)
 	}
 
 	cfg.Platform.Workspaces.Provider = config.WorkspaceProviderGitLab
-	calls = fakeSecretTool(t, func() error { return nil })
+	calls = fakeSecretSources(t, values)
 	if err := ensureWorkspaceSecrets(cfg); err != nil || len(*calls) != 0 {
 		t.Errorf("placed %v (%v) without the github instance", *calls, err)
 	}

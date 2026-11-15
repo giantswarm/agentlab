@@ -106,35 +106,31 @@ copy for Backstage's AI chat, `agent-platform/agentlab-anthropic`, by the same
 rules; see [Backstage](backstage.md)):
 
 - **A recorded source** (`aiKey.source` in `agentlab.yaml`; `agentlab
-  configure --ai-key-source op://<vault>/<item>/<field>`, or
-  `<file>#<path>` of a SOPS file): a *reference*, never a value. Every `up`
-  and `platform` hand it to the operator's secret tooling, `beekeeper secret
-  copy <source> --to-secret kind-<clusterName>/kagent/kagent-anthropic/ANTHROPIC_API_KEY`
-  ([beekeeper](https://github.com/giantswarm/beekeeper), on PATH; `configure`
-  refuses a source without it), which reads the value in its own process and
-  writes it straight into the lab's apiserver — agentlab sees the value's
-  length, never the value. A recreated lab (`down`, `up`) carries the key
-  again without a manual step; a Secret already holding a real key is left
-  alone (delete it and re-run to place the source again). A source that
-  cannot be placed — the tooling missing, the vault not answering, no lease
-  on the lab — fails the run naming the Secret and the source: a lab whose
-  configuration says where the key is never runs on a placeholder.
+  configure --ai-key-source op://<vault>/<item>/<field>`, `<file>#<path>` of
+  a SOPS file, or `k8s://<context>/<namespace>/<secret>/<key>`): a
+  *reference*, never a value. `up` and `platform` read it — through `op` or
+  `sops` (on PATH; `configure` refuses a source without its reader) or the
+  embedded client — and write it into the lab's Secret within agentlab's
+  process: the value never reaches an argument, a file or the output, the run
+  prints its length. A recreated lab (`down`, `up`) carries the key again
+  without a manual step; a Secret already holding a real key is left alone
+  and the source not read (delete it and re-run to place the source again). A
+  source that cannot be read — the reader missing or not signed in, the path
+  reaching nothing — fails the run naming the Secret and the source: a lab
+  whose configuration says where the key is never runs on a placeholder. See
+  [Secret sources](secrets.md).
 - **`$ANTHROPIC_API_KEY`** on the host, when no source is recorded: the
   Secret is created from it in-process (left alone once it holds a real key;
   delete it and re-run to rotate).
 - **A placeholder** otherwise, as for an [extra model](models.md) without a
   key: the ModelConfig resolves and agents start, but every turn on it fails
   at Anthropic until the key is placed — the run says so, loudly, with the
-  three ways: the `beekeeper secret copy … --to-secret` call above (it
-  replaces the placeholder; the next run leaves the real key alone), the
-  source recorded, or the variable exported and `agentlab platform` re-run.
+  three ways: the source recorded, `agentlab place-secret <ref>
+  kagent/kagent-anthropic/ANTHROPIC_API_KEY` (it replaces the placeholder;
+  the next run leaves the real key alone), or the variable exported and
+  `agentlab platform` re-run.
   Without any of those, run the agent proofs on a host model:
   [Agent proofs without an Anthropic key](models.md#agent-proofs-without-an-anthropic-key).
-
-A person without the tooling places the key with
-`kubectl --context kind-<clusterName> -n kagent create secret generic
-kagent-anthropic --from-file=ANTHROPIC_API_KEY=…` (over the placeholder:
-`delete secret` first).
 
 The same key powers Backstage's AI chat (see
 [Backstage gotchas](backstage.md#backstage-gotchas) for its no-key behavior).
@@ -155,9 +151,9 @@ back truncated (the proof refuses that by name) until the window resets.
 
 A token lifts that, from a recorded source (`githubToken.source` in
 `agentlab.yaml`; `agentlab configure --github-token-source
-op://<vault>/<item>/<field>`, or `<file>#<path>` of a SOPS file): every `up`
-and `platform` hand it to `beekeeper secret copy --to-secret`, which writes the
-token in its own process; agentlab never reads the value, and a placement that
+op://<vault>/<item>/<field>`, or `<file>#<path>` of a SOPS file): `up` and
+`platform` read it and place it while the Secret lacks it, the value in
+agentlab's process only ([Secret sources](secrets.md)), and a placement that
 fails fails the run. The lab never takes `$GITHUB_TOKEN` either (only
 `self-update` reads it): a token exported in its environment reaches no
 consumer. Without a source `discover` names the Secret the lab lacks,
@@ -166,19 +162,21 @@ consumer. Without a source `discover` names the Secret the lab lacks,
 GitHub App is recorded; `agents-test` then reports its `refreshSkills` step as
 a SKIP with the same reason.
 
-`agentlab up`/`platform` place **or update** the Secret `agentlab-github-token` (key `GITHUB_TOKEN`) in
+`agentlab up`/`platform` place the Secret `agentlab-github-token` (key `GITHUB_TOKEN`) in
 `agent-platform`: the portal takes it through `extraEnvVarsSecrets` and the
 lab's app-config overlay (`integrations.github[].token: ${GITHUB_TOKEN}`),
 and agent-manager through the chart's `skills.github.tokenSecret`. Both
 then call GitHub authenticated (5000 requests an hour; the rate-limit headers
 say so). A copy in `kagent` that an earlier agentlab placed is removed. A fine-grained token with public read access is enough; a token that
 reads a private skill repository lets agent-manager resolve skills from it.
-The token travels vault -> Secret through beekeeper only and never enters
+The token travels vault -> agentlab's memory -> Secret and never enters
 `agentlab.yaml`, `state/` (the rendered values carry the Secret's *name*), a
-log line or a process's argv. Re-running after a rotation in the vault
-rotates the Secret.
+log line or a process's argv. A placed token stays across runs; after a
+rotation in the vault, `agentlab place-secret <ref>
+agent-platform/agentlab-github-token/GITHUB_TOKEN` (or deleting the Secret and
+re-running) rotates the Secret.
 
-**A skills GitHub App** is the way a lab reaches GitHub without any token: agent-manager's chart takes a read-only App (`skills.github.app.secretName`) and resolves skills with its installation tokens, at the App's rate limit. `agentlab configure --github-app-id <id> --github-app-installation-id <id> --github-app-private-key-source op://<vault>/<item>/<field>` records it as `githubApp` in `agentlab.yaml` (the ids are public; the key is a reference). A lab that already records the workspaces GitHub App (`platform.workspaces.github`, docs/workspaces.md) records only its installation, `agentlab configure --github-app-installation-id <id>`: agent-manager then resolves skills as that App, its id and private key source taken from the workspaces entry. With the workspaces App's OAuth client recorded too (`clientId` and `clientSecretSource`, or `githubApp.clientId` and `githubApp.clientSecretSource` for an App of its own), the portal's skill discovery calls GitHub as the same App: every `up` and `platform` write the Secret `agentlab-portal-github-app` (`GITHUB_APP_ID` and `GITHUB_APP_CLIENT_ID` applied, `GITHUB_APP_PRIVATE_KEY` and `GITHUB_APP_CLIENT_SECRET` placed by beekeeper), the portal's `extraEnvVarsSecrets` take it, and the overlay's `integrations.github` lists the App with `publicAccess: true`, so a public repository of any owner gets an installation token. Every `up` and `platform` apply the ids to the Secret `agentlab-github-app` in `agent-platform` and hand the key to `beekeeper secret copy --to-secret` (key `private-key`, never read by agentlab; a failed placement fails the run), and the values name the Secret for agent-manager and, on a chart that runs the skill-manager (its values schema or defaults carry the `skill-manager` key, read from the chart itself, so a release, a branch build and a chart directory are judged alike), the skill-manager (`skill-manager.github.app.secretName`), which takes no token: without the App it reads public repositories anonymously. agent-manager's chart refuses the App together with `tokenSecret`, so `githubApp` and `githubToken.source` are not recorded together.
+**A skills GitHub App** is the way a lab reaches GitHub without any token: agent-manager's chart takes a read-only App (`skills.github.app.secretName`) and resolves skills with its installation tokens, at the App's rate limit. `agentlab configure --github-app-id <id> --github-app-installation-id <id> --github-app-private-key-source op://<vault>/<item>/<field>` records it as `githubApp` in `agentlab.yaml` (the ids are public; the key is a reference). A lab that already records the workspaces GitHub App (`platform.workspaces.github`, docs/workspaces.md) records only its installation, `agentlab configure --github-app-installation-id <id>`: agent-manager then resolves skills as that App, its id and private key source taken from the workspaces entry. With the workspaces App's OAuth client recorded too (`clientId` and `clientSecretSource`, or `githubApp.clientId` and `githubApp.clientSecretSource` for an App of its own), the portal's skill discovery calls GitHub as the same App: every `up` and `platform` write the Secret `agentlab-portal-github-app` (`GITHUB_APP_ID` and `GITHUB_APP_CLIENT_ID` applied, `GITHUB_APP_PRIVATE_KEY` and `GITHUB_APP_CLIENT_SECRET` placed from their sources), the portal's `extraEnvVarsSecrets` take it, and the overlay's `integrations.github` lists the App with `publicAccess: true`, so a public repository of any owner gets an installation token. Every `up` and `platform` apply the ids to the Secret `agentlab-github-app` in `agent-platform` and place the key from its source while the Secret lacks it (key `private-key`, the value in agentlab's process only, [Secret sources](secrets.md); a failed placement fails the run), and the values name the Secret for agent-manager and, on a chart that runs the skill-manager (its values schema or defaults carry the `skill-manager` key, read from the chart itself, so a release, a branch build and a chart directory are judged alike), the skill-manager (`skill-manager.github.app.secretName`), which takes no token: without the App it reads public repositories anonymously. agent-manager's chart refuses the App together with `tokenSecret`, so `githubApp` and `githubToken.source` are not recorded together.
 
 Without either the lab is as before: the values name no Secret, the
 consumers call GitHub unauthenticated, and a Secret an earlier run created
@@ -355,7 +353,8 @@ to `agent-platform:admin` for the group `platform-admins`; the editors,
 the lab's model, marked default, its key in the tenant credential
 `tenant-credential-anthropic`, placed the way the lab places the Anthropic
 key everywhere (`anthropic.go`: the recorded source, the host environment,
-else the placeholder; agentlab never reads the value). The chart's admission
+else the placeholder; the value never reaches an argument, a file or the
+output). The chart's admission
 policy fills in the LLM listener as its `baseUrl`. Last, the first developer
 creates an agent's HelmRelease there as a server-side dry run with their own
 Dex token, which RBAC and every admission policy of the namespace (the

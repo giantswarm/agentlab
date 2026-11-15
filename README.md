@@ -283,6 +283,7 @@ check above.
 | [Identity](docs/identity.md) | Users and groups, the shared issuer, the Dex version, wiring another app, `trustedPeers` |
 | [Workspaces](docs/workspaces.md) | The workspace storage switch (the NFS server, the NFS CSI driver behind its mTLS proxy, the read-write-many class, the proof) and the workspace-manager's provider instances, a GitHub App of the lab's own and a GitLab |
 | [GitHub sign-in](docs/github-signin.md) | GitHub as a second way into the lab: the App and its callback, the client secret placed as a Secret, what a GitHub user is in the lab |
+| [Secret sources](docs/secrets.md) | Where the lab's real credentials come from: the `op://`, SOPS and `k8s://` references `agentlab.yaml` records, how `up` and `platform` read and place them without the value reaching an argument, a file or the output, `place-secret` |
 | [The lab's registries](docs/registries.md) | The lab registry and the gsoci mirror every lab on the machine shares (`registryMirror`), zot following its releases, holding the lab registry back (`zotVersion`) |
 | [Bandwidth](docs/bandwidth.md) | The shaper that lets the mirror's downloads yield to your own traffic (`bandwidthShaper`): how it decides, the machine's override (`agentlab shaper`), what it shapes and what not, the namespace proof |
 | [Troubleshooting](docs/troubleshooting.md) | The gotchas that cost time |

@@ -2,7 +2,6 @@ package lab
 
 import (
 	"context"
-	"fmt"
 	"slices"
 	"strings"
 
@@ -16,13 +15,12 @@ import (
 //
 //   - github, the default: a GitHub App of the lab's own on github.com, its App id and
 //     client id in agentlab.yaml, its private key and client secret in the
-//     Secret agent-platform/workspace-github, which the operator's secret
-//     tooling places (`beekeeper secret copy <ref> --to-secret
-//     <context>/agent-platform/workspace-github/<key>`, one call per key):
-//     every up and platform from platform.workspaces.github's
-//     privateKeySource and clientSecretSource when agentlab.yaml records
-//     them (ensureWorkspaceSecrets), by hand otherwise. agentlab reads
-//     which keys it carries and never a value.
+//     Secret agent-platform/workspace-github: placed from
+//     platform.workspaces.github's privateKeySource and clientSecretSource
+//     when agentlab.yaml records them (ensureWorkspaceSecrets,
+//     secretsource.go), by hand otherwise (`agentlab place-secret <ref>
+//     agent-platform/workspace-github/<key>`, one call per key). No value
+//     reaches an argument, a file or the output.
 //   - gitlab: a GitLab the lab reaches (a self-managed test instance), of the
 //     chart's `gitlab` kind: its URL and the OAuth application's client id
 //     in agentlab.yaml, the group access token, the application's secret and
@@ -147,10 +145,10 @@ type sourcedKey struct{ key, field, source string }
 // ensureWorkspaceSecrets is the deploy-time placement of the github and
 // gitlab instances' Secrets, run before workspaceGitHubFor and
 // workspaceGitLabFor read them: each key whose source agentlab.yaml records
-// is placed by the secret tooling, and a placement that fails fails the run,
-// so a lab whose configuration says where an instance's keys are never comes
-// up without it. A key without a source is left as it is, for a placement by
-// hand.
+// is placed from it (ensureSourcedKey), and a placement that fails fails the
+// run, so a lab whose configuration says where an instance's keys are never
+// comes up without it. A key without a source is left as it is, for a
+// placement by hand (`agentlab place-secret`).
 func ensureWorkspaceSecrets(cfg *config.Config) error {
 	if cfg.WorkspaceGitHubProvider() {
 		gh := cfg.Platform.Workspaces.GitHub
@@ -179,12 +177,11 @@ func placeWorkspaceSecret(cfg *config.Config, instance, secret string, keys []so
 		if k.source == "" {
 			continue
 		}
-		answer, err := runSecretTool(secretCopyArgs(k.source, secretTarget(cfg, platformNamespace, secret, k.key))...)
-		if err != nil {
-			return fmt.Errorf("secret %s/%s key %s from platform.workspaces.%s.%s %s: %w\n  the workspace-manager's provider instance %s references it; when %s answers, re-run `agentlab platform`",
-				platformNamespace, secret, k.key, instance, k.field, k.source, err, instance, secretTool)
+		if _, err := ensureSourcedKey(cfg, sourcedSecretKey{ns: platformNamespace, name: secret, key: k.key,
+			field: "platform.workspaces." + instance + "." + k.field, source: k.source,
+			consumer: "the workspace-manager's provider instance " + instance}); err != nil {
+			return err
 		}
-		note("secret %s/%s key %s placed from %s by %s (%s); agentlab never read the value", platformNamespace, secret, k.key, k.source, secretTool, strings.TrimSpace(answer))
 	}
 	return nil
 }
@@ -226,9 +223,9 @@ func workspaceGitHubFor(ctx context.Context, cfg *config.Config) (*workspaceProv
 	warn("platform.workspaces.provider names github but %s missing -- the workspace-manager gets no provider instance %s", strings.Join(missing, ", "), config.WorkspaceProviderGitHub)
 	warn("  register a GitHub App with callback URL %s, record its App id and client id in agentlab.yaml and where its keys are (platform.workspaces.github.privateKeySource and clientSecretSource: every up and platform places them), or place them by hand, one per call:", callback)
 	for _, key := range workspaceGitHubKeys {
-		warn("  %s secret copy <ref to the %s> --to-secret %s", secretTool, key, secretTarget(cfg, platformNamespace, config.WorkspaceGitHubSecretName, key))
+		warn("  agentlab place-secret <ref to the %s> %s/%s/%s", key, platformNamespace, config.WorkspaceGitHubSecretName, key)
 	}
-	warn("  then re-run; agentlab never reads the values (docs/workspaces.md)")
+	warn("  then re-run; no value reaches an argument, a file or the output (docs/workspaces.md)")
 	return nil, nil
 }
 
@@ -268,9 +265,9 @@ func workspaceGitLabFor(ctx context.Context, cfg *config.Config) (*workspaceProv
 	warn("platform.workspaces.provider names gitlab but %s missing -- the workspace-manager gets no provider instance %s", strings.Join(missing, ", "), config.WorkspaceProviderGitLab)
 	warn("  register an OAuth application on the GitLab with redirect URI %s and the scopes api read_user read_repository write_repository, record the GitLab's url and the client id in agentlab.yaml and where the keys are (platform.workspaces.gitlab.tokenSource, clientSecretSource, passwordSource: every up and platform places them), or place them by hand, one per call:", callback)
 	for _, key := range append(slices.Clone(workspaceGitLabKeys), config.WorkspaceGitLabPasswordKey) {
-		warn("  %s secret copy <ref to the %s> --to-secret %s", secretTool, key, secretTarget(cfg, platformNamespace, config.WorkspaceGitLabSecretName, key))
+		warn("  agentlab place-secret <ref to the %s> %s/%s/%s", key, platformNamespace, config.WorkspaceGitLabSecretName, key)
 	}
-	warn("  then re-run; agentlab never reads the values (docs/workspaces.md)")
+	warn("  then re-run; no value reaches an argument, a file or the output (docs/workspaces.md)")
 	return nil, nil
 }
 

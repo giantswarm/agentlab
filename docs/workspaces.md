@@ -770,13 +770,12 @@ the lab's own is in place (`--workspaces-github-app-id` and
 [Platform](platform.md#the-workspace-managers-provider-instances-platformworkspacesprovider)).
 With `platform.workspaces.github.privateKeySource` and `clientSecretSource`
 recorded (`--workspaces-github-private-key-source`,
-`--workspaces-github-client-secret-source`), every `up` and `platform` places the two keys through the
-operator's secret tooling. A 1Password or SOPS source restores the binding
-when the lab is recreated. An existing Kubernetes binding can be reused
-with `k8s://kind-agentlab/agent-platform/workspace-github/private-key` and
-`k8s://kind-agentlab/agent-platform/workspace-github/client-secret`, with the
-lab's lease held in beekeeper. Without sources the Secret is placed by
-hand, and a lab without it renders no `github` instance.
+`--workspaces-github-client-secret-source`), `up` and `platform` place each
+key the Secret lacks ([Secret sources](secrets.md)). A 1Password or SOPS
+source restores the binding when the lab is recreated; a `k8s://` source
+takes the keys from another cluster's Secret, read with that context of your
+kubeconfig. Without sources the Secret is placed by hand (`agentlab
+place-secret`), and a lab without it renders no `github` instance.
 
 The App is registered once, by an owner of the organization that holds it,
 in GitHub's UI (Settings, Developer settings, GitHub Apps), and serves every
@@ -817,9 +816,9 @@ platform:
 ```
 
 The three values are the Secret `agent-platform/workspace-gitlab` (keys
-`token`, `client-secret`, `person-password`). With the sources recorded, every
-`up` and `platform` places them through the operator's secret tooling;
-agentlab never reads a value. The instance renders once the URL, the client
+`token`, `client-secret`, `person-password`). With the sources recorded, `up`
+and `platform` place each key the Secret lacks, the value in agentlab's
+process only ([Secret sources](secrets.md)). The instance renders once the URL, the client
 id and the first two keys are in place; the part's person needs the third.
 
 GitLab's side, set up once by an administrator of the instance:

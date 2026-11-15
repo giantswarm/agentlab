@@ -14,12 +14,11 @@ import (
 
 // The MCPServer `github` (github-mcp.yaml.tmpl) reads its OAuth client — an
 // OAuth App, or a GitHub App's client, whose callback URL is muster's proxy
-// callback — from the Secret platform.github.secret names. The operator's
-// secret tooling places it (`beekeeper secret copy <ref> --to-secret
-// <context>/<namespace>/<name>/<key>`, one call per key); agentlab reads
-// which keys it carries and never a value: nothing of the client reaches
-// agentlab.yaml, state/, a log line, a process's argv or the environment of
-// whoever runs the lab.
+// callback — from the Secret platform.github.secret names. The operator
+// places it (`agentlab place-secret <ref> <namespace>/<name>/<key>`, one
+// call per key, secretsource.go); a run reads which keys it carries and
+// never a value: nothing of the client reaches agentlab.yaml, state/, a log
+// line, a process's argv or the environment of whoever runs the lab.
 const gitHubMCPServer = "github"
 
 // gitHubMCPClientKeys are the keys the Secret must carry, muster's
@@ -47,9 +46,9 @@ func ensureGitHubMCP(cfg *config.Config) error {
 		warn("platform.github is on but %s -- skipping MCPServer %s", secretGap(ref.Namespace, ref.Name, missing), gitHubMCPServer)
 		warn("  register an OAuth App (or GitHub App) with callback URL %s%s and place its client, one key per call:", cfg.MusterBaseURL(), oauthProxyCallbackPath)
 		for _, key := range gitHubMCPClientKeys {
-			warn("  beekeeper secret copy <ref to the %s> --to-secret kind-%s/%s/%s/%s", key, cfg.ClusterName, ref.Namespace, ref.Name, key)
+			warn("  agentlab place-secret <ref to the %s> %s/%s/%s", key, ref.Namespace, ref.Name, key)
 		}
-		warn("  then re-run; agentlab never reads the values")
+		warn("  then re-run; no value reaches an argument, a file or the output")
 		return nil
 	}
 	step("Registering GitHub's hosted MCP server with muster (MCPServer %s, client Secret %s/%s)", gitHubMCPServer, ref.Namespace, ref.Name)
