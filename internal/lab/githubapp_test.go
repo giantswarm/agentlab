@@ -67,8 +67,9 @@ func TestGitHubAppLegacyChartTakesNoKeys(t *testing.T) {
 	}
 }
 
-// testPEM is what the fake vault answers for a private key: a test value.
-const testPEM = "-----BEGIN RSA PRIVATE KEY-----\ntest\n-----END RSA PRIVATE KEY-----\n" // #nosec G101 -- a test value, not a credential
+// testPEM is what the fake vault answers for a private key: a test value,
+// not PEM, so the repository's private-key scan has nothing to find.
+const testPEM = "app-private-key-from-the-vault\n" // #nosec G101 -- a test value, not a credential
 
 // TestEnsureGitHubAppSecret: nothing without an App; with one agentlab
 // applies the public ids and places the private key from its source next
