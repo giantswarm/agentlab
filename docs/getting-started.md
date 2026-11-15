@@ -215,7 +215,7 @@ Discovering this machine:
   LM Studio         api v1 on :1234 — answers on 172.21.0.1 (the address pods dial): yes; 6 downloaded, 4 tool-calling
   KVM               /dev/kvm and /dev/vhost-vsock present — platform.vmManager on, images from /home/you/projects/giantswarm/vm-manager/images/build
   Anthropic key     $ANTHROPIC_API_KEY is set — the agents' default ModelConfig and Backstage's AI chat get the real key at deploy time
-  GitHub token      githubToken.source op://lab/github-token/credential — beekeeper places it into the Secret agent-platform/agentlab-github-token at every up and platform: the portal's skill discovery and agent-manager's skill resolution call GitHub authenticated (5000 requests an hour); agentlab never reads the value
+  GitHub token      githubToken.source op://lab/github-token/credential — agentlab reads it through op 2.41.1 and places it into the Secret agent-platform/agentlab-github-token when it lacks the token: the portal's skill discovery and agent-manager's skill resolution call GitHub authenticated (5000 requests an hour)
   Telemetry         enabled — anonymous usage data (commands, platform installs, the portal's use, one random ID per lab) goes to TelemetryDeck; the form, or `agentlab configure --telemetry=false`, disables it (docs/telemetry.md)
 
 Applied to the configuration:
@@ -291,11 +291,12 @@ Applied to the configuration:
   what the file says (`--vm-manager` turns it on) — see
   [vm-manager](vm-manager.md).
 - **The Anthropic key**: the source `agentlab.yaml` records (`aiKey.source`,
-  placed through beekeeper, which must then answer on PATH), else whether
+  read through `op` or `sops`, which must then answer on PATH; see
+  [Secret sources](secrets.md)), else whether
   `$ANTHROPIC_API_KEY` is exported, else the placeholder the agents' default
   ModelConfig gets at deploy time. See [Agents](agents.md#the-model).
 - **The GitHub token**: the source `agentlab.yaml` records
-  (`githubToken.source`, placed through beekeeper into the Secret
+  (`githubToken.source`, placed into the Secret
   `agent-platform/agentlab-github-token`, key `GITHUB_TOKEN`) or the skills
   GitHub App, since the portal's skill discovery and agent-manager's skill
   resolution otherwise share this machine's unauthenticated GitHub window (60

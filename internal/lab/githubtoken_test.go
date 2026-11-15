@@ -184,14 +184,14 @@ func TestGitHubTokenLegacyChartTakesNoKeys(t *testing.T) {
 }
 
 // TestEnsureGitHubTokenSecrets: without githubToken.source nothing is
-// written and the secret tooling is not called, a $GITHUB_TOKEN in agentlab's
-// environment notwithstanding; a Secret an earlier run placed stays.
+// written and no source is read, a $GITHUB_TOKEN in agentlab's environment
+// notwithstanding; a Secret an earlier run placed stays.
 func TestEnsureGitHubTokenSecrets(t *testing.T) {
 	newFakeLab(t)
 	ctx := context.Background()
 	cfg := gitHubTokenTestConfig()
 	t.Setenv(GitHubTokenEnv, gitHubTestToken)
-	calls := fakeSecretTool(t, func() error { return nil })
+	calls := fakeSecretSources(t, nil)
 	exists := func() bool {
 		t.Helper()
 		ok, err := objectExists(ctx, gvrSecrets, platformNamespace, gitHubTokenSecret)
@@ -210,7 +210,7 @@ func TestEnsureGitHubTokenSecrets(t *testing.T) {
 		t.Errorf("without githubToken.source: stderr %q, want a warning naming the setting and its configure flag", warned)
 	}
 	if exists() || len(*calls) != 0 {
-		t.Fatalf("without githubToken.source: Secret written=%v, secret tooling calls %q; want neither", exists(), *calls)
+		t.Fatalf("without githubToken.source: Secret written=%v, sources read %q; want neither", exists(), *calls)
 	}
 
 	if err := ensureSecret(platformNamespace, gitHubTokenSecret, corev1.SecretTypeOpaque, map[string][]byte{gitHubTokenSecretKey: []byte("placed earlier")}); err != nil {
@@ -230,7 +230,7 @@ func TestEnsureGitHubTokenSecretsQuietWithoutConsumers(t *testing.T) {
 	newFakeLab(t)
 	cfg := gitHubTokenTestConfig()
 	cfg.Platform.Agents, cfg.Backstage.Enabled = false, false
-	fakeSecretTool(t, func() error { return nil })
+	fakeSecretSources(t, nil)
 	var err error
 	if warned := stderrOf(t, func() { err = ensureGitHubTokenSecrets(t.Context(), cfg) }); warned != "" {
 		t.Errorf("stderr %q, want nothing", warned)
@@ -297,10 +297,11 @@ func TestDeploymentSetsEnv(t *testing.T) {
 // nothing resolves it, the fake secret tooling stands in.
 const gitHubTokenTestSource = "op://lab/github-token/credential" // #nosec G101 -- a reference, not a credential
 
-// TestEnsureGitHubTokenSecretsFromSource: a recorded source is handed to the
-// secret tooling for agent-platform/ only, agentlab writing nothing itself,
-// and a kagent/ copy an earlier run placed is removed; a placement that
-// fails fails the run, since the values already name the Secret.
+// TestEnsureGitHubTokenSecretsFromSource: a recorded source is read and
+// placed into agent-platform/ only — the value from the source, never
+// $GITHUB_TOKEN — and a kagent/ copy an earlier run placed is removed; a
+// placement that fails fails the run, since the values already name the
+// Secret.
 func TestEnsureGitHubTokenSecretsFromSource(t *testing.T) {
 	newFakeLab(t)
 	ctx := t.Context()
@@ -314,24 +315,29 @@ func TestEnsureGitHubTokenSecretsFromSource(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	calls := fakeSecretTool(t, func() error { return nil })
+	const vaultToken = "ghp_from_the_vault" // #nosec G101 -- a test value, not a credential
+	reads := fakeSecretSources(t, map[string]string{gitHubTokenTestSource: vaultToken})
 	if err := ensureGitHubTokenSecrets(ctx, cfg); err != nil {
 		t.Fatal(err)
 	}
-	want := [][]string{
-		secretCopyArgs(gitHubTokenTestSource, secretTarget(cfg, platformNamespace, gitHubTokenSecret, gitHubTokenSecretKey)),
+	if want := []string{gitHubTokenTestSource}; !reflect.DeepEqual(*reads, want) {
+		t.Errorf("sources read = %q, want %q", *reads, want)
 	}
-	if !reflect.DeepEqual(*calls, want) {
-		t.Errorf("secret tooling calls = %q, want %q", *calls, want)
+	if got, err := secretDataKey(ctx, platformNamespace, gitHubTokenSecret, gitHubTokenSecretKey); err != nil || string(got) != vaultToken {
+		t.Errorf("%s/%s key %s = %q (err %v), want the source's value", platformNamespace, gitHubTokenSecret, gitHubTokenSecretKey, got, err)
 	}
-	if exists, err := objectExists(ctx, gvrSecrets, platformNamespace, gitHubTokenSecret); err != nil || exists {
-		t.Errorf("agentlab wrote %s/%s itself (exists=%v, err=%v); the source is the tooling's to place", platformNamespace, gitHubTokenSecret, exists, err)
+	if err := ensureGitHubTokenSecrets(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if len(*reads) != 1 {
+		t.Errorf("a re-run read the source again: %q; a held key stays until it is deleted", *reads)
 	}
 	if exists, err := objectExists(ctx, gvrSecrets, kagentNamespace, gitHubTokenSecret); err != nil || exists {
 		t.Errorf("%s/%s from an earlier run stays (exists=%v, err=%v); nothing there reads it", kagentNamespace, gitHubTokenSecret, exists, err)
 	}
 
-	fakeSecretTool(t, nil)
+	newFakeLab(t)
+	fakeSecretSources(t, nil)
 	err := ensureGitHubTokenSecrets(ctx, cfg)
 	if err == nil || !strings.Contains(err.Error(), "githubToken.source") {
 		t.Errorf("err = %v, want the failed placement naming githubToken.source", err)

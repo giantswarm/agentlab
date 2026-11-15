@@ -60,18 +60,18 @@ a demo or for using the portal as yourself.
    ```
 
 3. Place the client secret in the lab as the Secret `dex/github-signin-client`
-   (key `client-secret`). agentlab never reads, prints or writes the value;
-   it reads which keys the Secret carries. Your secret tooling puts it there
-   straight from wherever you keep it — with beekeeper, straight from the
-   vault into the lab's apiserver, so the value passes through no shell, file
-   or agent session:
+   (key `client-secret`). A run reads which keys the Secret carries, never the
+   value. `agentlab place-secret` puts it there straight from wherever you
+   keep it — a 1Password field, a SOPS file, another cluster's Secret — the
+   value passing through no argument, file or output
+   ([Secret sources](secrets.md#placing-a-credential-by-hand)):
 
    ```sh
-   beekeeper secret copy op://<vault>/<item>/client-secret --to-secret kind-agentlab/dex/github-signin-client/client-secret
+   agentlab place-secret op://<vault>/<item>/client-secret dex/github-signin-client/client-secret
    ```
 
    or, from a terminal of your own, `kubectl --kubeconfig state/kubeconfig -n dex create secret generic github-signin-client --from-literal=client-secret=…`
-   (the value then sits in your shell history; the broker path leaves no
+   (the value then sits in your shell history; `place-secret` leaves no
    trace). The Secret's namespace is `dex`, because the Dex pod reads it as an
    environment variable and a pod reads Secrets of its own namespace only;
    `platform.githubSignIn.secret` names another Secret in that namespace.
@@ -142,5 +142,5 @@ The client id (public) in `agentlab.yaml` and the rendered `state/dex.yaml`,
 which carries `clientSecret: $GITHUB_SIGNIN_CLIENT_SECRET` — the variable the
 Dex pod reads from the Secret, expanded by Dex at start. No secret value, no
 vault name and no item name is in this repository, in `agentlab.yaml` or in
-`state/`; the operator's secret tooling is the one thing that knows where the
-value comes from.
+`state/`; the reference you hand `agentlab place-secret` is the one thing that
+knows where the value comes from.

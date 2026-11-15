@@ -162,6 +162,7 @@ Claude Code: claude mcp add --transport http muster https://muster.127.0.0.1.nip
 		inGroup(groupAdvanced, platformCmd()),
 		inGroup(groupAdvanced, certsCmd()),
 		inGroup(groupAdvanced, renderCmd()),
+		inGroup(groupAdvanced, placeSecretCmd()),
 		inGroup(groupAdvanced, labCmd("reload", "Re-render and re-apply the Dex config (after editing agentlab.yaml)", lab.ApplyDex)),
 		inGroup(groupAdvanced, shaperCmd()),
 		inGroup(groupAdvanced, selfUpdateCmd()),
@@ -447,6 +448,24 @@ func renderCmd() *cobra.Command {
 					config.File, taken.Name, taken.Other, taken.Name)
 			}
 			return lab.RenderAll(cfg)
+		},
+	}
+}
+
+// placeSecretCmd is `agentlab place-secret <ref> <namespace>/<secret>/<key>`:
+// one credential placed into the lab from where it lives, the value in
+// agentlab's process only (lab.PlaceSecret).
+func placeSecretCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "place-secret <ref> <namespace>/<secret>/<key>",
+		Short: "Place one credential into a key of a lab Secret from op://<vault>/<item>/<field>, <file>#<path> of a SOPS file or k8s://<context>/<namespace>/<secret>/<key> — never an argument, a file or the output",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			return lab.PlaceSecret(cfg, args[0], args[1])
 		},
 	}
 }
@@ -1726,8 +1745,8 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&networkPolicy, "network-policy", false, "turn the platform's network policies on in the plain NetworkPolicy flavour kindnetd enforces (the connectivity chart's and muster's), with the selectors an installation runs; moves muster onto the pod network (--muster-pod-network), which the policies' pod-label selectors need; --network-policy=false turns them off")
 	cmd.Flags().BoolVar(&alertmanager, "alertmanager", false, "run an Alertmanager in the observability stack with an always-firing AgentlabWatchdog alert, and point mcp-prometheus at it (ALERTMANAGER_URL) so its alert tools have alerts to read; needs platform.observability")
 	cmd.Flags().StringVar(&mcpPrometheusChartVersion, "mcp-prometheus-chart-version", "", "install this mcp-prometheus chart release (an exact version, a release candidate included) instead of the one agentlab pins, for proving a chart change the devImages swap cannot carry; \"\" returns to the pin; needs platform.observability")
-	cmd.Flags().BoolVar(&github, "github", false, "register GitHub's hosted MCP server with muster as MCPServer github, signed in to as the person through an OAuth App or GitHub App client whose client-id and client-secret are the Secret platform.github.secret names (default agent-platform/github-oauth-client), placed with `beekeeper secret copy --to-secret`, never read by agentlab; --github=false removes the server")
-	cmd.Flags().StringVar(&githubSignInClientID, "github-signin-client-id", "", "GitHub sign-in through the lab Dex: the GitHub App's client id (turns the sign-in on; \"\" turns it off); the App's callback URL is the lab Dex's own, <issuer>/callback, and its client secret is the Secret platform.githubSignIn.secret names in the dex namespace (default github-signin-client, key client-secret), placed with `beekeeper secret copy --to-secret`, never read by agentlab")
+	cmd.Flags().BoolVar(&github, "github", false, "register GitHub's hosted MCP server with muster as MCPServer github, signed in to as the person through an OAuth App or GitHub App client whose client-id and client-secret are the Secret platform.github.secret names (default agent-platform/github-oauth-client), placed with `agentlab place-secret <ref> <namespace>/<secret>/<key>`; --github=false removes the server")
+	cmd.Flags().StringVar(&githubSignInClientID, "github-signin-client-id", "", "GitHub sign-in through the lab Dex: the GitHub App's client id (turns the sign-in on; \"\" turns it off); the App's callback URL is the lab Dex's own, <issuer>/callback, and its client secret is the Secret platform.githubSignIn.secret names in the dex namespace (default github-signin-client, key client-secret), placed with `agentlab place-secret <ref> dex/github-signin-client/client-secret`")
 	cmd.Flags().BoolVar(&githubSignIn, "github-signin", false, "turn the GitHub sign-in on (needs --github-signin-client-id once) or, with =false, off; the client Secret stays")
 	cmd.Flags().StringSliceVar(&githubSignInOrgs, "github-signin-orgs", nil, "GitHub sign-in: admit members of these GitHub organizations only, their teams as groups (`<org>:<team-slug>`); empty admits any GitHub account")
 	cmd.Flags().BoolVar(&workspaces, "workspaces", false, "workspace storage: a read-write-many StorageClass that serves git — an in-cluster NFS server, the NFS CSI driver behind an mTLS proxy only Agent Substrate's API server may reach, and the StorageClass "+lab.WorkspacesStorageClass+"; with --agents=false the storage and the workspace-manager run without Agent Substrate, the shape a later --agents switches on in place; --workspaces=false turns it off")
@@ -1746,16 +1765,16 @@ func configureCmd() *cobra.Command {
 	cmd.Flags().StringVar(&workspacesRefreshAfter, "workspaces-refresh-after", "", "the refresh threshold, a Go duration (the workspace-manager's sync.refreshAfter): a Session started on a workspace whose last sync is older requests a sync; \"\" returns to the manager's 1h")
 	cmd.Flags().StringVar(&workspacesGitHubAppID, "workspaces-github-app-id", "", "the App id of the workspaces GitHub App (public; its private key and client secret go into the Secret agent-platform/"+config.WorkspaceGitHubSecretName+")")
 	cmd.Flags().StringVar(&workspacesGitHubClientID, "workspaces-github-client-id", "", "the client id of the workspaces GitHub App (public)")
-	cmd.Flags().StringVar(&workspacesGitHubPrivateKeySource, "workspaces-github-private-key-source", "", "where the workspaces GitHub App's private key is: a reference `beekeeper secret copy` resolves (op://<vault>/<item>/<field>, k8s://<context>/<namespace>/<secret>/<key>, or <file>#<path> of a SOPS file), never the key; every up and platform place it into the Secret agent-platform/"+config.WorkspaceGitHubSecretName)
+	cmd.Flags().StringVar(&workspacesGitHubPrivateKeySource, "workspaces-github-private-key-source", "", "where the workspaces GitHub App's private key is: a reference (op://<vault>/<item>/<field>, k8s://<context>/<namespace>/<secret>/<key>, or <file>#<path> of a SOPS file), never the key; up and platform read it and place it into the Secret agent-platform/"+config.WorkspaceGitHubSecretName+" when that lacks it")
 	cmd.Flags().StringVar(&workspacesGitHubClientSecretSource, "workspaces-github-client-secret-source", "", "where the workspaces GitHub App's client secret is, in the form --workspaces-github-private-key-source takes; placed the same way")
 	cmd.Flags().BoolVar(&serving, "serving", false, "serve models on llm-d in the lab: the KServe llmisvc controller and its CRDs, the well-known runtime configs, the connectivity chart's serving slice with the models Gateway, model-manager's kserve backend and one CPU preset of the lab's (needs agents; installs cert-manager); --serving=false turns it off")
-	cmd.Flags().StringVar(&aiKeySource, "ai-key-source", "", "where the Anthropic key of the agents' default ModelConfig lives, a reference `beekeeper secret copy` resolves (op://<vault>/<item>/<field>, k8s://<context>/<namespace>/<secret>/<key>, or <file>#<path> of a SOPS file), never a value: every up and platform place it into the Secret kagent/kagent-anthropic through beekeeper; \"\" clears it (the key then comes from $ANTHROPIC_API_KEY, else a placeholder)")
-	cmd.Flags().StringVar(&gitHubTokenSource, "github-token-source", "", "where the GitHub token of the portal's skill discovery and agent-manager's skill resolution lives, a reference `beekeeper secret copy` resolves (op://<vault>/<item>/<field>, or <file>#<path> of a SOPS file), never a value: every up and platform place it into the Secret agentlab-github-token through beekeeper, lifting GitHub's anonymous 60 requests an hour this machine shares; \"\" clears it (GitHub is then called as the skills GitHub App when one is recorded, else unauthenticated); agentlab never reads $GITHUB_TOKEN")
+	cmd.Flags().StringVar(&aiKeySource, "ai-key-source", "", "where the Anthropic key of the agents' default ModelConfig lives, a reference (op://<vault>/<item>/<field> read through op, <file>#<path> of a SOPS file read through sops, or k8s://<context>/<namespace>/<secret>/<key>), never a value: up and platform read it and place it into the Secret kagent/kagent-anthropic when that lacks the key, the value in agentlab's process only; \"\" clears it (the key then comes from $ANTHROPIC_API_KEY, else a placeholder)")
+	cmd.Flags().StringVar(&gitHubTokenSource, "github-token-source", "", "where the GitHub token of the portal's skill discovery and agent-manager's skill resolution lives, a reference in the form --ai-key-source takes, never a value: up and platform place it into the Secret agentlab-github-token when that lacks it, lifting GitHub's anonymous 60 requests an hour this machine shares; \"\" clears it (GitHub is then called as the skills GitHub App when one is recorded, else unauthenticated); agentlab never reads $GITHUB_TOKEN")
 	cmd.Flags().StringVar(&gitHubAppID, "github-app-id", "", "the skills GitHub App agent-manager resolves skills with (installation tokens at the App's rate limit instead of a token or GitHub's anonymous window): its numeric App id (public); set with --github-app-installation-id and --github-app-private-key-source, \"\" on all three clears it")
 	cmd.Flags().StringVar(&gitHubAppInstallationID, "github-app-installation-id", "", "the skills GitHub App: the numeric id of its installation (public); alone, the App is the workspaces GitHub App (--workspaces-github-app-id and --workspaces-github-private-key-source)")
-	cmd.Flags().StringVar(&gitHubAppPrivateKeySource, "github-app-private-key-source", "", "the skills GitHub App: where its private key lives, a reference `beekeeper secret copy` resolves (op://<vault>/<item>/<field>, k8s://<context>/<namespace>/<secret>/<key>, or <file>#<path> of a SOPS file), never a value: every up and platform place it into the Secret agentlab-github-app through beekeeper")
+	cmd.Flags().StringVar(&gitHubAppPrivateKeySource, "github-app-private-key-source", "", "the skills GitHub App: where its private key lives, a reference in the form --ai-key-source takes, never a value: up and platform place it into the Secret agentlab-github-app when that lacks it")
 	cmd.Flags().StringVar(&gitHubAppClientID, "github-app-client-id", "", "the skills GitHub App: its OAuth client id (public); with --github-app-client-secret-source the portal's skill discovery calls GitHub as the App too (the workspaces GitHub App's client comes with --github-app-installation-id alone)")
-	cmd.Flags().StringVar(&gitHubAppClientSecretSource, "github-app-client-secret-source", "", "the skills GitHub App: where its client secret lives, in the form --github-app-private-key-source takes: every up and platform place it into the Secret agentlab-portal-github-app through beekeeper")
+	cmd.Flags().StringVar(&gitHubAppClientSecretSource, "github-app-client-secret-source", "", "the skills GitHub App: where its client secret lives, in the form --github-app-private-key-source takes: up and platform place it into the Secret agentlab-portal-github-app when that lacks it")
 	cmd.Flags().BoolVar(&accessible, "accessible", false, "prompt-per-question form mode (for screen readers and plain terminals)")
 	return cmd
 }
@@ -1796,7 +1815,7 @@ func printSaved(cfg *config.Config, disc *lab.Discovery) {
 	fmt.Printf("  telemetry  %s\n", lab.TelemetryLine(cfg))
 	switch {
 	case cfg.AIKey.Source != "":
-		fmt.Printf("  ai model   %s (key placed from %s through beekeeper at deploy time)\n", cfg.AIModel, cfg.AIKey.Source)
+		fmt.Printf("  ai model   %s (key placed from %s at deploy time)\n", cfg.AIModel, cfg.AIKey.Source)
 	case disc.AnthropicKey:
 		fmt.Printf("  ai model   %s (key from $%s at deploy time)\n", cfg.AIModel, lab.AnthropicKeyEnv)
 	default:

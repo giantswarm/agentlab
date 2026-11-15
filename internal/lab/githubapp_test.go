@@ -67,19 +67,22 @@ func TestGitHubAppLegacyChartTakesNoKeys(t *testing.T) {
 	}
 }
 
+// testPEM is what the fake vault answers for a private key: a test value.
+const testPEM = "-----BEGIN RSA PRIVATE KEY-----\ntest\n-----END RSA PRIVATE KEY-----\n" // #nosec G101 -- a test value, not a credential
+
 // TestEnsureGitHubAppSecret: nothing without an App; with one agentlab
-// applies the public ids and hands the private key to the secret tooling,
-// never writing it itself; a failed placement fails the run.
+// applies the public ids and places the private key from its source next
+// to them; a failed placement fails the run.
 func TestEnsureGitHubAppSecret(t *testing.T) {
 	newFakeLab(t)
 	ctx := context.Background()
 
-	calls := fakeSecretTool(t, func() error { return nil })
+	reads := fakeSecretSources(t, map[string]string{gitHubAppTestKeySource: testPEM})
 	if err := ensureGitHubAppSecret(ctx, gitHubTokenTestConfig()); err != nil {
 		t.Fatal(err)
 	}
-	if len(*calls) != 0 {
-		t.Errorf("secret tooling called without an App: %q", *calls)
+	if len(*reads) != 0 {
+		t.Errorf("sources read without an App: %q", *reads)
 	}
 	if exists, _ := objectExists(ctx, gvrSecrets, platformNamespace, gitHubAppSecret); exists {
 		t.Errorf("%s/%s written without an App", platformNamespace, gitHubAppSecret)
@@ -89,23 +92,20 @@ func TestEnsureGitHubAppSecret(t *testing.T) {
 	if err := ensureGitHubAppSecret(ctx, cfg); err != nil {
 		t.Fatal(err)
 	}
-	want := [][]string{secretCopyArgs(gitHubAppTestKeySource, secretTarget(cfg, platformNamespace, gitHubAppSecret, gitHubAppSecretPrivateKey))}
-	if !reflect.DeepEqual(*calls, want) {
-		t.Errorf("secret tooling calls = %q, want %q", *calls, want)
+	if want := []string{gitHubAppTestKeySource}; !reflect.DeepEqual(*reads, want) {
+		t.Errorf("sources read = %q, want %q", *reads, want)
 	}
-	for key, value := range map[string]string{gitHubAppSecretAppID: "123456", gitHubAppSecretInstallationID: "7890"} {
+	for key, value := range map[string]string{gitHubAppSecretAppID: "123456", gitHubAppSecretInstallationID: "7890", gitHubAppSecretPrivateKey: testPEM} {
 		got, err := secretDataKey(ctx, platformNamespace, gitHubAppSecret, key)
 		if err != nil || string(got) != value {
 			t.Errorf("%s/%s key %s = %q (err %v), want %q", platformNamespace, gitHubAppSecret, key, got, err, value)
 		}
 	}
-	if secretHasKey(platformNamespace, gitHubAppSecret, gitHubAppSecretPrivateKey) {
-		t.Errorf("agentlab wrote %s itself; the key is the tooling's to place", gitHubAppSecretPrivateKey)
-	}
 
-	fakeSecretTool(t, nil)
-	if err := ensureGitHubAppSecret(ctx, cfg); err == nil || !strings.Contains(err.Error(), "githubApp.privateKeySource") {
-		t.Errorf("err = %v, want the failed placement naming githubApp.privateKeySource", err)
+	newFakeLab(t)
+	fakeSecretSources(t, nil)
+	if err := ensureGitHubAppSecret(ctx, cfg); err == nil || !strings.Contains(err.Error(), "githubApp.privateKeySource") || !strings.Contains(err.Error(), "not signed in") {
+		t.Errorf("err = %v, want the failed placement naming githubApp.privateKeySource and the reader's answer", err)
 	}
 }
 
@@ -131,15 +131,14 @@ func TestGitHubAppFromWorkspacesWiresAgentManager(t *testing.T) {
 
 	newFakeLab(t)
 	ctx := context.Background()
-	calls := fakeSecretTool(t, func() error { return nil })
+	reads := fakeSecretSources(t, map[string]string{workspacesKeySource: testPEM})
 	if err := ensureGitHubAppSecret(ctx, cfg); err != nil {
 		t.Fatal(err)
 	}
-	want := [][]string{secretCopyArgs(workspacesKeySource, secretTarget(cfg, platformNamespace, gitHubAppSecret, gitHubAppSecretPrivateKey))}
-	if !reflect.DeepEqual(*calls, want) {
-		t.Errorf("secret tooling calls = %q, want %q", *calls, want)
+	if want := []string{workspacesKeySource}; !reflect.DeepEqual(*reads, want) {
+		t.Errorf("sources read = %q, want %q", *reads, want)
 	}
-	for key, value := range map[string]string{gitHubAppSecretAppID: "5288072", gitHubAppSecretInstallationID: "171259128"} {
+	for key, value := range map[string]string{gitHubAppSecretAppID: "5288072", gitHubAppSecretInstallationID: "171259128", gitHubAppSecretPrivateKey: testPEM} {
 		got, err := secretDataKey(ctx, platformNamespace, gitHubAppSecret, key)
 		if err != nil || string(got) != value {
 			t.Errorf("%s/%s key %s = %q (err %v), want %q", platformNamespace, gitHubAppSecret, key, got, err, value)
@@ -189,27 +188,18 @@ func TestGitHubAppWiresThePortal(t *testing.T) {
 
 	newFakeLab(t)
 	ctx := context.Background()
-	calls := fakeSecretTool(t, func() error { return nil })
+	const testClientSecret = "client-secret-value" // #nosec G101 -- a test value, not a credential
+	reads := fakeSecretSources(t, map[string]string{keySource: testPEM, clientSecretSource: testClientSecret})
 	if err := ensureGitHubAppSecret(ctx, cfg); err != nil {
 		t.Fatal(err)
 	}
-	wantCalls := [][]string{
-		secretCopyArgs(keySource, secretTarget(cfg, platformNamespace, gitHubAppSecret, gitHubAppSecretPrivateKey)),
-		secretCopyArgs(keySource, secretTarget(cfg, platformNamespace, portalGitHubAppSecret, portalGitHubAppPrivateKeyKey)),
-		secretCopyArgs(clientSecretSource, secretTarget(cfg, platformNamespace, portalGitHubAppSecret, portalGitHubAppClientSecretKey)),
+	if want := []string{keySource, keySource, clientSecretSource}; !reflect.DeepEqual(*reads, want) {
+		t.Errorf("sources read = %q, want %q", *reads, want)
 	}
-	if !reflect.DeepEqual(*calls, wantCalls) {
-		t.Errorf("secret tooling calls = %q, want %q", *calls, wantCalls)
-	}
-	for key, value := range map[string]string{portalGitHubAppIDKey: "5288072", portalGitHubAppClientIDKey: gitHubAppTestClientID} {
+	for key, value := range map[string]string{portalGitHubAppIDKey: "5288072", portalGitHubAppClientIDKey: gitHubAppTestClientID, portalGitHubAppPrivateKeyKey: testPEM, portalGitHubAppClientSecretKey: testClientSecret} {
 		got, err := secretDataKey(ctx, platformNamespace, portalGitHubAppSecret, key)
 		if err != nil || string(got) != value {
 			t.Errorf("%s/%s key %s = %q (err %v), want %q", platformNamespace, portalGitHubAppSecret, key, got, err, value)
-		}
-	}
-	for _, key := range []string{portalGitHubAppPrivateKeyKey, portalGitHubAppClientSecretKey} {
-		if secretHasKey(platformNamespace, portalGitHubAppSecret, key) {
-			t.Errorf("agentlab wrote %s itself; it is the tooling's to place", key)
 		}
 	}
 

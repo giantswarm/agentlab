@@ -839,8 +839,8 @@ type Workspaces struct {
 // application's secret and the proof person's GitLab password are the
 // Secret WorkspaceGitLabSecretName in the platform namespace (keys
 // WorkspaceGitLabTokenKey, GitHubClientSecretKey and
-// WorkspaceGitLabPasswordKey), which the operator's secret tooling places
-// and agentlab only references. The instance renders once the URL, the
+// WorkspaceGitLabPasswordKey), placed from the sources below or by hand
+// (`agentlab place-secret`), which the values only reference. The instance renders once the URL, the
 // client id and the first two keys are in place; the person is what
 // `workspaces-test --part gitlab` signs in to GitLab as.
 type WorkspaceGitLab struct {
@@ -855,10 +855,9 @@ type WorkspaceGitLab struct {
 	// connecting the lab's admin; its password is the Secret's
 	// WorkspaceGitLabPasswordKey.
 	Person string `yaml:"person,omitempty"`
-	// TokenSource, ClientSecretSource and PasswordSource are references
-	// `beekeeper secret copy` resolves, in the form AIKey.Source takes. Set,
-	// every up and platform places them into the Secret; empty, the Secret
-	// is placed by hand.
+	// TokenSource, ClientSecretSource and PasswordSource are references in
+	// the form AIKey.Source takes. Set, up and platform place each into the
+	// Secret when it lacks that key; empty, the Secret is placed by hand.
 	TokenSource        string `yaml:"tokenSource,omitempty"`
 	ClientSecretSource string `yaml:"clientSecretSource,omitempty"`
 	PasswordSource     string `yaml:"passwordSource,omitempty"`
@@ -897,17 +896,17 @@ func (g WorkspaceGitLab) Validate() error {
 // are public and live here, empty until the App is registered; its private
 // key and client secret are the Secret WorkspaceGitHubSecretName in the
 // platform namespace (keys WorkspaceGitHubPrivateKeyKey and
-// GitHubClientSecretKey), which the operator's secret tooling places and
-// agentlab only references: it reads which keys the Secret carries, never
-// a value.
+// GitHubClientSecretKey), placed from the sources below or by hand
+// (`agentlab place-secret`), which the values only reference: the render
+// reads which keys the Secret carries, never a value.
 type WorkspaceGitHub struct {
 	AppID    string `yaml:"appId,omitempty"`
 	ClientID string `yaml:"clientId,omitempty"`
-	// PrivateKeySource and ClientSecretSource are references `beekeeper
-	// secret copy` resolves to the App's private key and client secret, in
-	// the form AIKey.Source takes. Set, every up and platform places them
-	// into the Secret, so a recreated lab carries the instance without a
-	// manual step; empty, the Secret is placed by hand.
+	// PrivateKeySource and ClientSecretSource are references to the App's
+	// private key and client secret, in the form AIKey.Source takes. Set, up
+	// and platform place each into the Secret when it lacks that key, so a
+	// recreated lab carries the instance without a manual step; empty, the
+	// Secret is placed by hand.
 	PrivateKeySource   string `yaml:"privateKeySource,omitempty"`
 	ClientSecretSource string `yaml:"clientSecretSource,omitempty"`
 	// ProofRepositories are the two repositories, <owner>/<name>, the
@@ -965,8 +964,8 @@ const WorkspaceOrganization = "lab"
 
 var WorkspaceOrganizationGroups = []string{groupPlatformAdmins, groupDevelopers}
 
-// The workspace providers, and the Secrets of their Apps: what the
-// operator's secret tooling placed, which the values only ever reference.
+// The workspace providers, and the Secrets of their Apps: placed from their
+// sources or by hand, which the values only ever reference.
 const (
 	WorkspaceProviderGitHub      = "github"
 	WorkspaceProviderGitLab      = "gitlab"
@@ -1089,8 +1088,9 @@ func (c *Config) validateDevctl() error {
 // GitHub configures the MCPServer `github` the lab registers with muster:
 // GitHub's hosted MCP server behind a pinned GitHub authorization server, the
 // shape an installation declares. The OAuth client (an OAuth App, or a
-// GitHub App's client) is a Kubernetes Secret in the lab the operator's
-// secret tooling places; agentlab reads its key names only, never a value.
+// GitHub App's client) is a Kubernetes Secret in the lab the operator
+// places (`agentlab place-secret`); a run reads its key names only, never a
+// value.
 type GitHub struct {
 	// On, `agentlab platform` registers the server; off, it removes it.
 	Enabled bool `yaml:"enabled"`
@@ -1101,15 +1101,18 @@ type GitHub struct {
 }
 
 // AIKey is where the Anthropic key of the default ModelConfig comes from:
-// never this file. Source names where the operator's secret tooling finds
-// it; `agentlab up` and `platform` hand the reference to that tooling, which
-// writes the value from there straight into the lab's Secret in its own
-// process (internal/lab/anthropic.go), so the lab carries the key after
-// every recreate without a manual step and agentlab never reads a value.
+// never this file. Source names where the key lives; `agentlab up` and
+// `platform` read the value from there and write it into the lab's Secret
+// within their own process (internal/lab/secretsource.go), so the lab
+// carries the key after every recreate without a manual step and the value
+// never reaches a process's argv, a file or the output.
 type AIKey struct {
-	// Source is a reference `beekeeper secret copy` resolves: a field of the
-	// shared vault (op://<vault>/<item>/<field>) or one value of a SOPS file
-	// (<file>#<dotted.path>, sops:// in front optional). Empty means the key
+	// Source is a reference: a 1Password field (op://<vault>/<item>/<field>,
+	// read through the op CLI), one value of a SOPS file
+	// (<file>#<dotted.path>, sops:// in front optional, read through sops)
+	// or the key of a Secret in another cluster
+	// (k8s://<context>/<namespace>/<secret>/<key>[#<dotted.path>], read
+	// with that context of the shell's kubeconfig). Empty means the key
 	// comes from $ANTHROPIC_API_KEY at deploy time, else a placeholder.
 	Source string `yaml:"source,omitempty"`
 }
@@ -1189,9 +1192,9 @@ func (g GitHub) ClientSecret() SecretRef {
 // permissions are what a sign-in reads (the person's profile, email and
 // organization membership; no repository permission). The client id is
 // public and lives here; the client secret is a Kubernetes Secret in the
-// dex namespace the operator's secret tooling places, which the Dex pod
-// reads as an environment variable — agentlab reads the Secret's key names
-// only, never a value, and renders no literal.
+// dex namespace the operator places (`agentlab place-secret`), which the
+// Dex pod reads as an environment variable — a run reads the Secret's key
+// names only, never a value, and renders no literal.
 type GitHubSignIn struct {
 	// On, `agentlab up`, `platform` and `reload` render the connector into
 	// the Dex config once the client Secret is in place; off, the lab's Dex

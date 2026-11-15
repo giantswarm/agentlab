@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"reflect"
@@ -26,8 +27,13 @@ const (
 	testEnvKey   = "sk-ant-env"   // #nosec G101 -- a test value, not a credential
 	// testKeySource is the reference the tests record as aiKey.source.
 	testKeySource = "op://lab/anthropic/credential"
-	// testToolVersion is what the fake tooling reports.
+	// testToolVersion is what a fake beekeeper reports, testOpVersion a fake
+	// op.
 	testToolVersion = "v0.108.3"
+	testOpVersion   = "2.41.1"
+	// testReaderFailure is what the fake reader answers for a source it
+	// does not hold: the 1Password CLI without a signed-in account.
+	testReaderFailure = "op read --no-newline: exit status 1: [ERROR] not signed in"
 )
 
 // anthropicSecretWith is a kagent/kagent-anthropic seed carrying value under
@@ -48,13 +54,18 @@ func storedAnthropicKey(t *testing.T, f *fakeLab) string {
 	return string(raw)
 }
 
-// fakeSecretTool replaces the secret tooling for a test: it records every
+// fakeSecretTool puts a fake beekeeper on PATH for a test: it records every
 // call and runs place against the fake lab, the way beekeeper writes the
-// value into the apiserver in its own process.
+// value into the apiserver in its own process; nothing is read in-process.
 func fakeSecretTool(t *testing.T, place func() error) *[][]string {
 	t.Helper()
 	var calls [][]string
-	prev := runSecretTool
+	prevRun, prevOnPath, prevRead := runSecretTool, secretToolOnPath, readSecretSource
+	secretToolOnPath = func() bool { return true }
+	readSecretSource = func(context.Context, string) ([]byte, error) {
+		t.Error("a source read in agentlab's process while beekeeper is on PATH")
+		return nil, errors.New("not here")
+	}
 	runSecretTool = func(args ...string) (string, error) {
 		calls = append(calls, args)
 		if place == nil {
@@ -62,8 +73,29 @@ func fakeSecretTool(t *testing.T, place func() error) *[][]string {
 		}
 		return "42 bytes\n", place()
 	}
-	t.Cleanup(func() { runSecretTool = prev })
+	t.Cleanup(func() { runSecretTool, secretToolOnPath, readSecretSource = prevRun, prevOnPath, prevRead })
 	return &calls
+}
+
+// fakeSecretSources replaces the source reader for a test, beekeeper off
+// PATH: each source answers its value from values, one it does not hold
+// fails as op does without a signed-in account, and every read is recorded.
+// The placement itself runs for real against the fake lab.
+func fakeSecretSources(t *testing.T, values map[string]string) *[]string {
+	t.Helper()
+	var reads []string
+	prevRead, prevOnPath := readSecretSource, secretToolOnPath
+	secretToolOnPath = func() bool { return false }
+	readSecretSource = func(_ context.Context, source string) ([]byte, error) {
+		reads = append(reads, source)
+		v, ok := values[source]
+		if !ok {
+			return nil, errors.New(testReaderFailure)
+		}
+		return []byte(v), nil
+	}
+	t.Cleanup(func() { readSecretSource, secretToolOnPath = prevRead, prevOnPath })
+	return &reads
 }
 
 // TestEnsureAnthropicSecretPlaceholder: with neither a source nor the
@@ -145,7 +177,6 @@ func TestEnsureAnthropicSecretFromSource(t *testing.T) {
 	cfg := config.Default()
 	cfg.ClusterName = "agentlab-2"
 	cfg.AIKey.Source = source
-	wantArgs := []string{"secret", "copy", source, "--to-secret", "kind-agentlab-2/kagent/kagent-anthropic/ANTHROPIC_API_KEY"}
 
 	for _, tc := range []struct {
 		name string
@@ -161,51 +192,73 @@ func TestEnsureAnthropicSecretFromSource(t *testing.T) {
 			} else {
 				f = newFakeLab(t)
 			}
-			calls := fakeSecretTool(t, func() error {
-				return ensureSecret(kagentNamespace, anthropicSecret, corev1.SecretTypeOpaque, map[string][]byte{anthropicSecretKey: []byte(testVaultKey)})
-			})
-			wrote, err := ensureAnthropicSecret(cfg)
+			reads := fakeSecretSources(t, map[string]string{source: testVaultKey})
+			var wrote bool
+			var err error
+			out := stdoutOf(t, func() { wrote, err = ensureAnthropicSecret(cfg) })
 			if err != nil {
 				t.Fatal(err)
 			}
 			if !wrote {
 				t.Error("the placement must count as a write")
 			}
-			if len(*calls) != 1 || !reflect.DeepEqual((*calls)[0], wantArgs) {
-				t.Errorf("tooling calls %v, want one: %v", *calls, wantArgs)
+			if !reflect.DeepEqual(*reads, []string{source}) {
+				t.Errorf("sources read %v, want %s once", *reads, source)
 			}
 			if got := storedAnthropicKey(t, f); got != testVaultKey {
-				t.Errorf("key %q, want the one the tooling placed (never the variable's)", got)
+				t.Errorf("key %q, want the source's (never the variable's)", got)
+			}
+			if strings.Contains(out, testVaultKey) || !strings.Contains(out, "12 bytes") || !strings.Contains(out, "read through op") {
+				t.Errorf("output %q: want the reader and the length, never the value", out)
 			}
 		})
 	}
 
 	t.Run("real key stays", func(t *testing.T) {
 		f := newFakeLab(t, anthropicSecretWith(testRealKey))
-		calls := fakeSecretTool(t, nil)
+		reads := fakeSecretSources(t, nil)
 		wrote, err := ensureAnthropicSecret(cfg)
 		if err != nil || wrote {
 			t.Errorf("wrote %v, %v", wrote, err)
 		}
-		if len(*calls) != 0 || storedAnthropicKey(t, f) != testRealKey {
-			t.Errorf("a real key is left alone, the tooling not called: %v", *calls)
+		if len(*reads) != 0 || storedAnthropicKey(t, f) != testRealKey {
+			t.Errorf("a real key is left alone, the source not read: %v", *reads)
+		}
+	})
+
+	t.Run("beekeeper on PATH places it", func(t *testing.T) {
+		f := newFakeLab(t)
+		calls := fakeSecretTool(t, func() error {
+			return ensureSecret(kagentNamespace, anthropicSecret, corev1.SecretTypeOpaque, map[string][]byte{anthropicSecretKey: []byte(testVaultKey)})
+		})
+		wrote, err := ensureAnthropicSecret(cfg)
+		if err != nil || !wrote {
+			t.Fatalf("wrote %v, %v", wrote, err)
+		}
+		want := []string{"secret", "copy", source, "--to-secret", "kind-agentlab-2/kagent/kagent-anthropic/ANTHROPIC_API_KEY"}
+		if len(*calls) != 1 || !reflect.DeepEqual((*calls)[0], want) {
+			t.Errorf("beekeeper calls %v, want one: %v", *calls, want)
+		}
+		if got := storedAnthropicKey(t, f); got != testVaultKey {
+			t.Errorf("key %q, want the one beekeeper placed", got)
 		}
 	})
 }
 
-// TestEnsureAnthropicSecretSourceFailureIsNoPlaceholder: a source the tooling
-// cannot place fails the run, naming the Secret and the source, and nothing is
-// written — a lab whose configuration says where the key is never runs on a
-// placeholder; the same when the tooling answers but the key is not there.
+// TestEnsureAnthropicSecretSourceFailureIsNoPlaceholder: a source that
+// cannot be read fails the run, naming the Secret, the source and what the
+// reader said, and nothing is written — a lab whose configuration says where
+// the key is never runs on a placeholder; the same for a source naming an
+// empty value, and when beekeeper answers but the key is not there.
 func TestEnsureAnthropicSecretSourceFailureIsNoPlaceholder(t *testing.T) {
 	t.Setenv(AnthropicKeyEnv, "")
 	cfg := config.Default()
 	cfg.AIKey.Source = testKeySource
 
 	f := newFakeLab(t)
-	fakeSecretTool(t, nil)
+	fakeSecretSources(t, nil)
 	_, err := ensureAnthropicSecret(cfg)
-	for _, want := range []string{"secret kagent/kagent-anthropic key ANTHROPIC_API_KEY", "aiKey.source op://lab/anthropic/credential", "exit status 78", "re-run `agentlab platform`"} {
+	for _, want := range []string{"secret kagent/kagent-anthropic key ANTHROPIC_API_KEY", "aiKey.source op://lab/anthropic/credential", "not signed in", "re-run `agentlab platform`"} {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("want the failure naming %q, got %v", want, err)
 		}
@@ -214,10 +267,19 @@ func TestEnsureAnthropicSecretSourceFailureIsNoPlaceholder(t *testing.T) {
 		t.Errorf("no placeholder behind a failed source: %v", err)
 	}
 
+	f = newFakeLab(t)
+	fakeSecretSources(t, map[string]string{testKeySource: ""})
+	if _, err = ensureAnthropicSecret(cfg); err == nil || !strings.Contains(err.Error(), "empty value") {
+		t.Errorf("an empty value is a failure: %v", err)
+	}
+	if _, err := f.dyn.Tracker().Get(gvrSecrets, kagentNamespace, anthropicSecret); !apierrors.IsNotFound(err) {
+		t.Errorf("nothing written for an empty value: %v", err)
+	}
+
 	newFakeLab(t)
 	fakeSecretTool(t, func() error { return nil })
 	_, err = ensureAnthropicSecret(cfg)
-	if err == nil || !strings.Contains(err.Error(), "still lacks a key") {
+	if err == nil || !strings.Contains(err.Error(), "still lacks a value") {
 		t.Errorf("an answer without the key is a failure: %v", err)
 	}
 }
@@ -252,23 +314,41 @@ func TestClassifyAnthropicKey(t *testing.T) {
 	}
 }
 
-// TestPreflightAsksForTheSecretToolOnlyWithASource: a recorded source adds
-// the tooling to the verdict when it is missing, naming the source, the
-// Secret and the way out; without a source it is never asked for.
-func TestPreflightAsksForTheSecretToolOnlyWithASource(t *testing.T) {
-	d := &Discovery{Tools: toolVersions("29.7.2"), KeySource: testKeySource}
+// TestPreflightAsksForASourcesReader: a recorded source adds its reader to
+// the verdict when it is missing — one line per reader, naming the sources,
+// their Secrets and where the reader comes from; a k8s:// source needs none,
+// beekeeper on PATH answers for every source, and without a source no
+// reader is asked for.
+func TestPreflightAsksForASourcesReader(t *testing.T) {
+	const sopsSource = "/lab/agents.sops.yaml#stringData.private-key"
+	sources := []SecretSource{
+		{Field: "aiKey.source", Source: testKeySource, Secret: kagentNamespace + "/" + anthropicSecret},
+		{Field: "githubApp.privateKeySource", Source: sopsSource, Secret: platformNamespace + "/" + gitHubAppSecret},
+		{Field: gitHubTokenSourceField, Source: "k8s://kind-other/agent-platform/token/" + GitHubTokenEnv, Secret: platformNamespace + "/" + gitHubTokenSecret},
+	}
+	d := &Discovery{Tools: toolVersions("29.7.2"), Sources: sources, SecretReaders: map[string]string{opBin: "", sopsBin: ""}}
 	err := d.Preflight()
-	for _, want := range []string{"beekeeper is not on PATH", testKeySource, "kagent/kagent-anthropic", "giantswarm/beekeeper", `--ai-key-source ""`} {
+	for _, want := range []string{
+		"op is not on PATH", "aiKey.source " + testKeySource + " (Secret kagent/kagent-anthropic)", secretReaderInstall[opBin],
+		"sops is not on PATH", "githubApp.privateKeySource " + sopsSource, secretReaderInstall[sopsBin],
+	} {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("want the refusal naming %q, got %v", want, err)
 		}
 	}
-	d.SecretTool = testToolVersion
+	if err != nil && strings.Contains(err.Error(), "k8s://") {
+		t.Errorf("a k8s:// source needs no reader: %v", err)
+	}
+	d.SecretReaders = map[string]string{opBin: testOpVersion, sopsBin: "3.13.3"}
 	if err := d.Preflight(); err != nil {
-		t.Errorf("with the tooling answering: %v", err)
+		t.Errorf("with the readers answering: %v", err)
+	}
+	d.SecretReaders, d.Beekeeper = map[string]string{opBin: "", sopsBin: ""}, testToolVersion
+	if err := d.Preflight(); err != nil {
+		t.Errorf("with beekeeper answering: %v", err)
 	}
 	if err := (&Discovery{Tools: toolVersions("29.7.2")}).Preflight(); err != nil {
-		t.Errorf("without a source the tooling is not asked for: %v", err)
+		t.Errorf("without a source no reader is asked for: %v", err)
 	}
 }
 
@@ -286,17 +366,23 @@ func TestReportAnthropicKeyLine(t *testing.T) {
 		return ""
 	}
 	tools := toolVersions("29.7.2")
-	if line := keyLine(&Discovery{Tools: tools, KeySource: testKeySource, SecretTool: testToolVersion}); !strings.Contains(line, "aiKey.source "+testKeySource+" — beekeeper "+testToolVersion+" places it into the Secret kagent/kagent-anthropic") {
+	if line := keyLine(&Discovery{Tools: tools, KeySource: testKeySource, SecretReaders: map[string]string{opBin: testOpVersion}}); !strings.Contains(line, "aiKey.source "+testKeySource+" — agentlab reads it through op "+testOpVersion+" and places it into the Secret kagent/kagent-anthropic") {
 		t.Errorf("source line %q", line)
 	}
-	if line := keyLine(&Discovery{Tools: tools, KeySource: testKeySource}); !strings.Contains(line, "beekeeper is not on PATH") {
-		t.Errorf("source without the tooling %q", line)
+	if line := keyLine(&Discovery{Tools: tools, KeySource: testKeySource, Beekeeper: testToolVersion}); !strings.Contains(line, "aiKey.source "+testKeySource+" — beekeeper "+testToolVersion+" places it into the Secret kagent/kagent-anthropic") {
+		t.Errorf("source line with beekeeper %q", line)
+	}
+	if line := keyLine(&Discovery{Tools: tools, KeySource: "k8s://kind-agentlab/kagent/kagent-anthropic/ANTHROPIC_API_KEY"}); !strings.Contains(line, "agentlab reads it through the kubeconfig context kind-agentlab") {
+		t.Errorf("k8s:// source line %q", line)
+	}
+	if line := keyLine(&Discovery{Tools: tools, KeySource: testKeySource, SecretReaders: map[string]string{opBin: ""}}); !strings.Contains(line, "op is not on PATH") {
+		t.Errorf("source without its reader %q", line)
 	}
 	if line := keyLine(&Discovery{Tools: tools, AnthropicKey: true}); !strings.Contains(line, "$ANTHROPIC_API_KEY is set") {
 		t.Errorf("variable line %q", line)
 	}
 	line := keyLine(&Discovery{Tools: tools})
-	for _, want := range []string{"placeholder", "beekeeper secret copy <ref> --to-secret kind-agentlab/kagent/kagent-anthropic/ANTHROPIC_API_KEY", "--ai-key-source"} {
+	for _, want := range []string{"placeholder", "agentlab place-secret <ref> kagent/kagent-anthropic/ANTHROPIC_API_KEY", "--ai-key-source"} {
 		if !strings.Contains(line, want) {
 			t.Errorf("placeholder line %q lacks %q", line, want)
 		}

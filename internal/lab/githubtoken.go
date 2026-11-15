@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -15,9 +14,9 @@ import (
 
 // GitHubTokenEnv is the env var name the consumers read the GitHub token
 // under: the key of the Secret below. agentlab itself never reads a variable
-// of this name — the token reaches the lab only through githubToken.source,
-// placed by the secret tooling, so its value never passes through agentlab
-// or the session that runs it.
+// of this name — the token reaches the lab only through githubToken.source
+// (secretsource.go), so its value never passes through an argument, a file
+// or the output of agentlab or the session that runs it.
 const GitHubTokenEnv = "GITHUB_TOKEN" // #nosec G101 -- env var NAME, not a credential
 
 // gitHubTokenSecret is the Secret the consumers read, in agent-platform/:
@@ -35,6 +34,9 @@ const (
 	gitHubTokenSecret    = "agentlab-github-token" // #nosec G101 -- Secret NAME, not a credential
 	gitHubTokenSecretKey = GitHubTokenEnv
 )
+
+// gitHubTokenSourceField is the setting the token's source is recorded in.
+const gitHubTokenSourceField = "githubToken.source" // #nosec G101 -- a setting's NAME, not a credential
 
 // gitHubTokenSet reports whether the lab has a GitHub token to place — the
 // one input the render and the Secret creation decide on: the reference
@@ -72,14 +74,9 @@ func ensureGitHubTokenSecrets(ctx context.Context, cfg *config.Config) error {
 		}
 		return nil
 	}
-	source := cfg.GitHubToken.Source
-	answer, err := runSecretTool(secretCopyArgs(source, secretTarget(cfg, platformNamespace, gitHubTokenSecret, gitHubTokenSecretKey))...)
-	if err != nil {
-		return fmt.Errorf("secret %s/%s key %s from githubToken.source %s: %w\n  the portal and agent-manager reference it; when %s answers, re-run `agentlab platform`",
-			platformNamespace, gitHubTokenSecret, gitHubTokenSecretKey, source, err, secretTool)
-	}
-	note("secret %s/%s key %s placed from %s by %s (%s); agentlab never read the value — skill discovery and resolution call GitHub authenticated", platformNamespace, gitHubTokenSecret, gitHubTokenSecretKey, source, secretTool, strings.TrimSpace(answer))
-	return nil
+	_, err := ensureSourcedKey(cfg, sourcedSecretKey{ns: platformNamespace, name: gitHubTokenSecret, key: gitHubTokenSecretKey,
+		field: gitHubTokenSourceField, source: cfg.GitHubToken.Source, consumer: "the portal's skill discovery and agent-manager's skill resolution"})
+	return err
 }
 
 // removeKagentGitHubTokenSecret deletes kagent/gitHubTokenSecret when an

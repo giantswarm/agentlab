@@ -204,12 +204,12 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 				Validate(config.ValidateAIModel),
 			huh.NewInput().
 				Title("Anthropic key source").
-				Description("Optional: a reference `beekeeper secret copy` resolves — op://<vault>/<item>/<field>, or\n<file>#<path> of a SOPS file — never the key itself. Every up and platform place it into the\nSecret kagent/kagent-anthropic through beekeeper, so a recreated lab carries the key without\na manual step. Empty: the key comes from $ANTHROPIC_API_KEY at deploy time, else a placeholder.").
+				Description("Optional: a reference — op://<vault>/<item>/<field> (op), <file>#<path> of a SOPS file\n(sops) or k8s://<context>/<namespace>/<secret>/<key> — never the key itself. Up and platform\nread it and place it into the Secret kagent/kagent-anthropic, so a recreated lab carries the key\nwithout a manual step. Empty: the key comes from $ANTHROPIC_API_KEY at deploy time, else a placeholder.").
 				Value(&aiKeySource).
 				Validate(func(s string) error { return config.AIKey{Source: s}.Validate() }),
 			huh.NewInput().
 				Title("GitHub token source").
-				Description("Optional: a reference `beekeeper secret copy` resolves, as above — never the token itself.\nEvery up and platform place it into the Secret agentlab-github-token, so the portal's skill\ndiscovery and agent-manager's skill resolution call GitHub authenticated. Empty: GitHub is called\nas the skills GitHub App when one is recorded, else unauthenticated (60 an hour).").
+				Description("Optional: a reference, as above — never the token itself.\nUp and platform place it into the Secret agentlab-github-token, so the portal's skill\ndiscovery and agent-manager's skill resolution call GitHub authenticated. Empty: GitHub is called\nas the skills GitHub App when one is recorded, else unauthenticated (60 an hour).").
 				Value(&gitHubTokenSource).
 				Validate(func(s string) error { return config.GitHubToken{Source: s}.Validate() }),
 			huh.NewConfirm().

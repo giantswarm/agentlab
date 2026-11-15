@@ -45,9 +45,9 @@ func warn(format string, a ...any) {
 // the embedded Kubernetes client (kube.go), bound to the lab-owned kubeconfig
 // by labRESTClientGetter (restclient.go). The container engine is therefore
 // what a machine needs installed, and the one tool Preflight (discover.go)
-// asks for unconditionally; the operator's secret tooling (secretTool,
-// anthropic.go) is the other subprocess, asked for only while agentlab.yaml
-// records a key source.
+// asks for unconditionally; the secret sources' readers (op, sops;
+// secretsource.go) are the other subprocesses, asked for only while
+// agentlab.yaml records a source of their form.
 const dockerBin = "docker"
 
 // goosDarwin is runtime.GOOS on macOS.

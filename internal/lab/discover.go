@@ -32,11 +32,17 @@ type Discovery struct {
 	Tools        []ToolVersion
 	AnthropicKey bool
 	// KeySource is the reference agentlab.yaml records for the Anthropic key
-	// (aiKey.source), "" when none; SecretTool the version of the tooling
-	// that places it (secretTool, anthropic.go), "" when it is not on PATH or
-	// does not answer — probed only while a source is recorded.
-	KeySource  string
-	SecretTool string
+	// (aiKey.source), "" when none.
+	KeySource string
+	// Sources are every secret source agentlab.yaml records that up and
+	// platform place (recordedSecretSources); SecretReaders the versions of
+	// the CLIs they are read through (op, sops; secretsource.go), "" for one
+	// that is not on PATH or does not answer; Beekeeper beekeeper's version
+	// when it answers on PATH, which then places every source instead. All
+	// three probed only while a source is recorded.
+	Sources       []SecretSource
+	SecretReaders map[string]string
+	Beekeeper     string
 	// GitHubTokenSource is the reference recorded for the GitHub token
 	// (githubToken.source), "" when none.
 	GitHubTokenSource string
@@ -122,8 +128,17 @@ const flmOwner = "FastFlowLM"
 func Discover(cfg *config.Config) *Discovery {
 	d := &Discovery{AnthropicKey: os.Getenv(AnthropicKeyEnv) != "", KeySource: cfg.AIKey.Source, GitHubTokenSource: cfg.GitHubToken.Source, GitHubApp: cfg.SkillsGitHubApp(), WorkspacesGitHubApp: cfg.Platform.Workspaces.GitHub.AppID != "" && cfg.Platform.Workspaces.GitHub.PrivateKeySource != ""}
 	d.Tools = toolVersions(dockerVersion())
-	if d.KeySource != "" || d.GitHubTokenSource != "" || d.GitHubApp.Configured() {
-		d.SecretTool = secretToolVersion()
+	d.Sources = recordedSecretSources(cfg)
+	if len(d.Sources) > 0 {
+		d.Beekeeper = beekeeperVersion()
+		d.SecretReaders = map[string]string{}
+		for _, s := range d.Sources {
+			if r := secretReader(s.Source); r != "" {
+				if _, probed := d.SecretReaders[r]; !probed {
+					d.SecretReaders[r] = secretReaderVersion(r)
+				}
+			}
+		}
 	}
 	d.ClusterExists, d.ClusterPorts = kindNodePublishedPorts(cfg.ControlPlaneNode())
 	d.RegistryPort = devRegistryOwnPort(cfg)
@@ -315,9 +330,10 @@ var toolRequirements = []toolRequirement{
 // asks its first question (or, with --defaults, writes anything): an error
 // naming every tool `agentlab up` would fail on — not on PATH — with why and
 // where to get it. So nobody walks through the whole form to be refused at
-// boot time. The container engine is the one tool always asked for; the
-// secret tooling only while agentlab.yaml records a key source; everything
-// else the lab runs is in the binary.
+// boot time. The container engine is the one tool always asked for; a
+// secret source's reader (op, sops) only while agentlab.yaml records a
+// source of its form and beekeeper is not on PATH; everything else the lab
+// runs is in the binary.
 func (d *Discovery) Preflight() error {
 	var problems []string
 	for _, req := range toolRequirements {
@@ -326,18 +342,7 @@ func (d *Discovery) Preflight() error {
 		}
 		problems = append(problems, fmt.Sprintf("%s is not on PATH (or does not answer) — %s\n    install: %s", req.name, req.why, req.install))
 	}
-	if d.KeySource != "" && d.SecretTool == "" {
-		problems = append(problems, fmt.Sprintf("%s is not on PATH (or does not answer) — aiKey.source %s is placed into the Secret %s/%s by `%s secret copy --to-secret` at every up and platform\n    install: %s (or clear the source: agentlab configure --ai-key-source \"\")",
-			secretTool, d.KeySource, kagentNamespace, anthropicSecret, secretTool, secretToolInstall))
-	}
-	if d.GitHubTokenSource != "" && d.SecretTool == "" {
-		problems = append(problems, fmt.Sprintf("%s is not on PATH (or does not answer) — githubToken.source %s is placed into the Secret %s/%s by `%s secret copy --to-secret` at every up and platform\n    install: %s (or clear the source: agentlab configure --github-token-source \"\")",
-			secretTool, d.GitHubTokenSource, platformNamespace, gitHubTokenSecret, secretTool, secretToolInstall))
-	}
-	if d.GitHubApp.Configured() && d.SecretTool == "" {
-		problems = append(problems, fmt.Sprintf("%s is not on PATH (or does not answer) — githubApp.privateKeySource %s is placed into the Secret %s/%s by `%s secret copy --to-secret` at every up and platform\n    install: %s (or clear the App: agentlab configure --github-app-id \"\" --github-app-installation-id \"\" --github-app-private-key-source \"\")",
-			secretTool, d.GitHubApp.PrivateKeySource, platformNamespace, gitHubAppSecret, secretTool, secretToolInstall))
-	}
+	problems = append(problems, d.secretReaderProblems()...)
 	if len(problems) == 0 {
 		return nil
 	}
@@ -436,25 +441,23 @@ func (d *Discovery) Report(cfg *config.Config) string {
 	}
 	line("KVM", "%s", d.kvmLine(cfg))
 	switch {
-	case d.KeySource != "" && d.SecretTool != "":
-		line("Anthropic key", "aiKey.source %s — %s %s places it into the Secret %s/%s at every up and platform; agentlab never reads the value", d.KeySource, secretTool, d.SecretTool, kagentNamespace, anthropicSecret)
 	case d.KeySource != "":
-		line("Anthropic key", "aiKey.source %s — but %s is not on PATH (or does not answer), so up and platform cannot place it", d.KeySource, secretTool)
+		line("Anthropic key", "aiKey.source %s — %s into the Secret %s/%s when it lacks the key, at up and platform; the value never reaches an argument, a file or the output", d.KeySource, d.sourcePlacement(d.KeySource), kagentNamespace, anthropicSecret)
 	case d.AnthropicKey:
 		line("Anthropic key", "$%s is set — the agents' default ModelConfig and Backstage's AI chat get the real key at deploy time", AnthropicKeyEnv)
 	default:
-		line("Anthropic key", "no aiKey.source and $%s is not set — the default ModelConfig gets a placeholder (it resolves, agent turns fail at Anthropic) until the key is placed: `%s secret copy <ref> --to-secret kind-%s/%s/%s/%s`, or the source recorded (`agentlab configure --ai-key-source <ref>`), or the variable exported and `agentlab platform` re-run",
-			AnthropicKeyEnv, secretTool, cfg.ClusterName, kagentNamespace, anthropicSecret, anthropicSecretKey)
+		line("Anthropic key", "no aiKey.source and $%s is not set — the default ModelConfig gets a placeholder (it resolves, agent turns fail at Anthropic) until the key is placed: the source recorded (`agentlab configure --ai-key-source <ref>`), or `agentlab place-secret <ref> %s/%s/%s`, or the variable exported and `agentlab platform` re-run",
+			AnthropicKeyEnv, kagentNamespace, anthropicSecret, anthropicSecretKey)
 	}
 	if d.GitHubApp.Configured() {
-		line("GitHub App", "githubApp %s (installation %s), private key from %s — %s places it into the Secret %s/%s at every up and platform: agent-manager resolves skills as the App, at its rate limit; agentlab never reads the key", d.GitHubApp.AppID, d.GitHubApp.InstallationID, d.GitHubApp.PrivateKeySource, secretTool, platformNamespace, gitHubAppSecret)
+		line("GitHub App", "githubApp %s (installation %s), private key from %s — %s into the Secret %s/%s when it lacks the key: agent-manager resolves skills as the App, at its rate limit", d.GitHubApp.AppID, d.GitHubApp.InstallationID, d.GitHubApp.PrivateKeySource, d.sourcePlacement(d.GitHubApp.PrivateKeySource), platformNamespace, gitHubAppSecret)
 		if d.GitHubApp.HasClient() {
-			line("GitHub App", "client %s, client secret from %s — %s places the key and the client secret into the Secret %s/%s: the portal's skill discovery calls GitHub as the App too", d.GitHubApp.ClientID, d.GitHubApp.ClientSecretSource, secretTool, platformNamespace, portalGitHubAppSecret)
+			line("GitHub App", "client %s, client secret from %s — %s, with the private key, into the Secret %s/%s: the portal's skill discovery calls GitHub as the App too", d.GitHubApp.ClientID, d.GitHubApp.ClientSecretSource, d.sourcePlacement(d.GitHubApp.ClientSecretSource), platformNamespace, portalGitHubAppSecret)
 		}
 	}
 	switch {
 	case d.GitHubTokenSource != "":
-		line("GitHub token", "githubToken.source %s — %s places it into the Secret %s/%s at every up and platform: the portal's skill discovery and agent-manager's skill resolution call GitHub authenticated (5000 requests an hour); agentlab never reads the value", d.GitHubTokenSource, secretTool, platformNamespace, gitHubTokenSecret)
+		line("GitHub token", "githubToken.source %s — %s into the Secret %s/%s when it lacks the token: the portal's skill discovery and agent-manager's skill resolution call GitHub authenticated (5000 requests an hour)", d.GitHubTokenSource, d.sourcePlacement(d.GitHubTokenSource), platformNamespace, gitHubTokenSecret)
 	case d.GitHubApp.HasClient():
 		line("GitHub token", "no githubToken.source, so no Secret %s/%s (key %s) — none needed: agent-manager and the portal use the App", platformNamespace, gitHubTokenSecret, gitHubTokenSecretKey)
 	case d.GitHubApp.Configured():
@@ -630,13 +633,112 @@ func kindNodePublishedPorts(node string) (exists bool, ports map[int]bool) {
 	return true, ports
 }
 
-// secretToolInstall is where the secret tooling comes from.
-const secretToolInstall = "https://github.com/giantswarm/beekeeper/releases" // #nosec G101 -- a URL, not a credential
+// SecretSource is one secret source agentlab.yaml records: the setting, the
+// reference and the lab Secret up and platform place it into.
+type SecretSource struct {
+	Field, Source, Secret string
+}
 
-// secretToolVersion is the secret tooling's version (`beekeeper version`
-// answers `beekeeper vX.Y.Z (commit …)`; the second word), "" when it is not
-// on PATH or does not answer.
-func secretToolVersion() string {
+// recordedSecretSources are the secret sources up and platform place, in
+// the order they place them: the Anthropic key, the GitHub token, the
+// skills GitHub App, the workspace providers' keys.
+func recordedSecretSources(cfg *config.Config) []SecretSource {
+	var out []SecretSource
+	add := func(field, source, ns, name string) {
+		if source != "" {
+			out = append(out, SecretSource{Field: field, Source: source, Secret: ns + "/" + name})
+		}
+	}
+	add("aiKey.source", cfg.AIKey.Source, kagentNamespace, anthropicSecret)
+	add(gitHubTokenSourceField, cfg.GitHubToken.Source, platformNamespace, gitHubTokenSecret)
+	if app := cfg.SkillsGitHubApp(); app.Configured() {
+		add("githubApp.privateKeySource", app.PrivateKeySource, platformNamespace, gitHubAppSecret)
+		add("githubApp.clientSecretSource", app.ClientSecretSource, platformNamespace, portalGitHubAppSecret)
+	}
+	if cfg.WorkspaceGitHubProvider() {
+		gh := cfg.Platform.Workspaces.GitHub
+		add("platform.workspaces.github.privateKeySource", gh.PrivateKeySource, platformNamespace, config.WorkspaceGitHubSecretName)
+		add("platform.workspaces.github.clientSecretSource", gh.ClientSecretSource, platformNamespace, config.WorkspaceGitHubSecretName)
+	}
+	if cfg.WorkspaceGitLabProvider() {
+		gl := cfg.Platform.Workspaces.GitLab
+		add("platform.workspaces.gitlab.tokenSource", gl.TokenSource, platformNamespace, config.WorkspaceGitLabSecretName)
+		add("platform.workspaces.gitlab.clientSecretSource", gl.ClientSecretSource, platformNamespace, config.WorkspaceGitLabSecretName)
+		add("platform.workspaces.gitlab.passwordSource", gl.PasswordSource, platformNamespace, config.WorkspaceGitLabSecretName)
+	}
+	return out
+}
+
+// sourcePlacement says who places a recorded source on this machine:
+// beekeeper where it answers, else agentlab through the source's reader — or
+// that the reader is missing, so up and platform cannot.
+func (d *Discovery) sourcePlacement(source string) string {
+	if d.Beekeeper != "" {
+		return fmt.Sprintf("%s %s places it", secretTool, d.Beekeeper)
+	}
+	reader := secretReader(source)
+	if reader == "" {
+		kubeContext, _, _ := strings.Cut(strings.TrimPrefix(source, "k8s://"), "/")
+		return "agentlab reads it through the kubeconfig context " + kubeContext + " and places it"
+	}
+	if v := d.SecretReaders[reader]; v != "" {
+		return fmt.Sprintf("agentlab reads it through %s %s and places it", reader, v)
+	}
+	return fmt.Sprintf("but %s is not on PATH (or does not answer), so up and platform cannot place it", reader)
+}
+
+// secretReaderProblems are Preflight's verdicts on the readers: one per
+// reader a recorded source needs that does not answer, naming the sources —
+// none while beekeeper answers, which places them all.
+func (d *Discovery) secretReaderProblems() []string {
+	if d.Beekeeper != "" {
+		return nil
+	}
+	var problems []string
+	for _, reader := range []string{opBin, sopsBin} {
+		if d.SecretReaders[reader] != "" {
+			continue
+		}
+		var needs []string
+		for _, s := range d.Sources {
+			if secretReader(s.Source) == reader {
+				needs = append(needs, fmt.Sprintf("%s %s (Secret %s)", s.Field, s.Source, s.Secret))
+			}
+		}
+		if len(needs) == 0 {
+			continue
+		}
+		problems = append(problems, fmt.Sprintf("%s is not on PATH (or does not answer) — up and platform read %s through it, in agentlab's process, and place it\n    install: %s (or record another reference, or clear it with `agentlab configure`)",
+			reader, strings.Join(needs, ", "), secretReaderInstall[reader]))
+	}
+	return problems
+}
+
+// secretReaderVersion is a reader CLI's version, "" when it is not on PATH
+// or does not answer: `op --version` answers the bare version, `sops
+// --version` "sops X.Y.Z" (its check against the newest release kept off).
+func secretReaderVersion(reader string) string {
+	cmd := command(reader, "--version")
+	cmd.Env = append(os.Environ(), "SOPS_DISABLE_VERSION_CHECK=1")
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	first, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
+	fields := strings.Fields(first)
+	if len(fields) >= 2 && fields[0] == reader {
+		return fields[1]
+	}
+	return strings.TrimSpace(first)
+}
+
+// beekeeperVersion is beekeeper's version (`beekeeper version` answers
+// `beekeeper vX.Y.Z (commit …)`; the second word), "" when it is not on
+// PATH or does not answer.
+func beekeeperVersion() string {
+	if !secretToolOnPath() {
+		return ""
+	}
 	out, err := outputQuiet(secretTool, "version")
 	if err != nil {
 		return ""
