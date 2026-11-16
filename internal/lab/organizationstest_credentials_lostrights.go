@@ -139,6 +139,11 @@ func (p *credentialsProof) setOtherAdmin(admin bool) error {
 		p.disarmRestore = restoreOnSignal(func() { p.restoreOnInterrupt(ns) })
 	}
 	if err := bindOrganizationRole(p.namespace, organizationAdminsBinding, organizationAdminRole, p.adminsSubjects(admin)); err != nil {
+		if !admin {
+			// The removal may have landed although the write failed:
+			// cleanup binds them again, and disarms the guard.
+			p.otherRemoved = true
+		}
 		return err
 	}
 	p.otherRemoved = !admin
@@ -154,7 +159,7 @@ func (p *credentialsProof) setOtherAdmin(admin bool) error {
 // remove them again.
 func (p *credentialsProof) restoreOnInterrupt(ns string) {
 	p.bindingMu.Lock()
-	note("interrupted: binding %s as %s in %s again before the end (interrupt again to end at once)", p.other.Email, organizationAdminRole, ns)
+	note("interrupted: binding %s as %s in %s again before the end (at most %s)", p.other.Email, organizationAdminRole, ns, signalRestoreTimeout)
 	if err := bindOrganizationRole(ns, organizationAdminsBinding, organizationAdminRole, p.adminsSubjects(true)); err != nil {
 		warn("binding %s as %s in %s again: %v; the next run creates the organization again", p.other.Email, organizationAdminRole, ns, err)
 		return

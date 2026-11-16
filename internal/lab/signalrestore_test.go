@@ -2,6 +2,7 @@ package lab
 
 import (
 	"os"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -32,28 +33,43 @@ func TestOnSignalRestoresThenExits(t *testing.T) {
 	disarm()
 }
 
-// A restore that hangs cannot hang the program: it ends after the timeout,
-// or at once on a second signal.
+// A restore that hangs cannot hang the program: it ends after the timeout.
 func TestOnSignalBoundsTheRestore(t *testing.T) {
 	hang := make(chan struct{})
 	defer close(hang)
-	t.Run("timeout", func(t *testing.T) {
-		sigs := make(chan os.Signal, 2)
-		exit, exited := exitRecorder()
-		onSignal(sigs, func() { <-hang }, 10*time.Millisecond, exit)
-		sigs <- syscall.SIGTERM
-		require.Equal(t, syscall.SIGTERM, <-exited)
+	sigs := make(chan os.Signal, 2)
+	exit, exited := exitRecorder()
+	onSignal(sigs, func() { <-hang }, 10*time.Millisecond, exit)
+	sigs <- syscall.SIGTERM
+	require.Equal(t, syscall.SIGTERM, <-exited)
+}
+
+// The range hold's handler delivers the first signal again once it resumed
+// the ranges: that second signal must not end the program before the
+// restore did.
+func TestOnSignalWaitsForTheRestoreThroughASecondSignal(t *testing.T) {
+	sigs := make(chan os.Signal, 2)
+	started, release := make(chan struct{}), make(chan struct{})
+	var exitedEarly atomic.Bool
+	exited := make(chan os.Signal, 1)
+	onSignal(sigs, func() {
+		close(started)
+		<-release
+		require.False(t, exitedEarly.Load(), "the program ended before the restore did")
+	}, time.Minute, func(sig os.Signal) {
+		exitedEarly.Store(true)
+		exited <- sig
 	})
-	t.Run("second signal", func(t *testing.T) {
-		sigs := make(chan os.Signal, 2)
-		started := make(chan struct{})
-		exit, exited := exitRecorder()
-		onSignal(sigs, func() { close(started); <-hang }, time.Hour, exit)
-		sigs <- os.Interrupt
-		<-started
-		sigs <- os.Interrupt
-		require.Equal(t, os.Interrupt, <-exited)
-	})
+	sigs <- os.Interrupt
+	<-started
+	sigs <- os.Interrupt
+	select {
+	case <-exited:
+		t.Fatal("the second signal ended the program during the restore")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	require.Equal(t, os.Interrupt, <-exited)
 }
 
 // Once disarmed, the watch reads no signal: it keeps its default course.

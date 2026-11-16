@@ -1040,7 +1040,7 @@ func (p *credentialsProof) cancel() (string, error) {
 	if err := nothingWritten(ctx, p.namespace, credentialsOtherModel, credentialsOtherModelSecret, false); err != nil {
 		return "", fmt.Errorf("after the cancel: %w", err)
 	}
-	return fmt.Sprintf("%s's operation %s: DELETE with a stale If-Match 412, with its ETag 204; it reads %s, a save with its ETag 412, no ModelConfig %s and no value in %s",
+	return fmt.Sprintf("%s's operation %s: DELETE with a stale If-Match 412, with its ETag 204; it reads %s, a save with its ETag 412, no ModelConfig %s and no Secret %s",
 		p.other.Email, p.otherOperation, operationCancelled, credentialsOtherModel, credentialsOtherModelSecret), nil
 }
 

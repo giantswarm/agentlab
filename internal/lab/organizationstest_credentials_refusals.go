@@ -166,7 +166,7 @@ func (p *credentialsProof) viewerWriteRefused() (string, error) {
 	case skip != "":
 		return "", skipCheck("%s", skip)
 	}
-	return fmt.Sprintf("%s (%s in %s only; access reviews: list modelconfigs allowed, create secrets and modelconfigs denied): set_organization_model %s refused by the apiserver's denial of %s %q, no ModelConfig, no value",
+	return fmt.Sprintf("%s (%s in %s only; access reviews: list modelconfigs allowed, create secrets and modelconfigs denied): set_organization_model %s refused by the apiserver's denial of %s %q, no ModelConfig, no Secret",
 		p.viewer.Email, organizationUserRole, p.namespace, credentialsViewerModel, denied, excerpt(refusal, 200)), nil
 }
 
@@ -303,7 +303,7 @@ func (p *credentialsProof) sharedSecretRefused() (string, error) {
 	if err := nothingWritten(ctx, p.namespace, credentialsSharedModel, credentialsSharedSecret, false); err != nil {
 		return "", fmt.Errorf("after the refused preparation: %w", err)
 	}
-	return fmt.Sprintf("operation %s for %s/%s; with ModelConfig %s referencing it too, POST with If-Match answered 409 conflict, no ModelConfig %s and no value; prepared again it is refused %q",
+	return fmt.Sprintf("operation %s for %s/%s; with ModelConfig %s referencing it too, POST with If-Match answered 409 conflict, no ModelConfig %s and no Secret; prepared again it is refused %q",
 		operation, credentialsSharedSecret, credentialsModelKey, credentialsSharedOther, credentialsSharedModel, excerpt(refusal, 160)), nil
 }
 

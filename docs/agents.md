@@ -555,10 +555,10 @@ Secret existed before the refused write does a Secret without a value at
   the admin's operation is not kept waiting. The binding is given back in
   the cleanup too, so a failed run leaves the organization usable. While
   they are removed, an interrupt (Ctrl-C) or SIGTERM binds them again before
-  the program ends, with exit status 130 or 143; that write is bounded to
-  20 seconds, and a second interrupt ends the program at once (then the next
-  run creates the organization again). An interrupt at any other moment
-  ends the run at once, as before. Below
+  the signal ends the program; the program waits at most 35 seconds for
+  that write (a write in flight, then its own), then ends without it, and
+  the next run creates the organization again. An interrupt at any other
+  moment ends the run at once, as before. Below
   agent-manager 2.24.0-rc.2 both are a `SKIP` naming
   giantswarm/agent-manager#360: that user cannot prepare an operation of
   their own, and the first admin, a platform admin, cannot lose the right.
