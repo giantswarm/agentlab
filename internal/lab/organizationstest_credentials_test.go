@@ -361,7 +361,7 @@ func TestContainerArgs(t *testing.T) {
 
 func TestFormOperation(t *testing.T) {
 	const tpl = "https://portal.example/organizations/agentlab/{parent}/{organization}/credentials{?operation}"
-	op, err := formOperation(tpl, "https://portal.example/organizations/agentlab/root/org/credentials?operation=9b0e2fc5", "root", "org")
+	op, err := formOperation(tpl, "https://portal.example/organizations/agentlab/root/org/credentials?operation=9b0e2fc5", "root", "org", "agents-org")
 	require.NoError(t, err)
 	require.Equal(t, "9b0e2fc5", op)
 
@@ -371,16 +371,23 @@ func TestFormOperation(t *testing.T) {
 		"an extra parameter":   "https://portal.example/organizations/agentlab/root/org/credentials?operation=9b0e2fc5&token=abc",
 		"no operation":         "https://portal.example/organizations/agentlab/root/org/credentials?operation=",
 	} {
-		_, err := formOperation(tpl, link, "root", "org")
+		_, err := formOperation(tpl, link, "root", "org", "agents-org")
 		require.Error(t, err, name)
 	}
 
-	op, err = formOperation("https://p.example/c/{operation}", "https://p.example/c/abc-1", "root", "org")
+	const namespaced = "https://portal.example/customize/models/credentials/agentlab/{namespace}/{operation}"
+	op, err = formOperation(namespaced, "https://portal.example/customize/models/credentials/agentlab/agents-org/9b0e2fc5", "root", "org", "agents-org")
+	require.NoError(t, err)
+	require.Equal(t, "9b0e2fc5", op)
+	_, err = formOperation(namespaced, "https://portal.example/customize/models/credentials/agentlab/agents-other/9b0e2fc5", "root", "org", "agents-org")
+	require.Error(t, err, "another namespace")
+
+	op, err = formOperation("https://p.example/c/{operation}", "https://p.example/c/abc-1", "root", "org", "agents-org")
 	require.NoError(t, err)
 	require.Equal(t, "abc-1", op)
-	_, err = formOperation("http://p.example/c/{operation}", "http://p.example/c/abc-1", "root", "org")
+	_, err = formOperation("http://p.example/c/{operation}", "http://p.example/c/abc-1", "root", "org", "agents-org")
 	require.ErrorContains(t, err, "not an https URL")
-	_, err = formOperation("https://p.example/c", "https://p.example/c", "root", "org")
+	_, err = formOperation("https://p.example/c", "https://p.example/c", "root", "org", "agents-org")
 	require.ErrorContains(t, err, "does not expand {operation} once")
 }
 

@@ -718,7 +718,7 @@ func oneURLElicitation(a *musterAnswer) (mcp.ElicitationParams, error) {
 // formLink checks a link is the credential UI URL template expanded for the
 // part's organization and returns the operation it carries.
 func (p *credentialsProof) formLink(link string) (string, error) {
-	return formOperation(p.pre.agentManager[flagCredentialUIURL], link, organizationsRootNamespace, credentialsOrganization)
+	return formOperation(p.pre.agentManager[flagCredentialUIURL], link, organizationsRootNamespace, credentialsOrganization, p.namespace)
 }
 
 // plainGeneration: the plain client's answer carries the link in
@@ -734,7 +734,7 @@ func (p *credentialsProof) plainGeneration() (string, error) {
 	if operation != p.operation {
 		return "", fmt.Errorf("the link %s carries operation %s, the answer names %s", p.formURL, operation, p.operation)
 	}
-	return fmt.Sprintf("credentials[].next carries %s (operation %s), the credential UI URL template expanded with the operation, the parent and the organization only", p.formURL, p.operation), nil
+	return fmt.Sprintf("credentials[].next carries %s (operation %s), the credential UI URL template expanded with the operation, the parent, the organization and the namespace only", p.formURL, p.operation), nil
 }
 
 // resourceLinkCheck is the structuredContent and resource_link of the plain

@@ -312,6 +312,7 @@ const (
 	uiVarOperation    = "operation"
 	uiVarParent       = "parent"
 	uiVarOrganization = "organization"
+	uiVarNamespace    = "namespace"
 )
 
 // schemeHTTPS is the scheme MCP's safe URL handling has a URL elicitation
@@ -328,9 +329,9 @@ var operationRe = regexp.MustCompile(`^[A-Za-z0-9._~-]+$`)
 
 // formOperation reads the operation from a link to the credential UI: the
 // link must be the template expanded as agent-manager expands it (RFC 6570,
-// with operation, parent and organization only), so nothing else, no value
-// and no token, travels in it.
-func formOperation(template, link, parent, organization string) (string, error) {
+// with operation, parent, organization and namespace only), so nothing else,
+// no value and no token, travels in it.
+func formOperation(template, link, parent, organization, namespace string) (string, error) {
 	tpl, err := uritemplate.New(template)
 	if err != nil {
 		return "", fmt.Errorf("credential UI URL template %q: %w", template, err)
@@ -339,6 +340,7 @@ func formOperation(template, link, parent, organization string) (string, error) 
 		uiVarOperation:    uritemplate.String(formOperationMarker),
 		uiVarParent:       uritemplate.String(parent),
 		uiVarOrganization: uritemplate.String(organization),
+		uiVarNamespace:    uritemplate.String(namespace),
 	})
 	if err != nil {
 		return "", fmt.Errorf("credential UI URL template %q: %w", template, err)
