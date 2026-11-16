@@ -127,13 +127,39 @@ func (p *credentialsProof) adminsSubjects(withOther bool) []rbacv1.Subject {
 }
 
 // setOtherAdmin binds the other admin as an admin of the organization again,
-// or removes them, and records it for cleanup.
+// or removes them, and records it for cleanup. While they are removed, an
+// interrupt (Ctrl-C) or SIGTERM binds them again before the program ends:
+// the guard is armed before the removal and disarmed once they are bound
+// again. bindingMu keeps the guard's write after any write of the run.
 func (p *credentialsProof) setOtherAdmin(admin bool) error {
+	p.bindingMu.Lock()
+	defer p.bindingMu.Unlock()
+	if !admin && p.disarmRestore == nil {
+		ns := p.namespace
+		p.disarmRestore = restoreOnSignal(func() { p.restoreOnInterrupt(ns) })
+	}
 	if err := bindOrganizationRole(p.namespace, organizationAdminsBinding, organizationAdminRole, p.adminsSubjects(admin)); err != nil {
 		return err
 	}
 	p.otherRemoved = !admin
+	if admin && p.disarmRestore != nil {
+		p.disarmRestore()
+		p.disarmRestore = nil
+	}
 	return nil
+}
+
+// restoreOnInterrupt binds the other admin in ns again on an interrupt. It
+// keeps bindingMu: the program ends after it, and no write of the run may
+// remove them again.
+func (p *credentialsProof) restoreOnInterrupt(ns string) {
+	p.bindingMu.Lock()
+	note("interrupted: binding %s as %s in %s again before the end (interrupt again to end at once)", p.other.Email, organizationAdminRole, ns)
+	if err := bindOrganizationRole(ns, organizationAdminsBinding, organizationAdminRole, p.adminsSubjects(true)); err != nil {
+		warn("binding %s as %s in %s again: %v; the next run creates the organization again", p.other.Email, organizationAdminRole, ns, err)
+		return
+	}
+	note("interrupted: %s bound as %s in %s again", p.other.Email, organizationAdminRole, ns)
 }
 
 // restoreOtherAdmin gives the other admin their binding back after a run
@@ -246,10 +272,10 @@ func (p *credentialsProof) lostRightsSaveRefused() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%s: %w (the save answered %s; the read %s)", p.other.Email, err, excerpt(redactValue(string(raw), p.value), 300), excerpt(string(readBody), 300))
 	}
-	if err := nothingWritten(ctx, p.namespace, credentialsLostModel, credentialsLostModelSecret); err != nil {
+	if err := nothingWritten(ctx, p.namespace, credentialsLostModel, credentialsLostModelSecret, false); err != nil {
 		return "", fmt.Errorf("after the save refused for the lost right: %w", err)
 	}
-	return fmt.Sprintf("%s (access review: create secrets and modelconfigs allowed) prepared operation %s at %s; removed from %s/%s, access review: both denied; POST with that ETag 403 %s %q, their GET 403 naming %q; no ModelConfig %s, no value in %s",
+	return fmt.Sprintf("%s (access review: create secrets and modelconfigs allowed) prepared operation %s at %s; removed from %s/%s, access review: both denied; POST with that ETag 403 %s %q, their GET 403 naming %q; no ModelConfig %s, no Secret %s",
 		p.other.Email, p.lostOperation, etag, p.namespace, organizationAdminsBinding, codeForbidden, excerpt(errorMessage(raw), 120), denied, credentialsLostModel, credentialsLostModelSecret), nil
 }
 

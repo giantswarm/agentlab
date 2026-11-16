@@ -603,3 +603,23 @@ func TestViewerRefusalVerdict(t *testing.T) {
 		require.ErrorContains(t, err, "unrelated guard", name)
 	}
 }
+
+// After a refused write, a Secret that did not exist before fails whatever
+// it holds: empty, another key, or the value. One that existed before fails
+// only with a value at the key.
+func TestSecretWritten(t *testing.T) {
+	const ns, name = "org-ns", "tenant-credential-m" // #nosec G101 -- names, not credentials
+	secret := func(data map[string][]byte) *corev1.Secret { return &corev1.Secret{Data: data} }
+	for _, before := range []bool{false, true} {
+		require.NoError(t, secretWritten(ns, name, nil, before), "not found")
+		require.ErrorContains(t, secretWritten(ns, name, secret(map[string][]byte{credentialsModelKey: []byte("v")}), before), "holds a value")
+	}
+	for label, s := range map[string]*corev1.Secret{
+		"no keys":     secret(nil),
+		"another key": secret(map[string][]byte{"token": []byte("v")}),
+		"empty value": secret(map[string][]byte{credentialsModelKey: nil}),
+	} {
+		require.ErrorContains(t, secretWritten(ns, name, s, false), "want none", label)
+		require.NoError(t, secretWritten(ns, name, s, true), label)
+	}
+}
