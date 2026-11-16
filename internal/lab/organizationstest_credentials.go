@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -128,9 +129,12 @@ type credentialsProof struct {
 	// lostOperation is the other person's operation whose save is refused
 	// once they lose the right, lostETag its ETag before; otherRemoved says
 	// the other person is out of the organization's admins binding, which
-	// cleanup restores.
+	// cleanup restores. disarmRestore stops the guard that binds them
+	// again on an interrupt; bindingMu orders the binding's writes.
 	lostOperation, lostETag string
 	otherRemoved            bool
+	disarmRestore           func()
+	bindingMu               sync.Mutex
 	// started is when the run began: the logs judged for the value are
 	// read from it.
 	started             time.Time
@@ -666,7 +670,7 @@ func (p *credentialsProof) declinedAndDismissed() (string, error) {
 		if confirmation.State != operationCancelled {
 			return "", fmt.Errorf("operation %s reads %q after the person %s, want %s", operation, confirmation.State, c.word, operationCancelled)
 		}
-		if err := nothingWritten(ctx, p.namespace, c.model, "tenant-credential-"+c.model); err != nil {
+		if err := nothingWritten(ctx, p.namespace, c.model, "tenant-credential-"+c.model, false); err != nil {
 			return "", fmt.Errorf("after the person %s: %w", c.word, err)
 		}
 		outcomes = append(outcomes, fmt.Sprintf("%s: isError %q, operation %s %s, no ModelConfig %s", c.action, excerpt(final.result.text(), 80), operation, operationCancelled, c.model))
@@ -1033,24 +1037,50 @@ func (p *credentialsProof) cancel() (string, error) {
 	if resp.StatusCode != http.StatusPreconditionFailed {
 		return "", fmt.Errorf("a save of the cancelled operation answered %d, want 412: %s", resp.StatusCode, excerpt(redactValue(string(raw), p.value), 200))
 	}
-	if err := nothingWritten(ctx, p.namespace, credentialsOtherModel, credentialsOtherModelSecret); err != nil {
+	if err := nothingWritten(ctx, p.namespace, credentialsOtherModel, credentialsOtherModelSecret, false); err != nil {
 		return "", fmt.Errorf("after the cancel: %w", err)
 	}
-	return fmt.Sprintf("%s's operation %s: DELETE with a stale If-Match 412, with its ETag 204; it reads %s, a save with its ETag 412, no ModelConfig %s and no value in %s",
+	return fmt.Sprintf("%s's operation %s: DELETE with a stale If-Match 412, with its ETag 204; it reads %s, a save with its ETag 412, no ModelConfig %s and no Secret %s",
 		p.other.Email, p.otherOperation, operationCancelled, credentialsOtherModel, credentialsOtherModelSecret), nil
 }
 
 // nothingWritten checks a model has neither a ModelConfig nor a value in
-// its credential Secret.
-func nothingWritten(ctx context.Context, ns, model, secret string) error {
-	_, found, err := secretValueSum(ctx, ns, secret, credentialsModelKey)
+// its credential Secret. secretBefore says the Secret existed before the
+// refused write; see secretWritten.
+func nothingWritten(ctx context.Context, ns, model, secret string, secretBefore bool) error {
+	k, err := labKube()
 	if err != nil {
 		return err
 	}
-	if found {
-		return fmt.Errorf("the Secret %s/%s holds a value", ns, secret)
+	s, err := k.clientset.CoreV1().Secrets(ns).Get(ctx, secret, metav1.GetOptions{})
+	switch {
+	case apierrors.IsNotFound(err):
+		s = nil
+	case err != nil:
+		return fmt.Errorf("reading the Secret %s/%s: %w", ns, secret, err)
+	}
+	if err := secretWritten(ns, secret, s, secretBefore); err != nil {
+		return err
 	}
 	return modelConfigPresent(ctx, ns, model, false)
+}
+
+// secretWritten is why the Secret ns/name, as a read after a refused write
+// found it (nil: not found), shows that write; nil when it shows none. A
+// value at credentialsModelKey always does. Where the Secret did not exist
+// before (existedBefore false), any Secret does: a refused write must not
+// leave an empty Secret, or one with another key, behind.
+func secretWritten(ns, name string, s *corev1.Secret, existedBefore bool) error {
+	switch {
+	case s == nil:
+		return nil
+	case len(s.Data[credentialsModelKey]) > 0:
+		return fmt.Errorf("the Secret %s/%s holds a value", ns, name)
+	case !existedBefore:
+		keys := slices.Sorted(maps.Keys(s.Data))
+		return fmt.Errorf("the Secret %s/%s exists (keys %v), want none: it did not exist before the refused write", ns, name, keys)
+	}
+	return nil
 }
 
 // modelConfigPresent checks the ModelConfig ns/name exists, or does not when
@@ -1151,7 +1181,7 @@ func (p *credentialsProof) save() (string, error) {
 	if again, _, err := p.readConfirmation(ctx, rest, p.operation, p.adminToken); err != nil || again.State != operationPending {
 		return "", fmt.Errorf("after the refused saves the operation is not %s (%+v, %v)", operationPending, again, err)
 	}
-	if err := nothingWritten(ctx, p.namespace, credentialsModel, credentialsModelSecret); err != nil {
+	if err := nothingWritten(ctx, p.namespace, credentialsModel, credentialsModelSecret, p.live); err != nil {
 		return "", fmt.Errorf("after the refused saves: %w", err)
 	}
 	resp, raw, err := post(etag)
@@ -1201,7 +1231,7 @@ func (p *credentialsProof) save() (string, error) {
 	detail := fmt.Sprintf("ETag %s, Cache-Control no-store, the confirmation lists only ModelConfig %s (key %s); POST refused with %s%s, nothing written; POST with If-Match saved %s/%s (%s) as %s; %s; %s, the Secret's and the ModelConfig's resourceVersions unchanged",
 		etag, credentialsModel, credentialsModelKey, strings.Join(refusals, " and "), ifMatchNote, credentialsModelSecret, credentialsModelKey, shortSum(p.valueSum), want, again, retried)
 	if p.mode == modeCommit {
-		if err := nothingWritten(ctx, p.namespace, credentialsModel, credentialsModelSecret); err != nil {
+		if err := nothingWritten(ctx, p.namespace, credentialsModel, credentialsModelSecret, p.live); err != nil {
 			return "", fmt.Errorf("mode commit, before the pull request is merged: %w", err)
 		}
 		branches, err := personGH("pr", "list", "--repo", receipt.Commit.Repository, "--state", "open", "--head", receipt.Commit.Branch, "--json", "number", "--jq", ".[].number")

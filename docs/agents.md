@@ -458,7 +458,11 @@ typed only into agent-manager's credential API, never into a tool call
 organization, `agentlab-organizations/agentlab-credentials` (a previous
 run's is erased first), with `platform-admins` as its admins, and acts as
 the first admin. The key it types is a random value made in the process and
-printed only as its SHA-256. Each verdict:
+printed only as its SHA-256. Where a verdict says nothing is written, there
+is no ModelConfig of the model, and no `tenant-credential-*` Secret of it
+at all, not even an empty one or one with another key; only where that
+Secret existed before the refused write does a Secret without a value at
+`apiKey` pass. Each verdict:
 
 - `set_organization_model` through muster (`x_agent-manager_set_organization_model`)
   for a new model without a key writes nothing: no ModelConfig, no
@@ -549,9 +553,12 @@ printed only as its SHA-256. Each verdict:
   reads `pending` at the same `ETag`, and the save with it writes the Secret
   (its SHA-256 compared) and the ModelConfig. Both run after the save, so
   the admin's operation is not kept waiting. The binding is given back in
-  the cleanup too, so a failed run leaves the organization usable; a run
-  interrupted between the two verdicts (Ctrl-C) leaves it removed, and the
-  next run creates the organization again. Below
+  the cleanup too, so a failed run leaves the organization usable. While
+  they are removed, an interrupt (Ctrl-C) or SIGTERM binds them again before
+  the signal ends the program; the program waits at most 35 seconds for
+  that write (a write in flight, then its own), then ends without it, and
+  the next run creates the organization again. An interrupt at any other
+  moment ends the run at once, as before. Below
   agent-manager 2.24.0-rc.2 both are a `SKIP` naming
   giantswarm/agent-manager#360: that user cannot prepare an operation of
   their own, and the first admin, a platform admin, cannot lose the right.

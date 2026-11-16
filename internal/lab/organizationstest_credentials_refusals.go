@@ -156,7 +156,7 @@ func (p *credentialsProof) viewerWriteRefused() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%s's set_organization_model %s: %w", p.viewer.Email, credentialsViewerModel, err)
 	}
-	if err := nothingWritten(ctx, p.namespace, credentialsViewerModel, "tenant-credential-"+credentialsViewerModel); err != nil {
+	if err := nothingWritten(ctx, p.namespace, credentialsViewerModel, "tenant-credential-"+credentialsViewerModel, false); err != nil {
 		return "", fmt.Errorf("after %s's refused call: %w", p.viewer.Email, err)
 	}
 	denied, skip, err := viewerRefusalVerdict(p.agentManagerVersion, refusal, apiserverUserPrefix+p.viewer.Email, p.namespace)
@@ -166,7 +166,7 @@ func (p *credentialsProof) viewerWriteRefused() (string, error) {
 	case skip != "":
 		return "", skipCheck("%s", skip)
 	}
-	return fmt.Sprintf("%s (%s in %s only; access reviews: list modelconfigs allowed, create secrets and modelconfigs denied): set_organization_model %s refused by the apiserver's denial of %s %q, no ModelConfig, no value",
+	return fmt.Sprintf("%s (%s in %s only; access reviews: list modelconfigs allowed, create secrets and modelconfigs denied): set_organization_model %s refused by the apiserver's denial of %s %q, no ModelConfig, no Secret",
 		p.viewer.Email, organizationUserRole, p.namespace, credentialsViewerModel, denied, excerpt(refusal, 200)), nil
 }
 
@@ -215,7 +215,7 @@ func (p *credentialsProof) viewerSaveRefused() (string, error) {
 	case code != unknown:
 		return "", fmt.Errorf("%s's POST of %s's operation answered %d, an unknown operation's %d: the refusal tells the operation exists", p.viewer.Email, p.admin.Email, code, unknown)
 	}
-	if err := nothingWritten(ctx, p.namespace, credentialsModel, credentialsModelSecret); err != nil {
+	if err := nothingWritten(ctx, p.namespace, credentialsModel, credentialsModelSecret, p.live); err != nil {
 		return "", fmt.Errorf("after %s's refused POST: %w", p.viewer.Email, err)
 	}
 	after, etagAfter, err := p.readConfirmation(ctx, rest, p.operation, p.adminToken)
@@ -286,7 +286,7 @@ func (p *credentialsProof) sharedSecretRefused() (string, error) {
 	if code := errorCode(raw); resp.StatusCode != http.StatusConflict || code != "conflict" {
 		return "", fmt.Errorf("the save of a Secret %s also references answered %d %q, want 409 conflict: %s", credentialsSharedOther, resp.StatusCode, code, excerpt(redactValue(string(raw), p.value), 200))
 	}
-	if err := nothingWritten(ctx, p.namespace, credentialsSharedModel, credentialsSharedSecret); err != nil {
+	if err := nothingWritten(ctx, p.namespace, credentialsSharedModel, credentialsSharedSecret, false); err != nil {
 		return "", fmt.Errorf("after the refused save: %w", err)
 	}
 	again, err := m.call(ctx, agentManagerToolPrefix+"set_organization_model", withArgs(args, map[string]any{"requestId": randomHex(8)}), mcp.MultiRoundTripParams{})
@@ -300,10 +300,10 @@ func (p *credentialsProof) sharedSecretRefused() (string, error) {
 	if !strings.Contains(refusal, sharedSecretRefusal) {
 		return "", fmt.Errorf("preparing %s again was refused %q, not for the Secret %s references", credentialsSharedModel, excerpt(refusal, 200), credentialsSharedOther)
 	}
-	if err := nothingWritten(ctx, p.namespace, credentialsSharedModel, credentialsSharedSecret); err != nil {
+	if err := nothingWritten(ctx, p.namespace, credentialsSharedModel, credentialsSharedSecret, false); err != nil {
 		return "", fmt.Errorf("after the refused preparation: %w", err)
 	}
-	return fmt.Sprintf("operation %s for %s/%s; with ModelConfig %s referencing it too, POST with If-Match answered 409 conflict, no ModelConfig %s and no value; prepared again it is refused %q",
+	return fmt.Sprintf("operation %s for %s/%s; with ModelConfig %s referencing it too, POST with If-Match answered 409 conflict, no ModelConfig %s and no Secret; prepared again it is refused %q",
 		operation, credentialsSharedSecret, credentialsModelKey, credentialsSharedOther, credentialsSharedModel, excerpt(refusal, 160)), nil
 }
 
