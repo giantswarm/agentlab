@@ -14,7 +14,7 @@ require (
 	github.com/a2aproject/a2a-go/v2 v2.9.0
 	github.com/aws/aws-sdk-go-v2 v1.48.0
 	github.com/aws/aws-sdk-go-v2/credentials v1.21.1
-	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.10
+	github.com/aws/aws-sdk-go-v2/service/s3 v1.115.0
 	github.com/charmbracelet/x/ansi v0.11.9
 	github.com/fluxcd/cli-utils v1.4.0
 	github.com/giantswarm/go-selfupdate v1.7.7
