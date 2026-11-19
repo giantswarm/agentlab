@@ -25,11 +25,9 @@ import (
 // Prometheus server — see kube-prometheus-stack-values.yaml.tmpl.
 const (
 	kpsChartVersion = "22.0.0" // wraps upstream kube-prometheus-stack 87.3.0
-	// 0.8.0: OAuth provider switch and tenancy mode `none` (a single-tenant
-	// Prometheus behind muster; the lab's identity proofs need both). An exact
-	// version: the OCIRepository's semver range is this pin, unless
+	// An exact version: the OCIRepository's semver range is this pin, unless
 	// platform.mcpPrometheusChartVersion names another (mcpPrometheusChartFor).
-	mcpPrometheusChartVersion = "0.8.0"
+	mcpPrometheusChartVersion = "0.13.9"
 )
 
 // observabilityNamespace also appears in the templates (the PROMETHEUS_URL and

@@ -53,7 +53,7 @@ spec:
   # mcps entry's auth.mode: forward) and mcp-prometheus validates it against
   # Dex's JWKS because its audience, agent-platform, is trusted. The issuer is
   # the lab Dex on the host's loopback (see agent-platform-values.yaml.tmpl:
-  # why the issuer is https://localhost), hence allowPrivateURLs and the
+  # why the issuer is https://localhost), hence allowPrivateIPJWKS and the
   # sidecar; the lab CA (Secret dex-ca, mirrored into monitoring by
   # observability.go) verifies Dex's self-signed certificate. Nothing here is
   # routed on the edge: the issuer/redirect URLs only name this server's own
@@ -92,7 +92,7 @@ spec:
         redirectURL: https://mcp-prometheus.{{ .Platform.Domain }}/oauth/callback
         dexClientSecret: "{{ .AgentPlatformClientSecret }}"
         encryptionKey: "bGFiLW9ubHktbWNwLXByb21ldGhldXMta2V5LTMyYnk="
-        allowPrivateURLs: true
+        allowPrivateIPJWKS: true
         dexCASecret:
           name: dex-ca
           key: ca.crt
