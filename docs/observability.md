@@ -34,8 +34,10 @@ node (control-plane CPU/memory). Values and the reasons for every toggle:
 versions are Go-const pins in `internal/lab/observability.go` (like Flux's —
 no BOM covers them).
 
-mcp-prometheus follows the mcp-kubernetes stance exactly: unauthenticated on
-the cluster network, muster is the single enforcement point. Its MCPServer CR
+mcp-prometheus validates the user's Dex token forwarded by muster, with
+`agent-platform` as its trusted audience. `app.oauth.allowPrivateIPJWKS: true`
+lets its JWKS fetch reach the lab's loopback issuer; the `dex-ca` Secret
+provides the CA for TLS verification. Its MCPServer CR
 comes from the chart's `agent-platform-mcps.mcpServers` values, the entry an
 installation writes for a management cluster: `cluster: <clusterName>`,
 `group: prometheus`, so the chart names it `<clusterName>-mcp-prometheus`,
