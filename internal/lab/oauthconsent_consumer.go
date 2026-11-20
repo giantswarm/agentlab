@@ -178,6 +178,7 @@ func (flow *consentProofFlow) checkDCRCompatibility(ctx context.Context, user *c
 	}
 	document, err := json.Marshal(map[string]any{
 		"client_name": "Agentlab DCR compatibility proof", "redirect_uris": []string{consentProofRedirect},
+		"application_type":           "web",
 		"token_endpoint_auth_method": consentPublicClientAuthNone, "grant_types": []string{oauthAuthorizationCodeGrant, oauthRefreshTokenGrant},
 		"response_types": []string{oauthCodeParam},
 	})

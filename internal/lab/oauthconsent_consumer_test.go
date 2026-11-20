@@ -75,6 +75,25 @@ func TestConsentUnregisteredRedirectRequiresLocalRefusal(t *testing.T) {
 	}
 }
 
+func TestConsentDCRRegistrationDeclaresWebApplication(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		require.Equal(t, http.MethodPost, request.Method)
+		require.Equal(t, "/oauth/register", request.URL.Path)
+		require.Equal(t, "application/json", request.Header.Get("Content-Type"))
+		var registration struct {
+			ApplicationType string   `json:"application_type"`
+			RedirectURIs    []string `json:"redirect_uris"`
+		}
+		require.NoError(t, json.NewDecoder(request.Body).Decode(&registration))
+		require.Equal(t, "web", registration.ApplicationType)
+		require.Equal(t, []string{consentProofRedirect}, registration.RedirectURIs)
+		writer.WriteHeader(http.StatusForbidden)
+	}))
+	t.Cleanup(server.Close)
+	flow := newConsentProofFlow(server.Client(), &consentMetadata{Registration: server.URL + "/oauth/register"}, server.URL)
+	require.ErrorContains(t, flow.checkDCRCompatibility(t.Context(), nil, server.URL), "DCR returned HTTP 403")
+}
+
 func TestConsentDCRGrantUsesRegisteredIdentity(t *testing.T) {
 	flow := newConsentProofFlow(http.DefaultClient, &consentMetadata{Authorization: testConsentIssuer + "/oauth/authorize"}, testConsentIssuer)
 	flow.clientID = "registered-public-client"
