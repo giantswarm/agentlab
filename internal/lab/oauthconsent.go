@@ -25,6 +25,7 @@ const (
 	consentLoginParam           = "login"
 	consentApprove              = "approve"
 	oauthAuthorizationCodeGrant = "authorization_code"
+	oauthRefreshTokenGrant      = "refresh_token"
 	oauthResourceParam          = "resource"
 )
 
@@ -34,11 +35,16 @@ type consentMetadata struct {
 	Token         string   `json:"token_endpoint"`
 	CIMD          bool     `json:"client_id_metadata_document_supported"`
 	PKCEMethods   []string `json:"code_challenge_methods_supported"`
+	Registration  string   `json:"registration_endpoint"`
 }
 
-// OAuthConsentTest exercises the authorization-code flow against both lab
-// issuers, stopping at the registered client redirect without fetching it.
-func OAuthConsentTest(ctx context.Context, configuration *config.Config, email string) error {
+// OAuthConsentTest exercises CIMD authorization against the lab issuers or
+// selected consumers, intercepting the registered client callback locally.
+func OAuthConsentTest(ctx context.Context, configuration *config.Config, email string, consumers []string) error {
+	targets, err := consentConsumerTargets(consumers)
+	if err != nil {
+		return err
+	}
 	if err := useClusterKubeconfig(configuration); err != nil {
 		return err
 	}
@@ -47,7 +53,10 @@ func OAuthConsentTest(ctx context.Context, configuration *config.Config, email s
 		return fmt.Errorf("no lab user %q", email)
 	}
 	stages := newProofStages()
-	err := proveOAuthConsent(ctx, configuration, user, stages)
+	if len(targets) > 0 {
+		return stages.close(proveConsumerConsent(ctx, configuration, user, targets, stages))
+	}
+	err = proveOAuthConsent(ctx, configuration, user, stages)
 	return stages.close(err)
 }
 
@@ -156,10 +165,14 @@ type consentProofFlow struct {
 	upstream                  string
 	providerOrigin            string
 	refreshToken              string
+	clientID, redirectURI     string
 }
 
 func newConsentProofFlow(browser *http.Client, metadata *consentMetadata, resource string) *consentProofFlow {
-	return &consentProofFlow{browser: browser, metadata: metadata, resource: resource}
+	return &consentProofFlow{
+		browser: browser, metadata: metadata, resource: resource,
+		clientID: consentProofClientID, redirectURI: consentProofRedirect,
+	}
 }
 
 func (flow *consentProofFlow) authorizationURL(prompt string) string {
@@ -167,7 +180,7 @@ func (flow *consentProofFlow) authorizationURL(prompt string) string {
 	flow.state = rand.Text()
 	challenge := sha256.Sum256([]byte(flow.verifier))
 	query := url.Values{
-		oauthClientID: {consentProofClientID}, oauthRedirectURI: {consentProofRedirect}, "response_type": {oauthCodeParam},
+		oauthClientID: {flow.clientID}, oauthRedirectURI: {flow.redirectURI}, "response_type": {oauthCodeParam},
 		oauthStateParam: {flow.state}, "code_challenge": {base64.RawURLEncoding.EncodeToString(challenge[:])},
 		"code_challenge_method": {"S256"}, consentScopeParam: {consentProofScopes}, oauthResourceParam: {flow.resource},
 	}
@@ -179,7 +192,7 @@ func (flow *consentProofFlow) authorizationURL(prompt string) string {
 
 func (flow *consentProofFlow) exchange(ctx context.Context, code string) (string, error) {
 	form := url.Values{
-		grantTypeParam: {oauthAuthorizationCodeGrant}, oauthClientID: {consentProofClientID}, oauthRedirectURI: {consentProofRedirect},
+		grantTypeParam: {oauthAuthorizationCodeGrant}, oauthClientID: {flow.clientID}, oauthRedirectURI: {flow.redirectURI},
 		oauthCodeParam: {code}, "code_verifier": {flow.verifier}, oauthResourceParam: {flow.resource},
 	}
 	return flow.token(ctx, form)

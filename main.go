@@ -2052,9 +2052,10 @@ func platformTestCmd() *cobra.Command {
 }
 
 func oauthConsentTestCmd() *cobra.Command {
-	return &cobra.Command{
+	var consumers []string
+	command := &cobra.Command{
 		Use:   "oauth-consent-test [email]",
-		Short: "Prove default CIMD consent, PKCE and shared browser state through both MCP issuers",
+		Short: "Prove CIMD consent and PKCE for the lab issuers or selected consumers",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(command *cobra.Command, arguments []string) error {
 			configuration, err := loadProofLab()
@@ -2065,9 +2066,11 @@ func oauthConsentTestCmd() *cobra.Command {
 			if len(arguments) == 1 {
 				email = arguments[0]
 			}
-			return lab.OAuthConsentTest(command.Context(), configuration, email)
+			return lab.OAuthConsentTest(command.Context(), configuration, email, consumers)
 		},
 	}
+	command.Flags().StringArrayVar(&consumers, "consumer", nil, "Consumer name=HTTPS-base-URL to prove instead of the two lab issuers; repeat for multiple consumers")
+	return command
 }
 
 func polexTestCmd() *cobra.Command {

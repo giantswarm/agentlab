@@ -12,21 +12,29 @@ import (
 )
 
 func (flow *consentProofFlow) checkRefresh(ctx context.Context, configuration *config.Config, user *config.User, base string, aggregated bool) error {
-	previous := flow.refreshToken
-	if previous == "" {
-		return fmt.Errorf("the public client's grant has no refresh token")
-	}
-	accessToken, err := flow.token(ctx, url.Values{
-		grantTypeParam: {"refresh_token"}, "refresh_token": {previous},
-		oauthClientID: {consentProofClientID}, oauthResourceParam: {flow.resource},
-	})
+	accessToken, err := flow.rotateRefresh(ctx)
 	if err != nil {
 		return err
 	}
-	if flow.refreshToken == "" || flow.refreshToken == previous {
-		return fmt.Errorf("the public client's refresh token was not rotated")
-	}
 	return consentMCPRead(ctx, configuration, user, base, accessToken, aggregated)
+}
+
+func (flow *consentProofFlow) rotateRefresh(ctx context.Context) (string, error) {
+	previous := flow.refreshToken
+	if previous == "" {
+		return "", fmt.Errorf("the public client's grant has no refresh token")
+	}
+	accessToken, err := flow.token(ctx, url.Values{
+		grantTypeParam: {oauthRefreshTokenGrant}, "refresh_token": {previous},
+		oauthClientID: {flow.clientID}, oauthResourceParam: {flow.resource},
+	})
+	if err != nil {
+		return "", err
+	}
+	if flow.refreshToken == "" || flow.refreshToken == previous {
+		return "", fmt.Errorf("the public client's refresh token was not rotated")
+	}
+	return accessToken, nil
 }
 
 func (flow *consentProofFlow) checkPKCE(ctx context.Context, user *config.User) error {

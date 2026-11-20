@@ -167,7 +167,7 @@ func (flow *consentProofFlow) checkConsentGate(ctx context.Context) error {
 
 func (flow *consentProofFlow) checkErrorRedirect(reply *consentReply, code string) error {
 	target, err := url.Parse(reply.header.Get("Location"))
-	if err != nil || target.Scheme+"://"+target.Host+target.Path != consentProofRedirect || target.Query().Get("error") != code || target.Query().Get(oauthStateParam) != flow.state || target.Query().Get("iss") != flow.metadata.Issuer || target.Query().Get(oauthCodeParam) != "" {
+	if err != nil || target.Scheme+"://"+target.Host+target.Path != flow.redirectURI || target.Query().Get("error") != code || target.Query().Get(oauthStateParam) != flow.state || target.Query().Get("iss") != flow.metadata.Issuer || target.Query().Get(oauthCodeParam) != "" {
 		return fmt.Errorf("OAuth error response failed callback, error, state or issuer validation")
 	}
 	return nil
@@ -183,7 +183,7 @@ func (flow *consentProofFlow) followProvider(ctx context.Context, user *config.U
 		if err != nil {
 			return "", err
 		}
-		if location.Scheme+"://"+location.Host+location.Path == consentProofRedirect {
+		if location.Scheme+"://"+location.Host+location.Path == flow.redirectURI {
 			if location.Query().Get(oauthStateParam) != flow.state || location.Query().Get("iss") != flow.metadata.Issuer || location.Query().Get(oauthCodeParam) == "" {
 				return "", fmt.Errorf("authorization response failed code, state or issuer validation")
 			}

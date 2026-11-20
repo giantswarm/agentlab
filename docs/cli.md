@@ -20,6 +20,25 @@ the two-replica muster pod-network topology before running this proof. Tokens,
 cookies and lab passwords stay out of its output. The registered external client
 callback is intercepted locally; no authorization code is sent to that client.
 
+Use `--consumer name=https://consumer.example` (repeatable) to run the same
+browser and authorization machinery against selected CIMD consumers instead.
+Supported names are agent-manager, cluster-manager, mcp-capi, mcp-prometheus,
+model-manager, skill-manager, vm-manager, workspace-manager,
+mcp-observability-platform, mcp-template and mcp-timescale. The consumer must
+use the lab's Dex, register its HTTPS `/oauth/callback` there, and be reachable
+over HTTPS with the lab or system CA. Install the candidate consumer image or
+binary before the run; record its exact commit and mcp-oauth dependency version.
+This proof does not install or upgrade a consumer.
+
+Each target proves discovery, a real public HTTPS CIMD fetch, default consent
+(including denial, CSRF and replay), S256 redemption, authenticated MCP
+initialization and `tools/list`, refresh rotation and another protected read,
+wrong-PKCE refusal, and local rejection of an unregistered redirect URI. It
+also registers a public DCR compatibility client, completes that client's
+consent and S256 grant, and reads the protected resource. Enable public DCR
+only on the proof deployment; the proof fails if DCR is unavailable or gated.
+These consumer runs do not require two replicas and do not replace pods.
+
 ## Where things live
 
 agentlab keeps to the freedesktop folders, like every other program on the
