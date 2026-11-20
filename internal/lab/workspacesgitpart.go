@@ -348,7 +348,7 @@ func parseProbeLines(reply string) map[string]string {
 const gitShell = `m() { echo "` + probeMarker + ` $1=$(printf '%s' "$2" | tr '\n' ' ' | sed 's/ *$//')"; }; ` +
 	`try() { k=$1; shift; o=$("$@" 2>&1); rc=$?; m "$k" "rc$rc $(printf '%s' "$o" | grep -v '^[[:space:]]*$' | tail -n 3)"; }; ` +
 	`ghc() { GH_PROMPT_DISABLED=1 GH_NO_UPDATE_NOTIFIER=1 timeout 60 gh "$@"; }; ` +
-	`case "${GH_TOKEN-unset}" in unset) t=` + gitTokenUnset + `;; ` + credentialPlaceholder + `) t=` + gitTokenPlaceholder + `;; *) t=` + gitTokenForeign + `;; esac; m ` + gitProbeGHToken + ` "$t"; ` +
+	`case "${GH_TOKEN-unset}" in unset) t=` + gitTokenUnset + `;; ` + credentialPlaceholder + `|ghu_` + credentialPlaceholder + `) t=` + gitTokenPlaceholder + `;; *) t=` + gitTokenForeign + `;; esac; m ` + gitProbeGHToken + ` "$t"; ` +
 	`m ` + gitProbeTokenEnv + ` "$(env | grep -E '` + gitHubTokenPattern + `' | cut -d= -f1 | sort -u)"; ` +
 	`f() { find /data /workspace "$PWD" "$HOME" -name .git -prune -o -type f "$@" 2>/dev/null; }; ` +
 	`m ` + gitProbeTokenScanned + ` "$(f -print | sort -u | wc -l)"; ` +

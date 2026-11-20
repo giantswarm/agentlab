@@ -210,7 +210,7 @@ async function main() {
     }
     sampleMemory();
     console.log(JSON.stringify({ memoryLimit, minimumAvailable, maximumTotal }));
-    report('memory', memoryLimit > 0 && maximumTotal <= memoryLimit ? 'bounded' : 'unbounded');
+    report('memory', memoryLimit <= 0 ? 'missing-limit' : maximumTotal <= memoryLimit ? 'bounded' : 'exceeds-limit');
   } finally {
     clearInterval(sampler);
     await new Promise(resolve => server.close(resolve));

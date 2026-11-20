@@ -150,6 +150,23 @@ func TestGitShellTokenScan(t *testing.T) {
 	}
 }
 
+func TestGitShellGitHubPlaceholder(t *testing.T) {
+	for _, test := range []struct {
+		name, value, want string
+	}{
+		{name: "unprefixed placeholder", value: credentialPlaceholder, want: gitTokenPlaceholder},
+		{name: "GitHub user token", value: "ghu_" + credentialPlaceholder, want: gitTokenPlaceholder},
+		{name: "foreign", value: "foreign-placeholder", want: gitTokenForeign},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			readings := runGitShell(t, t.TempDir(), t.TempDir(), gitShell+`true`, "GH_TOKEN="+test.value)
+			if readings[gitProbeGHToken] != test.want {
+				t.Fatalf("GH_TOKEN classification = %q, want %q", readings[gitProbeGHToken], test.want)
+			}
+		})
+	}
+}
+
 func TestGitCommandsNameTheirLines(t *testing.T) {
 	write := gitWriteCommand("o/r", "b")
 	for _, key := range []string{gitProbeClone, gitProbePush, gitProbeCommitter, gitProbeGHUser, gitProbePRCreate, gitProbePRAuthor, gitProbePushActor, gitProbePRClose, gitProbeGHToken, gitProbeTokenEnv, gitProbeTokenFiles} {
