@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -35,7 +36,7 @@ func consentConsumerTargets(values []string) ([]consentConsumerTarget, error) {
 	for _, value := range values {
 		name, base, found := strings.Cut(value, "=")
 		if !found || !slices.Contains(names, name) {
-			return nil, fmt.Errorf("consumer must be a supported name=HTTPS-base-URL, got %q", value)
+			return nil, errors.New("consumer must be a supported name=HTTPS-base-URL")
 		}
 		parsed, err := url.Parse(base)
 		if err != nil || parsed.Scheme != schemeHTTPS || parsed.Hostname() == "" || parsed.User != nil ||
