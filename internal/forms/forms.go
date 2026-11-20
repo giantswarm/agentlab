@@ -125,7 +125,7 @@ func Run(cfg *config.Config, accessible bool, hints Hints) error {
 				Title("Dex image").
 				Description("groups on staticPasswords needs Dex >= v2.45.0.").
 				Value(&dexImage).
-				Validate(notEmpty),
+				Validate(config.ValidateImageRef),
 		).Title("Cluster"),
 
 		huh.NewGroup(

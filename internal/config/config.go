@@ -2339,10 +2339,16 @@ func ValidateChartVersion(s string) error {
 // `latest` and hide which build the lab runs.
 var imageRefRe = regexp.MustCompile(`^[a-z0-9]+([._-][a-z0-9]+)*(:[0-9]+)?(/[a-z0-9]+([._-][a-z0-9]+)*)*(:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}|@sha256:[a-f0-9]{64})$`)
 
-// ValidateImageRef accepts an image reference that names its tag or digest.
+// ValidateImageRef accepts an image reference with a tag or digest outside ghcr.io.
 func ValidateImageRef(s string) error {
 	if !imageRefRe.MatchString(s) {
 		return fmt.Errorf("must be an image reference with a tag or digest, e.g. muster:dev-1a2b3c")
+	}
+	if strings.HasPrefix(s, "ghcr.io/") {
+		if suffix, ok := strings.CutPrefix(s, "ghcr.io/dexidp/dex"); ok && (strings.HasPrefix(suffix, ":") || strings.HasPrefix(suffix, "@")) {
+			return fmt.Errorf("ghcr.io images are not supported; use gsoci.azurecr.io/giantswarm/dex%s", suffix)
+		}
+		return errors.New("ghcr.io images are not supported; use a mirrored image from gsoci.azurecr.io")
 	}
 	return nil
 }
@@ -2359,6 +2365,9 @@ func (c *Config) Validate() error {
 	}
 	if slices.Contains(PinnedNodePorts, c.DexPort) {
 		return fmt.Errorf("dexPort: %d is a NodePort the lab already pins, and the apiserver rejects the second Service that claims it", c.DexPort)
+	}
+	if err := ValidateImageRef(c.DexImage); err != nil {
+		return fmt.Errorf("dexImage %q: %w", c.DexImage, err)
 	}
 	if c.APIServerPort < 1 || c.APIServerPort > 65535 {
 		return fmt.Errorf("apiServerPort: %d is not a TCP port", c.APIServerPort)
@@ -2537,6 +2546,9 @@ func (c *Config) Validate() error {
 		}
 		if !codingImageRe.MatchString(image) {
 			return fmt.Errorf("platform.coding.images.%s: %q is not an image pinned by digest (<repository>@sha256:<64 hex digits>)", runtime, image)
+		}
+		if err := ValidateImageRef(image); err != nil {
+			return fmt.Errorf("platform.coding.images.%s %q: %w", runtime, image, err)
 		}
 	}
 	for _, runtime := range CodingRuntimes {
