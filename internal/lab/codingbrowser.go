@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -61,6 +62,20 @@ func (p *codingProof) runBrowser() error {
 	}); err != nil {
 		return err
 	}
+	checksError := p.browserChecks(ctx, names)
+	if checksError != nil {
+		p.stages.end(stageFail, checksError.Error())
+	}
+	attachmentError := p.browserAttachment(ctx)
+	if attachmentError != nil {
+		p.stages.end(stageFail, attachmentError.Error())
+	} else {
+		p.stages.end(stagePass, "")
+	}
+	return errors.Join(checksError, attachmentError)
+}
+
+func (p *codingProof) browserChecks(ctx context.Context, names []string) error {
 	id, started, err := p.startToolchainSession(p.toolchains, names)
 	if err != nil {
 		return err
@@ -130,7 +145,7 @@ func (p *codingProof) runBrowser() error {
 	if err := judgeBrowserProof(parseCodingProbe(output.String())); err != nil {
 		return fmt.Errorf("%w; tool output: %.3000s", err, output.String())
 	}
-	return p.browserAttachment(ctx)
+	return nil
 }
 
 func browserSessionTarget(session *apiv1alpha1.Session) (string, error) {
@@ -285,9 +300,10 @@ func (p *codingProof) browserAttachment(ctx context.Context) error {
 }
 
 func browserAttachmentCommand(repository, branch string) string {
-	return `set -eu
+	return `bash <<'AGENTLAB_BROWSER_ATTACHMENT'
+set -euo pipefail
 gh=/opt/kagent/tools/github/bin/gh
-case "${GH_TOKEN:-}" in ghu_` + credentialPlaceholder + `) ;; *) echo 'GH_TOKEN is not the ghu_ placeholder'; exit 1;; esac
+"$gh" --version
 "$gh" pr comment --help | grep -q -- --attach
 cd './` + repository + `'
 base=$(git symbolic-ref --short refs/remotes/origin/HEAD | sed 's|^origin/||')
@@ -295,20 +311,33 @@ git switch -q -c '` + branch + `' origin/HEAD
 printf '%s\n' '` + branch + `' > .agentlab-browser-proof
 git add .agentlab-browser-proof
 git -c commit.gpgsign=false commit -qm 'test: browser screenshot proof'
-trap 'git push -q origin --delete "` + branch + `" >/dev/null' EXIT
+pr=
+server=
+pushed=false
+cleanup() {
+  status=$?
+  trap - EXIT
+  playwright-cli close >/dev/null 2>&1 || true
+  if test -n "$server"; then kill "$server" 2>/dev/null || true; fi
+  if test -n "$pr"; then "$gh" pr close "$pr" --repo '` + repository + `' >/dev/null || status=1; fi
+  if "$pushed"; then git push -q origin --delete '` + branch + `' >/dev/null || status=1; fi
+  if test "$status" -eq 0; then echo '` + probeMarker + ` browser-close=closed'; fi
+  exit "$status"
+}
+trap cleanup EXIT
 git push -q origin 'HEAD:refs/heads/` + branch + `'
+pushed=true
 pr=$("$gh" pr create --draft --repo '` + repository + `' --head '` + branch + `' --base "$base" --title 'test: browser screenshot proof' --body 'Synthetic local browser screenshot uploaded from a workspace Session as the person.')
-trap '"$gh" pr close "$pr" --repo "` + repository + `" --delete-branch >/dev/null' EXIT
 person=$("$gh" api user --jq 'select(.type == "User") | .login')
 test -n "$person"
 test "$("$gh" pr view "$pr" --repo '` + repository + `' --json author --jq .author.login)" = "$person"
 node -e 'require("http").createServer((request,response)=>response.end("<title>Agentlab screenshot</title><h1>Browser proof</h1><button>Continue</button>")).listen(4318,"127.0.0.1")' >/tmp/agentlab-browser-server.log 2>&1 &
 server=$!
-trap 'playwright-cli close >/dev/null 2>&1 || true; kill "$server" 2>/dev/null || true; "$gh" pr close "$pr" --repo "` + repository + `" --delete-branch >/dev/null' EXIT
 node -e 'const http=require("http"); const check=()=>http.get("http://localhost:4318",response=>{response.resume();process.exit(response.statusCode===200?0:1)}).on("error",()=>setTimeout(check,100));check();setTimeout(()=>process.exit(1),10000)'
 playwright-cli open http://localhost:4318/
 playwright-cli screenshot --filename=/tmp/agentlab-browser-attachment.png
 playwright-cli close
+echo '` + probeMarker + ` browser-upload=attempted'
 "$gh" pr comment "$pr" --repo '` + repository + `' --body 'Synthetic browser proof.' --attach '/tmp/agentlab-browser-attachment.png#Browser proof'
 number=${pr##*/}
 comment=$("$gh" api "repos/` + repository + `/issues/$number/comments" --jq '.[-1] | [.user.login,.html_url,.body] | @tsv')
@@ -317,10 +346,7 @@ test "$(printf '%s' "$comment" | cut -f1)" = "$person"
 echo '` + probeMarker + ` browser-person='"$person"
 echo '` + probeMarker + ` browser-comment='"$(printf '%s' "$comment" | cut -f2)"
 echo '` + probeMarker + ` browser-upload=attached'
-"$gh" pr close "$pr" --repo '` + repository + `' --delete-branch >/dev/null
-kill "$server"
-trap - EXIT
-echo '` + probeMarker + ` browser-close=closed'
+AGENTLAB_BROWSER_ATTACHMENT
 `
 }
 
