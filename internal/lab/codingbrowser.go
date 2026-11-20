@@ -5,13 +5,16 @@ import (
 	_ "embed"
 	"encoding/base64"
 	"fmt"
+	"net"
 	"net/url"
 	"slices"
 	"strings"
+	"time"
 
 	"k8s.io/apimachinery/pkg/api/resource"
 
 	ateapi "github.com/giantswarm/agentlab/internal/kagent/gen"
+	apiv1alpha1 "github.com/giantswarm/agentlab/internal/kagent/gen/kagent/api/v1alpha1"
 )
 
 // CodingPartBrowser proves the browser and its screenshot upload from an actor.
@@ -96,11 +99,7 @@ func (p *codingProof) runBrowser() error {
 	if err != nil {
 		return err
 	}
-	policy, err := ate.GetActorEgressPolicy(ctx, &ateapi.GetActorEgressPolicyRequest{Actor: &ateapi.ObjectRef{Atespace: kagentNamespace, Name: substrateActorName(id)}})
-	if err != nil {
-		return err
-	}
-	target, err := browserMusterTarget(policy)
+	target, err := browserSessionTarget(session)
 	if err != nil {
 		return err
 	}
@@ -120,7 +119,7 @@ func (p *codingProof) runBrowser() error {
 	}
 	p.stages.begin("browser: refusals", "No-route muster refusals and wrapper refusals for fetch, redirects, service workers and playwright test")
 	command := browserProofCommand(target, memoryLimit)
-	turn, err = p.turn(ctx, session, "Run this exact browser protocol proof once with your shell tool. It sends MCP initialization requests only, never a tool call. Do not edit the script or substitute results. Reply with its AGENTLAB_PROBE lines.\n\n"+command)
+	turn, err = p.browserProtocolTurn(ctx, ate, session, target, command)
 	if err != nil {
 		return err
 	}
@@ -132,6 +131,70 @@ func (p *codingProof) runBrowser() error {
 		return fmt.Errorf("%w; tool output: %.3000s", err, output.String())
 	}
 	return p.browserAttachment(ctx)
+}
+
+func browserSessionTarget(session *apiv1alpha1.Session) (string, error) {
+	endpoint, err := url.Parse(defaultMusterMCPURL)
+	if err != nil {
+		return "", err
+	}
+	for _, provider := range session.GetProviders() {
+		if provider.GetAudience() == componentMuster && strings.EqualFold(provider.GetScheme(), "Bearer") {
+			endpoint.Host = net.JoinHostPort(provider.GetHostname(), endpoint.Port())
+			return endpoint.String(), nil
+		}
+	}
+	return "", fmt.Errorf("the browser Session has no muster bearer provider")
+}
+
+func (p *codingProof) browserProtocolTurn(ctx context.Context, client ateapi.ControlClient, session *apiv1alpha1.Session, target, command string) (codingTurn, error) {
+	turnContext, cancel := context.WithTimeout(ctx, p.turnTimeout)
+	defer cancel()
+	done := make(chan struct{})
+	var result codingTurn
+	var turnError error
+	go func() {
+		defer close(done)
+		result, turnError = p.turn(turnContext, session, "Run this exact browser protocol proof once with your shell tool. It sends MCP initialization requests only, never a tool call. Do not edit the script or substitute results. Reply with its AGENTLAB_PROBE lines.\n\n"+command)
+	}()
+	policyError := waitBrowserPolicy(turnContext, client, substrateActorName(session.GetId()), target, done)
+	if policyError != nil {
+		cancel()
+	}
+	<-done
+	if policyError != nil {
+		return codingTurn{}, policyError
+	}
+	return result, turnError
+}
+
+func waitBrowserPolicy(ctx context.Context, client ateapi.ControlClient, actor, target string, turnDone <-chan struct{}) error {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-turnDone:
+			return fmt.Errorf("the browser turn ended without an observed actor-JWT rule for %s", target)
+		default:
+		}
+		policy, err := client.GetActorEgressPolicy(ctx, &ateapi.GetActorEgressPolicyRequest{Actor: &ateapi.ObjectRef{Atespace: kagentNamespace, Name: actor}})
+		if err != nil {
+			return fmt.Errorf("read the browser actor's policy during its turn: %w", err)
+		}
+		if actual, err := browserMusterTarget(policy); err == nil {
+			if actual != target {
+				return fmt.Errorf("the browser targets %s, but its live actor-JWT rule targets %s", target, actual)
+			}
+			return nil
+		}
+		select {
+		case <-turnDone:
+			return fmt.Errorf("the browser turn ended without an observed actor-JWT rule for %s", target)
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func browserMusterTarget(policy *ateapi.EgressPolicy) (string, error) {

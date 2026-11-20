@@ -1758,7 +1758,9 @@ failures come from Playwright events.
 With the Chromium wrapper and `route.continue()`, fetches, redirects,
 service-worker fetches and a `playwright test` page must fail with
 `net::ERR_NAME_NOT_RESOLVED`, including the trailing-dot hostname. The
-target comes from the actor's live actor-JWT Authorization rule. The
+target comes from the Session's muster provider and is checked against the
+actor's live actor-JWT Authorization rule during the browser turn, while
+the credential rule is open. The
 protocol fixture allows service workers explicitly for that case; the CLI
 keeps them blocked. Browser launches run sequentially within the actor's
 memory limit.
