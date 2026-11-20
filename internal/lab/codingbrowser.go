@@ -287,12 +287,15 @@ func (p *codingProof) browserAttachment(ctx context.Context) error {
 func browserAttachmentCommand(repository, branch string) string {
 	return `set -eu
 gh=/opt/kagent/tools/github/bin/gh
-case "${GH_TOKEN:-}" in ghu_kagent-*) ;; *) echo 'GH_TOKEN is not the ghu_ placeholder'; exit 1;; esac
+case "${GH_TOKEN:-}" in ghu_` + credentialPlaceholder + `) ;; *) echo 'GH_TOKEN is not the ghu_ placeholder'; exit 1;; esac
 "$gh" pr comment --help | grep -q -- --attach
 cd './` + repository + `'
 base=$(git symbolic-ref --short refs/remotes/origin/HEAD | sed 's|^origin/||')
 git switch -q -c '` + branch + `' origin/HEAD
-git -c commit.gpgsign=false commit --allow-empty -qm 'test: browser screenshot proof'
+printf '%s\n' '` + branch + `' > .agentlab-browser-proof
+git add .agentlab-browser-proof
+git -c commit.gpgsign=false commit -qm 'test: browser screenshot proof'
+trap 'git push -q origin --delete "` + branch + `" >/dev/null' EXIT
 git push -q origin 'HEAD:refs/heads/` + branch + `'
 pr=$("$gh" pr create --draft --repo '` + repository + `' --head '` + branch + `' --base "$base" --title 'test: browser screenshot proof' --body 'Synthetic local browser screenshot uploaded from a workspace Session as the person.')
 trap '"$gh" pr close "$pr" --repo "` + repository + `" --delete-branch >/dev/null' EXIT

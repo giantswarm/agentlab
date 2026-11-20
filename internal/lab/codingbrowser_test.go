@@ -4,6 +4,10 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -131,4 +135,42 @@ func TestJudgeBrowserAttachment(t *testing.T) {
 	}
 	readings["browser-comment"] = "https://example.org/#issuecomment-1"
 	require.Error(t, judgeBrowserAttachment(readings))
+}
+
+func TestBrowserAttachmentCleansBranchWhenPRCreationFails(t *testing.T) {
+	directory := t.TempDir()
+	origin := filepath.Join(directory, "origin")
+	clone := filepath.Join(directory, "o", "r")
+	environment := append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_AUTHOR_NAME=a", "GIT_AUTHOR_EMAIL=a@lab.local", "GIT_COMMITTER_NAME=a", "GIT_COMMITTER_EMAIL=a@lab.local", "GH_TOKEN=ghu_"+credentialPlaceholder)
+	git := func(arguments ...string) string {
+		t.Helper()
+		command := exec.CommandContext(t.Context(), "git", arguments...) // #nosec G204 -- test-owned git arguments
+		command.Env = environment
+		output, err := command.CombinedOutput()
+		require.NoError(t, err, "%s", output)
+		return string(output)
+	}
+	git("init", "-q", "-b", "main", origin)
+	git("-C", origin, "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "seed")
+	git("clone", "-q", origin, clone)
+	stub := filepath.Join(directory, "gh")
+	require.NoError(t, os.WriteFile(stub, []byte(`#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == 'pr comment --help' ]]; then
+  echo --attach
+  exit 0
+fi
+git diff --quiet origin/HEAD HEAD && exit 99
+exit 42
+`), 0o600))
+	require.NoError(t, os.Chmod(stub, 0o700)) // #nosec G302 -- executable stub requires owner execute permission
+
+	command := exec.CommandContext(t.Context(), "sh", "-c", strings.Replace(browserAttachmentCommand("o/r", "browser-proof"), "gh=/opt/kagent/tools/github/bin/gh", "gh='"+stub+"'", 1)) // #nosec G204 -- fixed proof script and test-owned executable
+	command.Dir = directory
+	command.Env = environment
+	output, err := command.CombinedOutput()
+	var exitError *exec.ExitError
+	require.ErrorAs(t, err, &exitError, "%s", output)
+	require.Equal(t, 42, exitError.ExitCode(), "%s", output)
+	require.Empty(t, git("ls-remote", origin, "refs/heads/browser-proof"))
 }
