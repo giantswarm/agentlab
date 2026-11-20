@@ -4,7 +4,6 @@ import (
 	"context"
 	_ "embed"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -18,8 +17,11 @@ import (
 	apiv1alpha1 "github.com/giantswarm/agentlab/internal/kagent/gen/kagent/api/v1alpha1"
 )
 
-// CodingPartBrowser proves the browser and its screenshot upload from an actor.
+// CodingPartBrowser proves browser usability, refusals and the actor memory bound.
 const CodingPartBrowser = "browser"
+
+// CodingPartBrowserAttachment proves native GitHub screenshot uploads as the person.
+const CodingPartBrowserAttachment = "browser-attachment"
 
 const (
 	browserSkillCommit = "7681d5c8056cb2f6cd30de3d2ec8e5fade81bfba"
@@ -33,23 +35,39 @@ var browserProofScript string
 
 func (p *codingProof) runBrowser() error {
 	ctx := context.Background()
-	names, err := toolchainNames(p.toolchains)
+	names, err := p.prepareBrowser(ctx)
 	if err != nil {
 		return err
 	}
+	return p.browserChecks(ctx, names)
+}
+
+func (p *codingProof) runBrowserAttachment() error {
+	ctx := context.Background()
+	if _, err := p.prepareBrowser(ctx); err != nil {
+		return err
+	}
+	return p.browserAttachment(ctx)
+}
+
+func (p *codingProof) prepareBrowser(ctx context.Context) ([]string, error) {
+	names, err := toolchainNames(p.toolchains)
+	if err != nil {
+		return nil, err
+	}
 	if !slices.Contains(names, "node") || !slices.Contains(names, toolchainGitHub) {
-		return fmt.Errorf("--part browser needs node and github in --toolchains")
+		return nil, fmt.Errorf("the browser parts need node and github in --toolchains")
 	}
 	p.stages.begin("browser: harness", "The claude Harness Ready, with node and github toolchains")
 	if err := waitHarnessReady(ctx, p.rt.name, p.timeout); err != nil {
-		return err
+		return nil, err
 	}
 	if err := p.connect(ctx); err != nil {
-		return err
+		return nil, err
 	}
 	model, err := p.model()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	p.removeAgents()
 	p.stages.begin("browser: agent", "A claude agent with the pinned playwright-browser skill, created as %s", p.user.Email)
@@ -60,19 +78,9 @@ func (p *codingProof) runBrowser() error {
 			URL: "https://github.com/giantswarm/agent-skills.git", Commit: browserSkillCommit,
 		}}},
 	}); err != nil {
-		return err
+		return nil, err
 	}
-	checksError := p.browserChecks(ctx, names)
-	if checksError != nil {
-		p.stages.end(stageFail, checksError.Error())
-	}
-	attachmentError := p.browserAttachment(ctx)
-	if attachmentError != nil {
-		p.stages.end(stageFail, attachmentError.Error())
-	} else {
-		p.stages.end(stagePass, "")
-	}
-	return errors.Join(checksError, attachmentError)
+	return names, nil
 }
 
 func (p *codingProof) browserChecks(ctx context.Context, names []string) error {
