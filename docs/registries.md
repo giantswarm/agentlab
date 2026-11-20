@@ -1,5 +1,14 @@
 # The lab's registries
 
+Configuration image fields (`dexImage`, `platform.devImages` and
+`platform.coding.images`) refuse `ghcr.io/` references. Use the mirrored
+image from `gsoci.azurecr.io`, or a local development image. For a saved
+`dexImage: ghcr.io/dexidp/dex:v2.45.1`, set
+`dexImage: gsoci.azurecr.io/giantswarm/dex:v2.45.1` in `agentlab.yaml` or
+change the Dex image in `agentlab configure`. The refusal names the mirrored
+Dex reference with the same tag or digest. Other GHCR images require their
+published gsoci reference; their repository names are not inferred.
+
 agentlab runs two kinds of [zot](https://zotregistry.dev) container next to
 the kind nodes. Both are on the `kind` docker network:
 
