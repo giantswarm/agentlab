@@ -1768,6 +1768,11 @@ memory limit.
 A missing actor memory limit fails the memory assertion. A worker pool's
 shared budget does not establish a limit on an individual actor.
 
+On Podman, the kind node needs process capacity for Chromium alongside the
+platform pods. Follow kind's [PID-limit setup](https://kind.sigs.k8s.io/docs/user/rootless/#increase-pid-limits)
+before running the proof. That node-wide budget does not replace the actor's
+memory limit.
+
 ### The browser attachment part
 
 `agentlab coding-test --part browser-attachment` runs the native GitHub
