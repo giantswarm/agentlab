@@ -241,7 +241,7 @@ func browserMusterTarget(policy *ateapi.EgressPolicy) (string, error) {
 }
 
 func browserProofCommand(target string, memoryLimit int64) string {
-	return "proof=$(mktemp /tmp/agentlab-browser-XXXXXX.cjs)\ntrap 'rm -f \"$proof\"' EXIT\nprintf '%s' '" + base64.StdEncoding.EncodeToString([]byte(browserProofScript)) + "' | base64 -d > \"$proof\"\nnode \"$proof\" '" + target + "' '" + probeMarker + "' " + fmt.Sprint(memoryLimit)
+	return "bash <<'AGENTLAB_BROWSER_PROTOCOL'\nset -euo pipefail\nprintf '%s' '" + base64.StdEncoding.EncodeToString([]byte(browserProofScript)) + "' | base64 -d | node - '" + target + "' '" + probeMarker + "' " + fmt.Sprint(memoryLimit) + "\nAGENTLAB_BROWSER_PROTOCOL"
 }
 
 func judgeBrowserProof(probe codingProbe) error {

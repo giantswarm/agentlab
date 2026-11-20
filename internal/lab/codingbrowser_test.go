@@ -41,6 +41,57 @@ func TestJudgeBrowserProof(t *testing.T) {
 	}
 }
 
+func TestBrowserProtocolCommand(t *testing.T) {
+	const (
+		nodeExecutable = "node"
+		decodeFailure  = "decode"
+	)
+	for _, failure := range []string{"", nodeExecutable, decodeFailure} {
+		t.Run("failure="+failure, func(t *testing.T) {
+			directory := t.TempDir()
+			writeStub := func(name, script string) {
+				t.Helper()
+				file := filepath.Join(directory, name)
+				require.NoError(t, os.WriteFile(file, []byte("#!/usr/bin/env bash\nset -euo pipefail\n"+script), 0o600))
+				require.NoError(t, os.Chmod(file, 0o700)) // #nosec G302 -- executable stub requires owner execute permission
+			}
+			writeStub("mktemp", "exit 99\n")
+			writeStub(nodeExecutable, "printf '%s\\n' \"$@\" > \"$BROWSER_ARGUMENTS\"\ncat > \"$BROWSER_INPUT\"\nexit \"$BROWSER_EXIT\"\n")
+			if failure == decodeFailure {
+				writeStub("base64", "exit 43\n")
+			}
+			exitCode := "0"
+			if failure == nodeExecutable {
+				exitCode = "37"
+			}
+			command := exec.CommandContext(t.Context(), "bash", "-c", browserProofCommand("http://muster.example:8090/mcp", 12345)) // #nosec G204 -- fixed proof script and test-owned executables
+			command.Env = append(os.Environ(), "PATH="+directory+string(os.PathListSeparator)+os.Getenv("PATH"), "BROWSER_ARGUMENTS="+filepath.Join(directory, "arguments"), "BROWSER_INPUT="+filepath.Join(directory, "input"), "BROWSER_EXIT="+exitCode)
+			output, err := command.CombinedOutput()
+			if failure == "" {
+				require.NoError(t, err, "%s", output)
+			} else {
+				var exitError *exec.ExitError
+				require.ErrorAs(t, err, &exitError, "%s", output)
+				expected := 37
+				if failure == decodeFailure {
+					expected = 43
+				}
+				require.Equal(t, expected, exitError.ExitCode(), "%s", output)
+			}
+			arguments, err := os.ReadFile(filepath.Join(directory, "arguments")) // #nosec G304 -- test-owned temporary path
+			require.NoError(t, err)
+			require.Equal(t, "-\nhttp://muster.example:8090/mcp\n"+probeMarker+"\n12345\n", string(arguments))
+			input, err := os.ReadFile(filepath.Join(directory, "input")) // #nosec G304 -- test-owned temporary path
+			require.NoError(t, err)
+			if failure == decodeFailure {
+				require.Empty(t, input)
+			} else {
+				require.Equal(t, browserProofScript, string(input))
+			}
+		})
+	}
+}
+
 func TestBrowserMusterTarget(t *testing.T) {
 	policy := testBrowserPolicy()
 	target, err := browserMusterTarget(policy)
