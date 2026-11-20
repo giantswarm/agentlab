@@ -1767,14 +1767,16 @@ memory limit.
 
 A missing actor memory limit fails the memory assertion. A worker pool's
 shared budget does not establish a limit on an individual actor.
+The attachment stage runs even when the browser checks fail; the complete
+proof reports failures from both stages.
 
 The final stage uses the configured GitHub workspace proof repositories
 and the person's provider grant, as the [workspace git
 part](workspaces.md#the-git-part) does. A workspace Session opens a draft PR
 on a scratch branch, takes a synthetic screenshot with `playwright-cli`,
 and attaches it with the GitHub toolchain's `gh pr comment --attach`.
-The stage requires a `ghu_` credential placeholder, reads the comment back
-from GitHub, and checks its author and uploaded-asset link. It closes the
+The stage uses the Session's configured credential placeholder, reads the
+comment back from GitHub, and checks its author and uploaded-asset link. It closes the
 PR and deletes the scratch branch; the attachment remains on that closed
 PR as evidence. Missing upload support or provider authorization fails the
 stage. Sessions, the fixture workspace and the agent are removed on exit.

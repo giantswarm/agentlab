@@ -137,40 +137,102 @@ func TestJudgeBrowserAttachment(t *testing.T) {
 	require.Error(t, judgeBrowserAttachment(readings))
 }
 
-func TestBrowserAttachmentCleansBranchWhenPRCreationFails(t *testing.T) {
-	directory := t.TempDir()
-	origin := filepath.Join(directory, "origin")
-	clone := filepath.Join(directory, "o", "r")
-	environment := append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_AUTHOR_NAME=a", "GIT_AUTHOR_EMAIL=a@lab.local", "GIT_COMMITTER_NAME=a", "GIT_COMMITTER_EMAIL=a@lab.local", "GH_TOKEN=ghu_"+credentialPlaceholder)
-	git := func(arguments ...string) string {
-		t.Helper()
-		command := exec.CommandContext(t.Context(), "git", arguments...) // #nosec G204 -- test-owned git arguments
-		command.Env = environment
-		output, err := command.CombinedOutput()
-		require.NoError(t, err, "%s", output)
-		return string(output)
-	}
-	git("init", "-q", "-b", "main", origin)
-	git("-C", origin, "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "seed")
-	git("clone", "-q", origin, clone)
-	stub := filepath.Join(directory, "gh")
-	require.NoError(t, os.WriteFile(stub, []byte(`#!/usr/bin/env bash
+func TestBrowserAttachmentCleansResources(t *testing.T) {
+	const closeFailure = "close"
+	for _, failure := range []string{validateModeCreate, "identity", "upload", closeFailure, ""} {
+		t.Run("failure="+failure, func(t *testing.T) {
+			directory := t.TempDir()
+			origin := filepath.Join(directory, "origin")
+			clone := filepath.Join(directory, "o", "r")
+			environment := append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_AUTHOR_NAME=a", "GIT_AUTHOR_EMAIL=a@lab.local", "GIT_COMMITTER_NAME=a", "GIT_COMMITTER_EMAIL=a@lab.local", "GH_TOKEN="+credentialPlaceholder, "FAIL_AT="+failure, "CLOSE_LOG="+filepath.Join(directory, "closed"), "PATH="+directory+string(os.PathListSeparator)+os.Getenv("PATH"))
+			git := func(arguments ...string) string {
+				t.Helper()
+				command := exec.CommandContext(t.Context(), "git", arguments...) // #nosec G204 -- test-owned git arguments
+				command.Env = environment
+				output, err := command.CombinedOutput()
+				require.NoError(t, err, "%s", output)
+				return string(output)
+			}
+			git("init", "-q", "-b", "main", origin)
+			git("-C", origin, "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "seed")
+			git("clone", "-q", origin, clone)
+			stub := filepath.Join(directory, "gh")
+			require.NoError(t, os.WriteFile(stub, []byte(`#!/usr/bin/env bash
 set -euo pipefail
+if [[ "$*" == '--version' ]]; then
+  echo 'gh version test'
+  exit 0
+fi
 if [[ "$*" == 'pr comment --help' ]]; then
   echo --attach
   exit 0
 fi
-git diff --quiet origin/HEAD HEAD && exit 99
-exit 42
+case "$*" in
+  'pr create '*)
+    git diff --quiet origin/HEAD HEAD && exit 99
+    [[ "$FAIL_AT" != create ]] || exit 42
+    echo https://github.com/o/r/pull/1
+    ;;
+  'api user '*)
+    [[ "$FAIL_AT" != identity ]] || exit 42
+    echo person
+    ;;
+  'pr view '*) echo person ;;
+  'pr comment '*) [[ "$FAIL_AT" != upload ]] || exit 42 ;;
+  'api repos/'*) printf 'person\thttps://github.com/o/r/pull/1#issuecomment-1\thttps://github.com/user-attachments/assets/proof\n' ;;
+  'pr close '*)
+    echo closed >> "$CLOSE_LOG"
+    [[ "$FAIL_AT" != close ]] || exit 42
+    ;;
+  *) exit 99 ;;
+esac
 `), 0o600))
-	require.NoError(t, os.Chmod(stub, 0o700)) // #nosec G302 -- executable stub requires owner execute permission
+			require.NoError(t, os.Chmod(stub, 0o700)) // #nosec G302 -- executable stub requires owner execute permission
+			for name, script := range map[string]string{
+				"node":           "#!/usr/bin/env bash\nset -euo pipefail\ncase \"$*\" in *createServer*) exec sleep 60 ;; esac\n",
+				"playwright-cli": "#!/usr/bin/env bash\nset -euo pipefail\n",
+			} {
+				file := filepath.Join(directory, name)
+				require.NoError(t, os.WriteFile(file, []byte(script), 0o600))
+				require.NoError(t, os.Chmod(file, 0o700)) // #nosec G302 -- executable stub requires owner execute permission
+			}
 
-	command := exec.CommandContext(t.Context(), "sh", "-c", strings.Replace(browserAttachmentCommand("o/r", "browser-proof"), "gh=/opt/kagent/tools/github/bin/gh", "gh='"+stub+"'", 1)) // #nosec G204 -- fixed proof script and test-owned executable
-	command.Dir = directory
-	command.Env = environment
+			command := exec.CommandContext(t.Context(), "sh", "-c", strings.Replace(browserAttachmentCommand("o/r", "browser-proof"), "gh=/opt/kagent/tools/github/bin/gh", "gh='"+stub+"'", 1)) // #nosec G204 -- fixed proof script and test-owned executable
+			command.Dir = directory
+			command.Env = environment
+			output, err := command.CombinedOutput()
+			if failure == "" {
+				require.NoError(t, err, "%s", output)
+				require.NoError(t, judgeBrowserAttachment(parseCodingProbe(string(output))))
+			} else {
+				var exitError *exec.ExitError
+				require.ErrorAs(t, err, &exitError, "%s", output)
+				expected := 42
+				if failure == closeFailure {
+					expected = 1
+				}
+				require.Equal(t, expected, exitError.ExitCode(), "%s", output)
+				require.NotContains(t, string(output), "browser-close=closed")
+			}
+			if failure != validateModeCreate {
+				closed, err := os.ReadFile(filepath.Join(directory, "closed")) // #nosec G304 -- test-owned temporary path
+				require.NoError(t, err)
+				require.Equal(t, "closed\n", string(closed))
+			}
+			require.NotContains(t, string(output), credentialPlaceholder)
+			require.Empty(t, git("ls-remote", origin, "refs/heads/browser-proof"))
+		})
+	}
+}
+
+func TestBrowserAttachmentStopsWhenParentIgnoresErrexit(t *testing.T) {
+	directory := t.TempDir()
+	stub := filepath.Join(directory, "gh")
+	require.NoError(t, os.WriteFile(stub, []byte("#!/usr/bin/env bash\nset -euo pipefail\nexit 37\n"), 0o600))
+	require.NoError(t, os.Chmod(stub, 0o700)) // #nosec G302 -- executable stub requires owner execute permission
+	script := strings.Replace(browserAttachmentCommand("o/r", "browser-proof"), "gh=/opt/kagent/tools/github/bin/gh", "gh='"+stub+"'", 1)
+	command := exec.CommandContext(t.Context(), "bash", "-c", "if {\n"+script+"\n}; then exit 99; else exit 0; fi") // #nosec G204 -- fixed proof script and test-owned executable
 	output, err := command.CombinedOutput()
-	var exitError *exec.ExitError
-	require.ErrorAs(t, err, &exitError, "%s", output)
-	require.Equal(t, 42, exitError.ExitCode(), "%s", output)
-	require.Empty(t, git("ls-remote", origin, "refs/heads/browser-proof"))
+	require.NoError(t, err, "%s", output)
+	require.NotContains(t, string(output), "browser-upload=attached")
 }
