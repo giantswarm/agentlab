@@ -179,7 +179,7 @@ func chartVersionBelow(version, floor string) bool {
 // edit path, and both agents deleted through agent-manager. Every verdict line is printed
 // at the end. With an existing agent the run writes and deletes no agent:
 // proveExistingAgent replaces everything after the Models page.
-func proveAgentPlatform(cfg *config.Config, sessions []*portalSession, existing *portalAgentRef) error {
+func proveAgentPlatform(cfg *config.Config, sessions []*portalSession, existing *portalAgentRef, modelPlan portalModelPlan) error {
 	primary := adminSession(sessions)
 	if primary == nil {
 		fmt.Printf("agent platform pages skipped: the portal's create path runs as a %s user and none is among %s\n", platformAdminsGroup, sessionEmails(sessions))
@@ -215,7 +215,7 @@ func proveAgentPlatform(cfg *config.Config, sessions []*portalSession, existing 
 	// The Models page first: it needs no agent, and its hop is the one the
 	// create path takes next.
 	if cfg.ModelManagerEnabled() {
-		models, err := proveModelsPage(cfg, primary, viewer)
+		models, err := proveModelsPage(cfg, primary, viewer, modelPlan)
 		verdicts = append(verdicts, models...)
 		if err != nil {
 			return err

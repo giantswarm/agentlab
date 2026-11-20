@@ -35,7 +35,7 @@ var apiserverAcceptsDex = ensureApiserverAcceptsDex
 // without proofStages.
 func checkApiserverOIDC(cfg *config.Config) error {
 	step("%s: checking the apiserver accepts a fresh Dex token", stageApiserverOIDC)
-	return apiserverAcceptsDex(context.Background(), cfg)
+	return apiserverAcceptsDex(context.Background(), cfg, step)
 }
 
 // apiserverJWKSWindow bounds the wait: Dex's max-age plus a margin for the
@@ -78,7 +78,8 @@ func judgeApiserverOIDC(kid string, published []string, whoamiErr error) oidcVer
 // signing key (judgeApiserverOIDC) it presents a new token every
 // apiserverJWKSPoll until the cache expires and the token is accepted, for at
 // most apiserverJWKSWindow; any other refusal fails at once.
-func ensureApiserverAcceptsDex(ctx context.Context, cfg *config.Config) error {
+// reportStep lets a caller defer proof steps until its resource plan is announced.
+func ensureApiserverAcceptsDex(ctx context.Context, cfg *config.Config, reportStep func(string, ...any)) error {
 	if len(cfg.Users) == 0 {
 		return nil
 	}
@@ -86,7 +87,7 @@ func ensureApiserverAcceptsDex(ctx context.Context, cfg *config.Config) error {
 	start := time.Now()
 	waiting := false
 	for {
-		verdict, detail, err := apiserverOIDCCheck(ctx, cfg, user)
+		verdict, detail, err := readApiserverOIDC(ctx, cfg, user)
 		if err != nil {
 			return err
 		}
@@ -106,7 +107,7 @@ func ensureApiserverAcceptsDex(ctx context.Context, cfg *config.Config) error {
 				time.Since(start).Round(time.Second), apiserverJWKSWindow, detail)
 		}
 		if !waiting {
-			step("The apiserver refuses Dex tokens signed with a key Dex publishes (%s): Dex rotated its keys after the apiserver's last JWKS fetch, which it repeats once its cached set expires — waiting up to %s", detail, apiserverJWKSWindow)
+			reportStep("The apiserver refuses Dex tokens signed with a key Dex publishes (%s): Dex rotated its keys after the apiserver's last JWKS fetch, which it repeats once its cached set expires — waiting up to %s", detail, apiserverJWKSWindow)
 			waiting = true
 		}
 		select {
@@ -116,6 +117,9 @@ func ensureApiserverAcceptsDex(ctx context.Context, cfg *config.Config) error {
 		}
 	}
 }
+
+// readApiserverOIDC is the network seam; tests retain the readiness/recovery loop.
+var readApiserverOIDC = apiserverOIDCCheck
 
 // apiserverOIDCCheck mints a token for user at the apiserver's client, reads
 // the key IDs Dex publishes and judges the apiserver's whoami answer; detail
