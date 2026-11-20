@@ -250,6 +250,10 @@ func CodingTest(cfg *config.Config, opts CodingTestOptions) error {
 		opts.ReadyTimeout = DefaultCodingReadyTimeout
 	}
 	switch opts.Part {
+	case CodingPartBrowser:
+		if opts.Step != "" || opts.OtherVersion != "" || opts.Repository != "" || opts.Email != "" || len(opts.MusterTools) > 0 || (opts.Harness != "" && opts.Harness != config.CodingRuntimeClaude) {
+			return fmt.Errorf("--part browser runs on claude as the admin with the configured workspace proof repositories; it takes no [email], --step, --other-version, --repository or --muster-tools")
+		}
 	case "", CodingPartToolchains:
 		if opts.Part != "" && opts.Step != "" {
 			return fmt.Errorf("--step names a stage of the coding agents proof: --part %s takes none", opts.Part)
@@ -298,6 +302,9 @@ func CodingTest(cfg *config.Config, opts CodingTestOptions) error {
 	p := &codingProof{cfg: cfg, rt: rt, modelConfig: opts.ModelConfig, user: user, timeout: opts.ReadyTimeout, turnTimeout: opts.TurnTimeout, musterTools: opts.MusterTools, stages: newProofStages(), toolchains: opts.Toolchains, otherVersion: opts.OtherVersion, step: opts.Step, plan: plan}
 	if len(p.toolchains) == 0 {
 		p.toolchains = DefaultCodingToolchains
+		if opts.Part == CodingPartBrowser {
+			p.toolchains = []string{"node", toolchainGitHub}
+		}
 	}
 	if _, err := otherVersionToolchains(p.toolchains, p.otherVersion); err != nil {
 		return err
@@ -311,8 +318,11 @@ func CodingTest(cfg *config.Config, opts CodingTestOptions) error {
 	}
 	defer p.cleanup()
 	run := p.run
-	if opts.Part == CodingPartToolchains {
+	switch opts.Part {
+	case CodingPartToolchains:
 		run = p.runToolchains
+	case CodingPartBrowser:
+		run = p.runBrowser
 	}
 	err = run()
 	if err != nil && p.mock != nil {

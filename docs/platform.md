@@ -1738,6 +1738,50 @@ The part needs agent-manager's `toolchains.repository` (its `get_info` then repo
 
 The agent and its Sessions are removed on every path.
 
+### The browser part
+
+`agentlab coding-test --part browser` runs a claude agent with the
+commit-pinned `playwright-browser` skill and the `node` and `github`
+toolchains. `--toolchains node@<candidate>,github@<version>` selects a
+candidate toolchain release; `start_session` resolves its digest, which the
+proof checks against the actor template. `platform.devImages` selects
+platform component images, rather than Session toolchain images.
+
+The first turn asks for a local page, its title, an accessibility snapshot
+and a screenshot without browser instructions. A protocol fixture then
+checks muster without Playwright routes: an authorized cross-origin fetch
+fails its preflight, an anonymous `no-cors` POST answers 401, and a
+`no-cors` POST with an Authorization extra header answers 400. The fixture
+sends valid MCP initialization requests, never a tool call. HTTP statuses and network
+failures come from Playwright events.
+
+With the Chromium wrapper and `route.continue()`, fetches, redirects,
+service-worker fetches and a `playwright test` page must fail with
+`net::ERR_NAME_NOT_RESOLVED`, including the trailing-dot hostname. The
+target comes from the Session's muster provider and is checked against the
+actor's live actor-JWT Authorization rule during the browser turn, while
+the credential rule is open. The
+protocol fixture allows service workers explicitly for that case; the CLI
+keeps them blocked. Browser launches run sequentially within the actor's
+memory limit.
+
+A missing actor memory limit fails the memory assertion. A worker pool's
+shared budget does not establish a limit on an individual actor.
+
+The final stage uses the configured GitHub workspace proof repositories
+and the person's provider grant, as the [workspace git
+part](workspaces.md#the-git-part) does. A workspace Session opens a draft PR
+on a scratch branch, takes a synthetic screenshot with `playwright-cli`,
+and attaches it with the GitHub toolchain's `gh pr comment --attach`.
+The stage requires a `ghu_` credential placeholder, reads the comment back
+from GitHub, and checks its author and uploaded-asset link. It closes the
+PR and deletes the scratch branch; the attachment remains on that closed
+PR as evidence. Missing upload support or provider authorization fails the
+stage. Sessions, the fixture workspace and the agent are removed on exit.
+
+Run the same fixture on the full AWS and Azure test installations after
+the toolchain release. A local pass alone does not establish that rollout.
+
 ### The Swarmgeist proof (klaus-gateway on kagent API v2)
 
 `agentlab klaus-gateway-test` is the lab carrier of
