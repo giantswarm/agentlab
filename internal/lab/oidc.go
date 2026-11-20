@@ -35,7 +35,7 @@ import (
 // when platform.tls is set; empty means the lab CA.
 var labDomain struct {
 	sync.Mutex
-	domain, addr, trust string
+	domain, addr, trust, dexPort string
 }
 
 // SetPlatform registers the platform domain for the loopback dialer and the
@@ -46,13 +46,16 @@ func SetPlatform(cfg *config.Config) {
 	labDomain.domain = cfg.Platform.Domain
 	labDomain.addr = cfg.GatewayHostAddress()
 	labDomain.trust = trustBundleFile(cfg)
+	labDomain.dexPort = fmt.Sprint(cfg.DexPort)
 }
 
 // dialLabAddr rewrites a *.<domain> (or apex) dial target to the loopback
-// address the edge is published on.
+// address the edge is published on, and the lab's localhost Dex port to
+// IPv4, where kind publishes it. Only the dial target changes: the issuer,
+// HTTP Host and TLS server name remain localhost (docs/tls.md "Dex on localhost").
 func dialLabAddr(addr string) string {
 	labDomain.Lock()
-	domain, edge := labDomain.domain, labDomain.addr
+	domain, edge, dexPort := labDomain.domain, labDomain.addr, labDomain.dexPort
 	labDomain.Unlock()
 	if domain == "" {
 		return addr
@@ -60,6 +63,9 @@ func dialLabAddr(addr string) string {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return addr
+	}
+	if host == localhostName && port == dexPort {
+		return net.JoinHostPort("127.0.0.1", port)
 	}
 	if host == domain || strings.HasSuffix(host, "."+domain) {
 		return net.JoinHostPort(edge, port)
