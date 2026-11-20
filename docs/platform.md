@@ -1767,10 +1767,17 @@ memory limit.
 
 A missing actor memory limit fails the memory assertion. A worker pool's
 shared budget does not establish a limit on an individual actor.
-The attachment stage runs even when the browser checks fail; the complete
-proof reports failures from both stages.
 
-The final stage uses the configured GitHub workspace proof repositories
+On Podman, the kind node needs process capacity for Chromium alongside the
+platform pods. Follow kind's [PID-limit setup](https://kind.sigs.k8s.io/docs/user/rootless/#increase-pid-limits)
+before running the proof. That node-wide budget does not replace the actor's
+memory limit.
+
+### The browser attachment part
+
+`agentlab coding-test --part browser-attachment` runs the native GitHub
+attachment proof separately, using the same Harness, pinned skill and
+toolchain defaults. It uses the configured GitHub workspace proof repositories
 and the person's provider grant, as the [workspace git
 part](workspaces.md#the-git-part) does. A workspace Session opens a draft PR
 on a scratch branch, takes a synthetic screenshot with `playwright-cli`,
@@ -1780,6 +1787,8 @@ comment back from GitHub, and checks its author and uploaded-asset link. It clos
 PR and deletes the scratch branch; the attachment remains on that closed
 PR as evidence. Missing upload support or provider authorization fails the
 stage. Sessions, the fixture workspace and the agent are removed on exit.
+The browser part does not require this upload, which is tracked separately
+in [issue 1320](https://github.com/giantswarm/agentlab/issues/1320).
 
 Run the same fixture on the full AWS and Azure test installations after
 the toolchain release. A local pass alone does not establish that rollout.

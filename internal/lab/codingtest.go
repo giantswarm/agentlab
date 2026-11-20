@@ -250,9 +250,9 @@ func CodingTest(cfg *config.Config, opts CodingTestOptions) error {
 		opts.ReadyTimeout = DefaultCodingReadyTimeout
 	}
 	switch opts.Part {
-	case CodingPartBrowser:
+	case CodingPartBrowser, CodingPartBrowserAttachment:
 		if opts.Step != "" || opts.OtherVersion != "" || opts.Repository != "" || opts.Email != "" || len(opts.MusterTools) > 0 || (opts.Harness != "" && opts.Harness != config.CodingRuntimeClaude) {
-			return fmt.Errorf("--part browser runs on claude as the admin with the configured workspace proof repositories; it takes no [email], --step, --other-version, --repository or --muster-tools")
+			return fmt.Errorf("--part %s runs on claude as the admin; it takes no [email], --step, --other-version, --repository or --muster-tools", opts.Part)
 		}
 	case "", CodingPartToolchains:
 		if opts.Part != "" && opts.Step != "" {
@@ -302,7 +302,7 @@ func CodingTest(cfg *config.Config, opts CodingTestOptions) error {
 	p := &codingProof{cfg: cfg, rt: rt, modelConfig: opts.ModelConfig, user: user, timeout: opts.ReadyTimeout, turnTimeout: opts.TurnTimeout, musterTools: opts.MusterTools, stages: newProofStages(), toolchains: opts.Toolchains, otherVersion: opts.OtherVersion, step: opts.Step, plan: plan}
 	if len(p.toolchains) == 0 {
 		p.toolchains = DefaultCodingToolchains
-		if opts.Part == CodingPartBrowser {
+		if opts.Part == CodingPartBrowser || opts.Part == CodingPartBrowserAttachment {
 			p.toolchains = []string{"node", toolchainGitHub}
 		}
 	}
@@ -323,6 +323,8 @@ func CodingTest(cfg *config.Config, opts CodingTestOptions) error {
 		run = p.runToolchains
 	case CodingPartBrowser:
 		run = p.runBrowser
+	case CodingPartBrowserAttachment:
+		run = p.runBrowserAttachment
 	}
 	err = run()
 	if err != nil && p.mock != nil {
