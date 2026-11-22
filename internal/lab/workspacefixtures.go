@@ -167,7 +167,7 @@ func sweepWorkspaceLeftovers(ctx context.Context) error {
 	return err
 }
 
-// workspaceGrantLedger holds the workspace-manager grants a run used, each
+// workspaceGrantLedger holds the workspace-manager grants a run created, each
 // person once, to drop when the run ends.
 type workspaceGrantLedger struct {
 	mu     sync.Mutex
@@ -178,7 +178,7 @@ type workspaceGrantLedger struct {
 // runWorkspaceGrants is this run's ledger.
 var runWorkspaceGrants = &workspaceGrantLedger{}
 
-// record notes a grant the person holds for the run; the latest drop of a
+// record notes a grant created for the run; the latest drop of a
 // person wins (it rides their newest session).
 func (l *workspaceGrantLedger) record(email string, drop func()) {
 	l.mu.Lock()
@@ -205,7 +205,7 @@ func (l *workspaceGrantLedger) release() []string {
 	return emails
 }
 
-// recordWorkspaceGrant puts the person's grant into the run's ledger.
+// recordWorkspaceGrant records a grant created by the run.
 func recordWorkspaceGrant(p *workspacePerson, instance string) {
 	runWorkspaceGrants.record(p.user.Email, func() { p.disconnect(instance) })
 }
@@ -219,13 +219,10 @@ func startWorkspaceRun() (end func(), err error) {
 	return releaseWorkspaceGrants, sweepWorkspaceLeftovers(context.Background())
 }
 
-// releaseWorkspaceGrants ends a run on the workspaces: every grant of the
-// workspace-manager's App a proof of the run used is dropped in muster, so
-// the lab's people leave the run as they hold no grant — the portal's and
-// the gateway's proofs start from the same state on a used lab as on a
-// fresh one. Deferred by every command that grants.
+// releaseWorkspaceGrants drops grants created by the run. Grants already
+// held when the run began remain available to their other consumers.
 func releaseWorkspaceGrants() {
 	if dropped := runWorkspaceGrants.release(); len(dropped) > 0 {
-		note("dropped the workspace-manager grant of %s in muster: a run leaves no grant behind", strings.Join(dropped, ", "))
+		note("dropped the workspace-manager grants created by this run for %s", strings.Join(dropped, ", "))
 	}
 }

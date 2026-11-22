@@ -371,8 +371,9 @@ func connectWorkspaceProvider(cfg *config.Config, p *workspacePerson, instance s
 	if !status.Connected {
 		return "", fmt.Errorf("the grant of %s at %s reached muster's callback, but list_providers still shows %s\n  hops: %s", p.user.Email, instance, status, hops)
 	}
-	// Held before or granted now, the run drops it at its end.
-	recordWorkspaceGrant(p, instance)
+	if link != "" {
+		recordWorkspaceGrant(p, instance)
+	}
 	return hops, nil
 }
 

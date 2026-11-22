@@ -29,6 +29,12 @@ and what happened to it. One commit per resolved item. Statuses:
 
 ## Script hacks (fixable here)
 
+### H15. Workspace proof cleanup revokes already-held provider grants: FIXED
+The run records grants only when its sign-in requests new authorization.
+Cleanup releases those grants and preserves grants the person already held
+for other consumers. Regression tests cover held GitHub and GitLab grants
+and release of a newly created grant.
+
 ### H14. Workspace proof probes assume every Session directory belongs to UID 1000: FIXED
 Actor-owned directories can be private to UID 65532. The proofs read their
 metadata as the workspace parent owner, then probe and empty only the

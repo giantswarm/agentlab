@@ -447,9 +447,10 @@ headless walk makes. A part that finds the admin without the grant of the
 `workspaces-grant-github.url` in the state directory and waits up to 15
 minutes for `list_providers` to show it connected: open the link in a
 browser signed in to GitHub, which takes GitHub's consent of the lab's App
-once and redirects to muster's callback. The grant is dropped at the run's
-end, as every proof's. A GitLab's grant is walked headlessly through its
-sign-in form, as in the GitLab part.
+once and redirects to muster's callback. Cleanup drops grants created by
+the run and preserves grants held before it started. A GitLab's grant is
+walked headlessly through its sign-in form, as in the GitLab part, whose
+explicit Disconnect stage tests revocation.
 
 ### The GitLab part
 

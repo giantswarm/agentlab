@@ -292,11 +292,11 @@ func grantProofProvider(cfg *config.Config, p *workspacePerson, instance string,
 	if err != nil {
 		return err
 	}
-	recordWorkspaceGrant(p, instance)
 	if link == "" {
 		note("%s holds the grant of the App of %s in muster already", p.user.Email, instance)
 		return nil
 	}
+	recordWorkspaceGrant(p, instance)
 	path := filepath.Join(StateDir, fmt.Sprintf(proofGrantFile, instance))
 	if err := os.MkdirAll(StateDir, 0o750); err != nil {
 		return err
