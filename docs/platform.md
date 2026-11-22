@@ -1755,6 +1755,10 @@ fails its preflight, an anonymous `no-cors` POST answers 401, and a
 sends valid MCP initialization requests, never a tool call. HTTP statuses and network
 failures come from Playwright events.
 
+The shell command carries the fixture as compressed data and verifies its
+SHA-256 before Node executes it. A decoding or checksum failure prevents
+execution, and the temporary script is removed when the command exits.
+
 With the Chromium wrapper and `route.continue()`, fetches, redirects,
 service-worker fetches and a `playwright test` page must fail with
 `net::ERR_NAME_NOT_RESOLVED`, including the trailing-dot hostname. The

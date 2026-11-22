@@ -1,7 +1,10 @@
 package lab
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	_ "embed"
 	"encoding/base64"
 	"fmt"
@@ -141,7 +144,10 @@ func (p *codingProof) browserChecks(ctx context.Context, names []string) error {
 		note("the browser actor declares no memory limit; protocol checks still run and the memory assertion must fail")
 	}
 	p.stages.begin("browser: refusals", "No-route muster refusals and wrapper refusals for fetch, redirects, service workers and playwright test")
-	command := browserProofCommand(target, memoryLimit)
+	command, err := browserProofCommand(target, memoryLimit)
+	if err != nil {
+		return err
+	}
 	turn, err = p.browserProtocolTurn(ctx, ate, session, target, command)
 	if err != nil {
 		return err
@@ -178,7 +184,7 @@ func (p *codingProof) browserProtocolTurn(ctx context.Context, client ateapi.Con
 	var turnError error
 	go func() {
 		defer close(done)
-		result, turnError = p.turn(turnContext, session, "Run this exact browser protocol proof once with your shell tool. It sends MCP initialization requests only, never a tool call. Do not edit the script or substitute results. Reply with its AGENTLAB_PROBE lines.\n\n"+command)
+		result, turnError = p.turn(turnContext, session, "Run this exact browser protocol proof with your shell tool. Copy the compressed literal exactly. It sends MCP initialization requests only, never a tool call. Do not edit the script, expected checksum or substitute results. If checksum verification fails, recopy the original literal exactly. Reply with its AGENTLAB_PROBE lines.\n\n"+command)
 	}()
 	policyError := waitBrowserPolicy(turnContext, client, substrateActorName(session.GetId()), target, done)
 	if policyError != nil {
@@ -240,8 +246,16 @@ func browserMusterTarget(policy *ateapi.EgressPolicy) (string, error) {
 	return "", fmt.Errorf("the actor's live egress policy has no exact muster HTTP destination with an actor-JWT Authorization replacement")
 }
 
-func browserProofCommand(target string, memoryLimit int64) string {
-	return "bash <<'AGENTLAB_BROWSER_PROTOCOL'\nset -euo pipefail\nprintf '%s' '" + base64.StdEncoding.EncodeToString([]byte(browserProofScript)) + "' | base64 -d | node - '" + target + "' '" + probeMarker + "' " + fmt.Sprint(memoryLimit) + "\nAGENTLAB_BROWSER_PROTOCOL"
+func browserProofCommand(target string, memoryLimit int64) (string, error) {
+	var compressed bytes.Buffer
+	writer := gzip.NewWriter(&compressed)
+	if _, err := writer.Write([]byte(browserProofScript)); err != nil {
+		return "", fmt.Errorf("compress browser fixture: %w", err)
+	}
+	if err := writer.Close(); err != nil {
+		return "", fmt.Errorf("finish browser fixture compression: %w", err)
+	}
+	return "bash <<'AGENTLAB_BROWSER_PROTOCOL'\nset -euo pipefail\numask 077\nscript=$(mktemp)\ntrap 'rm -f \"$script\"' EXIT\nprintf '%s' '" + base64.StdEncoding.EncodeToString(compressed.Bytes()) + "' | base64 -d | gzip -d > \"$script\"\nprintf '%s  %s\\n' '" + fmt.Sprintf("%x", sha256.Sum256([]byte(browserProofScript))) + "' \"$script\" | sha256sum -c -\nnode \"$script\" '" + target + "' '" + probeMarker + "' " + fmt.Sprint(memoryLimit) + "\nAGENTLAB_BROWSER_PROTOCOL", nil
 }
 
 func judgeBrowserProof(probe codingProbe) error {
