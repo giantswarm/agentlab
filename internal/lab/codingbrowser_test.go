@@ -43,10 +43,12 @@ func TestJudgeBrowserProof(t *testing.T) {
 
 func TestBrowserProtocolCommand(t *testing.T) {
 	const (
-		nodeExecutable = "node"
-		decodeFailure  = "decode"
+		nodeExecutable   = "node"
+		decodeFailure    = "decode"
+		checksumFailure  = "checksum"
+		temporaryFailure = "temporary"
 	)
-	for _, failure := range []string{"", nodeExecutable, decodeFailure} {
+	for _, failure := range []string{"", nodeExecutable, decodeFailure, checksumFailure, temporaryFailure} {
 		t.Run("failure="+failure, func(t *testing.T) {
 			directory := t.TempDir()
 			writeStub := func(name, script string) {
@@ -55,39 +57,57 @@ func TestBrowserProtocolCommand(t *testing.T) {
 				require.NoError(t, os.WriteFile(file, []byte("#!/usr/bin/env bash\nset -euo pipefail\n"+script), 0o600))
 				require.NoError(t, os.Chmod(file, 0o700)) // #nosec G302 -- executable stub requires owner execute permission
 			}
-			writeStub("mktemp", "exit 99\n")
-			writeStub(nodeExecutable, "printf '%s\\n' \"$@\" > \"$BROWSER_ARGUMENTS\"\ncat > \"$BROWSER_INPUT\"\nexit \"$BROWSER_EXIT\"\n")
+			if failure == temporaryFailure {
+				writeStub("mktemp", "exit 99\n")
+			}
+			writeStub(nodeExecutable, "printf '%s\\n' \"$@\" > \"$BROWSER_ARGUMENTS\"\ncat \"$1\" > \"$BROWSER_INPUT\"\nexit \"$BROWSER_EXIT\"\n")
 			if failure == decodeFailure {
 				writeStub("base64", "exit 43\n")
+			}
+			if failure == checksumFailure {
+				writeStub("base64", "printf 'tampered fixture' | gzip -c\n")
 			}
 			exitCode := "0"
 			if failure == nodeExecutable {
 				exitCode = "37"
 			}
-			command := exec.CommandContext(t.Context(), "bash", "-c", browserProofCommand("http://muster.example:8090/mcp", 12345)) // #nosec G204 -- fixed proof script and test-owned executables
-			command.Env = append(os.Environ(), "PATH="+directory+string(os.PathListSeparator)+os.Getenv("PATH"), "BROWSER_ARGUMENTS="+filepath.Join(directory, "arguments"), "BROWSER_INPUT="+filepath.Join(directory, "input"), "BROWSER_EXIT="+exitCode)
+			scripts := filepath.Join(directory, "scripts")
+			require.NoError(t, os.Mkdir(scripts, 0o700))
+			script, err := browserProofCommand("http://muster.example:8090/mcp", 12345)
+			require.NoError(t, err)
+			command := exec.CommandContext(t.Context(), "bash", "-c", script) // #nosec G204 -- fixed proof script and test-owned executables
+			command.Env = append(os.Environ(), "PATH="+directory+string(os.PathListSeparator)+os.Getenv("PATH"), "TMPDIR="+scripts, "BROWSER_ARGUMENTS="+filepath.Join(directory, "arguments"), "BROWSER_INPUT="+filepath.Join(directory, "input"), "BROWSER_EXIT="+exitCode)
 			output, err := command.CombinedOutput()
 			if failure == "" {
 				require.NoError(t, err, "%s", output)
 			} else {
 				var exitError *exec.ExitError
 				require.ErrorAs(t, err, &exitError, "%s", output)
-				expected := 37
-				if failure == decodeFailure {
-					expected = 43
+				expected := 1
+				switch failure {
+				case nodeExecutable:
+					expected = 37
+				case temporaryFailure:
+					expected = 99
 				}
 				require.Equal(t, expected, exitError.ExitCode(), "%s", output)
 			}
+			remaining, err := os.ReadDir(scripts)
+			require.NoError(t, err)
+			require.Empty(t, remaining)
+			if failure != "" && failure != nodeExecutable {
+				require.NoFileExists(t, filepath.Join(directory, "arguments"))
+				require.NoFileExists(t, filepath.Join(directory, "input"))
+				return
+			}
 			arguments, err := os.ReadFile(filepath.Join(directory, "arguments")) // #nosec G304 -- test-owned temporary path
 			require.NoError(t, err)
-			require.Equal(t, "-\nhttp://muster.example:8090/mcp\n"+probeMarker+"\n12345\n", string(arguments))
+			lines := strings.Split(string(arguments), "\n")
+			require.Equal(t, []string{"http://muster.example:8090/mcp", probeMarker, "12345", ""}, lines[1:])
+			require.Equal(t, scripts, filepath.Dir(lines[0]))
 			input, err := os.ReadFile(filepath.Join(directory, "input")) // #nosec G304 -- test-owned temporary path
 			require.NoError(t, err)
-			if failure == decodeFailure {
-				require.Empty(t, input)
-			} else {
-				require.Equal(t, browserProofScript, string(input))
-			}
+			require.Equal(t, browserProofScript, string(input))
 		})
 	}
 }
