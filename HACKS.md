@@ -29,6 +29,12 @@ and what happened to it. One commit per resolved item. Statuses:
 
 ## Script hacks (fixable here)
 
+### H14. Workspace proof probes assume every Session directory belongs to UID 1000: FIXED
+Actor-owned directories can be private to UID 65532. The proofs read their
+metadata as the workspace parent owner, then probe and empty only the
+directories belonging to each recorded UID and GID. Empty directory entries
+are removed as the parent owner. Probes remain PodSecurity restricted.
+
 ### H1. `backstage.sh`: image-presence check ignores the tag — FIXED
 `docker exec … crictl images | grep -q giantswarm/backstage` matches *any*
 backstage image. Bumping `IMAGE` to a new tag would silently keep running the

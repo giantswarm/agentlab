@@ -408,7 +408,10 @@ needs). With `github` the write turn's `gh` must be the toolchain's,
 and `gh` work on a Harness image that ships no `gh` of its own.
 
 The Sessions, the Agents, the workspace and every branch of the run are
-removed on every path.
+removed on every path. Volume probes read private Session directories as
+their recorded UID and GID under the restricted PodSecurity profile.
+Cleanup empties each directory as its owner, then removes the empty entry
+as the workspace parent directory's owner.
 
 ### The proof repositories
 

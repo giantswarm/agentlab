@@ -110,9 +110,3 @@ func startSession(p *workspacePerson, grant string) (*toolEnvelope, error) {
 	}
 	return p.session.callToolEnvelope(agentManagerToolPrefix+"start_session", args)
 }
-
-// accessClearSessionsScript removes every session directory from the
-// workspace's volume, so its delete is not held by one.
-const accessClearSessionsScript = `rm -rf /workspace/` + workspacesTestSessions + `/*
-echo "sessions: $(ls -A /workspace/` + workspacesTestSessions + ` 2>/dev/null | wc -l) directories left"
-`

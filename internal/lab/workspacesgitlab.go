@@ -782,7 +782,7 @@ func (gp *gitlabProof) cleanupNow() error {
 	if gp.sp.member != nil {
 		if gone, err := gp.sp.gone(gitlabWorkspace); err == nil && !gone {
 			if _, err := gp.sp.volume(gitlabWorkspace); err == nil {
-				out, err := gp.sp.onVolume(gitlabWorkspace, "gitlab-clear", accessClearSessionsScript)
+				out, err := gp.sp.clearSessions(gitlabWorkspace)
 				errs = append(errs, err)
 				if err == nil {
 					note("%s", indent(out, "  "))

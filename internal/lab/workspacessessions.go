@@ -116,13 +116,43 @@ type workspaceState struct {
 	} `json:"problems"`
 }
 
-// sessionsDirectoriesScript lists every session directory on the volume:
-// its setup record, base64, and the Session-only files in it.
-const sessionsDirectoriesScript = `for d in /workspace/` + workspacesTestSessions + `/*/; do test -d "$d" || continue; id=$(basename "$d"); ` +
-	`state=$(base64 -w0 "$d` + workspaceStateFile + `" 2>/dev/null); ` +
-	`own=$(ls -A "$d" | grep '^` + sessionsOwnFilePrefix + `' | tr '\n' ','); ` +
-	`echo "dir $id state=$state own=$own"; done; true
-`
+func sessionIDsForOwner(owners map[string]volumeOwner, owner volumeOwner) []string {
+	var ids []string
+	for id, candidate := range owners {
+		if candidate == owner {
+			ids = append(ids, id)
+		}
+	}
+	slices.Sort(ids)
+	return ids
+}
+
+func sessionDirectoryLoop(ids []string, body string) string {
+	if len(ids) == 0 {
+		return "true\n"
+	}
+	paths := make([]string, 0, len(ids))
+	for _, id := range ids {
+		directory := workspacesTestMountPath + "/" + workspacesTestSessions + "/" + id + "/"
+		paths = append(paths, "'"+strings.ReplaceAll(directory, "'", "'\"'\"'")+"'")
+	}
+	return "for d in " + strings.Join(paths, " ") + "; do test -d \"$d\" || continue; " + body + "; done; true\n"
+}
+
+func sessionDirectoriesScript(ids []string) string {
+	return sessionDirectoryLoop(ids, `id=$(basename "$d"); `+
+		`state=$(base64 -w0 "$d`+workspaceStateFile+`" 2>/dev/null); `+
+		`own=$(ls -A "$d" | grep '^`+sessionsOwnFilePrefix+`' | tr '\n' ','); `+
+		`echo "dir $id state=$state own=$own"`)
+}
+
+func sessionClearContentsScript(ids []string) string {
+	return sessionDirectoryLoop(ids, `find "$d" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} \;`)
+}
+
+func sessionRemoveEntriesScript(ids []string) string {
+	return sessionDirectoryLoop(ids, `rmdir -- "$d"`)
+}
 
 // parseSessionDirectories reads the probe's lines into each directory.
 func parseSessionDirectories(out string) (map[string]sessionDirectory, error) {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1039,7 +1040,7 @@ func measureTurn(ctx context.Context, api *kagentAPI, session *apiv1alpha1.Sessi
 // setupRecord reads the setup's record of the Session's directory as its
 // owner.
 func (m *measurement) setupRecord(w *measureWorkspace, id string, owner volumeOwner) (*workspaceState, error) {
-	out, err := m.onVolume(w, "dirs", sessionsDirectoriesScript, nil, owner)
+	out, err := m.onVolume(w, "dirs", sessionDirectoriesScript([]string{id}), nil, owner)
 	if err != nil {
 		return nil, err
 	}
@@ -1393,8 +1394,7 @@ func (m *measurement) pvDriver(w *measureWorkspace) string {
 // /workspace without mounts, else as they say (an emptyDir "local" is added
 // when they name it).
 func measureVolumePod(claim, probe, script string, mounts []corev1.VolumeMount, owner volumeOwner) *corev1.Pod {
-	pod := workspaceVolumePod("agentlab-measure-"+probe, claim, script)
-	pod.Spec.SecurityContext.RunAsUser, pod.Spec.SecurityContext.RunAsGroup = &owner.uid, &owner.gid
+	pod := workspaceVolumePod("agentlab-measure-"+probe, claim, script, owner)
 	if mounts == nil {
 		return pod
 	}
@@ -1473,11 +1473,14 @@ func (m *measurement) clearSessions(w *measureWorkspace) (syncVolume, error) {
 		return syncVolume{}, err
 	}
 	for _, o := range distinctOwners(owners) {
-		out, err := m.onVolume(w, "clear", measureClearSessionsScript(o), nil, o.runnable())
+		out, err := m.onVolume(w, "clear-contents", sessionClearContentsScript(sessionIDsForOwner(owners, o)), nil, o.runnable())
 		if err != nil {
 			return syncVolume{}, err
 		}
 		note("%s: %s", w.name, out)
+	}
+	if _, err := m.onVolume(w, "clear", sessionRemoveEntriesScript(slices.Sorted(maps.Keys(owners))), nil, workspaceVolumeOwner); err != nil {
+		return syncVolume{}, err
 	}
 	return v, nil
 }
@@ -1668,13 +1671,4 @@ func distinctOwners(owners map[string]volumeOwner) []volumeOwner {
 	}
 	slices.SortFunc(list, func(a, b volumeOwner) int { return cmp.Or(cmp.Compare(a.uid, b.uid), cmp.Compare(a.gid, b.gid)) })
 	return list
-}
-
-// measureClearSessionsScript removes the session directories the owner's
-// user owns, so its delete is not held by one, and says how many are left.
-func measureClearSessionsScript(o volumeOwner) string {
-	return `for d in /workspace/` + workspacesTestSessions + `/*/; do test -d "$d" || continue; ` +
-		`if [ "$(stat -c %u "$d")" = "` + strconv.FormatInt(o.uid, 10) + `" ]; then rm -rf "$d"; fi; done
-echo "sessions: $(ls -A /workspace/` + workspacesTestSessions + ` 2>/dev/null | wc -l) directories left"
-`
 }
