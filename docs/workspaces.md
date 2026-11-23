@@ -367,7 +367,9 @@ workspace's first cycle:
 
 `agentlab workspaces-test --part git` proves a workspace Session works with
 git and `gh` as the person, on GitHub through the `github` instance's App,
-on the claude and the kagent (Go ADK) Harness, with the person's token never
+on the claude and the kagent (Go ADK) Harness, or on the Harnesses
+`--harness` lists (`claude,kagent,omp,codex`; codex needs
+`--model-config codex=<ModelConfig>`, a Responses API model), with the person's token never
 in the sandbox and no GitHub MCP server. What happened at GitHub is read back
 from GitHub's own API, by the Session as the person; nothing stands in for
 GitHub.
@@ -456,7 +458,9 @@ explicit Disconnect stage tests revocation.
 
 `agentlab workspaces-test --part gitlab [email]` proves
 [the provider instance `gitlab`](#the-provider-instance-gitlab) end to end
-against a real GitLab, with muster pinning the workspace-manager to the
+against a real GitLab, its Sessions on the claude Harness or the one
+`--harness` names (with `--toolchains gitlab@<version>` for a Harness image
+without glab), with muster pinning the workspace-manager to the
 GitLab OAuth application (`platform.workspaces.grantProvider: gitlab`), or
 keeping one provider App per instance, GitLab's beside GitHub's
 (`grantProvider: apps`, [provider Apps side by side](#provider-apps-side-by-side)),
@@ -494,9 +498,11 @@ reads as before.
    creates the Session on the volume, whose turn works in its directory with
    the clone at the mirrored head and holds no credential beyond the
    platform's own variables (`GH_TOKEN` and `GITLAB_TOKEN`, the Harness's
-   inert placeholder the egress gateway replaces, `GLAB_IS_OAUTH2` and
-   `GLAB_CONFIG_DIR`, glab's configuration naming the workspace's GitLab
-   hosts, are among them; a `GITLAB_TOKEN` of any other value is a credential).
+   inert placeholder the egress gateway replaces, glab's settings
+   `GLAB_IS_OAUTH2`, `GITLAB_HOST`, `GLAB_API_PROTOCOL`, `GLAB_GIT_PROTOCOL`
+   and `GLAB_CHECK_UPDATE` from the platform's Harness values, and
+   `GLAB_CONFIG_DIR` on earlier kagent lines, are among them; a `GITLAB_TOKEN`
+   of any other value is a credential).
 7. **Push and merge request from the Session**: the Session pushes an empty
    commit to a proof branch and deletes the branch again. It holds no GitLab
    credential, so GitLab accepts both only through Substrate's egress
@@ -509,8 +515,9 @@ reads as before.
    which the Session closes before it deletes the branch; on an older Harness
    the stage reports glab's answer and leaves the merge request unjudged.
 8. **No workspace**: a Session started without a workspace works in the
-   default directory, holds no credential beyond the platform's own and no
-   `GITLAB_TOKEN`, and `git ls-remote` of the private project is refused.
+   default directory, holds no credential beyond the platform's own (a
+   `GITLAB_TOKEN` only as the Harness's inert placeholder), and
+   `git ls-remote` of the private project is refused.
 9. **Disconnect**: the admin drops the grant in muster (`core_auth_logout`),
    and `list_providers` answers muster's sign-in link again; the admin grants
    it once more for the restore.

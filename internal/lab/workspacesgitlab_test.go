@@ -36,6 +36,7 @@ func TestGitLabCredentialEnv(t *testing.T) {
 		{"", gitlabTokenUnset, nil},
 		{"CLAUDE_CODE_MESSAGING_TOKEN GH_TOKEN KAGENT_PROPAGATE_TOKEN ", gitlabTokenUnset, nil},
 		{"GH_TOKEN GITLAB_TOKEN GLAB_CONFIG_DIR GLAB_IS_OAUTH2 KAGENT_PROPAGATE_TOKEN", gitlabTokenPlaceholder, nil},
+		{"GH_TOKEN GITLAB_HOST GITLAB_TOKEN GLAB_API_PROTOCOL GLAB_CHECK_UPDATE GLAB_GIT_PROTOCOL GLAB_IS_OAUTH2", gitlabTokenPlaceholder, nil},
 		{"GITLAB_TOKEN KAGENT_PROPAGATE_TOKEN", gitlabTokenForeign, []string{"GITLAB_TOKEN"}},
 		{"GIT_ASKPASS GLAB_TOKEN", gitlabTokenUnset, []string{"GIT_ASKPASS", "GLAB_TOKEN"}},
 	} {

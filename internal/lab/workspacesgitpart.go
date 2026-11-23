@@ -113,13 +113,23 @@ type gitProof struct {
 	// toolchains are mounted into every Session, name[@version] each;
 	// with github the write turn's gh is the toolchain's.
 	toolchains []string
+	// harnesses are the Harnesses of the part's Sessions.
+	harnesses []workspacesSessionHarness
 }
 
+// gitDefaultHarnesses are the git part's Harnesses without --harness.
+var gitDefaultHarnesses = []string{claudeHarness, kagentHarness}
+
 // workspacesGitPart runs the part in stages, as the admin.
-func workspacesGitPart(cfg *config.Config, timeout time.Duration, toolchains []string) error {
+func workspacesGitPart(cfg *config.Config, opts WorkspacesTestOptions) error {
+	harnesses, err := workspacePartHarnesses(opts.Harness, opts.ModelConfig, gitDefaultHarnesses)
+	if err != nil {
+		return err
+	}
 	p := newProofStages()
-	gp := &gitProof{sp: newSyncProof(cfg, timeout, gitWorkspace), timeout: timeout, run: randomHex(4), toolchains: toolchains}
-	err := gp.runStages(p)
+	timeout := opts.ReadyTimeout
+	gp := &gitProof{sp: newSyncProof(cfg, timeout, gitWorkspace), timeout: timeout, run: randomHex(4), toolchains: opts.Toolchains, harnesses: harnesses}
+	err = gp.runStages(p)
 	gp.cleanup()
 	if err == nil && gp.pr != nil {
 		var done []string
@@ -139,7 +149,7 @@ var gitStages = []string{"git: workspace", "git: push and pull request", "git: p
 func (gp *gitProof) runStages(p *proofStages) error {
 	cfg := gp.sp.cfg
 	instance := config.WorkspaceProviderGitHub
-	p.begin("git: preconditions", "The git part's preconditions on %s: its proof repositories, the workspace-manager, the Session admission, the Agents on the claude and the kagent Harness, the admin holding the instance's grant", instance)
+	p.begin("git: preconditions", "The git part's preconditions on %s: its proof repositories, the workspace-manager, the Session admission, the Agents on Harnesses %s, the admin holding the instance's grant", instance, gp.harnessNames())
 	if skip := proofReposSkip(cfg, instance); skip != "" {
 		p.skip("%s", skip)
 		p.leaveOut(skip, gitStages...)
@@ -155,9 +165,9 @@ func (gp *gitProof) runStages(p *proofStages) error {
 	}
 
 	p.begin("git: push and pull request", "Per Harness, a Session started with the admin's grant: git push and gh pr create on %s as the person, the pull request closed and its branch deleted, no GitHub token in the sandbox", gp.pr.pushed)
-	for _, h := range sessionsHarnesses {
-		if err := gp.write(h.harness, h.agent); err != nil {
-			return fmt.Errorf("on %s: %w", h.harness, err)
+	for _, h := range gp.harnesses {
+		if err := gp.write(h.name, h.agent); err != nil {
+			return fmt.Errorf("on %s: %w", h.name, err)
 		}
 	}
 
@@ -169,9 +179,9 @@ func (gp *gitProof) runStages(p *proofStages) error {
 	}
 
 	p.begin("git: no workspace", "Per Harness, a Session without a workspace: gh api user and a push to %s refused, no GitHub token", gp.pr.pushed)
-	for _, h := range sessionsHarnesses {
-		if err := gp.noWorkspace(h.harness, h.agent); err != nil {
-			return fmt.Errorf("on %s: %w", h.harness, err)
+	for _, h := range gp.harnesses {
+		if err := gp.noWorkspace(h.name, h.agent); err != nil {
+			return fmt.Errorf("on %s: %w", h.name, err)
 		}
 	}
 	return nil
@@ -216,7 +226,7 @@ func (gp *gitProof) preconditions(instance string) error {
 		return err
 	}
 	gp.set = &sessionSet{api: gp.api, manager: gp.admin.session}
-	if err := readySessionsAgents(ctx, gp.admin.session, rig, gp.timeout); err != nil {
+	if err := readyPartAgents(ctx, cfg, gp.admin.session, rig, gp.harnesses, gp.timeout); err != nil {
 		return err
 	}
 	if res := sideloadImages(cfg, hostPullImages([]string{workspacesTestGitImage})); res.n > 0 {
@@ -324,7 +334,7 @@ func (gp *gitProof) probe(ctx context.Context, session *apiv1alpha1.Session, com
 	_, _, err := probeTurnWith(ctx, gp.api, session, command, "", gitPurpose, func(reply string) error {
 		values = parseProbeLines(reply)
 		if _, ok := values[last]; !ok {
-			return fmt.Errorf("the reply carries no %s %s line (did the agent run its Bash tool?): %s", probeMarker, last, excerpt(reply, 300))
+			return fmt.Errorf("the reply carries no %s %s line (did the agent run its shell tool?): %s", probeMarker, last, excerpt(reply, 300))
 		}
 		return nil
 	})
@@ -645,7 +655,7 @@ func (gp *gitProof) cleanup() {
 	if gp.set != nil {
 		errs = append(errs, gp.set.removeAllNow())
 	}
-	errs = append(errs, removeSessionsAgents()...)
+	errs = append(errs, removePartAgents(gp.harnesses)...)
 	errs = append(errs, gp.sp.restore())
 	if gp.pr != nil && gp.pr.dir != "" {
 		if left, err := gp.deleteRunBranches(); err != nil {
@@ -675,4 +685,13 @@ func judgeGitGH(path string, toolchains []string) error {
 	}
 	note("gh is the github toolchain's: %s", path)
 	return nil
+}
+
+// harnessNames lists the part's Harnesses for its messages.
+func (gp *gitProof) harnessNames() string {
+	names := make([]string, 0, len(gp.harnesses))
+	for _, h := range gp.harnesses {
+		names = append(names, h.name)
+	}
+	return strings.Join(names, ", ")
 }

@@ -73,6 +73,9 @@ const (
 	workspacesHarnessGrantTTL = 5 * time.Minute
 	// workspacesHarnessSystemPrompt keeps the turns to the probe; %s is the
 	// runtime's shell tool.
+	// bashToolName is the shell tool's name in the probe prompts of the
+	// claude and kagent Harnesses.
+	bashToolName                  = "Bash tool"
 	workspacesHarnessSystemPrompt = "You are a probe. Run exactly the command you are given with your %s, once, and reply with the output lines you are asked for, verbatim, nothing else."
 	// workspaceManagerHTTPPort is the manager's HTTP port, where it serves
 	// its key set.
@@ -122,7 +125,7 @@ type workspacesSessionHarness struct {
 // resolved once the proof holds a token (proveWorkspacesHarnessSession).
 func workspacesSessionHarnessFor(harness, modelConfig string) workspacesSessionHarness {
 	if harness == "" || harness == claudeHarness {
-		return workspacesSessionHarness{name: claudeHarness, modelConfig: modelConfig, agent: workspacesHarnessAgent, shellTool: "Bash tool"}
+		return workspacesSessionHarness{name: claudeHarness, modelConfig: modelConfig, agent: workspacesHarnessAgent, shellTool: bashToolName}
 	}
 	return workspacesSessionHarness{name: harness, modelConfig: modelConfig, agent: "agentlab-workspaces-" + harness, shellTool: "shell tool"}
 }
@@ -445,13 +448,6 @@ func workspacesHarnessVolumeSource(volume workspaceVolume) *apiv1alpha1.SessionV
 			{SubPath: workspaceGrantMirrors, MountPath: "/mirrors", ReadOnly: true},
 		},
 	}
-}
-
-// workspacesHarnessAgentManifest is the proof's claude AgentTemplate on
-// modelConfig and its Agent on the claude Harness.
-func workspacesHarnessAgentManifest(harness, modelConfig string) string {
-	claude := workspacesSessionHarnessFor(claudeHarness, modelConfig)
-	return workspacesAgentManifest(claude.agent, harness, claude.modelConfig, fmt.Sprintf(workspacesHarnessSystemPrompt, claude.shellTool))
 }
 
 // workspacesAgentManifest is a workspaces proof's AgentTemplate on the

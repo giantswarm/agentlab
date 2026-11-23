@@ -26,14 +26,21 @@ type codingProbe map[string]string
 // reading before it too, so lines a model joins with a space read apart. A
 // value also loses the quotes around it.
 func parseCodingProbe(reply string) codingProbe {
-	reply = escapedNewline.ReplaceAllString(reply, "\n")
-	reply = escapedQuote.ReplaceAllString(reply, `"`)
-	reply = strings.ReplaceAll(reply, probeMarker+" ", "\n"+probeMarker+" ")
+	reply = probeText(reply)
 	probe := codingProbe{}
 	for _, m := range probeLine.FindAllStringSubmatch(reply, -1) {
 		probe[m[1]] = strings.Trim(m[2], " \t\r`*\"'")
 	}
 	return probe
+}
+
+// probeText puts every probe line of a text on a line of its own: a tool's
+// result reported as JSON carries its newlines and quotes escaped, and a
+// reply may run marker lines together.
+func probeText(text string) string {
+	text = escapedNewline.ReplaceAllString(text, "\n")
+	text = escapedQuote.ReplaceAllString(text, `"`)
+	return strings.ReplaceAll(text, probeMarker+" ", "\n"+probeMarker+" ")
 }
 
 var (

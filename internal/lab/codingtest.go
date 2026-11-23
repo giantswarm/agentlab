@@ -115,7 +115,7 @@ const (
 // codingRuntimes are the runtimes coding-test proves, by name.
 var codingRuntimes = map[string]codingRuntime{
 	config.CodingRuntimeClaude: {
-		name: config.CodingRuntimeClaude, shellTool: "Bash tool",
+		name: config.CodingRuntimeClaude, shellTool: bashToolName,
 		modelKeys: []string{anthropicKeyEnv}, claude: true,
 	},
 	config.CodingRuntimeCodex: {
