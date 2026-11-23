@@ -1833,8 +1833,8 @@ platform does not enforce: the reviewer's Session holds the person's
 repository permissions (push, and on a repository the person administers,
 merge and bypass), because forge writes made with `gh` are not limited by the
 agent's toolset (giantswarm/giantswarm#39105); and GitHub records every
-commit, pull request and review as the person alone, so which agent acted
-is recorded by the platform, not by GitHub.
+commit, pull request and review as the person (pull requests and reviews "via" the agents' App, commits with no mark), so which agent acted
+is recorded by the platform, not by GitHub (giantswarm/giantswarm#39421).
 
 The Sessions, the agents, the workspace, the pull request (closed) and its
 branch are removed on every path. A grant the run created is dropped; a grant

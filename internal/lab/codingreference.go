@@ -786,7 +786,7 @@ func (rp *referenceProof) audit() error {
 	if len(problems) > 0 {
 		return errors.New(strings.Join(problems, "; "))
 	}
-	rp.gaps = append(rp.gaps, "GitHub records both agents' commits, pull request and review as the person alone; which agent acted is recorded by the platform (Session, Agent, creator) and the Session line the agents write, not by GitHub")
+	rp.gaps = append(rp.gaps, "GitHub marks the pull request and the review as the person \"via\" the agents' App, but the commits carry no mark and nothing on GitHub names which agent or Session acted; the platform records that (Session, Agent, creator) and the agents write a Session line (giantswarm/giantswarm#39421)")
 	return nil
 }
 
