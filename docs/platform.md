@@ -1797,6 +1797,57 @@ in [issue 1320](https://github.com/giantswarm/agentlab/issues/1320).
 Run the same fixture on the full AWS and Azure test installations after
 the toolchain release. A local pass alone does not establish that rollout.
 
+### The reference part
+
+`agentlab coding-test --part reference` runs the coding use case's reference
+scenario (giantswarm/giantswarm#38890) on the github instance's first proof
+repository, as the admin, on the real GitHub:
+
+1. Two agents created through agent-manager as the admin, each with its own
+   toolset: the builder on the claude Harness (`preset:read-only`) and the
+   reviewer on the kagent (Go ADK) Harness (one read tool). Neither holds a
+   muster write tool.
+2. The builder's Session, with the admin's grant and the `go` and `github`
+   toolchains, gets a task, not a script: write a hello-world program and its
+   table-driven test under `apps/agentlab-hello-<run>`, run `go test` and
+   `go build`, run the binary, push a branch and open a draft pull request.
+   The verdict is read from GitHub and this host, never from the agent's
+   words: a draft pull request by the person from the run's branch with the
+   program and its test and nothing else, every commit authored and
+   committed by the person, the turn's tool outputs showing `go test` passing
+   and the binary's greeting, and this host's `go test` and `go build`
+   passing on the pushed head.
+3. The reviewer's Session, with the admin's grant and the `github`
+   toolchain, reviews the pull request: GitHub then holds exactly one
+   `COMMENTED` review by the person, naming the reviewer's Session and a
+   changed file, no approval, the pull request open and `REVIEW_REQUIRED`.
+4. Boundaries: the reviewer's `gh pr review --approve` is refused by GitHub
+   (the same person cannot approve their own pull request); a reviewer
+   Session without a grant cannot read GitHub's user.
+5. Audit: each Session names its own Agent and the admin as creator, and the
+   pull request and the review each carry the Session that made them.
+
+Both agents act as one GitHub user. Their review never counts as an approval,
+and the pull request still needs a person's review. The part prints what the
+platform does not enforce: the reviewer's Session holds the person's
+repository permissions (push, and on a repository the person administers,
+merge and bypass), because forge writes made with `gh` are not limited by the
+agent's toolset (giantswarm/giantswarm#39105); and GitHub records every
+commit, pull request and review as the person (pull requests and reviews
+"via" the agents' App, commits with no mark), so which agent acted is
+recorded by the platform, not by GitHub (giantswarm/giantswarm#39421).
+
+The Sessions, the agents, the workspace, the pull request (closed) and its
+branch are removed on every path. A grant the run created is dropped; a grant
+the admin held before the run is kept.
+
+The part needs the toolchains of `--part toolchains`: agent-manager's
+`toolchains.repository`, and the kagent controller admitting that repository
+in `sessionToolImageRepositories` and `go`'s origins
+(`https://proxy.golang.org`, `https://sum.golang.org`) in
+`sessionToolImageEgressOrigins`, through a `platform.valuesFiles` overlay. It
+stops in its preconditions when agent-manager publishes no toolchains.
+
 ### The Swarmgeist proof (klaus-gateway on kagent API v2)
 
 `agentlab klaus-gateway-test` is the lab carrier of

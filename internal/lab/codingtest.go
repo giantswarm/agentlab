@@ -275,6 +275,11 @@ func CodingTest(cfg *config.Config, opts CodingTestOptions) error {
 			return fmt.Errorf("--part %s on claude runs on agent-manager's default model: --model-config is codex's and omp's", CodingPartDevctl)
 		}
 		return codingDevctlPart(cfg, opts)
+	case CodingPartReference:
+		if opts.Email != "" || len(opts.MusterTools) > 0 || len(opts.Toolchains) > 0 || opts.OtherVersion != "" || opts.Step != "" || opts.Repository != "" || opts.ModelConfig != "" || (opts.Harness != "" && opts.Harness != config.CodingRuntimeClaude) {
+			return fmt.Errorf("--part %s runs its builder on claude and its reviewer on kagent as the admin, on agent-manager's default model, on the github instance's proof repository: it takes no [email], --harness, --model-config, --muster-tools, --toolchains, --other-version, --step or --repository", CodingPartReference)
+		}
+		return codingReferencePart(cfg, opts)
 	default:
 		return fmt.Errorf("no part %q of coding-test: --part takes %s", opts.Part, strings.Join(CodingParts, ", "))
 	}
