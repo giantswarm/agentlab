@@ -20,13 +20,24 @@ type signInLab struct {
 	server    *httptest.Server
 	fails     bool
 	completed bool
+	// dex has muster's identity check sign the person in to Dex first.
+	dex bool
 }
+
+const (
+	testDexLoginPath = "/dex/auth/local/login"
+	testDexPassword  = "lab-password"
+)
 
 func newSignInLab(t *testing.T) *signInLab {
 	t.Helper()
 	l := &signInLab{}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET "+oauthProxyStartPath, func(w http.ResponseWriter, r *http.Request) {
+		if l.dex {
+			http.Redirect(w, r, testDexLoginPath+"?"+url.Values{oauthStateParam: {r.URL.Query().Get(oauthStateParam)}}.Encode(), http.StatusFound)
+			return
+		}
 		http.Redirect(w, r, gitlabAuthorizePath+"?"+url.Values{oauthStateParam: {r.URL.Query().Get(oauthStateParam)}}.Encode(), http.StatusFound)
 	})
 	mux.HandleFunc("GET "+gitlabAuthorizePath, func(w http.ResponseWriter, r *http.Request) {
@@ -35,6 +46,16 @@ func newSignInLab(t *testing.T) *signInLab {
 			return
 		}
 		_, _ = w.Write([]byte(`<form action="` + gitlabAuthorizePath + `" method="post"><input name="state" value="s" /></form>`))
+	})
+	mux.HandleFunc("GET "+testDexLoginPath, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`<html><head><title>Dex Lab</title></head><form method="post"><input name="login" /><input type="password" name="password" /></form></html>`))
+	})
+	mux.HandleFunc("POST "+testDexLoginPath, func(w http.ResponseWriter, r *http.Request) {
+		if r.PostFormValue("login") != testPortalUser || r.PostFormValue(passwordParam) != testDexPassword {
+			http.Redirect(w, r, r.URL.String(), http.StatusSeeOther)
+			return
+		}
+		http.Redirect(w, r, gitlabAuthorizePath+"?"+url.Values{oauthStateParam: {r.URL.Query().Get(oauthStateParam)}}.Encode(), http.StatusFound)
 	})
 	mux.HandleFunc("GET "+gitlabSignInAction, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`<form action="` + gitlabSignInAction + `" method="post"><input name="user[login]" /><input type="password" name="user[password]" /></form>`))
@@ -76,7 +97,7 @@ var testSignInLogin = &providerLogin{login: testGitLabPerson, password: "pw"}
 
 func TestWalkProviderSignIn(t *testing.T) {
 	l := newSignInLab(t)
-	hops, err := walkProviderSignIn(l.client(t), l.link(), testSignInLogin)
+	hops, err := walkProviderSignIn(l.client(t), l.link(), testSignInLogin, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,23 +115,51 @@ func TestWalkProviderSignIn(t *testing.T) {
 	}
 }
 
+func TestWalkProviderSignInThroughDex(t *testing.T) {
+	l := newSignInLab(t)
+	l.dex = true
+	person := &config.User{Email: testPortalUser, Password: testDexPassword}
+	hops, err := walkProviderSignIn(l.client(t), l.link(), testSignInLogin, person)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worded := signInHops(hops)
+	if !l.completed || !strings.Contains(worded, "POST "+l.server.URL+testDexLoginPath+" 302") {
+		t.Fatalf("the walk did not sign the person in to Dex and complete: %s", worded)
+	}
+
+	l = newSignInLab(t)
+	l.dex = true
+	_, err = walkProviderSignIn(l.client(t), l.link(), testSignInLogin, &config.User{Email: testPortalUser, Password: "wrong"})
+	if !errors.Is(err, errSignInStopped) || !strings.Contains(err.Error(), "refused "+testPortalUser) {
+		t.Fatalf("refused Dex credentials: got %v, want the walk stopped at Dex's form", err)
+	}
+
+	l = newSignInLab(t)
+	l.dex = true
+	_, err = walkProviderSignIn(l.client(t), l.link(), testSignInLogin, nil)
+	if !errors.Is(err, errSignInStopped) || !strings.Contains(err.Error(), testDexLoginPath+" 200") {
+		t.Fatalf("Dex's form without the person: got %v, want the walk stopped there", err)
+	}
+}
+
 func TestWalkProviderSignInStops(t *testing.T) {
 	l := newSignInLab(t)
-	_, err := walkProviderSignIn(l.client(t), l.link(), nil)
+	_, err := walkProviderSignIn(l.client(t), l.link(), nil, nil)
 	if !errors.Is(err, errSignInStopped) || !strings.Contains(err.Error(), gitlabSignInAction+" 200") {
 		t.Fatalf("a sign-in form without the person's login: got %v, want the walk stopped at the sign-in page", err)
 	}
 
 	l = newSignInLab(t)
 	l.fails = true
-	_, err = walkProviderSignIn(l.client(t), l.link(), testSignInLogin)
+	_, err = walkProviderSignIn(l.client(t), l.link(), testSignInLogin, nil)
 	if !errors.Is(err, errSignInStopped) || !strings.Contains(err.Error(), "did not complete the sign-in") || !strings.Contains(err.Error(), "Authentication Failed") {
 		t.Fatalf("a failed callback: got %v, want the walk stopped at muster's callback naming its heading", err)
 	}
 
 	l = newSignInLab(t)
 	l.server.Close()
-	_, err = walkProviderSignIn(l.client(t), l.link(), testSignInLogin)
+	_, err = walkProviderSignIn(l.client(t), l.link(), testSignInLogin, nil)
 	if !errors.Is(err, errSignInStopped) || !strings.Contains(err.Error(), oauthProxyStartPath+" 0") {
 		t.Fatalf("an unreachable muster: got %v, want the walk stopped at the proxy start hop", err)
 	}

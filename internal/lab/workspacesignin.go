@@ -207,8 +207,9 @@ var errSignInStopped = errors.New("the provider sign-in stopped")
 // walk fills its sign-in form with login and submits its consent; without a
 // login it follows redirects alone. It returns the hops; an error names the
 // hop the walk stopped at, its status and the page's heading.
-func walkProviderSignIn(client *http.Client, link string, login *providerLogin) ([]signInHop, error) {
+func walkProviderSignIn(client *http.Client, link string, login *providerLogin, person *config.User) ([]signInHop, error) {
 	var hops []signInHop
+	dexAnswered := map[string]bool{}
 	stopped := func(h signInHop, why string) error {
 		return fmt.Errorf("%w at %s: %s\n  hops: %s", errSignInStopped, h, why, signInHops(hops))
 	}
@@ -250,6 +251,24 @@ func walkProviderSignIn(client *http.Client, link string, login *providerLogin) 
 		switch {
 		case login != nil && resp.StatusCode == http.StatusOK && next.Path != callback:
 			glAction, glFields, glForm, glErr = gitlabFormStep(page, login, method == http.MethodPost && strings.HasSuffix(next.Path, gitlabSignInAction))
+		}
+		// muster's identity check signs the person in to Dex before the
+		// provider's own authorization; the same form again is a refusal.
+		if person != nil && resp.StatusCode == http.StatusOK && strings.Contains(next.Path, "/auth/local") {
+			if dexAnswered[next.String()] {
+				return hops, stopped(hop, fmt.Sprintf("Dex's login form refused %s's credentials", person.Email))
+			}
+			dexAnswered[next.String()] = true
+			form = url.Values{"login": {person.Email}, passwordParam: {person.Password}}
+			continue
+		}
+		if local := localConnectorLink(next, page); person != nil && resp.StatusCode == http.StatusOK && local != "" {
+			location, err := url.Parse(local)
+			if err != nil {
+				return hops, stopped(hop, "Dex's local connector link: "+err.Error())
+			}
+			next = location
+			continue
 		}
 		switch {
 		case resp.StatusCode >= 300 && resp.StatusCode < 400:
@@ -362,7 +381,7 @@ func connectWorkspaceProvider(cfg *config.Config, p *workspacePerson, instance s
 		if err != nil {
 			return "", err
 		}
-		walked, err := walkProviderSignIn(client, link, login)
+		walked, err := walkProviderSignIn(client, link, login, p.user)
 		if err != nil {
 			return "", fmt.Errorf("%s granting %s as %s: %w", p.user.Email, instance, login.login, err)
 		}
