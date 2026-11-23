@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -146,5 +147,45 @@ func TestSessionsTimingLines(t *testing.T) {
 	want := "timing session=s1 harness=claude startCalled=2026-10-12T22:00:00Z startAnswered=2026-10-12T22:00:01Z firstTurnSent=2026-10-12T22:00:02Z directorySetUp=2026-10-12T22:00:03.5Z firstTurnEnded=2026-10-12T22:00:20Z setupSeconds=1.500"
 	if len(lines) != 1 || lines[0] != want {
 		t.Fatalf("sessionsTimingLines =\n%v\nwant\n%s", lines, want)
+	}
+}
+
+func TestParseProbeTurn(t *testing.T) {
+	const last, closed = "pr-close", "rc0 closed"
+	line := func(v string) string { return probeMarker + " " + last + "=" + v }
+	for name, c := range map[string]struct {
+		tools, reply string
+		source       probeSource
+		value        string
+	}{
+		"only the tools' output carries the lines": {line(closed), "Done: the branch is pushed and the pull request closed.", probeSourceTools, closed},
+		"only the reply carries the lines":         {"", line(closed), probeSourceReply, closed},
+		"the tools' output wins over the reply":    {line(closed), line("rc1 refused"), probeSourceTools, closed},
+		"a tool result reported as escaped JSON":   {`{"stdout":"` + probeMarker + ` clone=./repo\n` + line(closed) + `\n"}`, "", probeSourceTools, closed},
+		"tools without the last line fall back":    {probeMarker + " clone=./repo", line(closed), probeSourceReply, closed},
+	} {
+		var values map[string]string
+		source, err := parseProbeTurn(c.tools, c.reply, func(text string) error {
+			values = parseProbeLines(text)
+			if _, ok := values[last]; !ok {
+				return errors.New("no " + last + " line")
+			}
+			return nil
+		})
+		if err != nil {
+			t.Errorf("%s: parseProbeTurn = %v", name, err)
+			continue
+		}
+		if source != c.source || values[last] != c.value {
+			t.Errorf("%s: read %q from %s, want %q from %s", name, values[last], source, c.value, c.source)
+		}
+	}
+	if _, err := parseProbeTurn("no marker here", "nor here", func(text string) error {
+		if _, ok := parseProbeLines(text)[last]; !ok {
+			return errors.New("no " + last + " line")
+		}
+		return nil
+	}); err == nil {
+		t.Error("neither the tools' output nor the reply carries the lines: parseProbeTurn accepted the turn")
 	}
 }

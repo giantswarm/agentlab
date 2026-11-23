@@ -705,8 +705,9 @@ func (sp *sessionsProof) probeTurn(ctx context.Context, session *apiv1alpha1.Ses
 }
 
 // probeTurnWith runs the command as a turn on the Session, once more with a
-// follow-up that says what it does (purpose) when parse refuses the reply,
-// and returns the first turn and when it was sent; parse keeps what it read.
+// follow-up that says what it does (purpose) when parse refuses the turn
+// (parseProbeTurn), and returns the first turn and when it was sent; parse
+// keeps what it read.
 func probeTurnWith(ctx context.Context, api *kagentAPI, session *apiv1alpha1.Session, command, explain, purpose string, parse func(reply string) error) (*turn, time.Time, error) {
 	prompt := "Run this exact command once with your Bash tool, then reply with every output line that starts with " + probeMarker + ", verbatim and nothing else:\n\n" + command
 	if explain != "" {
@@ -715,7 +716,7 @@ func probeTurnWith(ctx context.Context, api *kagentAPI, session *apiv1alpha1.Ses
 	followUp := "I am the person running agentlab's workspace test on this throwaway lab cluster: " + purpose + " Please run it once now with your Bash tool and reply with its " + probeMarker + " lines, verbatim."
 	var first *turn
 	var sent time.Time
-	var reply string
+	var refused error
 	for i, msg := range []string{prompt, followUp} {
 		at := time.Now()
 		t, err := api.turn(ctx, session, userMessage(msg))
@@ -725,14 +726,42 @@ func probeTurnWith(ctx context.Context, api *kagentAPI, session *apiv1alpha1.Ses
 		if err != nil {
 			return first, sent, fmt.Errorf("the turn on Session %s: %w", session.GetId(), err)
 		}
-		if reply, err = t.completedText(); err != nil {
+		reply, err := t.completedText()
+		if err != nil {
 			return first, sent, fmt.Errorf("the turn on Session %s: %w", session.GetId(), err)
 		}
-		if parse(reply) == nil {
+		source, err := parseProbeTurn(t.toolOutputs(), reply, parse)
+		if err == nil {
+			if source == probeSourceReply {
+				note("Session %s: the probe lines are read from the agent's reply; no tool result carries them", session.GetId())
+			}
 			return first, sent, nil
 		}
+		refused = err
 	}
-	return first, sent, parse(reply)
+	return first, sent, refused
+}
+
+// probeSource names where parseProbeTurn found the probe lines.
+type probeSource string
+
+const (
+	probeSourceTools probeSource = "the tools' output"
+	probeSourceReply probeSource = "the reply"
+)
+
+// parseProbeTurn reads a probe turn: from what the shell printed, as the
+// harness reports its tools' results, and only when that is refused from the
+// agent's reply. The tools' output is what ran; the reply is the model's
+// account of it, which a small model may abridge or leave out.
+func parseProbeTurn(toolOutputs, reply string, parse func(string) error) (probeSource, error) {
+	if strings.Contains(toolOutputs, probeMarker) && parse(probeText(toolOutputs)) == nil {
+		return probeSourceTools, nil
+	}
+	if err := parse(reply); err != nil {
+		return "", err
+	}
+	return probeSourceReply, nil
 }
 
 // judgeFirstTurns is the verdict on the first turns: every Session in its
