@@ -204,6 +204,13 @@ func (rp *referenceProof) preconditions(instance string) error {
 		return err
 	}
 	s.member, s.memberEmail = rp.admin.session, adminUser.Email
+	info, err := readAgentManagerInfo(rp.admin.session)
+	if err != nil {
+		return err
+	}
+	if !info.Capabilities[agentManagerToolchainsCapability] {
+		return fmt.Errorf("agent-manager %s publishes no toolchains: the builder's Session mounts %s and %s, which needs agent-manager.toolchains.repository and the kagent controller admitting that repository and go's egress origins (a platform.valuesFiles overlay, as for --part toolchains)", info.Version, toolchainGo, toolchainGitHub)
+	}
 	if err := grantProofProvider(cfg, rp.admin, instance, rp.timeout); err != nil {
 		return err
 	}
@@ -358,7 +365,7 @@ func (rp *referenceProof) build() error {
 		return fmt.Errorf("the builder's reply: %w", err)
 	}
 	if err := judgeReferenceBuildTools(t.toolOutputs(), rp.greeting); err != nil {
-		return fmt.Errorf("the builder's tools on Session %s: %w", session.GetId(), err)
+		return fmt.Errorf("the builder's tools on Session %s: %w; tool outputs: %s", session.GetId(), err, excerpt(t.toolOutputs(), 1500))
 	}
 	view, err := rp.pullRequest()
 	if err != nil {
@@ -556,13 +563,16 @@ func (rp *referenceProof) verifyBuild() error {
 		return err
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
+	if dir, err = filepath.Abs(dir); err != nil {
+		return err
+	}
 	tree := filepath.Join(dir, "tree")
 	if _, err := rp.pr.git(rp.pr.dir, "worktree", "add", "-q", "--detach", tree, "origin/"+rp.branch); err != nil {
 		return err
 	}
 	defer func() { _, _ = rp.pr.git(rp.pr.dir, "worktree", "remove", "--force", tree) }()
 	binary := filepath.Join(dir, "hello")
-	for _, args := range [][]string{{"test", "./" + rp.appDir + "/..."}, {"build", "-o", binary, "./" + rp.appDir}} {
+	for _, args := range [][]string{{"test", "./" + rp.appDir + "/..."}, {"build", "-buildvcs=false", "-o", binary, "./" + rp.appDir}} {
 		cmd := exec.Command("go", args...) // #nosec G204 -- go with the proof's own arguments
 		cmd.Dir = tree
 		if out, err := cmd.CombinedOutput(); err != nil {

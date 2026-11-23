@@ -1354,6 +1354,7 @@ func TestToolOutput(t *testing.T) {
 		result any
 		want   string
 	}{
+		{"claude result text", probe, probe},
 		{"codex command output", map[string]any{"output": probe}, probe},
 		{"omp text content", map[string]any{
 			toolResultContent: []any{map[string]any{fieldTypeKey: toolResultText, toolResultText: probe}},

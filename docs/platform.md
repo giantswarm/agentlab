@@ -1833,12 +1833,20 @@ platform does not enforce: the reviewer's Session holds the person's
 repository permissions (push, and on a repository the person administers,
 merge and bypass), because forge writes made with `gh` are not limited by the
 agent's toolset (giantswarm/giantswarm#39105); and GitHub records every
-commit, pull request and review as the person (pull requests and reviews "via" the agents' App, commits with no mark), so which agent acted
-is recorded by the platform, not by GitHub (giantswarm/giantswarm#39421).
+commit, pull request and review as the person (pull requests and reviews
+"via" the agents' App, commits with no mark), so which agent acted is
+recorded by the platform, not by GitHub (giantswarm/giantswarm#39421).
 
 The Sessions, the agents, the workspace, the pull request (closed) and its
 branch are removed on every path. A grant the run created is dropped; a grant
 the admin held before the run is kept.
+
+The part needs the toolchains of `--part toolchains`: agent-manager's
+`toolchains.repository`, and the kagent controller admitting that repository
+in `sessionToolImageRepositories` and `go`'s origins
+(`https://proxy.golang.org`, `https://sum.golang.org`) in
+`sessionToolImageEgressOrigins`, through a `platform.valuesFiles` overlay. It
+stops in its preconditions when agent-manager publishes no toolchains.
 
 ### The Swarmgeist proof (klaus-gateway on kagent API v2)
 
