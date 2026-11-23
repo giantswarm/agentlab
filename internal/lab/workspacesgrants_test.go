@@ -39,7 +39,7 @@ func TestWorkspaceProofReleasesCreatedGrant(t *testing.T) {
 	var dropped atomic.Int32
 	person := grantProofPerson(t, config.WorkspaceProviderGitHub, "https://signin.example.invalid/start", &dropped)
 	require.NoError(t, grantProofProvider(configuration, person, config.WorkspaceProviderGitHub, time.Second))
-	require.Equal(t, []string{person.user.Email}, runWorkspaceGrants.release())
+	require.Equal(t, []string{person.user.Email + "/" + config.WorkspaceProviderGitHub}, runWorkspaceGrants.release())
 	require.Equal(t, int32(1), dropped.Load())
 }
 

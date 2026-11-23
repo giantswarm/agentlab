@@ -7,10 +7,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/giantswarm/agentlab/internal/config"
 )
 
 var (
@@ -131,22 +134,26 @@ func TestLabelLabWorkspace(t *testing.T) {
 	}
 }
 
-// TestWorkspaceGrantLedger: every grant a run used is dropped once at its
-// end, a person recorded twice once and through their newest session, in
-// the order first recorded; the ledger is empty afterwards.
+// TestWorkspaceGrantLedger: every grant a run created is dropped once at
+// its end, a grant recorded twice once and through its newest session, in
+// the order first recorded; one person's grants of two providers are both
+// dropped; a forgotten grant is kept; the ledger is empty afterwards.
 func TestWorkspaceGrantLedger(t *testing.T) {
 	var l workspaceGrantLedger
 	var dropped []string
-	l.record(testPortalUser, func() { dropped = append(dropped, "first session") })
-	l.record(accessDefaultSecond, func() { dropped = append(dropped, accessDefaultSecond) })
-	l.record(testPortalUser, func() { dropped = append(dropped, testPortalUser) })
-	if got := l.release(); !slices.Equal(got, []string{testPortalUser, accessDefaultSecond}) {
-		t.Errorf("release named %v", got)
-	}
-	if !slices.Equal(dropped, []string{testPortalUser, accessDefaultSecond}) {
-		t.Errorf("dropped %v, want admin's newest and dev's, once each", dropped)
-	}
-	if got := l.release(); len(got) != 0 || len(dropped) != 2 {
-		t.Errorf("a second release dropped %v (%v)", got, dropped)
-	}
+	l.record(testPortalUser, config.WorkspaceProviderGitHub, func() { dropped = append(dropped, "first session") })
+	l.record(accessDefaultSecond, config.WorkspaceProviderGitHub, func() { dropped = append(dropped, accessDefaultSecond) })
+	l.record(testPortalUser, config.WorkspaceProviderGitLab, func() { dropped = append(dropped, testPortalUser+" gitlab") })
+	l.record(testPortalUser, config.WorkspaceProviderGitHub, func() { dropped = append(dropped, testPortalUser+" github") })
+	l.record(accessDefaultSecond, config.WorkspaceProviderGitLab, func() { dropped = append(dropped, "forgotten") })
+	l.forget(accessDefaultSecond, config.WorkspaceProviderGitLab)
+	l.forget(accessDefaultSecond, "never-recorded")
+	require.Equal(t, []string{
+		testPortalUser + "/" + config.WorkspaceProviderGitHub,
+		accessDefaultSecond + "/" + config.WorkspaceProviderGitHub,
+		testPortalUser + "/" + config.WorkspaceProviderGitLab,
+	}, l.release())
+	require.Equal(t, []string{testPortalUser + " github", accessDefaultSecond, testPortalUser + " gitlab"}, dropped)
+	require.Empty(t, l.release())
+	require.Len(t, dropped, 3)
 }
