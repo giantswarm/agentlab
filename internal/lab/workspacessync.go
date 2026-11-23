@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -310,10 +311,8 @@ func (sp *syncProof) volume(name string) (syncVolume, error) {
 	return v, nil
 }
 
-// workspaceVolumeUser is the user and group a workspace volume probe runs
-// as, with the group as its fsGroup: the workspace-manager's sync Job's, the
-// identity that lays the volume out and removes the session directories on
-// it, so a probe reads, writes and removes what the Job can.
+// workspaceVolumeUser is the sync Job's identity and the shared volume
+// group. It owns the parent entries of the Session directories.
 const workspaceVolumeUser int64 = 1000
 
 // volumeOwner is the user and group a file on a workspace volume belongs to,
@@ -332,10 +331,9 @@ func (o volumeOwner) runnable() volumeOwner {
 	return o
 }
 
-// workspaceVolumePod is a probe pod on the git image with the workspace's
-// claim mounted whole at /workspace, as the sync Job's user and admitted
-// under the PodSecurity `restricted` profile an installation enforces.
-func workspaceVolumePod(name, claim, script string) *corev1.Pod {
+// workspaceVolumePod mounts the claim under its reader's identity. The
+// shared group remains the sync Job's; the PodSecurity profile is restricted.
+func workspaceVolumePod(name, claim, script string, owner volumeOwner) *corev1.Pod {
 	pod := probePod(name, workspacesTestGitImage, []string{"sh", shExitOnError, script})
 	pod.Spec.Volumes = []corev1.Volume{{Name: workspacesTestVolume, VolumeSource: corev1.VolumeSource{
 		PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: claim},
@@ -345,7 +343,7 @@ func workspaceVolumePod(name, claim, script string) *corev1.Pod {
 	// as the sync Job's does.
 	pod.Spec.Containers[0].Env = []corev1.EnvVar{{Name: "HOME", Value: "/tmp"}}
 	user := workspaceVolumeUser
-	pod.Spec.SecurityContext = &corev1.PodSecurityContext{RunAsUser: &user, RunAsGroup: &user, FSGroup: &user}
+	pod.Spec.SecurityContext = &corev1.PodSecurityContext{RunAsUser: &owner.uid, RunAsGroup: &owner.gid, FSGroup: &user}
 	restrictPodSecurity(pod)
 	return pod
 }
@@ -353,11 +351,15 @@ func workspaceVolumePod(name, claim, script string) *corev1.Pod {
 // onVolume runs a probe on the git image with the workspace's whole volume
 // at /workspace and returns its output.
 func (sp *syncProof) onVolume(name, probe, script string) (string, error) {
+	return sp.onVolumeAs(name, probe, script, workspaceVolumeOwner)
+}
+
+func (sp *syncProof) onVolumeAs(name, probe, script string, owner volumeOwner) (string, error) {
 	v, err := sp.volume(name)
 	if err != nil {
 		return "", err
 	}
-	pod := workspaceVolumePod("agentlab-sync-"+probe, v.claim, script)
+	pod := workspaceVolumePod("agentlab-sync-"+probe, v.claim, script, owner)
 	out, err := runPod(context.Background(), v.namespace, pod, sp.timeout)
 	if err != nil {
 		return "", fmt.Errorf("the volume probe %s on workspace %s: %w\n%s", probe, name, err, out)
@@ -365,12 +367,51 @@ func (sp *syncProof) onVolume(name, probe, script string) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
+func (sp *syncProof) sessionOwners(name string) (map[string]volumeOwner, error) {
+	metadata, err := sp.onVolume(name, "owners", sessionOwnersScript)
+	if err != nil {
+		return nil, err
+	}
+	return parseSessionOwners(metadata), nil
+}
+
+func (sp *syncProof) onVolumeOwners(name, probe string, script func([]string) string) (string, error) {
+	owners, err := sp.sessionOwners(name)
+	if err != nil {
+		return "", err
+	}
+	return sp.onOwnedVolume(name, probe, owners, script)
+}
+
+func (sp *syncProof) onOwnedVolume(name, probe string, owners map[string]volumeOwner, script func([]string) string) (string, error) {
+	var outputs []string
+	for _, owner := range distinctOwners(owners) {
+		output, err := sp.onVolumeAs(name, probe, script(sessionIDsForOwner(owners, owner)), owner.runnable())
+		if err != nil {
+			return "", err
+		}
+		outputs = append(outputs, output)
+	}
+	return strings.Join(outputs, "\n"), nil
+}
+
+func (sp *syncProof) clearSessions(name string) (string, error) {
+	owners, err := sp.sessionOwners(name)
+	if err != nil {
+		return "", err
+	}
+	if _, err := sp.onOwnedVolume(name, "clear-contents", owners, sessionClearContentsScript); err != nil {
+		return "", err
+	}
+	return sp.onVolume(name, "clear", sessionRemoveEntriesScript(slices.Sorted(maps.Keys(owners))))
+}
+
 // delete removes the workspace's session directory, deletes it through
 // delete_workspace and waits for it, its claim and its volume to go.
 func (sp *syncProof) delete(name string) error {
 	v, err := sp.volume(name)
 	if err == nil {
-		out, err := sp.onVolume(name, "clear", accessClearSessionsScript)
+		out, err := sp.clearSessions(name)
 		if err != nil {
 			return err
 		}

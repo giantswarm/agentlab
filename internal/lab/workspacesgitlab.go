@@ -95,6 +95,7 @@ type gitlabProof struct {
 	adminAPI      *kagentAPI
 	sessions      *sessionSet
 	login         *providerLogin
+	adminHeld     bool   // the admin held GitLab's grant before the part
 	head          string // the project's head the workspace's first cycle mirrored
 	branch        string
 	volume        workspaceVolume
@@ -377,6 +378,7 @@ func (gp *gitlabProof) connect() error {
 	if err != nil {
 		return err
 	}
+	gp.adminHeld = hops == alreadyGrantedHops
 	note("%s", hops)
 	status, err := gp.admin.providerStatus(config.WorkspaceProviderGitLab)
 	if err != nil {
@@ -767,6 +769,10 @@ func (gp *gitlabProof) disconnect() error {
 	if _, err := connectWorkspaceProvider(gp.cfg, gp.admin, config.WorkspaceProviderGitLab, gp.login); err != nil {
 		return fmt.Errorf("granting GitLab's application again for the cleanup: %w", err)
 	}
+	// A grant held before the part is restored, not dropped with the run's.
+	if gp.adminHeld {
+		runWorkspaceGrants.forget(gp.adminUser.Email, config.WorkspaceProviderGitLab)
+	}
 	return nil
 }
 
@@ -782,7 +788,7 @@ func (gp *gitlabProof) cleanupNow() error {
 	if gp.sp.member != nil {
 		if gone, err := gp.sp.gone(gitlabWorkspace); err == nil && !gone {
 			if _, err := gp.sp.volume(gitlabWorkspace); err == nil {
-				out, err := gp.sp.onVolume(gitlabWorkspace, "gitlab-clear", accessClearSessionsScript)
+				out, err := gp.sp.clearSessions(gitlabWorkspace)
 				errs = append(errs, err)
 				if err == nil {
 					note("%s", indent(out, "  "))
@@ -791,10 +797,10 @@ func (gp *gitlabProof) cleanupNow() error {
 		}
 		errs = append(errs, gp.sp.restore())
 	}
-	for _, p := range []*workspacePerson{gp.admin, gp.second} {
-		if p != nil {
-			p.disconnect(config.WorkspaceProviderGitLab)
-		}
+	// The admin's grant is dropped with the run's when the part created it;
+	// the second person's grant is the part's fixture (notConnected drops it).
+	if gp.second != nil {
+		gp.second.disconnect(config.WorkspaceProviderGitLab)
 	}
 	if gp.adminAPI != nil {
 		gp.adminAPI.close()

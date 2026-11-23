@@ -368,7 +368,7 @@ func gitWriteCommand(repo, branch string) string {
 		`m ` + gitProbeCommitter + ` "$(git log -1 --format=%ce)"; m ` + gitProbeParent + ` "$(git rev-parse -q --verify HEAD^ || echo ` + probeNone + `)"; ` +
 		`try ` + gitProbePush + ` env GIT_TERMINAL_PROMPT=0 timeout 60 git push -q origin 'HEAD:refs/heads/` + branch + `'; ` +
 		`try ` + gitProbeGHUser + ` ghc api user --jq '.login+" "+.type'; ` +
-		`try ` + gitProbePRCreate + ` ghc pr create --repo '` + repo + `' --head '` + branch + `' --base "$base" --title 'agentlab workspaces-test --part git' --body 'Opened by agentlab workspaces-test --part git as the person; closed at once.'; ` +
+		`try ` + gitProbePRCreate + ` ghc pr create --draft --repo '` + repo + `' --head '` + branch + `' --base "$base" --title 'agentlab workspaces-test --part git' --body 'Opened by agentlab workspaces-test --part git as the person; closed at once.'; ` +
 		`try ` + gitProbePRAuthor + ` ghc pr view '` + branch + `' --repo '` + repo + `' --json author,url --jq '.author.login+" "+.url'; ` +
 		`a=""; for i in 1 2 3 4 5 6; do a=$(ghc api 'repos/` + repo + `/activity?ref=refs/heads/` + branch + `&per_page=1' --jq '.[0].actor.login' 2>/dev/null); [ -n "$a" ] && break; sleep 5; done; m ` + gitProbePushActor + ` "$a"; ` +
 		`try ` + gitProbePRClose + ` ghc pr close '` + branch + `' --repo '` + repo + `' --delete-branch`
@@ -560,7 +560,7 @@ func judgeGitPaused(v map[string]string, branch, token string) error {
 // setUp is when the Session's directory was set up, from its setup record
 // on the volume.
 func (gp *gitProof) setUp(id string) (time.Time, error) {
-	out, err := gp.sp.onVolume(gitWorkspace, "git-directory", sessionsDirectoriesScript)
+	out, err := gp.sp.onVolumeOwners(gitWorkspace, "git-directory", sessionDirectoriesScript)
 	if err != nil {
 		return time.Time{}, err
 	}

@@ -792,7 +792,7 @@ func judgeSetupFetches(runs []*sessionRun, pushed string) error {
 // fetched into its mirror.
 func (sp *sessionsProof) directories(synced *syncLastSync) error {
 	s, pr := sp.sp, sp.pr
-	out, err := s.onVolume(sessionsWorkspace, "sessions-dirs", sessionsDirectoriesScript)
+	out, err := s.onVolumeOwners(sessionsWorkspace, "sessions-dirs", sessionDirectoriesScript)
 	if err != nil {
 		return err
 	}
@@ -938,7 +938,7 @@ func (sp *sessionsProof) deleteOne() error {
 		return err
 	}
 	deletedAt := time.Now()
-	out, err := s.onVolume(sessionsWorkspace, "sessions-deleted", sessionsDirectoriesScript)
+	out, err := s.onVolumeOwners(sessionsWorkspace, "sessions-deleted", sessionDirectoriesScript)
 	if err != nil {
 		return err
 	}
@@ -958,7 +958,7 @@ func (sp *sessionsProof) deleteOne() error {
 		if after, err = s.waitCycle(sessionsWorkspace, prev.Workspace.LastSync); err != nil {
 			return err
 		}
-		if out, err = s.onVolume(sessionsWorkspace, "sessions-after-delete", sessionsDirectoriesScript); err != nil {
+		if out, err = s.onVolumeOwners(sessionsWorkspace, "sessions-after-delete", sessionDirectoriesScript); err != nil {
 			return err
 		}
 		if dirs, err = parseSessionDirectories(out); err != nil {
@@ -1000,7 +1000,7 @@ func (sp *sessionsProof) awaitDeleted(id string, dirs map[string]sessionDirector
 			return nil, nil, fmt.Errorf("the directory of the deleted Session %s is still on the volume %s after delete_session with no cycle requested; the workspace-manager lists kagent's Sessions every %s", id, sessionsDeleteWait, sp.poll)
 		}
 		time.Sleep(5 * time.Second)
-		out, err := s.onVolume(sessionsWorkspace, "sessions-after-delete", sessionsDirectoriesScript)
+		out, err := s.onVolumeOwners(sessionsWorkspace, "sessions-after-delete", sessionDirectoriesScript)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1111,7 +1111,7 @@ func (sp *sessionsProof) cleanupCycle() error {
 		return fmt.Errorf("the Workspace %s reads %s after the cleanup cycle (reason %s): no directory is cleaned up", sessionsWorkspace, cond, cond.Reason)
 	}
 	note("cycle %s (trigger %s); the Workspace reads %s", after.Workspace.LastSync.Result, after.Workspace.LastSync.Trigger, cond)
-	out, err := s.onVolume(sessionsWorkspace, "sessions-cleaned", sessionsDirectoriesScript)
+	out, err := s.onVolumeOwners(sessionsWorkspace, "sessions-cleaned", sessionDirectoriesScript)
 	if err != nil {
 		return err
 	}

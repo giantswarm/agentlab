@@ -408,7 +408,10 @@ needs). With `github` the write turn's `gh` must be the toolchain's,
 and `gh` work on a Harness image that ships no `gh` of its own.
 
 The Sessions, the Agents, the workspace and every branch of the run are
-removed on every path.
+removed on every path. Volume probes read private Session directories as
+their recorded UID and GID under the restricted PodSecurity profile.
+Cleanup empties each directory as its owner, then removes the empty entry
+as the workspace parent directory's owner.
 
 ### The proof repositories
 
@@ -444,9 +447,10 @@ headless walk makes. A part that finds the admin without the grant of the
 `workspaces-grant-github.url` in the state directory and waits up to 15
 minutes for `list_providers` to show it connected: open the link in a
 browser signed in to GitHub, which takes GitHub's consent of the lab's App
-once and redirects to muster's callback. The grant is dropped at the run's
-end, as every proof's. A GitLab's grant is walked headlessly through its
-sign-in form, as in the GitLab part.
+once and redirects to muster's callback. Cleanup drops grants created by
+the run and preserves grants held before it started. A GitLab's grant is
+walked headlessly through its sign-in form, as in the GitLab part, whose
+explicit Disconnect stage tests revocation.
 
 ### The GitLab part
 

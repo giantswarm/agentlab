@@ -167,47 +167,68 @@ func sweepWorkspaceLeftovers(ctx context.Context) error {
 	return err
 }
 
-// workspaceGrantLedger holds the workspace-manager grants a run used, each
-// person once, to drop when the run ends.
+// workspaceGrantLedger holds the workspace-manager grants a run created, one
+// per person and provider instance, to drop when the run ends.
 type workspaceGrantLedger struct {
-	mu     sync.Mutex
-	emails []string
-	drops  map[string]func()
+	mu    sync.Mutex
+	keys  []workspaceGrantKey
+	drops map[workspaceGrantKey]func()
+}
+
+// workspaceGrantKey names one person's grant of one provider instance.
+type workspaceGrantKey struct {
+	email, instance string
 }
 
 // runWorkspaceGrants is this run's ledger.
 var runWorkspaceGrants = &workspaceGrantLedger{}
 
-// record notes a grant the person holds for the run; the latest drop of a
-// person wins (it rides their newest session).
-func (l *workspaceGrantLedger) record(email string, drop func()) {
+// record notes a grant created for the run; the latest drop of a grant
+// wins (it rides the person's newest session).
+func (l *workspaceGrantLedger) record(email, instance string, drop func()) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.drops == nil {
-		l.drops = map[string]func(){}
+		l.drops = map[workspaceGrantKey]func(){}
 	}
-	if _, ok := l.drops[email]; !ok {
-		l.emails = append(l.emails, email)
+	key := workspaceGrantKey{email, instance}
+	if _, ok := l.drops[key]; !ok {
+		l.keys = append(l.keys, key)
 	}
-	l.drops[email] = drop
+	l.drops[key] = drop
+}
+
+// forget removes a grant from the ledger without dropping it.
+func (l *workspaceGrantLedger) forget(email, instance string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	key := workspaceGrantKey{email, instance}
+	if _, ok := l.drops[key]; !ok {
+		return
+	}
+	delete(l.drops, key)
+	l.keys = slices.DeleteFunc(l.keys, func(k workspaceGrantKey) bool { return k == key })
 }
 
 // release drops every recorded grant, in the order they were first
-// recorded, and empties the ledger; it returns whose it dropped.
+// recorded, and empties the ledger; it returns whose it dropped, each as
+// email/instance.
 func (l *workspaceGrantLedger) release() []string {
 	l.mu.Lock()
-	emails, drops := l.emails, l.drops
-	l.emails, l.drops = nil, nil
+	keys, drops := l.keys, l.drops
+	l.keys, l.drops = nil, nil
 	l.mu.Unlock()
-	for _, email := range emails {
-		drops[email]()
+	dropped := make([]string, 0, len(keys))
+	for _, key := range keys {
+		drops[key]()
+		dropped = append(dropped, key.email+"/"+key.instance)
 	}
-	return emails
+	return dropped
 }
 
-// recordWorkspaceGrant puts the person's grant into the run's ledger.
+// recordWorkspaceGrant records a grant created by the run.
 func recordWorkspaceGrant(p *workspacePerson, instance string) {
-	runWorkspaceGrants.record(p.user.Email, func() { p.disconnect(instance) })
+	runWorkspaceGrants.record(p.user.Email, instance, func() { p.disconnect(instance) })
 }
 
 // startWorkspaceRun is the start of a command that works on the
@@ -219,13 +240,10 @@ func startWorkspaceRun() (end func(), err error) {
 	return releaseWorkspaceGrants, sweepWorkspaceLeftovers(context.Background())
 }
 
-// releaseWorkspaceGrants ends a run on the workspaces: every grant of the
-// workspace-manager's App a proof of the run used is dropped in muster, so
-// the lab's people leave the run as they hold no grant — the portal's and
-// the gateway's proofs start from the same state on a used lab as on a
-// fresh one. Deferred by every command that grants.
+// releaseWorkspaceGrants drops grants created by the run. Grants already
+// held when the run began remain available to their other consumers.
 func releaseWorkspaceGrants() {
 	if dropped := runWorkspaceGrants.release(); len(dropped) > 0 {
-		note("dropped the workspace-manager grant of %s in muster: a run leaves no grant behind", strings.Join(dropped, ", "))
+		note("dropped the workspace-manager grants created by this run for %s", strings.Join(dropped, ", "))
 	}
 }

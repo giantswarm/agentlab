@@ -29,6 +29,21 @@ and what happened to it. One commit per resolved item. Statuses:
 
 ## Script hacks (fixable here)
 
+### H15. Workspace proof cleanup revokes already-held provider grants: FIXED
+The run records grants only when its sign-in requests new authorization,
+one per person and provider. Cleanup releases those grants and preserves
+grants the person already held for other consumers. The GitLab part's
+Disconnect stage revokes the admin's grant of the lab's GitLab and grants
+it again; a grant held before the part stays connected afterwards.
+Regression tests cover held GitHub and GitLab grants, release of a newly
+created grant and one person's grants of two providers.
+
+### H14. Workspace proof probes assume every Session directory belongs to UID 1000: FIXED
+Actor-owned directories can be private to UID 65532. The proofs read their
+metadata as the workspace parent owner, then probe and empty only the
+directories belonging to each recorded UID and GID. Empty directory entries
+are removed as the parent owner. Probes remain PodSecurity restricted.
+
 ### H1. `backstage.sh`: image-presence check ignores the tag — FIXED
 `docker exec … crictl images | grep -q giantswarm/backstage` matches *any*
 backstage image. Bumping `IMAGE` to a new tag would silently keep running the

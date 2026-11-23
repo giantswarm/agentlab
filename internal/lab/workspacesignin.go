@@ -336,6 +336,10 @@ func openWorkspacePerson(cfg *config.Config, user *config.User) (*workspacePerso
 	return &workspacePerson{user: user, session: session, perApp: cfg.WorkspaceProviderApps()}, nil
 }
 
+// alreadyGrantedHops is connectWorkspaceProvider's walk for a person who
+// held the grant before.
+const alreadyGrantedHops = "already granted"
+
 // connectWorkspaceProvider has the person grant the provider instance's App
 // in muster the way a browser does: core_auth_login's link walked through
 // the provider's sign-in and consent to muster's callback, then
@@ -352,7 +356,7 @@ func connectWorkspaceProvider(cfg *config.Config, p *workspacePerson, instance s
 	if err != nil {
 		return "", err
 	}
-	hops := "already granted"
+	hops := alreadyGrantedHops
 	if link != "" {
 		client, err := workspaceSignInClient()
 		if err != nil {
@@ -371,8 +375,9 @@ func connectWorkspaceProvider(cfg *config.Config, p *workspacePerson, instance s
 	if !status.Connected {
 		return "", fmt.Errorf("the grant of %s at %s reached muster's callback, but list_providers still shows %s\n  hops: %s", p.user.Email, instance, status, hops)
 	}
-	// Held before or granted now, the run drops it at its end.
-	recordWorkspaceGrant(p, instance)
+	if link != "" {
+		recordWorkspaceGrant(p, instance)
+	}
 	return hops, nil
 }
 

@@ -72,8 +72,8 @@ func TestWorkspaceVolumeProbesAreRestricted(t *testing.T) {
 		{Name: measureLocalVolume, MountPath: "/" + measureLocalVolume},
 	}
 	for name, pod := range map[string]*corev1.Pod{
-		"measure dirs":  measureVolumePod("claim", "dirs", sessionsDirectoriesScript, nil, workspaceVolumeOwner),
-		"measure clear": measureVolumePod("claim", "clear", measureClearSessionsScript(workspaceVolumeOwner), nil, workspaceVolumeOwner),
+		"measure dirs":  measureVolumePod("claim", "dirs", sessionDirectoriesScript([]string{"s"}), nil, workspaceVolumeOwner),
+		"measure clear": measureVolumePod("claim", "clear", sessionClearContentsScript([]string{"s"}), nil, workspaceVolumeOwner),
 		"measure git":   measureVolumePod("claim", "git", measureGitScript("o/r", "main", ""), gitMounts, workspaceVolumeOwner),
 	} {
 		if v := restrictedViolations(pod); len(v) > 0 {
@@ -113,8 +113,8 @@ func TestRestrictedViolationsRefuseABarePod(t *testing.T) {
 func TestMeasureProbesRunAsSessionOwner(t *testing.T) {
 	actor := volumeOwner{65532, 65532}
 	for name, pod := range map[string]*corev1.Pod{
-		"dirs":      measureVolumePod("claim", "dirs", sessionsDirectoriesScript, nil, actor),
-		"clear":     measureVolumePod("claim", "clear", measureClearSessionsScript(actor), nil, actor),
+		"dirs":      measureVolumePod("claim", "dirs", sessionDirectoriesScript([]string{"s"}), nil, actor),
+		"clear":     measureVolumePod("claim", "clear", sessionClearContentsScript([]string{"s"}), nil, actor),
 		"git probe": measureVolumePod("claim", "git", measureGitScript("o/r", "main", ""), nil, actor),
 	} {
 		if v := restrictedViolations(pod); len(v) > 0 {

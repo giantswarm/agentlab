@@ -187,7 +187,7 @@ func TestMeasureScriptsParse(t *testing.T) {
 		"git, remote":  measureGitScript(measureTestSmallRepo, "", "https://proxy.example,direct"),
 		"storage":      measureStorageScript,
 		"owners":       sessionOwnersScript,
-		"clear":        measureClearSessionsScript(volumeOwner{65532, 65532}),
+		"clear":        sessionClearContentsScript([]string{"s"}),
 		"fetch (turn)": measureFetchCommand("o/docs", measureTestBranch),
 	} {
 		// #nosec G204 -- the test's own scripts, parsed and not run
