@@ -259,7 +259,7 @@ func walkProviderSignIn(client *http.Client, link string, login *providerLogin, 
 				return hops, stopped(hop, fmt.Sprintf("Dex's login form refused %s's credentials", person.Email))
 			}
 			dexAnswered[next.String()] = true
-			form = url.Values{"login": {person.Email}, passwordParam: {person.Password}}
+			form = url.Values{consentLoginParam: {person.Email}, passwordParam: {person.Password}}
 			continue
 		}
 		if local := localConnectorLink(next, page); person != nil && resp.StatusCode == http.StatusOK && local != "" {

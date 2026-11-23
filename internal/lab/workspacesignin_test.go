@@ -52,7 +52,7 @@ func newSignInLab(t *testing.T) *signInLab {
 	})
 	mux.HandleFunc("POST "+testDexLoginPath, func(w http.ResponseWriter, r *http.Request) {
 		if r.PostFormValue("login") != testPortalUser || r.PostFormValue(passwordParam) != testDexPassword {
-			http.Redirect(w, r, r.URL.String(), http.StatusSeeOther)
+			http.Redirect(w, r, testDexLoginPath+"?"+r.URL.RawQuery, http.StatusSeeOther) // #nosec G710 -- the test server's own login path
 			return
 		}
 		http.Redirect(w, r, gitlabAuthorizePath+"?"+url.Values{oauthStateParam: {r.URL.Query().Get(oauthStateParam)}}.Encode(), http.StatusFound)
