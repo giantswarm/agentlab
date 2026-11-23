@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-
-	"github.com/google/uuid"
 )
 
 // A Session's start on a workspace, as the workspace proofs read it: the
@@ -22,9 +20,6 @@ const (
 	authorizeGranted         = "granted"
 	authorizeConnectRequired = "connect_required"
 	authorizeRefused         = "refused"
-	// accessFirstMessage is start_session's first message on the admitted
-	// Session: one short turn.
-	accessFirstMessage = "Reply with the single word ready."
 )
 
 // accessGrantClaims are the claims of a manager's grant the part judges.
@@ -99,14 +94,4 @@ type accessStarted struct {
 		Creator string `json:"creator"`
 	} `json:"session"`
 	Workspace string `json:"workspace"`
-}
-
-// startSession calls agent-manager's start_session as the person, with the
-// grant when one is given.
-func startSession(p *workspacePerson, grant string) (*toolEnvelope, error) {
-	args := map[string]any{nameKey: workspacesHarnessAgent, namespaceKey: kagentNamespace, startSessionMessageArg: accessFirstMessage, startSessionRequestIDArg: uuid.NewString()}
-	if grant != "" {
-		args[startSessionGrantArg] = grant
-	}
-	return p.session.callToolEnvelope(agentManagerToolPrefix+"start_session", args)
 }

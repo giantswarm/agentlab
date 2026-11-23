@@ -21,9 +21,14 @@ func TestWorkspacesTestOptionsValidate(t *testing.T) {
 		{name: "claude with another model", opts: WorkspacesTestOptions{Harness: claudeHarness, ModelConfig: "another-model"}},
 		{name: "codex without a model", opts: WorkspacesTestOptions{Harness: config.CodingRuntimeCodex}, wantErr: "needs --model-config"},
 		{name: "storage only with a Harness", opts: WorkspacesTestOptions{StorageOnly: true, Harness: config.CodingRuntimeCodex, ModelConfig: "m"}, wantErr: "--storage-only runs none"},
-		{name: "the GitLab part with a Harness", opts: WorkspacesTestOptions{Part: WorkspacesPartGitLab, Harness: config.CodingRuntimeCodex}, wantErr: "runs the claude Session"},
+		{name: "the GitLab part on omp", opts: WorkspacesTestOptions{Part: WorkspacesPartGitLab, Harness: config.CodingRuntimeOmp}},
+		{name: "the GitLab part on codex without a model", opts: WorkspacesTestOptions{Part: WorkspacesPartGitLab, Harness: config.CodingRuntimeCodex}, wantErr: "needs --model-config codex="},
+		{name: "the GitLab part with toolchains", opts: WorkspacesTestOptions{Part: WorkspacesPartGitLab, Toolchains: []string{"gitlab@0.1.2"}}},
 		{name: "the git part", opts: WorkspacesTestOptions{Part: WorkspacesPartGit}},
-		{name: "the git part with a Harness", opts: WorkspacesTestOptions{Part: WorkspacesPartGit, Harness: config.CodingRuntimeCodex}, wantErr: "chooses its own Sessions"},
+		{name: "the git part on every Harness", opts: WorkspacesTestOptions{Part: WorkspacesPartGit, Harness: "claude,kagent,omp,codex", ModelConfig: "codex=codex-host"}},
+		{name: "the git part with a repeated Harness", opts: WorkspacesTestOptions{Part: WorkspacesPartGit, Harness: "claude,claude"}, wantErr: "empty or repeated"},
+		{name: "the git part with a model for an absent Harness", opts: WorkspacesTestOptions{Part: WorkspacesPartGit, Harness: claudeHarness, ModelConfig: "codex=codex-host"}, wantErr: "does not run: codex"},
+		{name: "the sessions part with a Harness", opts: WorkspacesTestOptions{Part: WorkspacesPartSessions, Harness: config.CodingRuntimeOmp}, wantErr: "chooses its own Sessions"},
 		{name: "the git part with an email", opts: WorkspacesTestOptions{Part: WorkspacesPartGit, Email: accessDefaultSecond}, wantErr: "takes no [email]"},
 		{name: "the git part with a provider", opts: WorkspacesTestOptions{Part: WorkspacesPartGit, Provider: config.WorkspaceProviderGitHub}, wantErr: "--provider names the instance"},
 	} {
@@ -39,6 +44,33 @@ func TestWorkspacesTestOptionsValidate(t *testing.T) {
 				t.Fatalf("validate() = %v, want an error with %q", err, tc.wantErr)
 			}
 		})
+	}
+}
+
+func TestWorkspacePartHarnesses(t *testing.T) {
+	harnesses, err := workspacePartHarnesses("", "", gitDefaultHarnesses)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(harnesses) != 2 || harnesses[0].agent != workspacesHarnessAgent || harnesses[1].agent != sessionsKagentAgent || harnesses[1].modelConfig != "" {
+		t.Errorf("the git part's default Harnesses = %+v, want claude and kagent on the default model", harnesses)
+	}
+	harnesses, err = workspacePartHarnesses("claude,omp,codex", "codex=codex-host,omp=omp-model", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if harnesses[0].modelConfig != "" || harnesses[1].modelConfig != "omp-model" || harnesses[1].agent != "agentlab-workspaces-omp" || harnesses[2].modelConfig != "codex-host" {
+		t.Errorf("harness=ModelConfig pairs = %+v", harnesses)
+	}
+	harnesses, err = workspacePartHarnesses("kagent,codex", "codex-host", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if harnesses[0].modelConfig != "" || harnesses[1].modelConfig != "codex-host" {
+		t.Errorf("one ModelConfig applies to the Harnesses beside claude and kagent only: %+v", harnesses)
+	}
+	if _, err := workspacePartHarnesses("omp", "omp=", nil); err == nil {
+		t.Error("an empty ModelConfig of a pair is accepted")
 	}
 }
 

@@ -100,14 +100,24 @@ type gitlabProof struct {
 	branch        string
 	volume        workspaceVolume
 	gitlabHost    string
+	harness       workspacesSessionHarness
+	toolchains    []string
 }
 
 // workspacesGitLabPart runs the part in stages, as the admin and the second
 // user email (default dev@lab.local).
-func workspacesGitLabPart(cfg *config.Config, email string, timeout time.Duration) error {
+func workspacesGitLabPart(cfg *config.Config, opts WorkspacesTestOptions) error {
+	harnesses, err := workspacePartHarnesses(opts.Harness, opts.ModelConfig, []string{claudeHarness})
+	if err != nil {
+		return err
+	}
+	if len(harnesses) != 1 {
+		return fmt.Errorf("--part %s runs one Harness's Sessions per run; --harness names %d", WorkspacesPartGitLab, len(harnesses))
+	}
 	p := newProofStages()
-	gp := &gitlabProof{sp: newSyncProof(cfg, timeout, gitlabWorkspace), cfg: cfg, gl: cfg.Platform.Workspaces.GitLab, timeout: timeout}
-	err := gp.run(cmp.Or(email, accessDefaultSecond), p)
+	timeout := opts.ReadyTimeout
+	gp := &gitlabProof{sp: newSyncProof(cfg, timeout, gitlabWorkspace), cfg: cfg, gl: cfg.Platform.Workspaces.GitLab, timeout: timeout, harness: harnesses[0], toolchains: opts.Toolchains}
+	err = gp.run(cmp.Or(opts.Email, accessDefaultSecond), p)
 	gp.cleanup()
 	if err == nil && gp.admin != nil {
 		fmt.Printf("\nWorkspaces GitLab part passed: muster answered a person who had not granted GitLab's application with its sign-in link, the admin granted it through GitLab's form and consent, list_repositories listed %s's projects, the workspace mirrored %s, a Session started with the grant found its clone, pushed to GitLab and opened a merge request with glab as the person, a Session without the workspace held no GitLab credential, and dropping the grant in muster closed the workspace-manager to the admin again.\n", gp.gl.Group, gp.repo)
@@ -255,29 +265,10 @@ func (gp *gitlabProof) preconditions(email string) error {
 		return err
 	}
 	gp.sessions = &sessionSet{api: gp.adminAPI, manager: gp.admin.session}
-	if err := waitHarnessReady(context.Background(), rig.ClaudeHarness, gp.timeout); err != nil {
+	if err := readyPartAgents(context.Background(), cfg, gp.admin.session, rig, []workspacesSessionHarness{gp.harness}, gp.timeout); err != nil {
 		return err
 	}
-	if agentExists(workspacesHarnessAgent) {
-		if err := removeAgent(workspacesHarnessAgent); err != nil {
-			return err
-		}
-	}
-	modelConfig, err := agentManagerModelConfig(gp.admin.session)
-	if err != nil {
-		return err
-	}
-	if _, err := applyManifests(context.Background(), []byte(workspacesHarnessAgentManifest(rig.ClaudeHarness, modelConfig))); err != nil {
-		return fmt.Errorf("applying the claude Agent: %w", err)
-	}
-	boot, err := waitAgentReadyOn(workspacesHarnessAgent, rig.ClaudeHarness, gp.timeout)
-	if err != nil {
-		return err
-	}
-	if !boot.ready {
-		return fmt.Errorf("the claude Agent %s is not Ready on Harness %s after %s: %s", workspacesHarnessAgent, rig.ClaudeHarness, boot.elapsed.Round(time.Second), boot.reason)
-	}
-	note("GitLab %s, project %s; signed in to muster as %s (GitLab person %s) and %s; the claude Agent %s Ready", gp.gl.URL, gp.repo, gp.adminUser.Email, gp.gl.Person, email, workspacesHarnessAgent)
+	note("GitLab %s, project %s; signed in to muster as %s (GitLab person %s) and %s; the Agent %s Ready on Harness %s", gp.gl.URL, gp.repo, gp.adminUser.Email, gp.gl.Person, email, gp.harness.agent, gp.harness.name)
 	return nil
 }
 
@@ -554,19 +545,12 @@ func (gp *gitlabProof) firstTurnDone(ctx context.Context, session *apiv1alpha1.S
 // startedSession starts a Session through agent-manager as the admin, with
 // the grant when one is given, and returns its id.
 func (gp *gitlabProof) startedSession(grant string) (string, error) {
-	env, err := startSession(gp.admin, grant)
+	id, err := startAgentSession(gp.admin.session, gp.harness.agent, grant, gp.toolchains...)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("start_session as %s: %w", gp.adminUser.Email, err)
 	}
-	if env.IsError {
-		return "", fmt.Errorf("start_session as %s refused: %.400s", gp.adminUser.Email, env.Content[0].Text)
-	}
-	var started accessStarted
-	if err := json.Unmarshal([]byte(env.Content[0].Text), &started); err != nil || started.Session.ID == "" {
-		return "", fmt.Errorf("start_session answered no session: %.400s", env.Content[0].Text)
-	}
-	gp.sessions.add(started.Session.ID)
-	return started.Session.ID, nil
+	gp.sessions.add(id)
+	return id, nil
 }
 
 func (gp *gitlabProof) start() (map[string]string, error) {
@@ -701,8 +685,8 @@ func (gp *gitlabProof) noWorkspace() error {
 	if probe["pwd"] != kagentDefaultWorkingDirectory || probe["mirrors"] != "" {
 		return fmt.Errorf("the Session %s without a workspace should work in %s with no /mirrors: %v", id, kagentDefaultWorkingDirectory, probe)
 	}
-	if token := probe[gitlabProbeGitLabToken]; token != gitlabTokenUnset {
-		return fmt.Errorf("the Session %s without a workspace has GITLAB_TOKEN %s, want it unset: glab's placeholder is a workspace Session's", id, token)
+	if token := probe[gitlabProbeGitLabToken]; token != gitlabTokenUnset && token != gitlabTokenPlaceholder {
+		return fmt.Errorf("the Session %s without a workspace has GITLAB_TOKEN %s, want it unset or the Harness's inert placeholder", id, token)
 	}
 	if env := gitlabCredentialEnv(probe[gitlabProbeCredentialEnv], probe[gitlabProbeGitLabToken]); len(env) > 0 {
 		return fmt.Errorf("the Session %s without a workspace carries credential-like variables %v beyond the platform's own %v", id, env, gitlabPlatformEnv)
@@ -714,14 +698,16 @@ func (gp *gitlabProof) noWorkspace() error {
 	return nil
 }
 
-// gitlabPlatformEnv are the credential-like variables every Session holds,
+// gitlabPlatformEnv are the credential-like variables a Session may hold,
 // with or without a workspace: the Harness's messaging channel, kagent's
 // propagation of the turn caller's token to its own broker, the Harness's
 // inert GH_TOKEN placeholder the egress gateway replaces (the git part
-// proves it inert), GLAB_IS_OAUTH2, which makes glab send its token as a
-// bearer, and GLAB_CONFIG_DIR, glab's configuration naming the workspace's
-// GitLab hosts; none is a GitLab credential.
-var gitlabPlatformEnv = []string{"CLAUDE_CODE_MESSAGING_TOKEN", "GH_TOKEN", "GLAB_CONFIG_DIR", "GLAB_IS_OAUTH2", "KAGENT_PROPAGATE_TOKEN"}
+// proves it inert) and glab's settings. GLAB_IS_OAUTH2 makes glab send its
+// token as a bearer; GITLAB_HOST, GLAB_API_PROTOCOL, GLAB_GIT_PROTOCOL and
+// GLAB_CHECK_UPDATE are the platform's Harness literals; GLAB_CONFIG_DIR is
+// the runtime's generated configuration on earlier kagent lines. None is a
+// GitLab credential.
+var gitlabPlatformEnv = []string{"CLAUDE_CODE_MESSAGING_TOKEN", "GH_TOKEN", "GITLAB_HOST", "GLAB_API_PROTOCOL", "GLAB_CHECK_UPDATE", "GLAB_CONFIG_DIR", "GLAB_GIT_PROTOCOL", "GLAB_IS_OAUTH2", "KAGENT_PROPAGATE_TOKEN"}
 
 // gitlabCredentialEnv is the probe's credential-like variable names beyond
 // gitlabPlatformEnv, GITLAB_TOKEN among them unless the probe found it the
@@ -782,8 +768,8 @@ func (gp *gitlabProof) cleanupNow() error {
 	if gp.sessions != nil {
 		errs = append(errs, gp.sessions.removeAllNow())
 	}
-	if gp.adminAPI != nil && agentExists(workspacesHarnessAgent) {
-		errs = append(errs, removeAgent(workspacesHarnessAgent))
+	if gp.adminAPI != nil {
+		errs = append(errs, removePartAgents([]workspacesSessionHarness{gp.harness})...)
 	}
 	if gp.sp.member != nil {
 		if gone, err := gp.sp.gone(gitlabWorkspace); err == nil && !gone {

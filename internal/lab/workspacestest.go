@@ -50,14 +50,18 @@ type WorkspacesTestOptions struct {
 	Email string
 	// Harness is the Harness the harness stage's Session runs on: claude
 	// (the default) or another coding Harness the lab renders, such as codex.
+	// The git and GitLab parts take a comma-separated list of claude,
+	// kagent, omp and codex (default claude and kagent for the git part,
+	// claude for the GitLab part).
 	Harness string
 	// ModelConfig is the kagent ModelConfig the stage's Agent runs on: the
 	// kagent namespace's default on claude, as agent-manager's
 	// list_model_configs reports it; required on another Harness, whose
-	// runtime needs a model of its own (codex: a Responses API one).
+	// runtime needs a model of its own (codex: a Responses API one). The
+	// git and GitLab parts also take harness=ModelConfig pairs.
 	ModelConfig string
-	// Toolchains are mounted into the git part's Sessions through
-	// start_session, name[@version] each; empty mounts none.
+	// Toolchains are mounted into the Sessions of the git and GitLab parts
+	// through start_session, name[@version] each; empty mounts none.
 	Toolchains []string
 }
 
@@ -83,12 +87,13 @@ func (o WorkspacesTestOptions) validate() error {
 		if o.StorageOnly {
 			return fmt.Errorf("--storage-only is the storage proof's; --part %s proves no storage", o.Part)
 		}
+		if sessionFlags && o.Part != WorkspacesPartGit && o.Part != WorkspacesPartGitLab {
+			return fmt.Errorf("--harness and --model-config choose the Sessions of the storage proof and the git and GitLab parts; --part %s chooses its own Sessions", o.Part)
+		}
 		if sessionFlags {
-			sessions := "runs the claude Session"
-			if o.Part != WorkspacesPartGitLab {
-				sessions = "chooses its own Sessions"
+			if _, err := workspacePartHarnesses(o.Harness, o.ModelConfig, nil); err != nil {
+				return err
 			}
-			return fmt.Errorf("--harness and --model-config are the storage proof's; --part %s %s", o.Part, sessions)
 		}
 		if o.Part != WorkspacesPartGitLab && o.Email != "" {
 			return fmt.Errorf("--part %s works as the admin: it takes no [email]", o.Part)
@@ -101,8 +106,8 @@ func (o WorkspacesTestOptions) validate() error {
 		return fmt.Errorf("--provider names the instance of the sync and sessions parts (--part %s or %s)", WorkspacesPartSync, WorkspacesPartSessions)
 	case o.Provider != "" && o.Provider != config.WorkspaceProviderGitHub && o.Provider != config.WorkspaceProviderGitLab:
 		return fmt.Errorf("--provider %q: %s or %s", o.Provider, config.WorkspaceProviderGitHub, config.WorkspaceProviderGitLab)
-	case len(o.Toolchains) > 0 && o.Part != WorkspacesPartGit:
-		return fmt.Errorf("--toolchains mounts toolchains into the git part's Sessions (--part %s)", WorkspacesPartGit)
+	case len(o.Toolchains) > 0 && o.Part != WorkspacesPartGit && o.Part != WorkspacesPartGitLab:
+		return fmt.Errorf("--toolchains mounts toolchains into the Sessions of the git and GitLab parts (--part %s or %s)", WorkspacesPartGit, WorkspacesPartGitLab)
 	case o.Sessions != 0 && o.Part != WorkspacesPartSessions:
 		return fmt.Errorf("--sessions is the sessions part's (--part %s)", WorkspacesPartSessions)
 	case o.Sessions != 0 && o.Sessions < workspacesMinSessions:
@@ -169,13 +174,13 @@ func WorkspacesTest(cfg *config.Config, opts WorkspacesTestOptions) error {
 	provider := cmpOr(opts.Provider, config.WorkspaceProviderGitHub)
 	switch opts.Part {
 	case WorkspacesPartGitLab:
-		return workspacesGitLabPart(cfg, opts.Email, opts.ReadyTimeout)
+		return workspacesGitLabPart(cfg, opts)
 	case WorkspacesPartSync:
 		return workspacesSyncPart(cfg, provider, opts.ReadyTimeout)
 	case WorkspacesPartSessions:
 		return workspacesSessionsPart(cfg, provider, opts.Sessions, opts.ReadyTimeout)
 	case WorkspacesPartGit:
-		return workspacesGitPart(cfg, opts.ReadyTimeout, opts.Toolchains)
+		return workspacesGitPart(cfg, opts)
 	}
 	ctx := context.Background()
 	timeout := opts.ReadyTimeout
