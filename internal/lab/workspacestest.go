@@ -160,7 +160,7 @@ func WorkspacesTest(cfg *config.Config, opts WorkspacesTestOptions) error {
 		return err
 	}
 	session := workspacesSessionHarnessFor(opts.Harness, opts.ModelConfig)
-	if session.name != claudeHarness && !cfg.CodingHarnessRendered(session.name) {
+	if opts.Part == "" && session.name != claudeHarness && !cfg.CodingHarnessRendered(session.name) {
 		return fmt.Errorf("the lab renders no Harness %s: add it to platform.coding.harnesses in %s, then `agentlab platform`", session.name, config.File)
 	}
 	if err := useClusterKubeconfig(cfg); err != nil {
