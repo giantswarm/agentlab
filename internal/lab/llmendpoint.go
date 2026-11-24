@@ -73,6 +73,20 @@ func readLLMEndpoint(ctx context.Context, k *kubeClients) (llmEndpointDoc, error
 	return doc, nil
 }
 
+// llmUsageMetering reports whether serving-test can read a turn's tokens:
+// the per-model metric exists on the LLM endpoint only, and PromQL is on the
+// edge only with platform.observability. skipped words why it cannot when
+// there is an LLM endpoint to meter; "" otherwise.
+func llmUsageMetering(cfg *config.Config, llmEndpoint string) (metered bool, skipped string) {
+	switch {
+	case llmEndpoint == "":
+		return false, ""
+	case !cfg.Platform.Observability:
+		return false, fmt.Sprintf("token metering skipped (platform.observability is off in %s)", config.File)
+	}
+	return true, ""
+}
+
 // llmUsageTokens is the tokens the data plane counted for the model so far,
 // through the lab's PromQL on the edge; a model never requested counts 0.
 func llmUsageTokens(cfg *config.Config, model string) (float64, error) {

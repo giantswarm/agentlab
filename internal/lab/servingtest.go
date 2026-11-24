@@ -371,12 +371,14 @@ func ServingTest(cfg *config.Config, email string, opts ServingTestOptions) erro
 	// egress gateway, which terminates the actor's TLS and dials the Gateway
 	// itself, trusts the lab CA next to its public roots (the values'
 	// substrate.atenetEgress.upstreamTrust). On the LLM endpoint (the
-	// in-cluster listener, plain HTTP) its tokens must also show up in the
-	// data plane's per-model token metric under the served model's id.
+	// in-cluster listener, plain HTTP) with platform.observability on, its
+	// tokens must also show up in the data plane's per-model token metric
+	// under the served model's id.
 	agentTurn := "skipped (--skip-chat)"
 	if !opts.SkipChat {
+		metered, meteringSkipped := llmUsageMetering(cfg, llmEndpoint)
 		var tokensBefore float64
-		if llmEndpoint != "" {
+		if metered {
 			if tokensBefore, err = llmUsageTokens(cfg, served.Name); err != nil {
 				return err
 			}
@@ -388,7 +390,11 @@ func ServingTest(cfg *config.Config, email string, opts ServingTestOptions) erro
 		}
 		note("agent replied: %q", excerpt(reply, 120))
 		agentTurn = fmt.Sprintf("answered %q", excerpt(reply, 60))
-		if llmEndpoint != "" {
+		if meteringSkipped != "" {
+			note("%s", meteringSkipped)
+			agentTurn += ", " + meteringSkipped
+		}
+		if metered {
 			step("The turn's tokens in the data plane's per-model metric (%s{%s=%q})", llmUsageMetric, llmUsageModelLabel, served.Name)
 			tokensAfter := tokensBefore
 			if !waitFor(24, 5*time.Second, func() bool {
