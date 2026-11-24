@@ -248,7 +248,7 @@ func TestAgentManagerGrants(t *testing.T) {
 }
 
 // Organization discovery replaces the legacy reconciler: require exactly
-// namespaces get/list while enabled, allow AgentPlatformOrganizations
+// namespaces get/list while enabled, allow Organizations
 // get/list beside it (agent-manager 2.24.0 on), and never inherit the
 // reconciler's write grants.
 func TestOrganizationDiscoveryGrants(t *testing.T) {

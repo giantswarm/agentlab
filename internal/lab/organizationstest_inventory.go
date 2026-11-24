@@ -70,7 +70,7 @@ func prepareOrganizationInventory(ctx context.Context, organization *unstructure
 		return nil, err
 	}
 	provenance, _ := json.Marshal(map[string]any{crMetadata: map[string]any{organizationInventoryLabelsKey: map[string]string{"kustomize.toolkit.fluxcd.io/name": organizationCleanupFixture, "kustomize.toolkit.fluxcd.io/namespace": platformNamespace}}})
-	if _, err := k.resource(organizationGVR, organizationsRootNamespace).Patch(ctx, organization.GetName(), types.MergePatchType, provenance, metav1.PatchOptions{}); err != nil {
+	if _, err := k.resource(organizationGVR, "").Patch(ctx, organization.GetName(), types.MergePatchType, provenance, metav1.PatchOptions{}); err != nil {
 		return nil, err
 	}
 	addedArgument := !slices.Contains(arguments, argument)
@@ -150,7 +150,7 @@ func writeOrganizationInventory(ctx context.Context, organizations ...*unstructu
 func waitOrganizationOrphaned(ctx context.Context, name string, expected bool) error {
 	var last organizationState
 	err := wait.PollUntilContextTimeout(ctx, pollInterval, organizationReadyTimeout, true, func(context.Context) (bool, error) {
-		state, err := readOrganization(organizationsRootNamespace, name)
+		state, err := readOrganization(name)
 		if err != nil {
 			return false, err
 		}
@@ -171,23 +171,14 @@ func markProofOrganization(name string) error {
 	if err != nil {
 		return err
 	}
-	organization, err := getObject(ctx, organizationGVR, organizationsRootNamespace, name)
+	organization, err := getObject(ctx, organizationGVR, "", name)
 	if err != nil {
 		return err
 	}
 	if organization.GetLabels()[managedByLabel] != managedByAgentlabValue {
 		return fmt.Errorf("organization %s is not managed by agentlab", name)
 	}
-	patch, err := json.Marshal(map[string]any{crMetadata: map[string]any{organizationInventoryLabelsKey: map[string]string{organizationsTestLabel: organizationsTestMark}}})
-	if err != nil {
-		return err
-	}
-	k, err := labKube()
-	if err != nil {
-		return err
-	}
-	_, err = k.resource(organizationGVR, organizationsRootNamespace).Patch(ctx, name, types.MergePatchType, patch, metav1.PatchOptions{})
-	return err
+	return labelProofOrganization(name)
 }
 
 func checkProofOrganization(name string) error {
@@ -197,7 +188,7 @@ func checkProofOrganization(name string) error {
 	if err != nil {
 		return err
 	}
-	organization, err := getObject(ctx, organizationGVR, organizationsRootNamespace, name)
+	organization, err := getObject(ctx, organizationGVR, "", name)
 	if apierrors.IsNotFound(err) {
 		return nil
 	}

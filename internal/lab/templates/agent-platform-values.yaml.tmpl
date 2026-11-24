@@ -754,18 +754,23 @@ tenants:
 {{- if .OrganizationsEnabled }}
 
 # platform.organizations: Agent Platform organizations. The meta chart
-# installs agent-platform-operator, which reconciles each
-# AgentPlatformOrganization into a namespace of its own
-# (agents-<name>-<random>), and the connectivity chart renders the
-# organizations' roles and admission policies and selects those namespaces
-# by the label agent-platform.giantswarm.io/organization (the credential
-# provider's grants, the workers' admission, kagent's authorizer). `agentlab
-# up` keeps the default organization (organizations.go); `agentlab
-# organizations-test` is the proof. The operator's values are the chart's
-# derivation: the lab's in-cluster snapshot store gives it the bucket
-# (snapshots.bucket from kagent.harness.snapshotLocation below).
+# installs agent-platform-operator, which reconciles each Organization
+# (security.giantswarm.io, cluster-scoped) with spec.agentPlatform.enabled
+# into its namespace agents-<name> and binds its spec.admins there, and the
+# connectivity chart renders the organizations' roles and admission policies
+# and selects those namespaces by the label
+# agent-platform.giantswarm.io/organization (the credential provider's
+# grants, the workers' admission, kagent's authorizer). The lab has no KaaS,
+# so the chart installs the Organization CRD itself (organizationCRD;
+# giantswarm/agent-platform#1489). `agentlab up` keeps the default
+# organization (organizations.go); `agentlab organizations-test` is the
+# proof. The operator's values are the chart's derivation: the lab's
+# in-cluster snapshot store gives it the bucket (snapshots.bucket from
+# kagent.harness.snapshotLocation below).
 agentPlatformOrganizations:
   enabled: true
+  organizationCRD:
+    enabled: true
 
 # The operator's object-count ResourceQuota counts ServiceAccounts under the
 # bare key serviceaccounts, which is no standard quota resource: the API

@@ -63,7 +63,7 @@ func rosterRows(m slackMessage) map[string]string {
 
 // organizationTenant is the gateway's label of a namespace's tenant, as
 // klaus-gateway words it (pkg/a2a Client.Tenant): an organization
-// namespace agents-<name>-<random> is labelled by its namespace.
+// namespace agents-<name> is labelled by its namespace.
 func organizationTenant(ns string) string {
 	if org, ok := strings.CutPrefix(ns, gatewayOrganizationPrefix); ok && org != "" {
 		return "organization " + org

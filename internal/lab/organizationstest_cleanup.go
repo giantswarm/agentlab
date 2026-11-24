@@ -19,7 +19,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 
@@ -77,7 +76,7 @@ func (p *organizationsProof) cleanupOrphanedOrganization() (detail string, resul
 	if err != nil {
 		return "", err
 	}
-	organization, err := getObject(ctx, organizationGVR, organizationsRootNamespace, p.names[0])
+	organization, err := getObject(ctx, organizationGVR, "", p.names[0])
 	if err != nil {
 		return "", err
 	}
@@ -127,7 +126,7 @@ func (p *organizationsProof) cleanupOrphanedOrganization() (detail string, resul
 		return "", err
 	}
 	defer stop()
-	control, err := getObject(ctx, organizationGVR, organizationsRootNamespace, p.names[1])
+	control, err := getObject(ctx, organizationGVR, "", p.names[1])
 	if err != nil {
 		return "", err
 	}
@@ -147,7 +146,7 @@ func (p *organizationsProof) cleanupOrphanedOrganization() (detail string, resul
 	if err := waitOrganizationOrphaned(ctx, p.names[0], true); err != nil {
 		return "", err
 	}
-	note("organization %s/%s is Orphaned=True after its inventory entry was removed; session %s belongs to %s", organizationsRootNamespace, p.names[0], session.GetId(), p.members[0].Email)
+	note("organization %s is Orphaned=True after its inventory entry was removed; session %s belongs to %s", p.names[0], session.GetId(), p.members[0].Email)
 	if err := p.deleteProofOrganization(ctx, 0); err != nil {
 		return "", err
 	}
@@ -236,7 +235,7 @@ func (p *organizationsProof) deleteProofOrganization(ctx context.Context, index 
 	if err != nil {
 		return err
 	}
-	organization, err := getObject(ctx, organizationGVR, organizationsRootNamespace, p.names[index])
+	organization, err := getObject(ctx, organizationGVR, "", p.names[index])
 	if err != nil {
 		return err
 	}
@@ -251,7 +250,7 @@ func (p *organizationsProof) deleteProofOrganization(ctx context.Context, index 
 	if err != nil {
 		return err
 	}
-	resource := admin.Resource(organizationGVR).Namespace(organizationsRootNamespace)
+	resource := admin.Resource(organizationGVR)
 	if _, err := resource.Patch(ctx, organization.GetName(), types.MergePatchType, []byte(`{"metadata":{"annotations":{"kustomize.toolkit.fluxcd.io/prune":"enabled"}}}`), metav1.PatchOptions{}); err != nil {
 		return err
 	}
@@ -261,7 +260,7 @@ func (p *organizationsProof) deleteProofOrganization(ctx context.Context, index 
 	}
 	last := ""
 	err = wait.PollUntilContextTimeout(ctx, pollInterval, organizationCleanupWait, true, func(ctx context.Context) (bool, error) {
-		current, err := getObject(ctx, organizationGVR, organizationsRootNamespace, organization.GetName())
+		current, err := getObject(ctx, organizationGVR, "", organization.GetName())
 		if apierrors.IsNotFound(err) {
 			_, err = getObject(ctx, gvrNamespaces, "", p.namespaces[index])
 			return apierrors.IsNotFound(err), ignoreNotFound(err)
@@ -269,7 +268,11 @@ func (p *organizationsProof) deleteProofOrganization(ctx context.Context, index 
 		if err != nil {
 			return false, err
 		}
-		step, _, _ := unstructured.NestedString(current.Object, "status", "erasureStep")
+		state, err := organizationStateFrom(current)
+		if err != nil {
+			return false, err
+		}
+		step := state.erasureStep
 		if step != last {
 			note("organization %s cleanup: %s", organization.GetName(), step)
 			last = step

@@ -323,7 +323,9 @@ every one again.
 `platform.organizations` (on by default; `agentlab configure
 --organizations[=false]`) renders the chart's
 `agentPlatformOrganizations.enabled: true` with the LLM listener it needs
-(`llmRouting.enabled`): the meta chart installs agent-platform-operator, and
+(`llmRouting.enabled`) and `agentPlatformOrganizations.organizationCRD.enabled:
+true`, because the lab has no KaaS to install the `Organization` CRD: the
+meta chart installs that CRD and agent-platform-operator, and
 the connectivity chart renders the organizations' roles
 (`agent-platform:organizations-admin`, `admin`, `editor`, `user`) and their
 admission policies, and selects the organization namespaces by the label
@@ -337,19 +339,28 @@ tenants mode the chart removed (`platform.tenants`, agent-manager's tenant
 reconciler) is gone from the lab: an `agentlab.yaml` that still names it
 loads, and the key is not written back.
 
-Each organization is an `AgentPlatformOrganization` in a parent namespace,
-reconciled by the operator into an organization namespace of its own,
-`agents-<name>-<random>`. On an installation the parent is a KaaS
-`org-<name>` namespace; the lab has no KaaS, so its parent is the fixed root
-namespace `agentlab-organizations`.
+Each organization is an `Organization` (`security.giantswarm.io/v1alpha1`,
+cluster-scoped) with `spec.agentPlatform.enabled: true`. The operator
+reconciles it into one organization namespace, `agents-<name>`, and reports
+the name in `status.agentPlatform.namespace`; the lab reads that field and
+never computes the name. `status.agentPlatform.erasureStep` names the
+cleanup step of a deleted organization, and `status.conditions` holds
+`Ready` and `Orphaned`. No organization-operator runs in the lab, so
+`status.namespace` (its `org-<name>`) stays empty. The organization's admins
+are `spec.admins` (`kind` `User` or `Group`, and `name`): the operator binds
+them to `agent-platform:admin` in the namespace (RoleBinding
+`organization-admins`), and the chart's admission policy refuses every other
+writer of a binding to that role, the lab's admin too. The lab writes no
+admin binding.
 
 **The default organization.** `agentlab up` (and `agentlab platform`) keeps
-the organization `agentlab-organizations/default` (display name `Lab`) and
-waits until the operator reports it `Ready`. Then, as an organization's
-creator does after `Ready`, it writes the first admins, `organization-admins`
-to `agent-platform:admin` for the group `platform-admins`; the editors,
-`organization-editors` to `agent-platform:editor` for the group
-`developers`; and the organization's model: the ModelConfig `anthropic` on
+the `Organization` `default` (display name `Lab`, the annotation
+`agent-platform.giantswarm.io/display-name`), with the platform Harness, one
+worker (`spec.agentPlatform.workers.replicas`) and the group
+`platform-admins` in `spec.admins`, and waits until the operator reports it
+`Ready`. Then it writes the editors, `organization-editors` to
+`agent-platform:editor` for the group `developers`, and the organization's
+model: the ModelConfig `anthropic` on
 the lab's model, marked default, its key in the tenant credential
 `tenant-credential-anthropic`, placed the way the lab places the Anthropic
 key everywhere (`anthropic.go`: the recorded source, the host environment,
@@ -362,12 +373,61 @@ HelmRelease field lock among them) judge; `up` fails if it is refused. The
 summary names the namespace. The lab's values also count the operator's
 ServiceAccount quota under `count/serviceaccounts` (HACKS.md U42).
 
+### The Organization kind prototype
+
+The lab runs organizations on the `Organization` kind only with the draft
+pull requests of giantswarm/giantswarm#39492; no released chart carries it
+yet. To run the prototype:
+
+1. **The chart** from branch `organization-kind-chart` of
+   giantswarm/agent-platform (giantswarm/agent-platform#1489), which
+   installs the `Organization` CRD and the roles and admission policies of
+   this model. Either a checkout (`agentlab configure --chart-path
+   /path/to/agent-platform/helm/agent-platform`, the branch checked out) or
+   its dev builds (`agentlab configure --chart-path "" --chart-branch
+   organization-kind-chart`). See [Installing an unreleased
+   chart](platform.md#installing-an-unreleased-chart) and [Dev
+   channel](platform.md#dev-channel).
+2. **agent-platform-operator and agent-manager** as dev builds, chart and
+   image together: their charts carry the RBAC on
+   `organizations.security.giantswarm.io`, which `platform.devImages` (an
+   image only) does not. A `platform.valuesFiles` overlay points the two
+   components of the meta chart at the dev charts, whose image tags are
+   their versions:
+
+   ```yaml
+   # organization-kind.yaml, listed in platform.valuesFiles
+   components:
+     agent-platform-operator:
+       # giantswarm/agent-platform-operator#69
+       versionRange: "0.4.7-r1b5e09bdt20261124180250he5d00ae"
+     agent-manager:
+       # giantswarm/agent-manager#475
+       versionRange: "3.5.7-r1b5e09bdt20261124202612ha80aab9"
+   ```
+
+   Both charts are in `oci://gsoci.azurecr.io/charts/giantswarm` (the
+   repository the meta chart already names; the catalog metadata of these
+   builds is in giantswarm-test-catalog). Their images are
+   `gsoci.azurecr.io/giantswarm/agent-platform-operator` and
+   `gsoci.azurecr.io/giantswarm/agent-manager` at the same tags. A newer
+   build of either pull request has a newer tag: put it in the overlay.
+3. **The portal** from branch `organization-kind-portal` of
+   giantswarm/backstage, which lists organizations from `Organization`
+   objects. Its dev build is not named here yet: put the build of that
+   branch under `platform.devImages.backstage`.
+4. `agentlab platform`, then `agentlab organizations-test`.
+
+A lab that ran the earlier `AgentPlatformOrganization` model has no
+migration: start the prototype on a new lab (`agentlab down`, then `agentlab
+up`).
+
 ## The organizations proof
 
 `agentlab organizations-test` (`tenants-test` is an alias) is the proof
 (giantswarm/agentlab#1149, the agent-platform-organizations plan). It keeps
-two organizations, `agentlab-a` and `agentlab-b`, in the root namespace, and
-binds one member to each as an editor by the group in their token
+two organizations, `agentlab-a` and `agentlab-b`, each an `Organization`
+with `platform-admins` in `spec.admins`, and binds one member to each as an editor by the group in their token
 (RoleBinding `agentlab-members`, subject `oidc:tenant-a` or
 `oidc:tenant-b`): `alice@lab.local` and `bob@lab.local`, which `agentlab
 configure --organizations` adds ([The member users](identity.md#the-member-users)).
@@ -455,8 +515,9 @@ the namespace's atespace from that namespace only. Then:
 `organizations-test --part credentials` proves an organization's keys are
 typed only into agent-manager's credential API, never into a tool call
 (agent-manager docs/organization-credentials.md). It keeps its own
-organization, `agentlab-organizations/agentlab-credentials` (a previous
-run's is erased first), with `platform-admins` as its admins, and acts as
+organization, the `Organization` `agentlab-credentials` (a previous
+run's is erased first), with `platform-admins` and the other admin in
+`spec.admins`, and acts as
 the first admin. The key it types is a random value made in the process and
 printed only as its SHA-256. Where a verdict says nothing is written, there
 is no ModelConfig of the model, and no `tenant-credential-*` Secret of it
@@ -478,8 +539,8 @@ Secret existed before the refused write does a Secret without a value at
   elicitation of mode `url` with an `elicitationId` and the form's URL; a
   client without it gets a result whose `credentials[].next` carries the
   link. Every link must be an `https` URL, agent-manager's `credentials.uiURL`
-  template expanded (RFC 6570) with the operation, the parent and the
-  organization only, so no value or token travels in it. That client also
+  template expanded (RFC 6570) with the operation, the organization and the
+  namespace only, so no value or token travels in it. That client also
   gets `structuredContent` with a `resource_link` once
   `set_organization_model` declares an `outputSchema` through muster's
   `describe_tool` (giantswarm/agent-manager#329; skipped while it declares
@@ -541,7 +602,8 @@ Secret existed before the refused write does a Secret without a value at
   whose access review allows creating Secrets and ModelConfigs in the
   organization, prepares model `agentlab-credentials-lost` and reads its
   confirmation and `ETag`. The lab then removes them from the
-  `organization-admins` RoleBinding, and their access review must deny both
+  organization's `spec.admins`, waits until agent-platform-operator's
+  `organization-admins` RoleBinding follows, and their access review must deny both
   creates within 15 seconds; else the verdict fails as a wrong fixture.
   Their `POST` of the value with that `ETag` must answer 403 `forbidden`
   (not 404, another person's; not 412, a stale `ETag`; not 409, an expired
@@ -582,8 +644,8 @@ Secret existed before the refused write does a Secret without a value at
   request is the only open one on its branch.
 - In commit mode, the receipt's pull request is read back with your `gh`
   login: opened by the person, its commit authored by them, the ModelConfig
-  file `<contentPrefix>/<parent>/<name>/modelconfig-<model>.yaml` and the
-  Secret file `<contentPrefix>/<parent>/<name>/<secret>-secret.enc.yaml` in
+  file `<contentPrefix>/<name>/modelconfig-<model>.yaml` and the
+  Secret file `<contentPrefix>/<name>/<secret>-secret.enc.yaml` in
   it, the Secret SOPS-encrypted, and no file carrying the value. Before the merge the cluster holds no
   value of the Secret and no ModelConfig, so the Flux verdict is Flux's.
 - Flux: the person merges the pull request, and the organization's own
@@ -616,7 +678,8 @@ Secret existed before the refused write does a Secret without a value at
   either in muster's own sentence (`Sign in to <namespace>/<name> to
   continue`) or as the `[<namespace>/<name>]` prefix muster puts on a
   backend's elicitation.
-- `delete_organization` erases the organization: without `confirm` it says
+- `delete_organization` erases the organization (its `confirm` is the
+  organization's name): without `confirm` it says
   what goes, the model and its credential Secret named among it once they
   are live (saved in apply mode, or applied by Flux: it lists the cluster's
   objects, never a pull request's), the
@@ -642,48 +705,45 @@ the edge's cluster IP, and the tenant server signs in to muster itself.
 
 ### The admins part
 
-`organizations-test --part admins` proves that the admins of one Giant Swarm
-Organization create an organization alone (giantswarm/agentlab#1225). On an
-installation they are `cluster-admin` only inside their `org-<name>`
-namespace, through a RoleBinding that rbac-operator writes with the label
-`giantswarm.io/managed-by: rbac-operator`. The lab runs no rbac-operator, so
-the part writes those bindings itself, as the lab's admin, with that label.
-It needs agent-platform-operator 0.2.0 or later (agent-platform 4.178.0 or
-later), which mirrors the Users and Groups of such a binding into each
-organization namespace as `agent-platform:organizations-admin`, and
-agent-manager 2.23.0 or later, whose `create_organization` refuses before
-any write a person whose right will not reach the new namespace.
+`organizations-test --part admins` proves that an organization's admins
+exist only in its `Organization`'s `spec.admins` (giantswarm/agentlab#1225,
+giantswarm/giantswarm#39501). agent-platform-operator binds them to
+`agent-platform:admin` in the organization namespace (RoleBinding
+`organization-admins`), the chart's admission policy refuses every other
+writer of a binding to that role, and agent-manager's member tools refuse
+the admin role. The right to create an `Organization` is one RBAC rule on
+the kind, which the lab's admin holds. It needs the prototype ([The
+Organization kind prototype](#the-organization-kind-prototype)).
 
-It keeps two parents, `org-agentlab-admins-a` and `org-agentlab-admins-b`.
-In the first, rbac-operator's binding names the group of `alice@lab.local`
-and a ServiceAccount; in the second, it names `bob@lab.local`. Beside them in
-the first parent: a `cluster-admin` binding without the label, for the first
-lab user outside `platform-admins` (`dev@lab.local` by default), a labelled
-binding whose subjects are a ServiceAccount and a `system:` name, and a
-labelled binding that a finalizer holds, for a user nobody signs in as.
-The verdicts:
+The lab's admin creates two organizations through `create_organization`:
+`agentlab-admins-a`, whose admin is the group of `alice@lab.local`, and
+`agentlab-admins-b`, whose admin is `bob@lab.local` by name. The first lab
+user outside `platform-admins` (`dev@lab.local` by default) is the
+outsider. The verdicts:
 
-- nobody of the three may create or bind RoleBindings cluster-wide;
-- alice, then bob, calls `create_organization` through muster in mode apply:
-  the answer is created with its first admins written and nothing pending,
-  the organization is Ready, and `organization-admins` binds the first admins
-  to `agent-platform:admin`;
-- each organization namespace holds the mirror of its parent binding: the
-  ClusterRole `agent-platform:organizations-admin`, the group or the user
-  alone (the ServiceAccount left out), the annotation
-  `agent-platform.giantswarm.io/copied-from: <parent>/<binding>`, and no
-  RoleBinding there binds `cluster-admin`;
-- no mirror of the binding without the label, nor of the machines' binding;
-- the person of the binding without the label is refused before any write,
-  and the refusal names that binding; no organization exists afterwards;
-- bob is refused in alice's parent, and alice in bob's, with nothing
-  written;
-- the held binding is deleted: its mirror goes while the finalizer still
-  keeps the binding;
-- alice's group is removed from rbac-operator's binding: its mirror goes.
+- nobody of alice, bob and the outsider may create RoleBindings, bind
+  `agent-platform:admin` or create `Organization`s cluster-wide;
+- for each organization, `create_organization` through muster in mode apply
+  answers created with the admins in `spec.admins`, writes no RoleBinding,
+  the organization becomes Ready, and the operator's `organization-admins`
+  binds those admins alone to `agent-platform:admin`;
+- a RoleBinding to `agent-platform:admin` in alice's organization is refused
+  by an admission policy as alice (its admin) and as the lab's admin
+  (`cluster-admin`), while alice's binding to `agent-platform:editor` is
+  admitted (dry runs);
+- alice's `add_organization_member` with the role `admin` is refused and
+  `organization-admins` does not change, while the role `user` (a dry run)
+  is admitted;
+- alice, who may not create `Organization`s, is refused
+  `create_organization`, and no organization of that name exists
+  afterwards;
+- `update_organization` replaces the admin group of `agentlab-admins-a` with
+  alice by name: `organization-admins` follows;
+- `update_organization` empties the admins of `agentlab-admins-b`:
+  `organization-admins` goes and the organization stays Ready.
 
-A successful run deletes both organizations and both parents. A failed run
-keeps them for diagnosis, and the next run deletes them first.
+A successful run deletes both organizations. A failed run keeps them for
+diagnosis, and the next run deletes them first.
 
 `organizations-test --part cleanup` runs the orphan cleanup check alone, creating the proof agents and a member-owned session directly through kagent without a model turn. The default run includes this check after all other organization checks. The former `--part erasure` spelling remains an alias. See the operator's [glossary](https://github.com/giantswarm/agent-platform-operator/blob/main/GLOSSARY.md) for the distinction between organization deletion and cleanup.
 

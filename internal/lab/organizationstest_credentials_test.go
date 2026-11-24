@@ -82,8 +82,8 @@ func TestCredentialPrerequisites(t *testing.T) {
 }
 
 func TestCredentialSecretPath(t *testing.T) {
-	require.Equal(t, "agent-platform/organizations/org-acme/payments/tenant-credential-x-secret.enc.yaml",
-		credentialSecretPath("/agent-platform/organizations/", "org-acme", "payments", "tenant-credential-x"))
+	require.Equal(t, "agent-platform/organizations/payments/tenant-credential-x-secret.enc.yaml",
+		credentialSecretPath("/agent-platform/organizations/", "payments", "tenant-credential-x"))
 }
 
 func TestStrongETag(t *testing.T) {
@@ -162,7 +162,7 @@ func TestSOPSEncryptedPatch(t *testing.T) {
 
 func TestSOPSRuleFor(t *testing.T) {
 	recipient := "age1labrecipient"
-	path := credentialSecretPath(defaultOrgsContentPath, "agentlab-organizations", "agentlab-credentials", credentialsModelSecret)
+	path := credentialSecretPath(defaultOrgsContentPath, "agentlab-credentials", credentialsModelSecret)
 	require.NoError(t, sopsRuleFor([]byte(sopsRuleHint(defaultOrgsContentPath, recipient)), path, recipient))
 
 	require.ErrorContains(t, sopsRuleFor([]byte(sopsRuleHint(defaultOrgsContentPath, "age1other")), path, recipient), "does not encrypt for the lab's age recipient")
@@ -176,7 +176,7 @@ func TestSOPSRuleFor(t *testing.T) {
 }
 
 func TestOrganizationBindingLeftovers(t *testing.T) {
-	org := organizationRef{parent: "agentlab-organizations", name: "agentlab-credentials", namespace: "agents-agentlab-credentials-x7k2q", uid: "uid-1"}
+	org := organizationRef{name: "agentlab-credentials", namespace: "agents-agentlab-credentials", uid: "uid-1"}
 	binding := func(ns, name string, labels map[string]string, subjects ...rbacv1.Subject) rbacv1.RoleBinding {
 		return rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name, Labels: labels}, Subjects: subjects}
 	}
@@ -185,14 +185,14 @@ func TestOrganizationBindingLeftovers(t *testing.T) {
 		binding(org.namespace, "organization-admins", nil),
 		binding("flux-ns", "by-uid", map[string]string{organizationUIDLabel: "uid-1"}),
 		binding("flux-ns", "other-uid", map[string]string{organizationUIDLabel: "uid-2"}),
-		binding("agentlab-organizations", "by-name", map[string]string{organizationLabel: org.name, organizationParentLabel: org.parent}),
-		binding("agentlab-organizations", "same-name-other-parent", map[string]string{organizationLabel: org.name, organizationParentLabel: "org-other"}),
+		binding("flux-ns", "by-name", map[string]string{organizationLabel: org.name}),
+		binding("flux-ns", "other-name", map[string]string{organizationLabel: "agentlab-other"}),
 		binding("kagent", "sa-of-namespace", nil, rbacv1.Subject{Kind: rbacv1.ServiceAccountKind, Namespace: org.namespace, Name: "builder"}),
 		binding("flux-ns", "flux-identity", nil, rbacv1.Subject{Kind: rbacv1.ServiceAccountKind, Namespace: "flux-ns", Name: org.namespace}),
 	}
 	require.Equal(t, []string{
-		"agentlab-organizations/by-name",
 		org.namespace + "/organization-admins",
+		"flux-ns/by-name",
 		"flux-ns/by-uid",
 		"flux-ns/flux-identity",
 		"kagent/sa-of-namespace",
@@ -334,7 +334,7 @@ func TestEnsureCredentialsAgeIdentityRefusesAReadableKey(t *testing.T) {
 }
 
 func TestCredentialsContentPath(t *testing.T) {
-	require.Equal(t, "organizations/"+organizationsRootNamespace+"/"+credentialsOrganization, credentialsContentPath("organizations"))
+	require.Equal(t, "organizations/agentlab-credentials", credentialsContentPath("organizations"))
 }
 
 func TestContentPathRemovalCommand(t *testing.T) {
@@ -360,34 +360,34 @@ func TestContainerArgs(t *testing.T) {
 }
 
 func TestFormOperation(t *testing.T) {
-	const tpl = "https://portal.example/organizations/agentlab/{parent}/{organization}/credentials{?operation}"
-	op, err := formOperation(tpl, "https://portal.example/organizations/agentlab/root/org/credentials?operation=9b0e2fc5", "root", "org", "agents-org")
+	const tpl = "https://portal.example/organizations/agentlab/{organization}/credentials{?operation}"
+	op, err := formOperation(tpl, "https://portal.example/organizations/agentlab/org/credentials?operation=9b0e2fc5", "org", "agents-org")
 	require.NoError(t, err)
 	require.Equal(t, "9b0e2fc5", op)
 
 	for name, link := range map[string]string{
-		"another organization": "https://portal.example/organizations/agentlab/root/other/credentials?operation=9b0e2fc5",
-		"another origin":       "https://evil.example/organizations/agentlab/root/org/credentials?operation=9b0e2fc5",
-		"an extra parameter":   "https://portal.example/organizations/agentlab/root/org/credentials?operation=9b0e2fc5&token=abc",
-		"no operation":         "https://portal.example/organizations/agentlab/root/org/credentials?operation=",
+		"another organization": "https://portal.example/organizations/agentlab/other/credentials?operation=9b0e2fc5",
+		"another origin":       "https://evil.example/organizations/agentlab/org/credentials?operation=9b0e2fc5",
+		"an extra parameter":   "https://portal.example/organizations/agentlab/org/credentials?operation=9b0e2fc5&token=abc",
+		"no operation":         "https://portal.example/organizations/agentlab/org/credentials?operation=",
 	} {
-		_, err := formOperation(tpl, link, "root", "org", "agents-org")
+		_, err := formOperation(tpl, link, "org", "agents-org")
 		require.Error(t, err, name)
 	}
 
 	const namespaced = "https://portal.example/customize/models/credentials/agentlab/{namespace}/{operation}"
-	op, err = formOperation(namespaced, "https://portal.example/customize/models/credentials/agentlab/agents-org/9b0e2fc5", "root", "org", "agents-org")
+	op, err = formOperation(namespaced, "https://portal.example/customize/models/credentials/agentlab/agents-org/9b0e2fc5", "org", "agents-org")
 	require.NoError(t, err)
 	require.Equal(t, "9b0e2fc5", op)
-	_, err = formOperation(namespaced, "https://portal.example/customize/models/credentials/agentlab/agents-other/9b0e2fc5", "root", "org", "agents-org")
+	_, err = formOperation(namespaced, "https://portal.example/customize/models/credentials/agentlab/agents-other/9b0e2fc5", "org", "agents-org")
 	require.Error(t, err, "another namespace")
 
-	op, err = formOperation("https://p.example/c/{operation}", "https://p.example/c/abc-1", "root", "org", "agents-org")
+	op, err = formOperation("https://p.example/c/{operation}", "https://p.example/c/abc-1", "org", "agents-org")
 	require.NoError(t, err)
 	require.Equal(t, "abc-1", op)
-	_, err = formOperation("http://p.example/c/{operation}", "http://p.example/c/abc-1", "root", "org", "agents-org")
+	_, err = formOperation("http://p.example/c/{operation}", "http://p.example/c/abc-1", "org", "agents-org")
 	require.ErrorContains(t, err, "not an https URL")
-	_, err = formOperation("https://p.example/c", "https://p.example/c", "root", "org", "agents-org")
+	_, err = formOperation("https://p.example/c", "https://p.example/c", "org", "agents-org")
 	require.ErrorContains(t, err, "does not expand {operation} once")
 }
 

@@ -58,7 +58,7 @@ func restError(t *testing.T, code, message string) []byte {
 // fail.
 func TestLostRightsRefusal(t *testing.T) {
 	const ns, model, secret = "org-ns", "agentlab-credentials-lost", "tenant-credential-agentlab-credentials-lost" // #nosec G101 -- names, not credentials
-	way := "; this needs agent-platform:admin in organization namespace org-ns; an admin of the organization adds you (add_organization_member), or an organizations-admin (agent-platform:organizations-admin) does"
+	way := "; this needs agent-platform:admin in organization namespace org-ns: an organizations-admin (agent-platform:organizations-admin) adds you to the Organization's spec.admins (update_organization)"
 	modelDenied := "forbidden: you may not create modelconfigs.api.kagent.dev/agentlab-credentials-lost in org-ns" + way
 	secretDenied := "forbidden: you may not create secrets/tenant-credential-agentlab-credentials-lost in org-ns" + way
 	save := restAnswer{code: http.StatusForbidden, body: restError(t, "forbidden", "forbidden: credential save was refused; refresh the operation before retrying")}

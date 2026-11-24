@@ -13,7 +13,7 @@ func TestSettledOrganizationInventory(t *testing.T) {
 	fixture.SetGeneration(7)
 	organization := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": organizationAPIVersion, beekeeperKeyKind: organizationKind,
-		crMetadata: map[string]any{"namespace": organizationsRootNamespace, nameKey: organizationsTestA},
+		crMetadata: map[string]any{nameKey: organizationsTestA},
 	}}
 	for _, present := range []bool{true, false} {
 		t.Run(map[bool]string{true: "recorded", false: "removed"}[present], func(t *testing.T) {
@@ -39,7 +39,7 @@ func TestSettledOrganizationInventory(t *testing.T) {
 			require.Equal(t, conditionTrue, document.Status.Conditions[0].Status)
 			require.Equal(t, int64(7), document.Status.Conditions[0].ObservedGeneration)
 			if present {
-				require.Equal(t, []inventoryEntry{{ID: organizationsRootNamespace + "_" + organizationsTestA + "_agent-platform.giantswarm.io_AgentPlatformOrganization", Version: organization.GroupVersionKind().Version}}, document.Status.Inventory.Entries)
+				require.Equal(t, []inventoryEntry{{ID: "_agentlab-a_security.giantswarm.io_Organization", Version: organization.GroupVersionKind().Version}}, document.Status.Inventory.Entries)
 			} else {
 				require.Empty(t, document.Status.Inventory.Entries)
 			}

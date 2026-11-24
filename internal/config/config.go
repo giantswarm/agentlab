@@ -703,8 +703,9 @@ type Platform struct {
 	// Agent Platform organizations: the chart's
 	// agentPlatformOrganizations.enabled, which installs
 	// agent-platform-operator and renders the organizations' roles and
-	// admission policies; `agentlab up` then keeps one default
-	// AgentPlatformOrganization in the root namespace
+	// admission policies, and organizationCRD.enabled, which installs the
+	// Organization CRD (the lab has no KaaS); `agentlab up` then keeps one
+	// default Organization with the Agent Platform enabled
 	// (organizations.go). On by default; it takes effect with the agents
 	// runtime on a chart from OrganizationsChartFloor on
 	// (OrganizationsEnabled). `agentlab organizations-test` is the proof.

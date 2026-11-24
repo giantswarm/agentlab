@@ -29,8 +29,9 @@ import (
 
 // The organizations proof (giantswarm/agentlab#1149, the
 // agent-platform-organizations plan's testing decisions): two
-// AgentPlatformOrganizations in the lab's root namespace, one member each,
-// bound by the group in their token as an editor of their organization
+// Organizations with the Agent Platform on, the lab's admins in their
+// spec.admins, one member each, bound by the group in their token as an
+// editor in their organization's namespace
 // (alice in tenant-a, bob in tenant-b). Each member creates an agent in
 // their own organization as themselves (a HelmRelease of the agent chart
 // through the Kubernetes API, which the chart's field lock admits) and runs
@@ -384,9 +385,9 @@ func (p *organizationsProof) add(v organizationVerdict) {
 // the organizations' roles, and the kagent authorizer judging people as the
 // API server does.
 func (p *organizationsProof) preconditions() error {
-	step("agent-platform-operator and the organizations' roles (agentPlatformOrganizations on the installed chart)")
+	step("The Organization CRD and the organizations' roles (agentPlatformOrganizations on the installed chart)")
 	if _, err := gvrFor(organizationResource); err != nil {
-		return fmt.Errorf("the apiserver serves no %s: the installed chart does not run agent-platform-operator — `agentlab platform` with platform.organizations on and agent-platform %s or newer: %w", organizationResource, config.OrganizationsChartFloor, err)
+		return fmt.Errorf("the apiserver serves no %s: the installed chart does not install the Organization CRD (agentPlatformOrganizations.organizationCRD.enabled, giantswarm/agent-platform#1489) — docs/agents.md \"The Organization kind prototype\": %w", organizationResource, err)
 	}
 	for _, role := range []string{organizationEditorRole, organizationUserRole, organizationAdminRole} {
 		if err := checkOrganizationRole(role); err != nil {
@@ -405,23 +406,22 @@ func (p *organizationsProof) preconditions() error {
 	return nil
 }
 
-// setUp keeps the two organizations Ready, binds each member's group as
-// an editor of their own, gives each the lab's model, and logs everyone in.
+// setUp keeps the two organizations Ready with platform-admins in
+// spec.admins (the operator binds them; nobody else may), binds each
+// member's group as an editor of their own, gives each the lab's model, and
+// logs everyone in.
 func (p *organizationsProof) setUp() error {
 	for i, name := range p.names {
 		if err := checkProofOrganization(name); err != nil {
 			return err
 		}
-		step("Organization %s/%s Ready; group %s bound to %s there; its model %s", organizationsRootNamespace, name, p.members[i].Groups[0], organizationEditorRole, organizationModel)
-		ns, err := ensureOrganization(organizationsRootNamespace, name, name)
+		step("Organization %s Ready, admins group %s; group %s bound to %s in its namespace; its model %s", name, platformAdminsGroup, p.members[i].Groups[0], organizationEditorRole, organizationModel)
+		ns, err := ensureOrganization(name, name, []organizationAdmin{adminGroup(platformAdminsGroup)})
 		if err != nil {
 			return err
 		}
 		p.namespaces[i] = ns
 		if err := markProofOrganization(name); err != nil {
-			return err
-		}
-		if err := bindOrganizationRole(ns, organizationAdminsBinding, organizationAdminRole, []rbacv1.Subject{groupSubject(platformAdminsGroup)}); err != nil {
 			return err
 		}
 		if err := bindOrganizationRole(ns, organizationsTestBinding, organizationEditorRole, []rbacv1.Subject{groupSubject(p.members[i].Groups[0])}); err != nil {
