@@ -60,6 +60,9 @@ const (
 	argRole        = "role"
 	argRoleUser    = "user"
 	argRoleAdmin   = "admin"
+	// memberToolsAdminRefusal is agent-manager's refusal of the admin role
+	// in its member tools (internal/organizations/members.go, roleOf).
+	memberToolsAdminRefusal = "the member tools do not give or remove the admin role"
 )
 
 // createOrganizationAnswer is the part of create_organization's answer the
@@ -417,11 +420,11 @@ func (p *adminsProof) memberToolRefusesAdmin() (string, error) {
 	switch {
 	case !env.IsError:
 		return "", fmt.Errorf("%s's add_organization_member %s as admin in %s was not refused: %.500s", p.alice.Email, user, ns, text)
-	case !strings.Contains(text, "spec.admins") || !strings.Contains(text, "update_organization"):
-		// agent-manager's own refusal points to spec.admins; a refusal
-		// without it may be the admission policy's, after a tool that
-		// tried to write the admin binding.
-		return "", fmt.Errorf("%s's add_organization_member %s as admin in %s was refused, but not by agent-manager's rule that names spec.admins and update_organization: %.500s", p.alice.Email, user, ns, text)
+	case !strings.Contains(text, memberToolsAdminRefusal):
+		// agent-manager's own refusal of the role, before any write; an
+		// admission refusal of a tool that tried to write the admin binding
+		// carries agent-manager's hint on spec.admins too, but not this.
+		return "", fmt.Errorf("%s's add_organization_member %s as admin in %s was refused, but not by agent-manager's refusal of the role (%q): %.500s", p.alice.Email, user, ns, memberToolsAdminRefusal, text)
 	}
 	binding, err := readAdminsBinding(ns)
 	if err != nil {
@@ -444,6 +447,8 @@ func (p *adminsProof) createRefused() (string, error) {
 	}
 	text := envelopeText(env)
 	if !env.IsError {
+		// alice's create was answered: this run wrote the Organization, so
+		// the next run's cleanup may remove it.
 		if err := labelProofOrganization(adminsOrgRefused); err != nil {
 			note("labelling Organization %s for the next run's cleanup: %v", adminsOrgRefused, err)
 		}
@@ -460,10 +465,8 @@ func (p *adminsProof) createRefused() (string, error) {
 		return "", err
 	}
 	if exists {
-		// Marked for the next run's removal of the part's leftovers.
-		if err := labelProofOrganization(adminsOrgRefused); err != nil {
-			note("labelling Organization %s for the next run's cleanup: %v", adminsOrgRefused, err)
-		}
+		// Not labelled for cleanup: the refused call did not create it, so
+		// nothing shows this run owns it.
 		return "", fmt.Errorf("create_organization as %s was refused, but Organization %s exists", p.alice.Email, adminsOrgRefused)
 	}
 	return fmt.Sprintf("%s refused, no Organization %s afterwards: %s", p.alice.Email, adminsOrgRefused, excerpt(text, 200)), nil
