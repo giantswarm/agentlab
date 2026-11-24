@@ -243,8 +243,8 @@ github.com/giantswarm/selfupdate-cosign v0.3.30 h1:7wv5tls/7UBv1vbtEUbFtLgx+kKWS
 github.com/giantswarm/selfupdate-cosign v0.3.30/go.mod h1:aqZcrB1siDoxywXXOjr82nPlADx6Grac+PxtKPNFlNw=
 github.com/giantswarm/telemetrydeck-go v0.3.19 h1:8YnYHVhbFbU+lmE+fz+XA+4Fc/Aask+mrO80girm284=
 github.com/giantswarm/telemetrydeck-go v0.3.19/go.mod h1:BitlH7nTrQmWvVEtnAa8pNM+FjI0+9S7JA9tl1PVvzo=
-github.com/giantswarm/vm-manager v0.27.4 h1:xZfnKcpGIJiXPHLyqK9f+yKSi36wKhY56ymBd3i//gY=
-github.com/giantswarm/vm-manager v0.27.4/go.mod h1:R1tl0bk0fOksSfvuOCpVRH7+vhpofWfbCWZ6LEgjugk=
+github.com/giantswarm/vm-manager v0.27.5 h1:BEMgRCBVbhG0/BcH7DcsY8VakEFyCfMpf+3+45TONGc=
+github.com/giantswarm/vm-manager v0.27.5/go.mod h1:GKBxV6hySUNu6r6VHjvv7UvnDK4r82hm+RldqNLX5RU=
 github.com/go-chi/chi/v5 v5.5.0 h1:xdKQ1dJmVJsmgahrXSKhUx8NyVPzpwdlyrrQFpMPJgg=
 github.com/go-chi/chi/v5 v5.5.0/go.mod h1:d1IG7GtKPSjPyBP365PH8sAGVHk3qfB/IhjFNRH1wWM=
 github.com/go-errors/errors v1.5.1 h1:ZwEMSLRCapFLflTpT7NKaAc7ukJ8ZPEjzlxt8rPN8bk=
