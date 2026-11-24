@@ -24,6 +24,7 @@ const (
 	consentScopeParam           = "scope"
 	consentLoginParam           = "login"
 	consentApprove              = "approve"
+	consentDecisionParam        = "decision"
 	oauthAuthorizationCodeGrant = "authorization_code"
 	oauthRefreshTokenGrant      = "refresh_token"
 	oauthResourceParam          = "resource"
