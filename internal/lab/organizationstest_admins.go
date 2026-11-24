@@ -287,6 +287,11 @@ func (p *adminsProof) created(org string) func() (string, error) {
 		if env.IsError {
 			return "", fmt.Errorf("create_organization as %s was refused: %s", p.admin.Email, text)
 		}
+		// Marked before the answer is judged, so that a failed verdict
+		// leaves an organization the next run removes first.
+		if err := labelProofOrganization(org); err != nil {
+			return "", err
+		}
 		var answer createOrganizationAnswer
 		if err := json.Unmarshal([]byte(text), &answer); err != nil {
 			return "", fmt.Errorf("create_organization's answer is not the expected JSON: %w\n%.500s", err, text)
@@ -296,9 +301,6 @@ func (p *adminsProof) created(org string) func() (string, error) {
 			return "", fmt.Errorf("create_organization as %s answered created=false: %.500s", p.admin.Email, text)
 		case !slices.Equal(answer.Organization.Admins, admins):
 			return "", fmt.Errorf("create_organization's organization has admins %v, want %v: %.500s", answer.Organization.Admins, admins, text)
-		}
-		if err := labelProofOrganization(org); err != nil {
-			return "", err
 		}
 		ns, err := waitOrganizationReady(org)
 		if err != nil {
@@ -412,8 +414,14 @@ func (p *adminsProof) memberToolRefusesAdmin() (string, error) {
 		return "", err
 	}
 	text := envelopeText(env)
-	if !env.IsError {
+	switch {
+	case !env.IsError:
 		return "", fmt.Errorf("%s's add_organization_member %s as admin in %s was not refused: %.500s", p.alice.Email, user, ns, text)
+	case !strings.Contains(text, "spec.admins") || !strings.Contains(text, "update_organization"):
+		// agent-manager's own refusal points to spec.admins; a refusal
+		// without it may be the admission policy's, after a tool that
+		// tried to write the admin binding.
+		return "", fmt.Errorf("%s's add_organization_member %s as admin in %s was refused, but not by agent-manager's rule that names spec.admins and update_organization: %.500s", p.alice.Email, user, ns, text)
 	}
 	binding, err := readAdminsBinding(ns)
 	if err != nil {
@@ -436,6 +444,9 @@ func (p *adminsProof) createRefused() (string, error) {
 	}
 	text := envelopeText(env)
 	if !env.IsError {
+		if err := labelProofOrganization(adminsOrgRefused); err != nil {
+			note("labelling Organization %s for the next run's cleanup: %v", adminsOrgRefused, err)
+		}
 		return "", fmt.Errorf("create_organization as %s was not refused: %.500s", p.alice.Email, text)
 	}
 	gvr, err := gvrFor(organizationResource)
@@ -449,6 +460,10 @@ func (p *adminsProof) createRefused() (string, error) {
 		return "", err
 	}
 	if exists {
+		// Marked for the next run's removal of the part's leftovers.
+		if err := labelProofOrganization(adminsOrgRefused); err != nil {
+			note("labelling Organization %s for the next run's cleanup: %v", adminsOrgRefused, err)
+		}
 		return "", fmt.Errorf("create_organization as %s was refused, but Organization %s exists", p.alice.Email, adminsOrgRefused)
 	}
 	return fmt.Sprintf("%s refused, no Organization %s afterwards: %s", p.alice.Email, adminsOrgRefused, excerpt(text, 200)), nil
@@ -495,12 +510,8 @@ func (p *adminsProof) adminsEmptied() (string, error) {
 	if _, err := waitOrganizationAdmins(ns, nil); err != nil {
 		return "", err
 	}
-	state, err := readOrganization(adminsOrgB)
-	if err != nil {
-		return "", err
-	}
-	if ok, why := state.ready(); !ok {
-		return "", fmt.Errorf("organization %s without admins is not Ready: %s", adminsOrgB, why)
+	if _, err := waitOrganizationReady(adminsOrgB); err != nil {
+		return "", fmt.Errorf("organization %s without admins: %w", adminsOrgB, err)
 	}
 	return fmt.Sprintf("with spec.admins empty, %s holds no RoleBinding %s and %s stays Ready", ns, organizationAdminsBinding, adminsOrgB), nil
 }

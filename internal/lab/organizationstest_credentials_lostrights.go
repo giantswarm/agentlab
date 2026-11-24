@@ -127,33 +127,34 @@ func (p *credentialsProof) admins(withOther bool) []organizationAdmin {
 	return admins
 }
 
-// writeAdmins sets the organization's spec.admins with or without the other
-// admin, as the lab's admin, and waits until agent-platform-operator's
-// organization-admins follows it.
-func (p *credentialsProof) writeAdmins(ns string, withOther bool) error {
-	if err := setOrganizationAdmins(credentialsOrganization, p.admins(withOther)); err != nil {
+// setOtherAdmin makes the other admin an admin of the organization again,
+// or removes them, in spec.admins, records it for cleanup, then waits until
+// agent-platform-operator's organization-admins follows. While they are
+// removed, an interrupt (Ctrl-C) or SIGTERM writes them back into spec.admins
+// before the program ends: the guard is armed before the removal and
+// disarmed once they are back in the spec. bindingMu keeps the guard's write
+// after any write of the run; it is not held during the wait for the
+// operator, so an interrupt then restores the spec within its bound.
+func (p *credentialsProof) setOtherAdmin(admin bool) error {
+	if err := p.writeOtherAdmin(admin); err != nil {
 		return err
 	}
-	_, err := waitOrganizationAdmins(ns, p.admins(withOther))
+	_, err := waitOrganizationAdmins(p.namespace, p.admins(admin))
 	return err
 }
 
-// setOtherAdmin makes the other admin an admin of the organization again,
-// or removes them, and records it for cleanup. While they are removed, an
-// interrupt (Ctrl-C) or SIGTERM binds them again before the program ends:
-// the guard is armed before the removal and disarmed once they are bound
-// again. bindingMu keeps the guard's write after any write of the run.
-func (p *credentialsProof) setOtherAdmin(admin bool) error {
+// writeOtherAdmin is setOtherAdmin's write of spec.admins, under bindingMu.
+func (p *credentialsProof) writeOtherAdmin(admin bool) error {
 	p.bindingMu.Lock()
 	defer p.bindingMu.Unlock()
 	if !admin && p.disarmRestore == nil {
 		ns := p.namespace
 		p.disarmRestore = restoreOnSignal(func() { p.restoreOnInterrupt(ns) })
 	}
-	if err := p.writeAdmins(p.namespace, admin); err != nil {
+	if err := setOrganizationAdmins(credentialsOrganization, p.admins(admin)); err != nil {
 		if !admin {
 			// The removal may have landed although the write failed:
-			// cleanup binds them again, and disarms the guard.
+			// cleanup writes them back, and disarms the guard.
 			p.otherRemoved = true
 		}
 		return err

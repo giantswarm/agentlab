@@ -938,7 +938,7 @@ at write time and the model it names against the values entry.
 unbound ServiceAccount and the grants required by the platform values.
 With `agentPlatformOrganizations.enabled` and agent-manager's `--multi-tenant`
 flag, it requires exactly `get` and `list` on namespaces for organization
-discovery, and allows `get` and `list` on `agentplatformorganizations` beside
+discovery, and allows `get` and `list` on `organizations.security.giantswarm.io` beside
 it: agent-manager 2.24.0 and later render that row in the same ClusterRole
 (`agent-manager-namespaces`) for `list_organizations`, which answers only the
 organizations the caller's access reviews allow; an earlier release renders
