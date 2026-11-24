@@ -105,6 +105,9 @@ func Up(cfg *config.Config, offers Offers) error {
 		}
 		warnHostKernelChanges(hostKernel)
 	}
+	// Podman starts the nodes at its default pids limit, below what a full
+	// lab runs (nodepids.go); never a reason to stop.
+	ensureNodePidsLimit(cfg)
 	// The nodes pull gsoci through the registry mirror the labs on this
 	// machine share before anything pulls (Dex first); off, their hosts.toml
 	// goes (mirror.go). Never a reason to stop: the nodes fall back to gsoci.

@@ -196,6 +196,17 @@ whole lab. Neither can be raised from inside the node.
   running node at kube-proxy's next sync:
   `printf 'net.core.wmem_default = 4194304\nnet.core.rmem_default = 4194304\n' | sudo tee /etc/sysctl.d/91-rootless-netlink.conf && sudo sysctl --system`.
 
+## Podman's pids limit
+
+Podman starts every container with a limit of 2048 processes. A full lab
+runs about 2000 on the kind node, so a model on the CPU runtime crashloops
+with `pthread_create failed ... Resource temporarily unavailable`, and
+`docker exec` into the node fails with `errno=11`. `agentlab up` removes
+the limit from the nodes (HACKS.md U51), and `agentlab status` shows each
+node's processes against its limit on its `pids` line. If a node still
+shows a limit, run `agentlab up`, or
+`docker update --pids-limit=-1 <clusterName>-control-plane` by hand.
+
 ## vm-manager
 
 - **`vm-manager's pod fetches its guest image … and this link is too slow

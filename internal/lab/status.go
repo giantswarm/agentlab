@@ -177,6 +177,9 @@ type Status struct {
 	// Shaper is the bandwidth shaper on that mirror (shaper.go); nil for a
 	// lab that has it off while no shaper is in place.
 	Shaper *ShaperStatus `json:"shaper,omitempty"`
+	// NodePids are the node containers' processes against their pids limit
+	// (nodepids.go); none when the nodes cannot be read.
+	NodePids []NodePidsStatus `json:"nodePids,omitempty"`
 	// Overlays are agentlab.yaml's platform.valuesFiles with what each sets
 	// (overlays.go); none without.
 	Overlays []Overlay `json:"overlays,omitempty"`
@@ -207,6 +210,7 @@ func LabStatus(cfg *config.Config, dir string) (*Status, error) {
 	s.StaleOverlays = staleOverlays(cfg, installed)
 	s.Mirror = readMirrorStatus(cfg)
 	s.Shaper = readShaperStatus(cfg)
+	s.NodePids = readNodePids(cfg)
 	if cfg.Platform.Enabled {
 		s.Registry = devRegistryState(cfg)
 		s.RegistryRelease = devRegistryRelease(cfg)
@@ -270,6 +274,9 @@ func PrintStatus(w io.Writer, s *Status, asJSON bool) error {
 	}
 	if s.Observability != nil {
 		fmt.Fprintf(&b, "    prometheus  %s\n", s.Observability)
+	}
+	if len(s.NodePids) > 0 {
+		fmt.Fprintf(&b, "    pids        %s\n", nodePidsLine(s.NodePids))
 	}
 	_, err := io.WriteString(w, b.String())
 	return err
