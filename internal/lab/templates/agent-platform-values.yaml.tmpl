@@ -904,6 +904,12 @@ kagent:
       apiKeySecretKey: ANTHROPIC_API_KEY
 {{- end }}
   controller:
+{{- if and (not .LegacyChart) (ne .Platform.GatewayPort 443) }}
+    # The address the agent cards advertise. The meta chart derives
+    # https://agentgateway.<domain> without a port; the lab's edge listens on
+    # platform.gatewayPort. On 443 the chart's own derivation stands.
+    a2aGatewayUrl: "{{ .AgentgatewayBaseURL }}"
+{{- end }}
     auth:
 {{- if .LegacyChart }}
       # The 3.x line runs no JWT-validating policy in front of the controller
