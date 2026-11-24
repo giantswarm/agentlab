@@ -1,6 +1,11 @@
 package lab
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/giantswarm/agentlab/internal/config"
+)
 
 func TestLLMEndpointReported(t *testing.T) {
 	var d llmEndpointDoc
@@ -32,6 +37,36 @@ func TestParseInstantScalar(t *testing.T) {
 			}
 			if got != tc.want {
 				t.Errorf("got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestLLMUsageMetering(t *testing.T) {
+	const endpoint = "http://agentgateway.agent-platform.svc:8081"
+	for name, tc := range map[string]struct {
+		endpoint      string
+		observability bool
+		wantMetered   bool
+		wantSkipped   bool
+	}{
+		"no LLM endpoint":                 {endpoint: "", observability: true},
+		"no LLM endpoint, no PromQL":      {endpoint: ""},
+		"LLM endpoint with PromQL":        {endpoint: endpoint, observability: true, wantMetered: true},
+		"LLM endpoint, observability off": {endpoint: endpoint, wantSkipped: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := &config.Config{}
+			cfg.Platform.Observability = tc.observability
+			metered, skipped := llmUsageMetering(cfg, tc.endpoint)
+			if metered != tc.wantMetered {
+				t.Errorf("metered = %v, want %v", metered, tc.wantMetered)
+			}
+			if (skipped != "") != tc.wantSkipped {
+				t.Errorf("skipped = %q, want skipped=%v", skipped, tc.wantSkipped)
+			}
+			if tc.wantSkipped && !strings.Contains(skipped, "platform.observability is off in "+config.File) {
+				t.Errorf("skipped = %q, want it to name the switch", skipped)
 			}
 		})
 	}
