@@ -372,6 +372,20 @@ system trust store; a note says so), and on a lab with an externally
 provisioned pair (`platform.tls`). There the binary runs as before. The image (`--gateway-image`) runs on Linux, where
 `SSL_CERT_FILE` holds.
 
+**The Slack part of `organizations-test` reads the API server.** The
+gateway names an organization's tenant by the organization's name, which it
+reads from the label `agent-platform.giantswarm.io/organization` on the
+organization's namespace through the Kubernetes API; without that access it
+writes `namespace <namespace>`. The proof gives its gateway the lab's
+kubeconfig: as it is for the binary and for the image on the host network,
+and with the API server at the control-plane node's port 6443 for the image
+on the `kind` network (macOS). It is the lab's admin kubeconfig, more than
+the gateway's ServiceAccount has on an installation (HACKS.md U52). The
+proof's step S3 needs klaus-gateway 4.18.10 or later
+(giantswarm/klaus-gateway#616, a thread's Session started by the
+organization's name); without `--gateway-image` the lab takes the newest
+release that the chart's range admits.
+
 **An image for linux/amd64 only.** A dev image of klaus-gateway is built for
 linux/amd64 alone. When the plain `docker pull` of `--gateway-image` finds no
 manifest for the host's platform (an arm64 host), the proof pulls the image

@@ -101,6 +101,7 @@ const (
 	gatewayKubeconfigPath = "/etc/klaus-gateway/kubeconfig"
 	gatewayBoltFile       = "routes.bolt"
 	gatewayLinksFile      = "links.bolt"
+	gatewayKubeconfigFile = "kubeconfig"
 	gatewayLogFile        = "klaus-gateway.log"
 	gatewaySecrets        = "slack-secrets.yaml"
 	gatewayStateKey       = "obo-state.key"

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 
 	"gopkg.in/yaml.v3"
 
@@ -36,6 +37,28 @@ func labKubeconfig() string {
 		return abs
 	}
 	return labKubeconfigPath
+}
+
+// kindAPIServer is the server line of the kubeconfig kind emits: the API
+// server's port published on the host's loopback.
+var kindAPIServer = regexp.MustCompile(`server: https://127\.0\.0\.1:\d+`)
+
+// withAPIServer is the kubeconfig raw with the server kind wrote (the host's
+// published port) replaced by server, for a process that reaches the API
+// server elsewhere: inside a node, or on the kind network.
+func withAPIServer(raw []byte, server string) []byte {
+	return kindAPIServer.ReplaceAll(raw, []byte("server: "+server))
+}
+
+// labKubeconfigAt writes the lab kubeconfig with its server moved to server
+// (withAPIServer) to runDir/name and returns that path.
+func labKubeconfigAt(runDir, name, server string) (string, error) {
+	raw, err := os.ReadFile(labKubeconfig()) //nolint:gosec // the lab's own kubeconfig
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(runDir, name)
+	return path, os.WriteFile(path, withAPIServer(raw, server), 0o600) //nolint:gosec // the run directory
 }
 
 // kindKubeconfigCache holds the kubeconfig kind read off the node, per

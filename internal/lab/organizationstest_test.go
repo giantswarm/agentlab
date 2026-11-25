@@ -551,9 +551,10 @@ func TestControllerAuthorizationProblem(t *testing.T) {
 }
 
 // A Slack roster passes when it lists the member's organization's agent,
-// its row naming the organization by its name (the member's organization
-// list knows it, so klaus-gateway words it so), and nothing of another
-// organization; the platform tenant's rows are not judged.
+// its row naming the organization by its name (klaus-gateway reads it from
+// the namespace's label through the API server), and nothing of another
+// organization; the platform tenant's rows are not judged. A row that names
+// the namespace instead says the gateway cannot read the API server.
 func TestRosterProblem(t *testing.T) {
 	const alpha = "alpha"
 	ownRef, otherRef := orgAlpha+"/"+organizationsTestAgent, orgBeta+"/"+organizationsTestAgent
@@ -571,8 +572,8 @@ func TestRosterProblem(t *testing.T) {
 	withOther[otherRef] = "*" + organizationsTestAgent + "* · namespace " + orgBeta
 	unlabelled := maps.Clone(good)
 	unlabelled[ownRef] = "*" + organizationsTestAgent + "*"
-	// A gateway before giantswarm/klaus-gateway#616 names the member's own
-	// organization by its namespace, which also holds the name.
+	// A gateway without access to the API server names the organization by
+	// its namespace, which also holds the name.
 	byNamespace := maps.Clone(good)
 	byNamespace[ownRef] = "*" + organizationsTestAgent + "* · namespace " + orgAlpha
 	for name, tc := range map[string]struct {
@@ -581,7 +582,8 @@ func TestRosterProblem(t *testing.T) {
 	}{
 		"another organization's agent":      {withOther, "another organization's"},
 		"no tenant on the row":              {unlabelled, `names the tenant ""`},
-		"the own organization by namespace": {byNamespace, `names the tenant "namespace ` + orgAlpha + `"`},
+		"the own organization by namespace": {byNamespace, `names the tenant "namespace ` + orgAlpha + `", want its organization "alpha"`},
+		"the namespace's hint":              {byNamespace, "no access to the lab's API server"},
 		"no row of their own":               {map[string]string{kagentNamespace + "/assistant": "x"}, "no row of " + ownRef},
 	} {
 		if p := rosterProblem(tc.rows, orgAlpha, alpha); !strings.Contains(p, tc.want) {
@@ -590,22 +592,25 @@ func TestRosterProblem(t *testing.T) {
 	}
 }
 
-// The refusal must be the not-permitted note, name the other organization's
-// tenant as a stranger to it reads it ("namespace <namespace>": their
-// organization list does not know it) and say nothing was sent: a generic
-// failure note would pass for a refusal otherwise.
+// The refusal must be the not-permitted note, name the other organization
+// by its name (the same wording a member gets: the gateway reads it from the
+// namespace's label) and say nothing was sent: a generic failure note would
+// pass for a refusal otherwise. A refusal that names the namespace instead
+// says the gateway cannot read the API server.
 func TestRefusalProblem(t *testing.T) {
-	note := "You cannot use *agentlab-organizations* (namespace " + orgBeta + "): it is not one of the agents you have access to. Nothing was sent to it."
-	if p := refusalProblem(note, orgBeta); p != "" {
+	const alpha, beta = "alpha", "beta"
+	note := "You cannot use *agentlab-organizations* (" + beta + "): it is not one of the agents you have access to. Nothing was sent to it."
+	if p := refusalProblem(note, beta); p != "" {
 		t.Errorf("the gateway's note: %s", p)
 	}
-	for name, text := range map[string]string{
-		"a failure note":  "Something went wrong talking to the agent.",
-		"another tenant":  strings.ReplaceAll(note, orgBeta, orgAlpha),
-		"no nothing-sent": strings.ReplaceAll(note, "Nothing was sent to it.", ""),
+	for name, tc := range map[string]struct{ text, want string }{
+		"a failure note":       {"Something went wrong talking to the agent.", "it is not the refusal"},
+		"another organization": {strings.ReplaceAll(note, beta, alpha), `does not name the organization "beta"`},
+		"by namespace":         {strings.ReplaceAll(note, "("+beta+")", "(namespace "+orgBeta+")"), "no access to the lab's API server"},
+		"no nothing-sent":      {strings.ReplaceAll(note, "Nothing was sent to it.", ""), "Nothing was sent"},
 	} {
-		if refusalProblem(text, orgBeta) == "" {
-			t.Errorf("%s accepted as the refusal", name)
+		if p := refusalProblem(tc.text, beta); !strings.Contains(p, tc.want) {
+			t.Errorf("%s: %q, want %q", name, p, tc.want)
 		}
 	}
 }

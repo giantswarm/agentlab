@@ -170,10 +170,13 @@ with Dex doing the logins.
   (docs/agents.md "The Organization kind prototype"). There agent-manager's
   tools take an organization by its name (`organization`), never its
   namespace: the lab passes `namespace` only for `kagent`. The Slack surface
-  of `organizations-test` needs klaus-gateway with
-  giantswarm/klaus-gateway#616, which starts a thread's Session by the
-  organization's name (its dev image until a release has it: docs/agents.md
-  "The tools take the organization's name").
+  of `organizations-test` needs klaus-gateway 4.18.10 or later, the first
+  release with giantswarm/klaus-gateway#616, which starts a thread's Session
+  by the organization's name (the lab takes it from the chart's range by
+  itself). Its gateway reads the lab's API server in every shape: it names an
+  organization's tenant by the label `agent-platform.giantswarm.io/organization`
+  on the namespace, and without that access it writes `namespace <namespace>`
+  (docs/agents.md "The tools take the organization's name").
   `agentlab organizations-test` is the proof (docs/agents.md "The
   organizations proof"); its two organizations stay between runs, since an
   organization's erasure is skipped on the lab (HACKS.md U41).

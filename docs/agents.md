@@ -471,23 +471,26 @@ agent-manager finds an organization's namespace itself, in its
 The lab's own proofs on `kagent` pass `namespace: kagent` or nothing, as
 before. `organizations-test` passes the organization's name to every tool it
 calls (the members' `start_session` included), and judges each answer's
-`organization` where the answer carries it. Its Slack surface needs a
-klaus-gateway with giantswarm/klaus-gateway#616 (a part of
-giantswarm/giantswarm#39503): that gateway starts a thread's Session on an
-organization's agent with `start_session` and the organization's name, which
-it reads from the person's `list_organizations`. An older gateway passes the
+`organization` where the answer carries it. Its Slack surface needs
+klaus-gateway 4.18.10 or later, the first release with
+giantswarm/klaus-gateway#616 (a part of giantswarm/giantswarm#39503): that
+gateway starts a thread's Session on an organization's agent with
+`start_session` and the organization's name. An older gateway passes the
 agent's namespace, which this agent-manager build refuses, so its Slack turn
-fails. Until a klaus-gateway release has the change, run the proof with the
-change's dev image:
+(step S3) fails. Without `--gateway-image` or `--gateway-binary` the proof
+takes the newest klaus-gateway release that the agent-platform chart's range
+admits, which is 4.18.10 or later.
 
-```bash
-agentlab organizations-test --gateway-image gsoci.azurecr.io/giantswarm/klaus-gateway:4.18.10-r665749cet20261125131441h743bb2f
-```
-
-The dev image is built for linux/amd64 only. On an arm64 machine the proof's
-own pull finds no manifest for the host's platform, then pulls the image for
-linux/amd64, and Docker runs it under emulation; `docker pull --platform
-linux/amd64 <image>` before the run does the same by hand.
+The gateway names an organization's tenant on a roster row and in a refusal
+by the organization's name. It reads that name from the label
+`agent-platform.giantswarm.io/organization` on the organization's namespace,
+through the Kubernetes API, for a member and for a stranger alike. A gateway
+that cannot read the API server writes `namespace <namespace>` instead. So
+the proof gives its gateway the lab's kubeconfig in each shape: the binary
+and the image on the host network get the lab kubeconfig as it is, and the
+image on the `kind` network (macOS) gets a copy that names the API server as
+the control-plane node's port 6443. It is the lab's admin kubeconfig, more
+than the gateway's ServiceAccount has on an installation (HACKS.md U52).
 
 A lab that ran the earlier `AgentPlatformOrganization` model has no
 migration: start the prototype on a new lab (`agentlab down`, then `agentlab
@@ -541,11 +544,13 @@ the namespace's atespace from that namespace only. Then:
     same in their own organization pass; `ListSessions` with `all_creators`
     is `PermissionDenied` for both members and answered for the admin;
   - Slack: each roster is the member's own organization's, its row naming
-    the organization by its name (the member's organization list knows it);
-    a pick of the other organization's agent is refused with nothing
-    reaching it, and a turn in a thread on it is refused, each refusal naming
-    `namespace <namespace>` (the member's organization list does not know
-    that organization);
+    the organization by its name; a pick of the other organization's agent
+    is refused with nothing reaching it, and a turn in a thread on it is
+    refused, each refusal naming that organization by its name
+    (`(<organization>)`). The gateway reads the names from the organization
+    namespaces' labels through the API server; a row or a refusal that names
+    `namespace <namespace>` fails with a hint that the gateway has no access
+    to the API server;
   - muster: with an `MCPServer` in each organization namespace, each member
     lists muster's namespace's servers and their own organization's; with
     their RoleBinding gone a moment, their own goes too; the first member's
