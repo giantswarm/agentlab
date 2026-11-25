@@ -240,14 +240,18 @@ type measurement struct {
 	started   int // the Sessions start_session started
 	agentNS   string
 	agentName string
-	sessions  string // why the Session figures are not available, "" when they are
-	pushers   map[string]*measurePusher
-	listedAt  map[string]time.Time // owner → the manager's last listing of it
-	ws        []*measureWorkspace
-	runNo     int // the run being measured, for a failed probe's record
-	created   []string
-	report    measureReport
-	runDir    string
+	// agentOrg is the organization whose namespace agentNS is, by its
+	// namespace's label: start_session takes an organization's agent by the
+	// organization's name, never its namespace. "" for a platform namespace.
+	agentOrg string
+	sessions string // why the Session figures are not available, "" when they are
+	pushers  map[string]*measurePusher
+	listedAt map[string]time.Time // owner → the manager's last listing of it
+	ws       []*measureWorkspace
+	runNo    int // the run being measured, for a failed probe's record
+	created  []string
+	report   measureReport
+	runDir   string
 }
 
 // WorkspacesMeasure runs the measurement and writes its report.
@@ -459,8 +463,28 @@ func (m *measurement) remotePreconditions() error {
 	}
 	m.set = &sessionSet{api: m.api, manager: m.person}
 	m.agentNS, m.agentName, _ = strings.Cut(o.Agent, "/")
+	if m.agentOrg, err = namespaceOrganization(m.agentNS); err != nil {
+		return err
+	}
 	m.report.Harness = "Agent " + o.Agent + "'s"
 	return nil
+}
+
+// namespaceOrganization is the organization whose Agent Platform namespace
+// ns is, by agent-platform-operator's label on it, "" for any other
+// namespace.
+func namespaceOrganization(ns string) (string, error) {
+	k, err := labKube()
+	if err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
+	defer cancel()
+	got, err := k.clientset.CoreV1().Namespaces().Get(ctx, ns, metav1.GetOptions{})
+	if err != nil {
+		return "", fmt.Errorf("--agent's namespace %s: %w", ns, err)
+	}
+	return got.Labels[organizationLabel], nil
 }
 
 // musterCLIToken is the person's token of their muster sign-in at url: the
@@ -920,9 +944,12 @@ func (m *measurement) session(w *measureWorkspace, last bool) error {
 		return m.storage(w, last)
 	}
 	startCalled := time.Now()
-	env, err := m.person.callToolEnvelope(agentManagerToolPrefix+"start_session", map[string]any{
-		nameKey: m.agentName, namespaceKey: m.agentNS, startSessionRequestIDArg: uuid.NewString(), startSessionGrantArg: grant,
-	})
+	args := map[string]any{nameKey: m.agentName, namespaceKey: m.agentNS, startSessionRequestIDArg: uuid.NewString(), startSessionGrantArg: grant}
+	if m.agentOrg != "" {
+		delete(args, namespaceKey)
+		args[organizationArg] = m.agentOrg
+	}
+	env, err := m.person.callToolEnvelope(agentManagerToolPrefix+"start_session", args)
 	if err != nil {
 		return err
 	}
