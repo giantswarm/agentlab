@@ -476,7 +476,9 @@ exception it does not control: klaus-gateway starts a thread's Session with
 `start_session` and the agent's namespace, which this agent-manager build
 refuses for an organization's agent, so the Slack turn on an organization's
 agent fails until klaus-gateway passes `organization`; `--skip-slack` runs
-the rest.
+the rest. The klaus-gateway change is a part of giantswarm/giantswarm#39503;
+the Slack part of the proof runs again once a klaus-gateway build sends
+`organization`.
 
 A lab that ran the earlier `AgentPlatformOrganization` model has no
 migration: start the prototype on a new lab (`agentlab down`, then `agentlab
