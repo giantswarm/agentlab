@@ -308,7 +308,7 @@ func (p *organizationsProof) run() error {
 			continue
 		}
 		since := time.Now()
-		reply, session, err := agentSessionTurnOf(p.cfg, &apiv1alpha1.ResourceReference{Namespace: ns, Name: organizationsTestAgent}, p.tokens[i], organizationsTestPrompt)
+		reply, session, err := agentSessionTurnOf(p.cfg, p.names[i], &apiv1alpha1.ResourceReference{Namespace: ns, Name: organizationsTestAgent}, p.tokens[i], organizationsTestPrompt)
 		if session != "" {
 			p.sessions[i] = append(p.sessions[i], session)
 		}
@@ -966,7 +966,7 @@ func (p *organizationsProof) egressChecks() []organizationCheck {
 		run: func() (string, error) {
 			targets := []string{DefaultEgressOrigin + "/", "https://" + kubernetesAPIHost + "/version", "https://" + ateAPIHost + "/"}
 			started := time.Now()
-			reply, session, err := agentSessionTurnOf(p.cfg, &apiv1alpha1.ResourceReference{Namespace: a, Name: organizationsTestAgent}, p.tokens[0], inClusterProbePrompt(targets))
+			reply, session, err := agentSessionTurnOf(p.cfg, p.names[0], &apiv1alpha1.ResourceReference{Namespace: a, Name: organizationsTestAgent}, p.tokens[0], inClusterProbePrompt(targets))
 			if session != "" {
 				p.sessions[0] = append(p.sessions[0], session)
 			}

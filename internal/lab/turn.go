@@ -94,7 +94,7 @@ func Turn(cfg *config.Config, email, template, harness, prompt, sessionID, decid
 		if err != nil {
 			return err
 		}
-		if session, err = startSessionOf(ctx, ms, api, &sessionSet{api: api, manager: ms}, agentRef(agent.Name), uuid.NewString()); err != nil {
+		if session, err = startSessionOf(ctx, ms, api, &sessionSet{api: api, manager: ms}, "", agentRef(agent.Name), uuid.NewString()); err != nil {
 			return err
 		}
 		sessionID = session.GetId()

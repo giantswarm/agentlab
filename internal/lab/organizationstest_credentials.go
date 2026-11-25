@@ -1117,7 +1117,8 @@ type confirmation struct {
 	State        string `json:"state"`
 	Mode         string `json:"mode"`
 	Organization struct {
-		Namespace string `json:"namespace"`
+		Organization string `json:"organization"`
+		Namespace    string `json:"namespace"`
 	} `json:"organization"`
 	GitTarget *struct {
 		Repository string `json:"repository"`
@@ -1149,8 +1150,9 @@ func (p *credentialsProof) save() (string, error) {
 		return "", err
 	}
 	switch {
-	case c.ID != p.operation || c.State != operationPending || c.Mode != p.mode || c.Organization.Namespace != p.namespace:
-		return "", fmt.Errorf("the confirmation names operation %q state %q mode %q in %q, want %s %s %s in %s", c.ID, c.State, c.Mode, c.Organization.Namespace, p.operation, operationPending, p.mode, p.namespace)
+	case c.ID != p.operation || c.State != operationPending || c.Mode != p.mode || c.Organization.Organization != credentialsOrganization || c.Organization.Namespace != p.namespace:
+		return "", fmt.Errorf("the confirmation names operation %q state %q mode %q for organization %q in %q, want %s %s %s for %s in %s",
+			c.ID, c.State, c.Mode, c.Organization.Organization, c.Organization.Namespace, p.operation, operationPending, p.mode, credentialsOrganization, p.namespace)
 	case p.mode == modeCommit && (c.GitTarget == nil || c.GitTarget.Repository != p.pre.agentManager[flagOrgsRepository]):
 		return "", fmt.Errorf("the confirmation's git target %+v is not %s", c.GitTarget, p.pre.agentManager[flagOrgsRepository])
 	}
