@@ -246,7 +246,7 @@ func OrganizationsTest(cfg *config.Config, opts OrganizationsTestOptions) error 
 	// The Slack half's gateway starts a thread's Session through muster: a
 	// binary that cannot verify muster would fail only at S3.
 	if part == "" && !opts.SkipSlack {
-		if err := refuseUntrustedHostGateway(opts.GatewayBinary); err != nil {
+		if err := refuseUntrustedHostGateway(cfg, opts.GatewayBinary); err != nil {
 			return err
 		}
 	}

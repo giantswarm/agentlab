@@ -784,8 +784,13 @@ construction: an installation's edge serves a publicly trusted certificate.
 the image on the host's network. Docker Desktop leaves host networking off by
 default, so the Mac has no route to the container's loopback ports and the
 readiness probe times out with an empty log; a darwin build of the gateway
-cannot verify the lab CA either (`SSL_CERT_FILE` is not read on macOS, and the
-system verifier calls the lab certificate not standards compliant). **Fix:**
+cannot verify the lab CA either: `SSL_CERT_FILE` is not read on macOS (a
+module whose `go` directive is below 1.27), so it verifies against the system
+trust store. (The system verifier's "not standards compliant" seen on
+2026-10-19 was a leaf valid for 825 days and two hours, which `certs.go`
+mints within the cap since 1936eeb.) The proofs whose gateway calls muster
+refuse such a binary before they start unless the lab CA is in the system
+trust store (`hostGatewayTrustProblem`). **Fix:**
 on darwin, with the image, the container joins the `kind` network, its two
 ports are published on 127.0.0.1, `--add-host` names the edge's and muster's
 public hostnames as the node's address, the target and muster are the edge's

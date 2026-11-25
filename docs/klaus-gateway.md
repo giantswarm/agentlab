@@ -365,13 +365,18 @@ trust store, so its muster calls fail with `x509: certificate signed by
 unknown authority`. `klaus-gateway-test`, `decisions-test` and the Slack part
 of `organizations-test` call muster through the gateway: on macOS they refuse
 `--gateway-binary` before they start unless the lab CA is in the system trust
-store (`agentlab trust`). The image (`--gateway-image`) runs on Linux, where
+store (`agentlab trust`). They refuse it also while `SSL_CERT_FILE` or
+`SSL_CERT_DIR` is set in agentlab's own environment: agentlab then reads that
+variable in place of the system trust store and cannot see what the gateway
+sees. A lab with an externally provisioned pair (`platform.tls`) runs the
+binary as before. The image (`--gateway-image`) runs on Linux, where
 `SSL_CERT_FILE` holds.
 
 **An image for linux/amd64 only.** A dev image of klaus-gateway is built for
-linux/amd64 alone. When the plain `docker pull` of `--gateway-image` fails (an
-arm64 host finds no manifest for its platform), the proof pulls the image
-again for linux/amd64, and Docker runs it under emulation.
+linux/amd64 alone. When the plain `docker pull` of `--gateway-image` finds no
+manifest for the host's platform (an arm64 host), the proof pulls the image
+again for linux/amd64, and Docker runs it under emulation. Any other pull
+failure stops the proof with the pull's own error.
 
 1. No token is 401; a person no member of the fake workspace has the email
    of is 422.

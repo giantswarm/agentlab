@@ -99,7 +99,7 @@ func DecisionsTest(cfg *config.Config, email string, opts DecisionsTestOptions) 
 		return fmt.Errorf("no user %q in %s", email, config.File)
 	}
 	// The gateway answers decisions through muster (trustLabCA).
-	if err := refuseUntrustedHostGateway(opts.GatewayBinary); err != nil {
+	if err := refuseUntrustedHostGateway(cfg, opts.GatewayBinary); err != nil {
 		return err
 	}
 	opts.Port = cmp.Or(opts.Port, gatewayTestPort(cfg))

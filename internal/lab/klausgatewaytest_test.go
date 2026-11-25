@@ -255,8 +255,9 @@ func TestGatewayProcessExitsBeforeReady(t *testing.T) {
 }
 
 // fakeDockerScript stands in for the docker CLI in $FAKE_DOCKER_DIR: the
-// image is cached once pulled (`image inspect` fails before), and with
-// $FAKE_AMD64_ONLY only a pull for --platform linux/amd64 finds it; `run` pulls an
+// image is cached once pulled (`image inspect` fails before), with
+// $FAKE_AMD64_ONLY only a pull for --platform linux/amd64 finds it, and with
+// $FAKE_PULL_UNREACHABLE no pull reaches the registry; `run` pulls an
 // uncached image itself, taking $FAKE_PULL seconds, then creates the
 // container (the file container), marks it ready unless $FAKE_NEVER_READY,
 // and runs until killed; `stop` ends it unless $FAKE_STOP_MISSES (the client
@@ -267,6 +268,7 @@ echo "$*" >> "$d/calls"
 case "$1" in
 image) [ -e "$d/pulled" ] ;;
 pull)
+  [ -z "$FAKE_PULL_UNREACHABLE" ] || { echo "dial tcp: connection refused" >&2; exit 1; }
   case "$*" in *"--platform linux/amd64"*) ;; *) [ -z "$FAKE_AMD64_ONLY" ] || { echo "no matching manifest for linux/arm64/v8" >&2; exit 1; } ;; esac
   sleep "$FAKE_PULL"; touch "$d/pulled" ;;
 run)
@@ -339,27 +341,50 @@ func TestGatewayImagePullFallsBackToAmd64(t *testing.T) {
 	}
 }
 
+// TestGatewayImagePullFailureNotRetriedForAmd64: a pull that fails for
+// another reason than the platform is not tried again for linux/amd64, so a
+// multi-platform image is never cached as amd64 on an arm64 host.
+func TestGatewayImagePullFailureNotRetriedForAmd64(t *testing.T) {
+	dir, g := fakeDockerGateway(t, map[string]string{fakePullEnv: "0", "FAKE_PULL_UNREACHABLE": "1"})
+	if err := g.start(); err == nil || !strings.Contains(err.Error(), "connection refused") {
+		t.Fatalf("start() with an unreachable registry = %v, want the pull's error", err)
+	}
+	calls, _ := os.ReadFile(filepath.Join(dir, "calls")) // #nosec G304 -- the test's own temporary file
+	if strings.Contains(string(calls), "--platform") {
+		t.Errorf("docker calls =\n%s\nwant no pull for another platform", calls)
+	}
+}
+
 // A gateway binary on macOS verifies muster against the system trust store
 // alone (SSL_CERT_FILE is ignored there), so a proof whose gateway calls
-// muster refuses it up front unless the lab CA is trusted; the image and
-// any other host are fine.
+// muster refuses it up front unless the lab CA is trusted, and when
+// agentlab's own probe reads a certificate variable in place of the store;
+// the image, any other host and an externally provisioned pair are fine.
 func TestHostGatewayTrustProblem(t *testing.T) {
-	p := hostGatewayTrustProblem(goosDarwin, "/bin/klaus-gateway", false)
-	for _, want := range []string{"--gateway-image", "agentlab trust"} {
-		if !strings.Contains(p, want) {
-			t.Errorf("the refusal %q does not name %s", p, want)
-		}
-	}
+	const binary = "/bin/klaus-gateway"
 	for name, tc := range map[string]struct {
-		goos, binary string
-		trusted      bool
+		binary string
+		trust  hostTrust
+		want   []string
 	}{
-		"the image on macOS":                {goosDarwin, "", false},
-		"a binary on macOS, lab CA trusted": {goosDarwin, "/bin/klaus-gateway", true},
-		"a binary on Linux":                 {"linux", "/bin/klaus-gateway", false},
+		"a binary on macOS, lab CA untrusted":  {binary, hostTrust{goos: goosDarwin}, []string{"--gateway-image", "agentlab trust"}},
+		"a binary on macOS, SSL_CERT_FILE set": {binary, hostTrust{goos: goosDarwin, labCATrusted: true, certEnv: "SSL_CERT_FILE"}, []string{"--gateway-image", "unset SSL_CERT_FILE"}},
+		"a binary on macOS, lab CA trusted":    {binary, hostTrust{goos: goosDarwin, labCATrusted: true}, nil},
+		"a binary on macOS, external pair":     {binary, hostTrust{goos: goosDarwin, externalTLS: true}, nil},
+		"the image on macOS":                   {"", hostTrust{goos: goosDarwin}, nil},
+		"a binary on Linux":                    {binary, hostTrust{goos: "linux"}, nil},
 	} {
-		if p := hostGatewayTrustProblem(tc.goos, tc.binary, tc.trusted); p != "" {
+		p := hostGatewayTrustProblem(tc.binary, tc.trust)
+		if tc.want == nil && p != "" {
 			t.Errorf("%s refused: %s", name, p)
+		}
+		if tc.want != nil && p == "" {
+			t.Errorf("%s not refused", name)
+		}
+		for _, want := range tc.want {
+			if !strings.Contains(p, want) {
+				t.Errorf("%s: the refusal %q does not name %s", name, p, want)
+			}
 		}
 	}
 }
