@@ -55,11 +55,14 @@ const (
 	// The arguments of agent-manager's organization tools the part sends:
 	// the admins of create_organization and update_organization, and the
 	// role of add_organization_member, whose person argument is "user" too.
-	argAdminGroups = "adminGroups"
-	argAdminUsers  = "adminUsers"
-	argRole        = "role"
-	argRoleUser    = "user"
-	argRoleAdmin   = "admin"
+	// organizationArg is the organization every tool of an organization's
+	// contents takes: the name of its Organization, never its namespace.
+	organizationArg = "organization"
+	argAdminGroups  = "adminGroups"
+	argAdminUsers   = "adminUsers"
+	argRole         = "role"
+	argRoleUser     = "user"
+	argRoleAdmin    = "admin"
 	// memberToolsAdminRefusal is agent-manager's refusal of the admin role
 	// in its member tools (internal/organizations/members.go, roleOf).
 	memberToolsAdminRefusal = "the member tools do not give or remove the admin role"
@@ -257,6 +260,19 @@ func envelopeText(env *toolEnvelope) string {
 	return strings.Join(parts, "\n")
 }
 
+// answerOrganization is the organization an agent-manager answer names in
+// its top-level organization field, "" for none or an answer that is not a
+// JSON object.
+func answerOrganization(text string) string {
+	var answer struct {
+		Organization string `json:"organization"`
+	}
+	if json.Unmarshal([]byte(text), &answer) != nil {
+		return ""
+	}
+	return answer.Organization
+}
+
 // readAdminsBinding reads the namespace's organization-admins; nil when
 // there is none.
 func readAdminsBinding(ns string) (*rbacv1.RoleBinding, error) {
@@ -405,14 +421,17 @@ func (p *adminsProof) memberToolRefusesAdmin() (string, error) {
 	ns := p.namespaces[adminsOrgA]
 	_, admins := p.caseOf(adminsOrgA)
 	user := userSubject(p.outsider).Name
-	twin, err := p.callOrganizationTool(p.alice, "add_organization_member", map[string]any{namespaceKey: ns, argRoleUser: user, argRole: argRoleUser, dryRunArg: true})
+	twin, err := p.callOrganizationTool(p.alice, "add_organization_member", map[string]any{organizationArg: adminsOrgA, argRoleUser: user, argRole: argRoleUser, dryRunArg: true})
 	if err != nil {
 		return "", err
 	}
 	if twin.IsError {
 		return "", fmt.Errorf("the twin: %s's add_organization_member %s as user in %s (a dry run) was refused: %s", p.alice.Email, user, ns, envelopeText(twin))
 	}
-	env, err := p.callOrganizationTool(p.alice, "add_organization_member", map[string]any{namespaceKey: ns, argRoleUser: user, argRole: argRoleAdmin, modeArg: modeApply})
+	if got := answerOrganization(envelopeText(twin)); got != adminsOrgA {
+		return "", fmt.Errorf("the twin: %s's add_organization_member %s as user (a dry run) answered for organization %q, want %s: %.300s", p.alice.Email, user, got, adminsOrgA, envelopeText(twin))
+	}
+	env, err := p.callOrganizationTool(p.alice, "add_organization_member", map[string]any{organizationArg: adminsOrgA, argRoleUser: user, argRole: argRoleAdmin, modeArg: modeApply})
 	if err != nil {
 		return "", err
 	}

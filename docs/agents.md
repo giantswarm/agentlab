@@ -402,10 +402,17 @@ yet. To run the prototype:
        # giantswarm/agent-platform-operator#69
        versionRange: "0.4.7-r1b5e09bdt20261124180250he5d00ae"
      agent-manager:
-       # giantswarm/agent-manager#475, with main's A2A-Version fix
-       # (giantswarm/agent-manager#480)
-       versionRange: "3.5.9-r1b5e09bdt20261125095418h68c27fc"
+       # giantswarm/agent-manager#475 at its head 31a58c6, with main's
+       # A2A-Version fix (giantswarm/agent-manager#480)
+       versionRange: "3.5.9-r1b5e09bdt20261125120439h31a58c6"
    ```
+
+   This agent-manager build takes every organization by its name: each
+   tool of an organization's contents takes one argument `organization`,
+   the name of the `Organization`, and never its namespace (see [The
+   tools take the organization's name](#the-tools-take-the-organizations-name)).
+   The lab's proofs call it so; an earlier build of the pull request, which
+   took the namespace, fails them.
 
    Both charts are in `oci://gsoci.azurecr.io/charts/giantswarm` (the
    repository the meta chart already names; the catalog metadata of these
@@ -435,6 +442,35 @@ yet. To run the prototype:
    giantswarm/agentlab#1347 is fixed, such a lab needs `platform.tls`: see
    [Bring your own certificate](tls.md#bring-your-own-certificate).
 5. `agentlab platform`, then `agentlab organizations-test`.
+
+#### The tools take the organization's name
+
+From giantswarm/agent-manager#475 at 31a58c6 (giantswarm/giantswarm#39503),
+agent-manager finds an organization's namespace itself, in its
+`Organization`'s `status.agentPlatform.namespace`:
+
+- The member tools (`list_organization_members`,
+  `add_organization_member`, `remove_organization_member`),
+  `list_organization_connectors`, `set_organization_connector` and
+  `set_organization_egress_policy` take `organization` (required) in place
+  of `namespace`; a call that still passes `namespace` is refused.
+- `set_organization_model`, `replace_organization_credential` and
+  `delete_organization_object` take `organization` (optional): without it
+  they act on the installation's own models, for a cluster admin.
+- The agent and session tools take `organization` for an organization's
+  agents, `organization` with `cluster` for an agent on a workload cluster,
+  and `namespace` only for the installation's own platform namespace
+  (`kagent`). An organization's namespace as `namespace` is refused as
+  `invalid_request`, naming the organization to pass to a caller with a
+  right in it; `organization` with `namespace` and no `cluster` is refused
+  as `invalid_request`.
+- An organization that does not exist and one the caller has no right in
+  are answered alike: `not_found: organization <name> not found`.
+- Every answer about an organization's object carries `organization`.
+
+The lab's own proofs on `kagent` pass `namespace: kagent` or nothing, as
+before. `organizations-test` passes the organization's name to every tool,
+and judges each answer's `organization` where the answer carries it.
 
 A lab that ran the earlier `AgentPlatformOrganization` model has no
 migration: start the prototype on a new lab (`agentlab down`, then `agentlab
@@ -496,6 +532,16 @@ the namespace's atespace from that namespace only. Then:
     `core_service_start` and `core_auth_login` naming the other
     organization's server read word for word as for a server that does not
     exist;
+  - agent-manager through muster (its tools take the organization's name):
+    the first member's `create_agent` with their organization's namespace
+    as `namespace` and no `organization` is refused as `invalid_request`
+    naming their organization; their `create_agent` naming the other
+    organization reads word for word as for an organization that does not
+    exist (`not_found`); their `create_agent` with their organization and
+    its namespace and no `cluster` is refused as `invalid_request`. None
+    writes a HelmRelease. The twin of each: their `get_agent` of their own
+    agent by their organization's name is answered with that organization
+    and its namespace;
   - models and the llm listener: the first member's agent naming the other
     organization's ModelConfig is refused at admission or fails on that
     reference, and no credential of the other organization is read for its
@@ -543,7 +589,9 @@ at all, not even an empty one or one with another key; only where that
 Secret existed before the refused write does a Secret without a value at
 `apiKey` pass. Each verdict:
 
-- `set_organization_model` through muster (`x_agent-manager_set_organization_model`)
+- `set_organization_model` through muster (`x_agent-manager_set_organization_model`,
+  with `organization: agentlab-credentials`, as every model, connector and
+  egress call of the part, whose answers must name that organization back)
   for a new model without a key writes nothing: no ModelConfig, no
   `tenant-credential-*` value, and the answer names a pending credential
   operation. In commit mode no open pull request of the person touches the
@@ -749,9 +797,10 @@ outsider. The verdicts:
   by an admission policy as alice (its admin) and as the lab's admin
   (`cluster-admin`), while alice's binding to `agent-platform:editor` is
   admitted (dry runs);
-- alice's `add_organization_member` with the role `admin` is refused and
-  `organization-admins` does not change, while the role `user` (a dry run)
-  is admitted;
+- alice's `add_organization_member` (`organization: agentlab-admins-a`)
+  with the role `admin` is refused and `organization-admins` does not
+  change, while the role `user` (a dry run) is admitted and answers for
+  that organization;
 - alice, who may not create `Organization`s, is refused
   `create_organization`, and no organization of that name exists
   afterwards;

@@ -408,7 +408,7 @@ func (p *credentialsProof) grantProblem() string {
 
 // modelArgs are set_organization_model's arguments: a new model, no key.
 func (p *credentialsProof) modelArgs() map[string]any {
-	return map[string]any{namespaceKey: p.namespace, nameKey: credentialsModel, "provider": organizationModelProvider, modelField: p.cfg.AIModel, modeArg: p.mode}
+	return map[string]any{organizationArg: credentialsOrganization, nameKey: credentialsModel, "provider": organizationModelProvider, modelField: p.cfg.AIModel, modeArg: p.mode}
 }
 
 // modelWithoutKey: the plain client's set_organization_model writes
@@ -482,7 +482,8 @@ func setModelWith(ctx context.Context, m *musterMCP, args map[string]any, roundT
 
 // credentialToolWith calls one of agent-manager's model, connector and
 // egress tools with args, answering a previous input_required with
-// roundTrip, and decodes a result.
+// roundTrip, and decodes a result, which must name the organization of
+// args.
 func credentialToolWith(ctx context.Context, m *musterMCP, tool string, args map[string]any, roundTrip mcp.MultiRoundTripParams) (*musterAnswer, *credentialAnswer, error) {
 	answer, err := m.call(ctx, agentManagerToolPrefix+tool, args, roundTrip)
 	if err != nil || answer.result == nil {
@@ -494,6 +495,10 @@ func credentialToolWith(ctx context.Context, m *musterMCP, tool string, args map
 	var result credentialAnswer
 	if err := json.Unmarshal([]byte(answer.result.text()), &result); err != nil {
 		return nil, nil, fmt.Errorf("%s's answer: %w: %s", tool, err, excerpt(answer.result.text(), 300))
+	}
+	// The answer names the organization the call addressed, by name.
+	if want, _ := args[organizationArg].(string); result.Organization != want {
+		return nil, nil, fmt.Errorf("%s's answer names organization %q, want %q: %s", tool, result.Organization, want, excerpt(answer.result.text(), 300))
 	}
 	return answer, &result, nil
 }

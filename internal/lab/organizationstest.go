@@ -45,9 +45,10 @@ import (
 //   - the negative cross-organization tests, each a verdict naming its
 //     surface and its boundary, each with a twin in the member's own
 //     organization that is admitted, so a refusal for any other reason
-//     fails: Kubernetes, the kagent API and A2A, muster, the other
-//     organization's model, in-cluster endpoints on 443 through the egress
-//     gateway;
+//     fails: Kubernetes, the kagent API and A2A, muster, agent-manager
+//     (its tools take the organization's name, never its namespace), the
+//     other organization's model, in-cluster endpoints on 443 through the
+//     egress gateway;
 //   - the management-cluster profile tests that fit the lab: the
 //     object-count ResourceQuota, a Kyverno PolicyException that does not
 //     lift the sandbox admission policies, cleanup of an Orphaned
@@ -366,7 +367,8 @@ func (p *organizationsProof) run() error {
 	p.add(organizationVerdict{surface: strings.Join(slices.Sorted(maps.Keys(rosters)), ", "), boundary: "every surface gives each member the same agents", detail: same})
 
 	muster := &organizationsMuster{cfg: p.cfg, namespaces: p.namespaces, users: p.members}
-	for _, c := range slices.Concat(p.kubernetesChecks(), muster.checks(), p.modelChecks(), p.egressChecks(), p.profileChecks()) {
+	agentManager := &organizationsAgentManager{cfg: p.cfg, names: p.names, namespaces: p.namespaces, users: p.members}
+	for _, c := range slices.Concat(p.kubernetesChecks(), muster.checks(), agentManager.checks(), p.modelChecks(), p.egressChecks(), p.profileChecks()) {
 		v, err := c.verdict()
 		if err != nil {
 			return err
@@ -1459,7 +1461,7 @@ func (p *organizationsProof) cleanupAgents() {
 		if ns == "" {
 			continue
 		}
-		for _, name := range []string{organizationsTestAgent, organizationsTestCrossAgent} {
+		for _, name := range []string{organizationsTestAgent, organizationsTestCrossAgent, organizationsTestToolAgent} {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*organizationReadyTimeout)
 			if err := deleteObject(ctx, gvr, ns, name, organizationReadyTimeout); err != nil {
 				note("cleanup: %v", err)

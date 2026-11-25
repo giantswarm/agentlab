@@ -202,6 +202,7 @@ func signInAttribution(message, key string) string {
 // credentialAnswer is the part of agent-manager's ResourceResult the proof
 // reads: the credentials and the pending operation, or the receipt.
 type credentialAnswer struct {
+	Organization        string            `json:"organization"`
 	Namespace           string            `json:"namespace"`
 	Kind                string            `json:"kind"`
 	Name                string            `json:"name"`
