@@ -818,9 +818,10 @@ func deleteRetryable(err error) bool {
 
 // untilSettled runs call on the session until it answers anything settling
 // does not match, retrying with a pause growing from sessionSettleBackoff to
-// sessionSettleMaxBackoff, bounded by timeout; the wait is noted once. The
-// error names the method and the session, and, when the bound or the context
-// ends the wait, the attempts and the controller's last answer.
+// sessionSettleMaxBackoff, bounded by timeout; the wait is noted once, with
+// the answer that started it. The error names the method and the session,
+// and, when the bound or the context ends the wait, the attempts and the
+// last answer.
 func untilSettled(ctx context.Context, method, id string, timeout time.Duration, settling func(error) bool, call func() error) error {
 	deadline := time.Now().Add(timeout)
 	pause := sessionSettleBackoff
@@ -833,10 +834,10 @@ func untilSettled(ctx context.Context, method, id string, timeout time.Duration,
 			return fmt.Errorf("%s %s: %w", method, id, err)
 		}
 		if !time.Now().Add(pause).Before(deadline) {
-			return fmt.Errorf("%s %s: the Session did not settle within %s (%d attempts), last answer: %w", method, id, timeout, attempt, err)
+			return fmt.Errorf("%s %s: no final answer within %s (%d attempts), last answer: %w", method, id, timeout, attempt, err)
 		}
 		if attempt == 1 {
-			note("%s %s: the Session's runtime work is not yet settled; retrying for up to %s", method, id, timeout)
+			note("%s %s: %v; retrying for up to %s", method, id, err, timeout)
 		}
 		select {
 		case <-ctx.Done():

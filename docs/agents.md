@@ -402,8 +402,9 @@ yet. To run the prototype:
        # giantswarm/agent-platform-operator#69
        versionRange: "0.4.7-r1b5e09bdt20261124180250he5d00ae"
      agent-manager:
-       # giantswarm/agent-manager#475
-       versionRange: "3.5.7-r1b5e09bdt20261124202612ha80aab9"
+       # giantswarm/agent-manager#475, with main's A2A-Version fix
+       # (giantswarm/agent-manager#480)
+       versionRange: "3.5.9-r1b5e09bdt20261125095418h68c27fc"
    ```
 
    Both charts are in `oci://gsoci.azurecr.io/charts/giantswarm` (the
@@ -413,10 +414,27 @@ yet. To run the prototype:
    `gsoci.azurecr.io/giantswarm/agent-manager` at the same tags. A newer
    build of either pull request has a newer tag: put it in the overlay.
 3. **The portal** from branch `organization-kind-portal` of
-   giantswarm/backstage, which lists organizations from `Organization`
-   objects. Its dev build is not named here yet: put the build of that
-   branch under `platform.devImages.backstage`.
-4. `agentlab platform`, then `agentlab organizations-test`.
+   giantswarm/backstage (giantswarm/backstage#3651), which lists
+   organizations from `Organization` objects. Its dev image is
+   `gsoci.azurecr.io/giantswarm/backstage:3.50.2-r19abaa42t20261124225820h1ac3271`.
+   The lab takes it as a local tag: pull it, tag it, and put the local tag
+   under `platform.devImages.backstage`:
+
+   ```sh
+   docker pull gsoci.azurecr.io/giantswarm/backstage:3.50.2-r19abaa42t20261124225820h1ac3271
+   docker tag gsoci.azurecr.io/giantswarm/backstage:3.50.2-r19abaa42t20261124225820h1ac3271 backstage:organization-kind-3651
+   ```
+
+   ```yaml
+   platform:
+     devImages:
+       backstage: backstage:organization-kind-3651
+   ```
+4. **A certificate.** agent-manager from v3.5.0 refuses a Dex issuer on
+   loopback, which a lab made with `agentlab configure --defaults` has. Until
+   giantswarm/agentlab#1347 is fixed, such a lab needs `platform.tls`: see
+   [Bring your own certificate](tls.md#bring-your-own-certificate).
+5. `agentlab platform`, then `agentlab organizations-test`.
 
 A lab that ran the earlier `AgentPlatformOrganization` model has no
 migration: start the prototype on a new lab (`agentlab down`, then `agentlab
@@ -753,6 +771,8 @@ boundary: ...`. `--skip-slack` leaves klaus-gateway out (its lines read
 `SKIP`); `--gateway-image` and `--gateway-binary` pick the gateway as for
 `klaus-gateway-test` (on macOS the image runs on the `kind` network, HACKS.md
 U35). Successful runs delete both proof organizations and remove the installation inventory fixture and its temporary operator setting. Failed cleanup retains the organizations, the session, the fixture Kustomization `agentlab-organizations-inventory` and the operator's setting for diagnosis and reports the failing step. The next run (the full proof or `--part cleanup`) removes them first and says so: the proof organizations that carry the proof's ownership label (one `Orphaned` with `MissingFromGit` through the same delete pull request annotation), the fixture Kustomization with its Role and RoleBinding, and the operator's flag. It refuses, naming the object, one of those names without the proof's ownership label. Other failures remove the transient agents, Sessions, PolicyException and quota ServiceAccounts.
+
+After the erase, the reads through kagent and Substrate that prove the end state (`GetSession` and `ResumeSession` on the member's session, `ListActors` in the organization's namespace) try a transport error (gRPC `Unavailable`: the kagent controller restarting, a reset connection) again, with a note that names the read and its error. The session's reads try for up to three minutes; `ListActors` within the one minute the actors have to go. Every other answer is judged at once, and a transport error past the bound fails the check with that error and the bound.
 
 The proof leaves out muster's per-organization sign-in: a server of an
 organization namespace that signs in needs muster to read its client Secret

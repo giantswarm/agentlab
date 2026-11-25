@@ -35,6 +35,9 @@ const (
 	organizationCleanupPart    = "cleanup"
 	organizationCleanupFixture = "agentlab-organizations-inventory"
 	organizationCleanupWait    = 15 * time.Minute
+	// organizationActorsGoneWait bounds the wait for an erased
+	// organization's actors to go, a transport error of the read included.
+	organizationActorsGoneWait = time.Minute
 	organizationSnapshotBody   = "agentlab organization cleanup control"
 	// organizationDeleteIntentPolicy is the chart's ValidatingAdmissionPolicy
 	// that holds an Organization's delete: an organization applied from git
@@ -190,11 +193,15 @@ func (p *organizationsProof) cleanupOrphanedOrganization() (detail string, resul
 	if err := p.deleteProofOrganization(ctx, 0); err != nil {
 		return "", err
 	}
-	if err := wait.PollUntilContextTimeout(ctx, pollInterval, time.Minute, true, func(ctx context.Context) (bool, error) {
-		remaining, err := organizationActors(ctx, api, p.namespaces[0])
+	if err := wait.PollUntilContextTimeout(ctx, pollInterval, organizationActorsGoneWait, true, func(ctx context.Context) (bool, error) {
+		var remaining []*ateapi.Actor
+		err := endStateRead(ctx, "ListActors", p.namespaces[0], organizationActorsGoneWait, func() (err error) {
+			remaining, err = organizationActors(ctx, api, p.namespaces[0])
+			return err
+		})
 		return len(remaining) == 0, err
 	}); err != nil {
-		return "", fmt.Errorf("organization actors remain: %w", err)
+		return "", fmt.Errorf("organization actors of %s not gone within %s: %w", p.namespaces[0], organizationActorsGoneWait, err)
 	}
 	if err := requireSnapshotCount(ctx, client, bucket, prefix, 0); err != nil {
 		return "", err
@@ -214,16 +221,8 @@ func (p *organizationsProof) cleanupOrphanedOrganization() (detail string, resul
 	if string(body) != organizationSnapshotBody {
 		return "", fmt.Errorf("control object content changed")
 	}
-	removedSession, readErr := p.apis[0].getSession(ctx, session.GetId())
-	if readErr == nil && removedSession.GetState() != apiv1alpha1.RuntimeState_RUNTIME_STATE_DELETED {
-		return "", fmt.Errorf("deleted organization retains session %s in state %s", session.GetId(), sessionState(removedSession))
-	}
-	if readErr != nil && status.Code(readErr) != codes.NotFound && status.Code(readErr) != codes.PermissionDenied {
-		return "", readErr
-	}
-	_, resumeErr := p.apis[0].sessions.ResumeSession(p.apis[0].callCtx(ctx), &apiv1alpha1.ResumeSessionRequest{SessionId: session.GetId()})
-	if code := status.Code(resumeErr); code != codes.NotFound && code != codes.FailedPrecondition && code != codes.PermissionDenied {
-		return "", fmt.Errorf("deleted session remains runnable: ResumeSession returned %v", resumeErr)
+	if err := requireSessionErased(ctx, p.apis[0], session.GetId()); err != nil {
+		return "", err
 	}
 	p.sessions[0] = nil
 	if err := p.deleteProofOrganization(ctx, 1); err != nil {
@@ -235,6 +234,62 @@ func (p *organizationsProof) cleanupOrphanedOrganization() (detail string, resul
 	p.sessions[1] = nil
 	p.retainCleanupDiagnostics = false
 	return fmt.Sprintf("after its delete pull request merged (Orphaned=True, %s), member-owned READY session %s and %d actors removed; both organizations and namespaces gone; snapshot prefix %s empty; control %s survived the first cleanup and was deleted with its own organization", orphanedDeleteMerged, session.GetId(), len(actors), prefix, controlKey), nil
+}
+
+// endStateReadTimeout bounds the retries of an end-state read of the cleanup
+// proof on a transport error: the kagent controller restarts with its
+// database when the kubelet restarts that for a failed liveness probe, as on
+// a loaded laptop. A variable so the tests wait in milliseconds.
+var endStateReadTimeout = 3 * time.Minute
+
+// The SessionService methods the cleanup proof's end-state reads call.
+const (
+	getSessionMethod    = "GetSession"
+	resumeSessionMethod = "ResumeSession"
+)
+
+// transportError is a gRPC answer that says nothing of the end state: the
+// connection to the server failed (Unavailable), as on its restart.
+func transportError(err error) bool {
+	return status.Code(err) == codes.Unavailable
+}
+
+// endStateRead runs read, a read that proves an end state of the cleanup
+// proof, again on a transport error until timeout, noting the first one;
+// every other answer returns at once for the caller to judge.
+func endStateRead(ctx context.Context, method, id string, timeout time.Duration, read func() error) error {
+	return untilSettled(ctx, method, id, timeout, transportError, read)
+}
+
+// requireSessionErased proves the session id erased with its organization:
+// GetSession answers NotFound or PermissionDenied, or the session DELETED,
+// and ResumeSession answers NotFound, FailedPrecondition or PermissionDenied.
+// A transport error of either read is tried again (endStateRead); any other
+// answer, and a transport error past the bound, fails the proof.
+func requireSessionErased(ctx context.Context, api *kagentAPI, id string) error {
+	var session *apiv1alpha1.Session
+	readErr := endStateRead(ctx, getSessionMethod, id, endStateReadTimeout, func() error {
+		response, err := api.sessions.GetSession(api.callCtx(ctx), &apiv1alpha1.GetSessionRequest{SessionId: id})
+		session = response.GetSession()
+		return err
+	})
+	switch code := status.Code(readErr); {
+	case readErr == nil && session.GetState() != apiv1alpha1.RuntimeState_RUNTIME_STATE_DELETED:
+		return fmt.Errorf("deleted organization retains session %s in state %s", id, sessionState(session))
+	case readErr != nil && code != codes.NotFound && code != codes.PermissionDenied:
+		return readErr
+	}
+	resumeErr := endStateRead(ctx, resumeSessionMethod, id, endStateReadTimeout, func() error {
+		_, err := api.sessions.ResumeSession(api.callCtx(ctx), &apiv1alpha1.ResumeSessionRequest{SessionId: id})
+		return err
+	})
+	switch code := status.Code(resumeErr); {
+	case resumeErr == nil:
+		return fmt.Errorf("deleted session %s remains runnable: ResumeSession succeeded", id)
+	case code != codes.NotFound && code != codes.FailedPrecondition && code != codes.PermissionDenied:
+		return fmt.Errorf("deleted session %s is not proven unrunnable: %w", id, resumeErr)
+	}
+	return nil
 }
 
 func organizationActors(ctx context.Context, api *ateAPI, namespace string) ([]*ateapi.Actor, error) {
