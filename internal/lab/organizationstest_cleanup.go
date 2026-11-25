@@ -263,9 +263,10 @@ func endStateRead(ctx context.Context, method, id string, timeout time.Duration,
 
 // requireSessionErased proves the session id erased with its organization:
 // GetSession answers NotFound or PermissionDenied, or the session DELETED,
-// and ResumeSession answers NotFound, FailedPrecondition or PermissionDenied.
-// A transport error of either read is tried again (endStateRead); any other
-// answer, and a transport error past the bound, fails the proof.
+// and ResumeSession answers NotFound, FailedPrecondition or PermissionDenied
+// (not "not yet settled" after a retry). A transport error of either read is
+// tried again (endStateRead); any other answer, and a transport error past
+// the bound, fails the proof.
 func requireSessionErased(ctx context.Context, api *kagentAPI, id string) error {
 	var session *apiv1alpha1.Session
 	readErr := endStateRead(ctx, getSessionMethod, id, endStateReadTimeout, func() error {
@@ -279,13 +280,20 @@ func requireSessionErased(ctx context.Context, api *kagentAPI, id string) error 
 	case readErr != nil && code != codes.NotFound && code != codes.PermissionDenied:
 		return readErr
 	}
+	attempts := 0
 	resumeErr := endStateRead(ctx, resumeSessionMethod, id, endStateReadTimeout, func() error {
+		attempts++
 		_, err := api.sessions.ResumeSession(api.callCtx(ctx), &apiv1alpha1.ResumeSessionRequest{SessionId: id})
 		return err
 	})
 	switch code := status.Code(resumeErr); {
 	case resumeErr == nil:
 		return fmt.Errorf("deleted session %s remains runnable: ResumeSession succeeded", id)
+	case attempts > 1 && notYetSettled(resumeErr):
+		// The Unavailable before may have been the controller's own answer
+		// to a resume it began: a session whose runtime work then runs is
+		// not erased.
+		return fmt.Errorf("deleted session %s is not proven unrunnable: a resume tried again found its runtime work running: %w", id, resumeErr)
 	case code != codes.NotFound && code != codes.FailedPrecondition && code != codes.PermissionDenied:
 		return fmt.Errorf("deleted session %s is not proven unrunnable: %w", id, resumeErr)
 	}

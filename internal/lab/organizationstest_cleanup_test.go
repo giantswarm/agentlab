@@ -92,6 +92,8 @@ func TestRequireSessionErasedRetriesTransportErrorsOnly(t *testing.T) {
 			wantCalls: []string{getSessionMethod}, wantErr: "boom", wantErrorCode: codes.Internal},
 		{name: "an unknown resume error fails at once", resume: []error{status.Error(codes.Internal, "boom")},
 			wantCalls: []string{getSessionMethod, resumeSessionMethod}, wantErr: "not proven unrunnable", wantErrorCode: codes.Internal},
+		{name: "a resume tried again that meets runtime work fails", resume: []error{reset, status.Error(codes.FailedPrecondition, notYetSettledMessage)},
+			wantCalls: []string{getSessionMethod, resumeSessionMethod, resumeSessionMethod}, wantErr: "found its runtime work running", wantErrorCode: codes.FailedPrecondition},
 		{name: "a transport error past the bound fails with it", get: slices.Repeat([]error{reset}, 1000),
 			wantErr: "no final answer within 500ms", wantErrorCode: codes.Unavailable},
 	} {
