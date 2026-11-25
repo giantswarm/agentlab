@@ -2,6 +2,7 @@ package lab
 
 import (
 	"encoding/json"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -45,4 +46,51 @@ func TestSettledOrganizationInventory(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestOrphanedAs(t *testing.T) {
+	state := func(status, reason string, observed int64) organizationState {
+		return organizationState{generation: 3, conditions: []organizationCondition{{Type: orphanedCondition, Status: status, Reason: reason, ObservedGeneration: observed}}}
+	}
+	require.True(t, orphanedAs(state(conditionTrue, orphanedDeleteMerged, 3), true, orphanedDeleteMerged))
+	require.False(t, orphanedAs(state(conditionTrue, orphanedMissingInGit, 3), true, orphanedDeleteMerged), "another reason")
+	require.False(t, orphanedAs(state(conditionTrue, orphanedDeleteMerged, 2), true, orphanedDeleteMerged), "an earlier generation")
+	require.False(t, orphanedAs(state("False", orphanedInInventory, 3), true, orphanedInInventory), "another status")
+	require.False(t, orphanedAs(organizationState{generation: 3}, false, orphanedInInventory), "no condition")
+}
+
+func TestNextLeftoverAction(t *testing.T) {
+	orphaned := func(status, reason string, observed int64) organizationState {
+		return organizationState{generation: 2, conditions: []organizationCondition{{Type: orphanedCondition, Status: status, Reason: reason, ObservedGeneration: observed}}}
+	}
+	for _, test := range []struct {
+		name      string
+		state     organizationState
+		annotated bool
+		want      leftoverAction
+	}{
+		{name: "not judged applied from git", state: organizationState{generation: 2}, want: leftoverDelete},
+		{name: "its deletion runs", state: organizationState{generation: 2, deleting: true, conditions: orphaned(conditionTrue, orphanedMissingInGit, 2).conditions}, want: leftoverDelete},
+		{name: "still in the inventory", state: orphaned("False", orphanedInInventory, 2), want: leftoverWait},
+		{name: "a stale condition", state: orphaned(conditionTrue, orphanedMissingInGit, 1), want: leftoverWait},
+		{name: "missing from git", state: orphaned(conditionTrue, orphanedMissingInGit, 2), want: leftoverMarkDeletePullRequest},
+		{name: "annotated, not yet answered", state: orphaned(conditionTrue, orphanedMissingInGit, 2), annotated: true, want: leftoverWait},
+		{name: "delete merged", state: orphaned(conditionTrue, orphanedDeleteMerged, 2), annotated: true, want: leftoverDelete},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, nextLeftoverAction(test.state, test.annotated))
+		})
+	}
+}
+
+func TestWithoutCleanupSetting(t *testing.T) {
+	own := []string{"--leader-elect", "--installation-kustomization=flux-giantswarm/installation"}
+	kept, changed := withoutCleanupSetting(append(slices.Clone(own), cleanupOperatorArgument()), map[string]string{organizationsTestLabel: "2026-11-25T00:00:00Z"})
+	require.True(t, changed)
+	require.Equal(t, own, kept)
+	kept, changed = withoutCleanupSetting(own, map[string]string{"unrelated": "x"})
+	require.False(t, changed)
+	require.Equal(t, own, kept)
+	_, changed = withoutCleanupSetting(own, map[string]string{organizationsTestLabel: "2026-11-25T00:00:00Z"})
+	require.True(t, changed, "the proof's restart annotation alone")
 }

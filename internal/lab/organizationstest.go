@@ -406,11 +406,15 @@ func (p *organizationsProof) preconditions() error {
 	return nil
 }
 
-// setUp keeps the two organizations Ready with platform-admins in
+// setUp removes what an earlier failed run of the cleanup proof left, then
+// keeps the two organizations Ready with platform-admins in
 // spec.admins (the operator binds them; nobody else may), binds each
 // member's group as an editor of their own, gives each the lab's model, and
 // logs everyone in.
 func (p *organizationsProof) setUp() error {
+	if err := p.removeCleanupLeftovers(); err != nil {
+		return err
+	}
 	for i, name := range p.names {
 		if err := checkProofOrganization(name); err != nil {
 			return err

@@ -1,9 +1,12 @@
 package lab
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 func TestOrganizationProofPart(t *testing.T) {
@@ -26,6 +29,32 @@ func TestOrganizationProofPart(t *testing.T) {
 			}
 			require.NoError(t, err)
 			require.Equal(t, test.want, part)
+		})
+	}
+}
+
+func TestDeleteIntentRefusal(t *testing.T) {
+	organizations := schema.ParseGroupResource(organizationResource)
+	forbidden := func(message string) error {
+		return apierrors.NewForbidden(organizations, organizationsTestA, errors.New(message))
+	}
+	for name, test := range map[string]struct {
+		err      error
+		accepted bool
+	}{
+		"refused until the delete pull request merged": {err: forbidden("ValidatingAdmissionPolicy 'agent-platform-organization-delete-intent' with binding 'agent-platform-organization-delete-intent' denied request: an Organization applied from git is erased only once its delete pull request merged (Orphaned, reason DeleteMerged): delete it with agent-manager in mode commit, then erase it; refused: agentlab-a"), accepted: true},
+		"admitted":                             {},
+		"refused for the missing prune marker": {err: forbidden("ValidatingAdmissionPolicy 'agent-platform-organization-delete-intent' with binding 'agent-platform-organization-delete-intent' denied request: deleting an Organization with the Agent Platform enabled erases its Agent Platform: set the annotation kustomize.toolkit.fluxcd.io/prune: enabled on agentlab-a first")},
+		"refused by another policy":            {err: forbidden("ValidatingAdmissionPolicy 'agent-platform-organization-names' with binding 'agent-platform-organization-names' denied request: DeleteMerged")},
+		"refused by RBAC":                      {err: forbidden(`User "oidc:admin@lab.local" cannot delete resource "organizations"`)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := deleteIntentRefusal("the delete", test.err)
+			if test.accepted {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
 		})
 	}
 }
