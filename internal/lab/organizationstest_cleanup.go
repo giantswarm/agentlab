@@ -334,10 +334,10 @@ func (p *organizationsProof) deleteRefusedWhileMissingFromGit(ctx context.Contex
 	if err != nil {
 		return "", err
 	}
-	if _, err := resource.Patch(ctx, organization.GetName(), types.MergePatchType, pruneMarkerPatch(), metav1.PatchOptions{}); err != nil {
+	uid := organization.GetUID()
+	if _, err := resource.Patch(ctx, organization.GetName(), types.MergePatchType, pruneMarkerPatch(uid), metav1.PatchOptions{}); err != nil {
 		return "", err
 	}
-	uid := organization.GetUID()
 	what := fmt.Sprintf("the lab admin's delete of organization %s (Orphaned=True, %s, %s: enabled)", organization.GetName(), orphanedMissingInGit, fluxPruneAnnotation)
 	if err := deleteIntentRefusal(what, resource.Delete(ctx, organization.GetName(), metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &uid}})); err != nil {
 		return "", err
@@ -386,15 +386,22 @@ func deleteIntentRefusal(what string, err error) error {
 // markDeletePullRequest sets the delete pull request annotation on the
 // organization name as the lab's admin, as agent-manager does in mode commit.
 func (p *organizationsProof) markDeletePullRequest(ctx context.Context, name string) error {
+	organization, err := p.ownedOrganization(ctx, name)
+	if err != nil {
+		return err
+	}
 	resource, err := p.adminOrganizations()
 	if err != nil {
 		return err
 	}
-	return patchDeletePullRequest(ctx, resource, name)
+	return patchDeletePullRequest(ctx, resource, name, organization.GetUID())
 }
 
-func patchDeletePullRequest(ctx context.Context, resource dynamic.ResourceInterface, name string) error {
-	patch, err := json.Marshal(map[string]any{crMetadata: map[string]any{"annotations": map[string]string{organizationDeletePullRequestAnnotation: organizationCleanupPullRequest}}})
+// patchDeletePullRequest sets the delete pull request annotation on the
+// organization name with uid: the uid in the patch is the API server's
+// precondition, so a replacement of that name is not written.
+func patchDeletePullRequest(ctx context.Context, resource dynamic.ResourceInterface, name string, uid types.UID) error {
+	patch, err := json.Marshal(map[string]any{crMetadata: map[string]any{"uid": uid, "annotations": map[string]string{organizationDeletePullRequestAnnotation: organizationCleanupPullRequest}}})
 	if err != nil {
 		return err
 	}
@@ -404,8 +411,11 @@ func patchDeletePullRequest(ctx context.Context, resource dynamic.ResourceInterf
 	return nil
 }
 
-func pruneMarkerPatch() []byte {
-	return []byte(`{"metadata":{"annotations":{"` + fluxPruneAnnotation + `":"enabled"}}}`)
+// pruneMarkerPatch sets Flux's prune marker on the organization with uid,
+// which the API server checks as a precondition.
+func pruneMarkerPatch(uid types.UID) []byte {
+	patch, _ := json.Marshal(map[string]any{crMetadata: map[string]any{"uid": uid, "annotations": map[string]string{fluxPruneAnnotation: "enabled"}}})
+	return patch
 }
 
 // eraseOrganization deletes organization through resource with Flux's prune
@@ -417,10 +427,10 @@ func eraseOrganization(ctx context.Context, resource dynamic.ResourceInterface, 
 		return err
 	}
 	if organization.GetDeletionTimestamp() == nil {
-		if _, err := resource.Patch(ctx, organization.GetName(), types.MergePatchType, pruneMarkerPatch(), metav1.PatchOptions{}); err != nil {
+		uid := organization.GetUID()
+		if _, err := resource.Patch(ctx, organization.GetName(), types.MergePatchType, pruneMarkerPatch(uid), metav1.PatchOptions{}); err != nil {
 			return err
 		}
-		uid := organization.GetUID()
 		if err := resource.Delete(ctx, organization.GetName(), metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &uid}}); err != nil {
 			return err
 		}

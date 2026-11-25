@@ -94,7 +94,8 @@ func prepareOrganizationInventory(ctx context.Context, organization *unstructure
 		if _, err := restoreOperatorSetting(cleanup); err != nil {
 			return err
 		}
-		return removeInventoryFixture(cleanup)
+		_, err := removeInventoryFixture(cleanup)
+		return err
 	}, nil
 }
 
@@ -140,48 +141,53 @@ func restoreOperatorSetting(ctx context.Context) (bool, error) {
 }
 
 // removeInventoryFixture deletes the fixture Kustomization and its Role and
-// RoleBinding. Each must carry the proof's ownership label: one without it is
-// refused, by name, and kept.
-func removeInventoryFixture(ctx context.Context) error {
+// RoleBinding, and names those it deleted. Each must carry the proof's
+// ownership label: one without it is refused, by name, and kept.
+func removeInventoryFixture(ctx context.Context) (removed []string, err error) {
 	k, err := labKube()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	fixture, err := k.resource(kustomizationGVR, platformNamespace).Get(ctx, organizationCleanupFixture, metav1.GetOptions{})
 	switch {
 	case apierrors.IsNotFound(err):
 	case err != nil:
-		return err
+		return removed, err
 	case fixture.GetLabels()[organizationsTestLabel] != organizationsTestMark:
-		return fmt.Errorf("refusing to delete the Kustomization %s/%s without the proof ownership label %s=%s", platformNamespace, organizationCleanupFixture, organizationsTestLabel, organizationsTestMark)
+		return removed, fmt.Errorf("refusing to delete the Kustomization %s/%s without the proof ownership label %s=%s", platformNamespace, organizationCleanupFixture, organizationsTestLabel, organizationsTestMark)
 	default:
 		if err := deleteObject(ctx, kustomizationGVR, platformNamespace, organizationCleanupFixture, gitopsFixtureWait); err != nil {
-			return err
+			return removed, err
 		}
+		removed = append(removed, "the Kustomization")
 	}
 	rbac := k.clientset.RbacV1()
 	binding, err := rbac.RoleBindings(platformNamespace).Get(ctx, organizationCleanupFixture, metav1.GetOptions{})
 	switch {
 	case apierrors.IsNotFound(err):
 	case err != nil:
-		return err
+		return removed, err
 	case binding.Labels[organizationsTestLabel] != organizationsTestMark:
-		return fmt.Errorf("refusing to delete the RoleBinding %s/%s without the proof ownership label %s=%s", platformNamespace, organizationCleanupFixture, organizationsTestLabel, organizationsTestMark)
+		return removed, fmt.Errorf("refusing to delete the RoleBinding %s/%s without the proof ownership label %s=%s", platformNamespace, organizationCleanupFixture, organizationsTestLabel, organizationsTestMark)
 	default:
 		if err := rbac.RoleBindings(platformNamespace).Delete(ctx, organizationCleanupFixture, metav1.DeleteOptions{}); ignoreNotFound(err) != nil {
-			return err
+			return removed, err
 		}
+		removed = append(removed, "the RoleBinding")
 	}
 	role, err := rbac.Roles(platformNamespace).Get(ctx, organizationCleanupFixture, metav1.GetOptions{})
 	switch {
 	case apierrors.IsNotFound(err):
-		return nil
+		return removed, nil
 	case err != nil:
-		return err
+		return removed, err
 	case role.Labels[organizationsTestLabel] != organizationsTestMark:
-		return fmt.Errorf("refusing to delete the Role %s/%s without the proof ownership label %s=%s", platformNamespace, organizationCleanupFixture, organizationsTestLabel, organizationsTestMark)
+		return removed, fmt.Errorf("refusing to delete the Role %s/%s without the proof ownership label %s=%s", platformNamespace, organizationCleanupFixture, organizationsTestLabel, organizationsTestMark)
 	}
-	return ignoreNotFound(rbac.Roles(platformNamespace).Delete(ctx, organizationCleanupFixture, metav1.DeleteOptions{}))
+	if err := rbac.Roles(platformNamespace).Delete(ctx, organizationCleanupFixture, metav1.DeleteOptions{}); ignoreNotFound(err) != nil {
+		return removed, err
+	}
+	return append(removed, "the Role"), nil
 }
 
 func settledOrganizationInventory(fixture *unstructured.Unstructured, organizations ...*unstructured.Unstructured) ([]byte, error) {
@@ -458,7 +464,7 @@ func (p *organizationsProof) removeCleanupLeftovers() error {
 		return err
 	}
 	for _, organization := range organizations {
-		if err := eraseLeftoverOrganization(ctx, resource, organization.GetName()); err != nil {
+		if err := eraseLeftoverOrganization(ctx, resource, organization.GetName(), organization.GetUID()); err != nil {
 			return err
 		}
 		note("removed the leftover organization %s", organization.GetName())
@@ -468,17 +474,18 @@ func (p *organizationsProof) removeCleanupLeftovers() error {
 	} else if restored {
 		note("the operator's Deployment has its own setting again")
 	}
-	if err := removeInventoryFixture(ctx); err != nil {
-		return err
+	removed, err := removeInventoryFixture(ctx)
+	if len(removed) > 0 {
+		note("removed %s %s/%s", strings.Join(removed, ", "), platformNamespace, organizationCleanupFixture)
 	}
-	note("removed the Kustomization %s/%s and its Role and RoleBinding", platformNamespace, organizationCleanupFixture)
-	return nil
+	return err
 }
 
-// eraseLeftoverOrganization takes the leftover organization name through
-// nextLeftoverAction until its delete is admitted, then waits until it and
-// its namespace are gone.
-func eraseLeftoverOrganization(ctx context.Context, resource dynamic.ResourceInterface, name string) error {
+// eraseLeftoverOrganization takes the leftover organization name, the one
+// with uid whose ownership was checked, through nextLeftoverAction until its
+// delete is admitted, then waits until it and its namespace are gone. A
+// replacement of that name, or one that lost the proof's label, is refused.
+func eraseLeftoverOrganization(ctx context.Context, resource dynamic.ResourceInterface, name string, uid types.UID) error {
 	organizationGVR, err := gvrFor(organizationResource)
 	if err != nil {
 		return err
@@ -490,6 +497,9 @@ func eraseLeftoverOrganization(ctx context.Context, resource dynamic.ResourceInt
 		if err != nil {
 			return false, err
 		}
+		if err := sameOwnedOrganization(organization, uid); err != nil {
+			return false, err
+		}
 		state, err := organizationStateFrom(organization)
 		if err != nil {
 			return false, err
@@ -499,7 +509,7 @@ func eraseLeftoverOrganization(ctx context.Context, resource dynamic.ResourceInt
 		switch nextLeftoverAction(state, annotated) {
 		case leftoverMarkDeletePullRequest:
 			note("organization %s is Orphaned=True (%s): setting %s", name, orphanedMissingInGit, organizationDeletePullRequestAnnotation)
-			return false, patchDeletePullRequest(ctx, resource, name)
+			return false, patchDeletePullRequest(ctx, resource, name, uid)
 		case leftoverDelete:
 			ready = organization
 			return true, nil
@@ -513,4 +523,16 @@ func eraseLeftoverOrganization(ctx context.Context, resource dynamic.ResourceInt
 		return errors.Join(err, fmt.Errorf("leftover organization %s not ready for its delete: %+v", name, last.conditions))
 	}
 	return eraseOrganization(ctx, resource, ready, last.namespace)
+}
+
+// sameOwnedOrganization refuses organization unless it is the one with uid
+// and still carries the proof's ownership label.
+func sameOwnedOrganization(organization *unstructured.Unstructured, uid types.UID) error {
+	switch {
+	case organization.GetUID() != uid:
+		return fmt.Errorf("refusing to remove organization %s: it was replaced (uid %s, checked %s)", organization.GetName(), organization.GetUID(), uid)
+	case organization.GetLabels()[organizationsTestLabel] != organizationsTestMark:
+		return fmt.Errorf("refusing to remove organization %s without the proof ownership label %s=%s", organization.GetName(), organizationsTestLabel, organizationsTestMark)
+	}
+	return nil
 }

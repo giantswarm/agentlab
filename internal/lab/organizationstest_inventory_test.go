@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 func TestSettledOrganizationInventory(t *testing.T) {
@@ -93,4 +94,18 @@ func TestWithoutCleanupSetting(t *testing.T) {
 	require.Equal(t, own, kept)
 	_, changed = withoutCleanupSetting(own, map[string]string{organizationsTestLabel: "2026-11-25T00:00:00Z"})
 	require.True(t, changed, "the proof's restart annotation alone")
+}
+
+func TestSameOwnedOrganization(t *testing.T) {
+	organization := func(uid types.UID, labels map[string]string) *unstructured.Unstructured {
+		u := &unstructured.Unstructured{}
+		u.SetName(organizationsTestB)
+		u.SetUID(uid)
+		u.SetLabels(labels)
+		return u
+	}
+	owned := map[string]string{organizationsTestLabel: organizationsTestMark}
+	require.NoError(t, sameOwnedOrganization(organization("checked", owned), "checked"))
+	require.ErrorContains(t, sameOwnedOrganization(organization("replacement", owned), "checked"), "refusing to remove organization agentlab-b: it was replaced")
+	require.ErrorContains(t, sameOwnedOrganization(organization("checked", nil), "checked"), "refusing to remove organization agentlab-b without the proof ownership label")
 }
