@@ -478,8 +478,10 @@ gateway starts a thread's Session on an organization's agent with
 `start_session` and the organization's name. An older gateway passes the
 agent's namespace, which this agent-manager build refuses, so its Slack turn
 (step S3) fails. Without `--gateway-image` or `--gateway-binary` the proof
-takes the newest klaus-gateway release that the agent-platform chart's range
-admits, which is 4.18.10 or later.
+takes the version that the klaus-gateway component's HelmRelease applied, or,
+with no such HelmRelease, the newest release that the agent-platform chart's
+range admits. A lab whose component runs a version before 4.18.10 needs the
+component updated or `--gateway-image` with 4.18.10 or later.
 
 The gateway names an organization's tenant on a roster row and in a refusal
 by the organization's name. It reads that name from the label
@@ -490,7 +492,9 @@ the proof gives its gateway the lab's kubeconfig in each shape: the binary
 and the image on the host network get the lab kubeconfig as it is, and the
 image on the `kind` network (macOS) gets a copy that names the API server as
 the control-plane node's port 6443. It is the lab's admin kubeconfig, more
-than the gateway's ServiceAccount has on an installation (HACKS.md U52).
+than the gateway's ServiceAccount has on an installation (HACKS.md U52). The
+gateway does not wait for its first list of the namespaces before it
+serves, so a roster asked right at its start can also name the namespace.
 
 A lab that ran the earlier `AgentPlatformOrganization` model has no
 migration: start the prototype on a new lab (`agentlab down`, then `agentlab

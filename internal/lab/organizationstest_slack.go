@@ -40,11 +40,12 @@ const (
 	// organizationsSlackSessionHint names the gateway release step S3
 	// needs: giantswarm/klaus-gateway#616 starts a thread's Session by the
 	// organization's name, and klaus-gateway 4.18.10 is its first release.
-	organizationsSlackSessionHint = "a thread's Session starts as giantswarm/klaus-gateway#616 changed it, in klaus-gateway 4.18.10 or later (without --gateway-image or --gateway-binary the lab takes the newest release the chart's range admits)"
+	organizationsSlackSessionHint = "a thread's Session starts as giantswarm/klaus-gateway#616 changed it, in klaus-gateway 4.18.10 or later (without --gateway-image or --gateway-binary the lab takes the version the klaus-gateway component's HelmRelease applied, or with no such HelmRelease the newest release the chart's range admits)"
 	// gatewayNoAPIServer is the hint on a tenant the gateway words as
 	// "namespace <namespace>": it names an organization only when it reads
-	// the organization namespaces' labels through the API server.
-	gatewayNoAPIServer = "the gateway has no access to the lab's API server, where it reads the organization's name from the namespace's label " + organizationLabel
+	// the organization namespaces' labels through the API server, and it
+	// does not wait for its first list of them before it serves.
+	gatewayNoAPIServer = "the gateway has no access to the lab's API server, or had not listed the namespaces yet; it reads the organization's name from the namespace's label " + organizationLabel
 	// gatewayNamespaceTenant starts the tenant the gateway words for a
 	// namespace it knows no organization of.
 	gatewayNamespaceTenant = "namespace "
@@ -334,14 +335,14 @@ func (s *organizationsSlack) steps(rosterSets *[2]refSet) ([]organizationVerdict
 		return p.pickStarted(t, rosters[1], otherRef, text)
 	}, thread, klausGatewayWordPrompt)
 	if err != nil {
-		return nil, fmt.Errorf("FAIL [Slack] S3: %w — the gateway needs %s", err, organizationsSlackSessionHint)
+		return nil, fmt.Errorf("FAIL [Slack] S3: %w — the gateway (%s) needs %s", err, gw.describe(), organizationsSlackSessionHint)
 	}
 	if err := assertSlackTurnSaid(turn, klausGatewayWord); err != nil {
-		return nil, fmt.Errorf("FAIL [Slack] S3: %w", err)
+		return nil, fmt.Errorf("FAIL [Slack] S3: %w — the gateway (%s) needs %s", err, gw.describe(), organizationsSlackSessionHint)
 	}
 	session, err := p.boundSession(apis[1], thread)
 	if err != nil {
-		return nil, fmt.Errorf("FAIL [Slack] S3: %w — the gateway needs %s", err, organizationsSlackSessionHint)
+		return nil, fmt.Errorf("FAIL [Slack] S3: %w — the gateway (%s) needs %s", err, gw.describe(), organizationsSlackSessionHint)
 	}
 	note("answered %q; thread bound to Session %s", excerpt(turn.answer, 60), session.GetId())
 

@@ -172,8 +172,8 @@ with Dex doing the logins.
   namespace: the lab passes `namespace` only for `kagent`. The Slack surface
   of `organizations-test` needs klaus-gateway 4.18.10 or later, the first
   release with giantswarm/klaus-gateway#616, which starts a thread's Session
-  by the organization's name (the lab takes it from the chart's range by
-  itself). Its gateway reads the lab's API server in every shape: it names an
+  by the organization's name (the lab takes the component's applied version,
+  or the newest in the chart's range). Its gateway reads the lab's API server in every shape: it names an
   organization's tenant by the label `agent-platform.giantswarm.io/organization`
   on the namespace, and without that access it writes `namespace <namespace>`
   (docs/agents.md "The tools take the organization's name").
