@@ -551,15 +551,17 @@ func TestControllerAuthorizationProblem(t *testing.T) {
 }
 
 // A Slack roster passes when it lists the member's organization's agent,
-// its row naming the tenant as klaus-gateway words it, and nothing of
-// another organization; the platform tenant's rows are not judged.
+// its row naming the organization by its name (the member's organization
+// list knows it, so klaus-gateway words it so), and nothing of another
+// organization; the platform tenant's rows are not judged.
 func TestRosterProblem(t *testing.T) {
+	const alpha = "alpha"
 	ownRef, otherRef := orgAlpha+"/"+organizationsTestAgent, orgBeta+"/"+organizationsTestAgent
 	good := map[string]string{
 		kagentNamespace + "/assistant": "*assistant* · platform",
-		ownRef:                         "*" + organizationsTestAgent + "* · namespace " + orgAlpha,
+		ownRef:                         "*" + organizationsTestAgent + "* · " + alpha + " · default\nThrowaway agent.",
 	}
-	if p := rosterProblem(good, orgAlpha); p != "" {
+	if p := rosterProblem(good, orgAlpha, alpha); p != "" {
 		t.Errorf("a good roster: %s", p)
 	}
 	if got := slackRoster(good); rosterDiff(got, refSet{ownRef: true}) != "" {
@@ -569,26 +571,29 @@ func TestRosterProblem(t *testing.T) {
 	withOther[otherRef] = "*" + organizationsTestAgent + "* · namespace " + orgBeta
 	unlabelled := maps.Clone(good)
 	unlabelled[ownRef] = "*" + organizationsTestAgent + "*"
+	// A gateway before giantswarm/klaus-gateway#616 names the member's own
+	// organization by its namespace, which also holds the name.
+	byNamespace := maps.Clone(good)
+	byNamespace[ownRef] = "*" + organizationsTestAgent + "* · namespace " + orgAlpha
 	for name, tc := range map[string]struct {
 		rows map[string]string
 		want string
 	}{
-		"another organization's agent": {withOther, "another organization's"},
-		"no tenant on the row":         {unlabelled, "does not name its tenant"},
-		"no row of their own":          {map[string]string{kagentNamespace + "/assistant": "x"}, "no row of " + ownRef},
+		"another organization's agent":      {withOther, "another organization's"},
+		"no tenant on the row":              {unlabelled, `names the tenant ""`},
+		"the own organization by namespace": {byNamespace, `names the tenant "namespace ` + orgAlpha + `"`},
+		"no row of their own":               {map[string]string{kagentNamespace + "/assistant": "x"}, "no row of " + ownRef},
 	} {
-		if p := rosterProblem(tc.rows, orgAlpha); !strings.Contains(p, tc.want) {
+		if p := rosterProblem(tc.rows, orgAlpha, alpha); !strings.Contains(p, tc.want) {
 			t.Errorf("%s: %q, want %q", name, p, tc.want)
 		}
 	}
-	if got := organizationTenant("org-acme"); got != "organization acme" {
-		t.Errorf("a KaaS Organization's namespace: %q", got)
-	}
 }
 
-// The refusal must be the not-permitted note, name the other tenant and say
-// nothing was sent: a generic failure note would pass for a refusal
-// otherwise.
+// The refusal must be the not-permitted note, name the other organization's
+// tenant as a stranger to it reads it ("namespace <namespace>": their
+// organization list does not know it) and say nothing was sent: a generic
+// failure note would pass for a refusal otherwise.
 func TestRefusalProblem(t *testing.T) {
 	note := "You cannot use *agentlab-organizations* (namespace " + orgBeta + "): it is not one of the agents you have access to. Nothing was sent to it."
 	if p := refusalProblem(note, orgBeta); p != "" {

@@ -31,10 +31,6 @@ const (
 	// slackReplayFailed is the gateway's note on a held message it could not
 	// run after the thread's person allowed its sender.
 	slackReplayFailed = "could not be picked up again"
-	// gatewayOrganizationPrefix is the namespace prefix klaus-gateway labels
-	// a row "organization <name>" by (a KaaS Organization's org-<name>);
-	// another namespace's rows are labelled "namespace <namespace>".
-	gatewayOrganizationPrefix = "org-"
 	// slackAccessAllow is the button of the gateway's access prompt that
 	// lets a collaborator into the thread.
 	slackAccessAllow = "access_allow"
@@ -42,7 +38,11 @@ const (
 	// with a refusal before the proof reads them.
 	organizationsTraceSettle = 3 * time.Second
 	// organizationsSlackGatewayHint names the gateway release the half needs.
-	organizationsSlackGatewayHint = "klaus-gateway with giantswarm/klaus-gateway#486 (4.10.0 or later: `--gateway-image gsoci.azurecr.io/giantswarm/klaus-gateway:4.10.0-rc.1` until 4.10.0 is released)"
+	organizationsSlackGatewayHint = "klaus-gateway with giantswarm/klaus-gateway#616 (until a release has it: `--gateway-image " + organizationsSlackGatewayImage + "`)"
+	// organizationsSlackGatewayImage is the dev image of
+	// giantswarm/klaus-gateway#616 the Slack half passed on (linux/amd64
+	// only).
+	organizationsSlackGatewayImage = "gsoci.azurecr.io/giantswarm/klaus-gateway:4.18.10-r665749cet20261125131441h743bb2f"
 )
 
 // rosterRows are a roster post's rows as ref -> the row's text: each Select
@@ -61,27 +61,44 @@ func rosterRows(m slackMessage) map[string]string {
 	return rows
 }
 
-// organizationTenant is the gateway's label of a namespace's tenant, as
-// klaus-gateway words it (pkg/a2a Client.Tenant): an organization
-// namespace agents-<name> is labelled by its namespace.
-func organizationTenant(ns string) string {
-	if org, ok := strings.CutPrefix(ns, gatewayOrganizationPrefix); ok && org != "" {
-		return "organization " + org
+// klaus-gateway names an agent's tenant (pkg/a2a Client.Tenant) by what the
+// asking person's organization list (list_organizations) knows: an
+// organization on the list by its name alone, any other namespace as
+// "namespace <namespace>". The proof's checks expect one or the other:
+//
+//   - memberTenant, on a member's row of their own organization's agent
+//     (S1): their list holds the organization the proof made them a member of.
+//   - strangerTenant, on the refusal of the other organization's agent (S2,
+//     S4): the person is no member of it, so their list does not know it.
+//
+// The name comes from the organization the proof created, never from the
+// namespace's name.
+func memberTenant(organization string) string { return organization }
+
+func strangerTenant(ns string) string { return "namespace " + ns }
+
+// rowTenant is the tenant a roster row names: the segment after the agent's
+// name on the row's first line ("*name* · tenant · default").
+func rowTenant(text string) string {
+	first, _, _ := strings.Cut(text, "\n")
+	parts := strings.Split(first, " · ")
+	if len(parts) < 2 {
+		return ""
 	}
-	return "namespace " + ns
+	return parts[1]
 }
 
 // rosterProblem words what is wrong with a member's roster, "" when nothing
-// is: their organization's agent labelled with its tenant, and no agent of
-// another namespace but the platform tenant's (kagent), which this proof
-// does not judge.
-func rosterProblem(rows map[string]string, ownNS string) string {
+// is: their organization's agent, the row naming the organization by its name
+// (memberTenant), and no agent of another namespace but the platform
+// tenant's (kagent), which this proof does not judge.
+func rosterProblem(rows map[string]string, ownNS, ownOrganization string) string {
 	ownRef := ownNS + "/" + organizationsTestAgent
 	var problems []string
 	if text, ok := rows[ownRef]; !ok {
 		problems = append(problems, "no row of "+ownRef)
-	} else if !strings.Contains(text, organizationTenant(ownNS)) {
-		problems = append(problems, fmt.Sprintf("the row of %s does not name its tenant %q: %q", ownRef, organizationTenant(ownNS), text))
+	} else if got, want := rowTenant(text), memberTenant(ownOrganization); got != want {
+		problems = append(problems, fmt.Sprintf("the row of %s names the tenant %q, want its organization %q: %q", ownRef, got, want, text))
 	}
 	for ref := range rows {
 		if ns, _, ok := strings.Cut(ref, "/"); ok && ns != ownNS && ns != kagentNamespace {
@@ -105,14 +122,15 @@ func slackRoster(rows map[string]string) refSet {
 }
 
 // refusalProblem words what is wrong with the gateway's refusal of another
-// tenant's agent, "" when nothing is: it names the tenant and says nothing
-// was sent.
+// organization's agent, "" when nothing is: it names the tenant as a
+// stranger to it reads it (strangerTenant: "(namespace <namespace>)") and
+// says nothing was sent.
 func refusalProblem(text, otherNS string) string {
 	switch {
 	case !strings.Contains(text, slackNotPermitted):
 		return fmt.Sprintf("it is not the refusal %q", slackNotPermitted)
-	case !strings.Contains(text, organizationTenant(otherNS)):
-		return fmt.Sprintf("it does not name the tenant %q", organizationTenant(otherNS))
+	case !strings.Contains(text, "("+strangerTenant(otherNS)+")"):
+		return fmt.Sprintf("it does not name the tenant %q", strangerTenant(otherNS))
 	case !strings.Contains(text, slackNothingSent):
 		return fmt.Sprintf("it does not say %q", slackNothingSent)
 	}
@@ -121,11 +139,13 @@ func refusalProblem(text, otherNS string) string {
 
 // organizationsSlack is what the Slack surface works with.
 type organizationsSlack struct {
-	cfg        *config.Config
-	opts       KlausGatewayTestOptions
-	namespaces [2]string
-	users      [2]*config.User
-	admin      *kagentAPI
+	cfg  *config.Config
+	opts KlausGatewayTestOptions
+	// names are the two organizations the proof created, namespaces their
+	// namespaces.
+	names, namespaces [2]string
+	users             [2]*config.User
+	admin             *kagentAPI
 }
 
 // run is the Slack surface, steps S1 to S4: it returns the verdicts and
@@ -250,7 +270,7 @@ func (s *organizationsSlack) steps(rosterSets *[2]refSet) ([]organizationVerdict
 	for i := range s.users {
 		rows := rosterRows(rosters[i])
 		rosterSets[i] = slackRoster(rows)
-		if problem := rosterProblem(rows, s.namespaces[i]); problem != "" {
+		if problem := rosterProblem(rows, s.namespaces[i], s.names[i]); problem != "" {
 			return nil, fmt.Errorf("FAIL [Slack] S1: %s's roster (%s): %s — the gateway needs %s", s.users[i].Email, strings.Join(slices.Sorted(maps.Keys(rows)), ", "), problem, organizationsSlackGatewayHint)
 		}
 		note("%s: %s", s.users[i].Email, strings.Join(slices.Sorted(maps.Keys(rows)), ", "))
@@ -263,7 +283,7 @@ func (s *organizationsSlack) steps(rosterSets *[2]refSet) ([]organizationVerdict
 		return nil, fmt.Errorf("FAIL [Slack] S1: %s's roster changed after %s's: %s, before %s", s.users[0].Email, s.users[1].Email, strings.Join(a, ", "), strings.Join(b, ", "))
 	}
 	out = append(out, organizationVerdict{surface: surfaceSlack, boundary: "klaus-gateway's per-caller roster lists a member their own organization's agents only",
-		detail: fmt.Sprintf("%s and %s, asking at the same time, get their own rosters: each their organization's agent (labelled %q, %q), nothing of the other's", s.users[0].Email, s.users[1].Email, organizationTenant(s.namespaces[0]), organizationTenant(s.namespaces[1]))})
+		detail: fmt.Sprintf("%s and %s, asking at the same time, get their own rosters: each their organization's agent (labelled %q, %q), nothing of the other's", s.users[0].Email, s.users[1].Email, memberTenant(s.names[0]), memberTenant(s.names[1]))})
 
 	otherRef := s.namespaces[1] + "/" + organizationsTestAgent
 	otherAgent := &apiv1alpha1.ResourceReference{Namespace: s.namespaces[1], Name: organizationsTestAgent}

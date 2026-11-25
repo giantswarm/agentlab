@@ -2,8 +2,10 @@ package lab
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -156,4 +158,31 @@ func resolveGatewayImage(cfg *config.Config, image, binary string) (string, erro
 	}
 	note("host gateway: %s — %s", img.ref, img.source)
 	return img.ref, nil
+}
+
+// hostGatewayTrustProblem words why a gateway binary (--gateway-binary)
+// cannot call muster on this host, "" when it can. The lab gives a host
+// process the lab CA through SSL_CERT_FILE, and a Go program on macOS
+// ignores it (a module whose go directive is below 1.27 keeps
+// x509sslcertoverrideplatform=0) and verifies against the system trust
+// store alone: the muster call fails "x509: certificate signed by unknown
+// authority" unless `agentlab trust` put the lab CA there. The image runs
+// on Linux, where SSL_CERT_FILE holds.
+func hostGatewayTrustProblem(goos, binary string, labCATrusted bool) string {
+	if binary == "" || goos != goosDarwin || labCATrusted {
+		return ""
+	}
+	return fmt.Sprintf("--gateway-binary %s: on macOS the gateway calls muster through the system trust store, which does not hold the lab CA, so its muster calls fail with an unknown authority; run the image instead (--gateway-image), or put the lab CA in the system trust store first (`agentlab trust`)", binary)
+}
+
+// refuseUntrustedHostGateway is hostGatewayTrustProblem for this host, as
+// an error: a proof whose gateway calls muster asks it before it starts.
+func refuseUntrustedHostGateway(binary string) error {
+	if binary == "" {
+		return nil
+	}
+	if problem := hostGatewayTrustProblem(runtime.GOOS, binary, systemTrusted()); problem != "" {
+		return errors.New(problem)
+	}
+	return nil
 }

@@ -258,6 +258,10 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	if opts.Part == KlausGatewayPartRefresh {
 		return klausGatewayRefreshTest(cfg, user, opts)
 	}
+	// The gateway starts a thread's Session through muster (trustLabCA).
+	if err := refuseUntrustedHostGateway(opts.GatewayBinary); err != nil {
+		return err
+	}
 	if err := portsFree(opts.Port, opts.Port+1, opts.Port+3); err != nil {
 		return err
 	}
@@ -1391,11 +1395,23 @@ func pullGatewayImage(image string, wait time.Duration) error {
 		return nil
 	}
 	note("pulling %s (not counted against the %s readiness wait)", image, wait)
-	if _, err := outputQuiet(dockerBin, "pull", "-q", image); err != nil {
-		return fmt.Errorf("pulling the klaus-gateway image: %w", err)
+	_, err := outputQuiet(dockerBin, "pull", "-q", image)
+	if err == nil {
+		return nil
+	}
+	// A dev image of klaus-gateway is built for linux/amd64 alone: on an
+	// arm64 host the plain pull finds no manifest for its platform, and
+	// the engine runs the amd64 image under emulation once it is pulled.
+	note("the pull failed (%v); pulling %s for %s", err, image, gatewayFallbackPlatform)
+	if _, err2 := outputQuiet(dockerBin, "pull", "-q", "--platform", gatewayFallbackPlatform, image); err2 != nil {
+		return fmt.Errorf("pulling the klaus-gateway image: %w; for %s: %w", err, gatewayFallbackPlatform, err2)
 	}
 	return nil
 }
+
+// gatewayFallbackPlatform is the platform pullGatewayImage asks for when the
+// host's own finds nothing: the one a klaus-gateway dev image is built for.
+const gatewayFallbackPlatform = "linux/amd64"
 
 // version is the gateway's own "starting" record, for the notes.
 func (g *gatewayProcess) version() string { return gatewayVersion(g.logs()) }

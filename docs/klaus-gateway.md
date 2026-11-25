@@ -358,6 +358,21 @@ one allowed caller; its token has the audience `klaus-gateway` and the gateway
 verifies it with a TokenReview through the lab's kubeconfig. The gateway
 trusts the lab CA (`SSL_CERT_FILE`), since every answer is a call to muster.
 
+**A gateway binary on macOS.** The lab gives a host gateway the lab CA through
+`SSL_CERT_FILE`. A Go program on macOS ignores that variable (unless its
+module's `go` directive is 1.27 or later) and verifies against the system
+trust store, so its muster calls fail with `x509: certificate signed by
+unknown authority`. `klaus-gateway-test`, `decisions-test` and the Slack part
+of `organizations-test` call muster through the gateway: on macOS they refuse
+`--gateway-binary` before they start unless the lab CA is in the system trust
+store (`agentlab trust`). The image (`--gateway-image`) runs on Linux, where
+`SSL_CERT_FILE` holds.
+
+**An image for linux/amd64 only.** A dev image of klaus-gateway is built for
+linux/amd64 alone. When the plain `docker pull` of `--gateway-image` fails (an
+arm64 host finds no manifest for its platform), the proof pulls the image
+again for linux/amd64, and Docker runs it under emulation.
+
 1. No token is 401; a person no member of the fake workspace has the email
    of is 422.
 2. A team decision renders its question as a header and a Choose button per

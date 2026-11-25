@@ -471,14 +471,23 @@ agent-manager finds an organization's namespace itself, in its
 The lab's own proofs on `kagent` pass `namespace: kagent` or nothing, as
 before. `organizations-test` passes the organization's name to every tool it
 calls (the members' `start_session` included), and judges each answer's
-`organization` where the answer carries it. Its Slack surface is the
-exception it does not control: klaus-gateway starts a thread's Session with
-`start_session` and the agent's namespace, which this agent-manager build
-refuses for an organization's agent, so the Slack turn on an organization's
-agent fails until klaus-gateway passes `organization`; `--skip-slack` runs
-the rest. The klaus-gateway change is a part of giantswarm/giantswarm#39503;
-the Slack part of the proof runs again once a klaus-gateway build sends
-`organization`.
+`organization` where the answer carries it. Its Slack surface needs a
+klaus-gateway with giantswarm/klaus-gateway#616 (a part of
+giantswarm/giantswarm#39503): that gateway starts a thread's Session on an
+organization's agent with `start_session` and the organization's name, which
+it reads from the person's `list_organizations`. An older gateway passes the
+agent's namespace, which this agent-manager build refuses, so its Slack turn
+fails. Until a klaus-gateway release has the change, run the proof with the
+change's dev image:
+
+```bash
+agentlab organizations-test --gateway-image gsoci.azurecr.io/giantswarm/klaus-gateway:4.18.10-r665749cet20261125131441h743bb2f
+```
+
+The dev image is built for linux/amd64 only. On an arm64 machine the proof's
+own pull finds no manifest for the host's platform, then pulls the image for
+linux/amd64, and Docker runs it under emulation; `docker pull --platform
+linux/amd64 <image>` before the run does the same by hand.
 
 A lab that ran the earlier `AgentPlatformOrganization` model has no
 migration: start the prototype on a new lab (`agentlab down`, then `agentlab
@@ -531,9 +540,12 @@ the namespace's atespace from that namespace only. Then:
     Agent's create, change and delete there are `PermissionDenied`, while the
     same in their own organization pass; `ListSessions` with `all_creators`
     is `PermissionDenied` for both members and answered for the admin;
-  - Slack: each roster is the member's own organization's, a pick of the
-    other organization's agent is refused with nothing reaching it, and a
-    turn in a thread on it is refused;
+  - Slack: each roster is the member's own organization's, its row naming
+    the organization by its name (the member's organization list knows it);
+    a pick of the other organization's agent is refused with nothing
+    reaching it, and a turn in a thread on it is refused, each refusal naming
+    `namespace <namespace>` (the member's organization list does not know
+    that organization);
   - muster: with an `MCPServer` in each organization namespace, each member
     lists muster's namespace's servers and their own organization's; with
     their RoleBinding gone a moment, their own goes too; the first member's
@@ -827,7 +839,11 @@ boundary — what was seen`; a failure stops the run as `FAIL [surface]
 boundary: ...`. `--skip-slack` leaves klaus-gateway out (its lines read
 `SKIP`); `--gateway-image` and `--gateway-binary` pick the gateway as for
 `klaus-gateway-test` (on macOS the image runs on the `kind` network, HACKS.md
-U35). Successful runs delete both proof organizations and remove the installation inventory fixture and its temporary operator setting. Failed cleanup retains the organizations, the session, the fixture Kustomization `agentlab-organizations-inventory` and the operator's setting for diagnosis and reports the failing step. The next run (the full proof or `--part cleanup`) removes them first and says so: the proof organizations that carry the proof's ownership label (one `Orphaned` with `MissingFromGit` through the same delete pull request annotation), the fixture Kustomization with its Role and RoleBinding, and the operator's flag. It refuses, naming the object, one of those names without the proof's ownership label. Other failures remove the transient agents, Sessions, PolicyException and quota ServiceAccounts.
+U35). On macOS a `--gateway-binary` is refused before the proof starts
+unless the lab CA is in the system trust store (`agentlab trust`): the
+gateway calls muster, and a Go program on macOS verifies against the system
+trust store, not the `SSL_CERT_FILE` the lab gives it. Use `--gateway-image`
+there. Successful runs delete both proof organizations and remove the installation inventory fixture and its temporary operator setting. Failed cleanup retains the organizations, the session, the fixture Kustomization `agentlab-organizations-inventory` and the operator's setting for diagnosis and reports the failing step. The next run (the full proof or `--part cleanup`) removes them first and says so: the proof organizations that carry the proof's ownership label (one `Orphaned` with `MissingFromGit` through the same delete pull request annotation), the fixture Kustomization with its Role and RoleBinding, and the operator's flag. It refuses, naming the object, one of those names without the proof's ownership label. Other failures remove the transient agents, Sessions, PolicyException and quota ServiceAccounts.
 
 After the erase, the reads through kagent and Substrate that prove the end state (`GetSession` and `ResumeSession` on the member's session, `ListActors` in the organization's namespace) try a transport error (gRPC `Unavailable`: the kagent controller restarting, a reset connection) again, with a note that names the read and its error. The session's reads try for up to three minutes; `ListActors` within the one minute the actors have to go. Every other answer is judged at once, and a transport error past the bound fails the check with that error and the bound.
 

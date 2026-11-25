@@ -243,6 +243,13 @@ func OrganizationsTest(cfg *config.Config, opts OrganizationsTestOptions) error 
 		return err
 	}
 	opts.Part = part
+	// The Slack half's gateway starts a thread's Session through muster: a
+	// binary that cannot verify muster would fail only at S3.
+	if part == "" && !opts.SkipSlack {
+		if err := refuseUntrustedHostGateway(opts.GatewayBinary); err != nil {
+			return err
+		}
+	}
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
 	}
@@ -352,7 +359,7 @@ func (p *organizationsProof) run() error {
 		p.add(organizationVerdict{surface: surfaceSlack, boundary: "each member's roster is their own organization's", skip: "--skip-slack"})
 	} else {
 		slack := &organizationsSlack{cfg: p.cfg, opts: KlausGatewayTestOptions{GatewayImage: p.opts.GatewayImage, GatewayBinary: p.opts.GatewayBinary},
-			namespaces: p.namespaces, users: p.members, admin: p.adminAPI}
+			names: p.names, namespaces: p.namespaces, users: p.members, admin: p.adminAPI}
 		slackVerdicts, slackRosters, err := slack.run()
 		if err != nil {
 			return err
