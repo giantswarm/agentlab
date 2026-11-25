@@ -259,8 +259,9 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 		return klausGatewayRefreshTest(cfg, user, opts)
 	}
 	// The host gateway starts a thread's Session through muster
-	// (trustLabCA); --refusal-only starts none.
-	if !opts.RefusalOnly {
+	// (trustLabCA); --refusal-only starts none, unless --part signin, which
+	// runs before it, does.
+	if !opts.RefusalOnly || opts.Part == KlausGatewayPartSignIn {
 		if err := refuseUntrustedHostGateway(cfg, opts.GatewayBinary); err != nil {
 			return err
 		}
@@ -1419,10 +1420,16 @@ func pullGatewayImage(image string, wait time.Duration) error {
 
 // noManifestForPlatform reports whether a failed pull found the image but
 // nothing for the host's platform: Docker's classic store says "no matching
-// manifest", its containerd store "no match for platform".
+// manifest", its containerd store "no match for platform", Podman "no image
+// found in image index" or "in manifest list".
 func noManifestForPlatform(err error) bool {
 	msg := err.Error()
-	return strings.Contains(msg, "no matching manifest") || strings.Contains(msg, "no match for platform")
+	for _, s := range []string{"no matching manifest", "no match for platform", "no image found in image index", "no image found in manifest list"} {
+		if strings.Contains(msg, s) {
+			return true
+		}
+	}
+	return false
 }
 
 // gatewayFallbackPlatform is the platform pullGatewayImage asks for when the

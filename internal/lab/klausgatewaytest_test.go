@@ -256,7 +256,8 @@ func TestGatewayProcessExitsBeforeReady(t *testing.T) {
 
 // fakeDockerScript stands in for the docker CLI in $FAKE_DOCKER_DIR: the
 // image is cached once pulled (`image inspect` fails before), with
-// $FAKE_AMD64_ONLY only a pull for --platform linux/amd64 finds it, and with
+// $FAKE_AMD64_ONLY (the engine's error) only a pull for --platform
+// linux/amd64 finds it, and with
 // $FAKE_PULL_UNREACHABLE no pull reaches the registry; `run` pulls an
 // uncached image itself, taking $FAKE_PULL seconds, then creates the
 // container (the file container), marks it ready unless $FAKE_NEVER_READY,
@@ -269,7 +270,7 @@ case "$1" in
 image) [ -e "$d/pulled" ] ;;
 pull)
   [ -z "$FAKE_PULL_UNREACHABLE" ] || { echo "dial tcp: connection refused" >&2; exit 1; }
-  case "$*" in *"--platform linux/amd64"*) ;; *) [ -z "$FAKE_AMD64_ONLY" ] || { echo "no matching manifest for linux/arm64/v8" >&2; exit 1; } ;; esac
+  case "$*" in *"--platform linux/amd64"*) ;; *) [ -z "$FAKE_AMD64_ONLY" ] || { echo "$FAKE_AMD64_ONLY" >&2; exit 1; } ;; esac
   sleep "$FAKE_PULL"; touch "$d/pulled" ;;
 run)
   [ -e "$d/pulled" ] || { sleep "$FAKE_PULL"; touch "$d/pulled"; }
@@ -331,13 +332,22 @@ func TestGatewayImagePullNotCounted(t *testing.T) {
 // alone, which the host's own platform finds no manifest for, is pulled for
 // linux/amd64 and starts.
 func TestGatewayImagePullFallsBackToAmd64(t *testing.T) {
-	dir, g := fakeDockerGateway(t, map[string]string{fakePullEnv: "0", "FAKE_AMD64_ONLY": "1"})
-	if err := g.start(); err != nil {
-		t.Fatalf("start() with an amd64-only image = %v", err)
-	}
-	calls, _ := os.ReadFile(filepath.Join(dir, "calls")) // #nosec G304 -- the test's own temporary file
-	if !strings.Contains(string(calls), "pull -q --platform linux/amd64 "+g.opts.GatewayImage) {
-		t.Errorf("docker calls =\n%s\nwant the pull for linux/amd64", calls)
+	for engine, msg := range map[string]string{
+		"Docker":                    "no matching manifest for linux/arm64/v8 in the manifest list entries",
+		"Docker's containerd store": "no match for platform in manifest: not found",
+		"Podman, an OCI index":      "choosing an image from manifest list docker://x: no image found in image index for architecture arm64",
+		"Podman, a manifest list":   "no image found in manifest list for architecture arm64, variant v8, OS linux",
+	} {
+		t.Run(engine, func(t *testing.T) {
+			dir, g := fakeDockerGateway(t, map[string]string{fakePullEnv: "0", "FAKE_AMD64_ONLY": msg})
+			if err := g.start(); err != nil {
+				t.Fatalf("start() with an amd64-only image = %v", err)
+			}
+			calls, _ := os.ReadFile(filepath.Join(dir, "calls")) // #nosec G304 -- the test's own temporary file
+			if !strings.Contains(string(calls), "pull -q --platform linux/amd64 "+g.opts.GatewayImage) {
+				t.Errorf("docker calls =\n%s\nwant the pull for linux/amd64", calls)
+			}
+		})
 	}
 }
 
@@ -357,9 +367,9 @@ func TestGatewayImagePullFailureNotRetriedForAmd64(t *testing.T) {
 
 // A gateway binary on macOS verifies muster against the system trust store
 // alone (SSL_CERT_FILE is ignored there), so a proof whose gateway calls
-// muster refuses it up front unless the lab CA is trusted, and when
-// agentlab's own probe reads a certificate variable in place of the store;
-// the image, any other host and an externally provisioned pair are fine.
+// muster refuses it up front unless the lab CA is trusted; the image, any
+// other host, an externally provisioned pair and a certificate variable in
+// agentlab's environment (its probe would not read the store) are not judged.
 func TestHostGatewayTrustProblem(t *testing.T) {
 	const binary = "/bin/klaus-gateway"
 	for name, tc := range map[string]struct {
@@ -368,7 +378,7 @@ func TestHostGatewayTrustProblem(t *testing.T) {
 		want   []string
 	}{
 		"a binary on macOS, lab CA untrusted":  {binary, hostTrust{goos: goosDarwin}, []string{"--gateway-image", "agentlab trust"}},
-		"a binary on macOS, SSL_CERT_FILE set": {binary, hostTrust{goos: goosDarwin, labCATrusted: true, certEnv: "SSL_CERT_FILE"}, []string{"--gateway-image", "unset SSL_CERT_FILE"}},
+		"a binary on macOS, SSL_CERT_FILE set": {binary, hostTrust{goos: goosDarwin, certEnv: "SSL_CERT_FILE"}, nil},
 		"a binary on macOS, lab CA trusted":    {binary, hostTrust{goos: goosDarwin, labCATrusted: true}, nil},
 		"a binary on macOS, external pair":     {binary, hostTrust{goos: goosDarwin, externalTLS: true}, nil},
 		"the image on macOS":                   {"", hostTrust{goos: goosDarwin}, nil},

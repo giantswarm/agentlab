@@ -182,17 +182,16 @@ type hostTrust struct {
 // authority" unless `agentlab trust` put the lab CA there. The image runs on
 // Linux, where SSL_CERT_FILE holds.
 //
-// The probe of the system trust store runs in agentlab, which reads
-// SSL_CERT_FILE and SSL_CERT_DIR on macOS in place of the store: with
-// either set, its answer is not the gateway's, and the binary is refused. An
-// externally provisioned pair serves a certificate the lab CA does not sign,
-// which the lab cannot judge: the binary runs, as before.
+// The lab judges only what it can see. The probe of the system trust store
+// runs in agentlab, which reads SSL_CERT_FILE and SSL_CERT_DIR on macOS in
+// place of the store: with either set, its answer is not the gateway's. An
+// externally provisioned pair serves a certificate the lab CA does not sign.
+// In both cases the binary runs, as before this check: a wrong refusal
+// would stop a healthy run, a wrong pass fails at the muster call as it did.
 func hostGatewayTrustProblem(binary string, t hostTrust) string {
 	switch {
-	case binary == "" || t.goos != goosDarwin || t.externalTLS:
+	case binary == "" || t.goos != goosDarwin || t.externalTLS || t.certEnv != "":
 		return ""
-	case t.certEnv != "":
-		return fmt.Sprintf("--gateway-binary %s: on macOS the gateway verifies muster against the system trust store, and with %s set agentlab cannot see whether the lab CA is there; run the image instead (--gateway-image), or unset %s", binary, t.certEnv, t.certEnv)
 	case !t.labCATrusted:
 		return fmt.Sprintf("--gateway-binary %s: on macOS the gateway verifies muster against the system trust store, which does not hold the lab CA, so its muster calls would fail with an unknown authority; run the image instead (--gateway-image), or put the lab CA in the system trust store first (`agentlab trust`)", binary)
 	}
@@ -212,6 +211,9 @@ func refuseUntrustedHostGateway(cfg *config.Config, binary string) error {
 			t.certEnv = env
 			break
 		}
+	}
+	if t.certEnv != "" {
+		note("%s is set: agentlab cannot see whether the gateway binary trusts the lab CA on macOS, so the binary runs unchecked", t.certEnv)
 	}
 	if problem := hostGatewayTrustProblem(binary, t); problem != "" {
 		return errors.New(problem)

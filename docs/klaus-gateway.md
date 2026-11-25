@@ -365,11 +365,11 @@ trust store, so its muster calls fail with `x509: certificate signed by
 unknown authority`. `klaus-gateway-test`, `decisions-test` and the Slack part
 of `organizations-test` call muster through the gateway: on macOS they refuse
 `--gateway-binary` before they start unless the lab CA is in the system trust
-store (`agentlab trust`). They refuse it also while `SSL_CERT_FILE` or
-`SSL_CERT_DIR` is set in agentlab's own environment: agentlab then reads that
-variable in place of the system trust store and cannot see what the gateway
-sees. A lab with an externally provisioned pair (`platform.tls`) runs the
-binary as before. The image (`--gateway-image`) runs on Linux, where
+store (`agentlab trust`). The check is left out where agentlab cannot see
+what the gateway sees: while `SSL_CERT_FILE` or `SSL_CERT_DIR` is set in
+agentlab's own environment (agentlab then reads that variable in place of the
+system trust store; a note says so), and on a lab with an externally
+provisioned pair (`platform.tls`). There the binary runs as before. The image (`--gateway-image`) runs on Linux, where
 `SSL_CERT_FILE` holds.
 
 **An image for linux/amd64 only.** A dev image of klaus-gateway is built for
