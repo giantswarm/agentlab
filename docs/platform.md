@@ -349,8 +349,8 @@ puts the released chart back.
 
 ## Running a lab in governed mode
 
-The agent-platform chart's `governance` value (`trusted`, the default, or
-`governed`) decides whether muster also asks a person before an agent runs a
+The agent-platform chart's `governance.mode` value (`trusted`, the default,
+or `governed`) decides whether muster also asks a person before an agent runs a
 write on the platform's own servers; the chart's README describes it (further
 reading, optional: [Governing tool
 calls](https://docs.giantswarm.io/overview/agent-platform/governing-tool-calls/)).
@@ -359,7 +359,8 @@ value:
 
 ```yaml
 # governed.yaml
-governance: governed
+governance:
+  mode: governed
 ```
 
 ```yaml
