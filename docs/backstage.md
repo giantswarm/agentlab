@@ -34,9 +34,12 @@ What the lab adds on top of the chart's own app-config
 (`agent-platform-backstage-app-config`):
 
 - **`hostNetwork: true` on the Backstage pod** (a `postRenderers` patch on
-  the backstage component, the same as muster's). The issuer is `https://localhost:32000/dex`, and from
-  inside a normal pod that is the pod's own loopback; on the host network it
-  is the node's, which is the Dex NodePort — the same URL the browser uses.
+  the backstage component, the same as muster's). The issuer
+  `https://dex.<domain>:<dexPort>/dex` resolves through cluster DNS to Dex's
+  Service on the host network too; on a lab created with the localhost
+  issuer, `https://localhost:32000/dex` from inside a normal pod is the pod's
+  own loopback, on the host network the node's, which is the Dex NodePort —
+  the same URL the browser uses.
   `dnsPolicy: ClusterFirstWithHostNet` keeps cluster DNS, so the CoreDNS
   rewrite still routes `https://muster.127.0.0.1.nip.io/mcp` to the edge.
 - **The lab catalog overlay** (`agentlab-backstage-app-config` +

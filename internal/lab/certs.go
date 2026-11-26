@@ -32,9 +32,9 @@ const (
 	// provisioned pair (platform.tls): the lab CA plus the pair's chain,
 	// which Dex and the edge then serve (writeIssuerFiles).
 	trustBundlePath = "certs/trust-bundle.crt"
-	// apiserverHostsPath is the kube-apiserver's /etc/hosts with an
-	// externally provisioned pair: dex.<domain> on loopback, where the Dex
-	// NodePort answers (kind-config.yaml.tmpl).
+	// apiserverHostsPath is the kube-apiserver's /etc/hosts while the issuer
+	// lives under the domain (IssuerUnderDomain): dex.<domain> on loopback,
+	// where the Dex NodePort answers (kind-config.yaml.tmpl).
 	apiserverHostsPath = "certs/apiserver-hosts"
 	// replacedCADir stashes CAs that a re-mint replaced: the trust stores
 	// index roots by name+serial, so removing one later needs the very
@@ -60,10 +60,19 @@ const (
 	leafRenewWindow  = 30 * 24 * time.Hour
 )
 
-// dexSANNames are the DNS names of the Dex server cert: the issuer name
-// (localhost — see docs/identity.md on why not 127.0.0.1) plus the in-cluster
-// service names. Also the fixed half of the CA's name constraints.
+// dexSANNames are the fixed DNS names of the Dex server cert: localhost (the
+// issuer's name on a lab created before IssuerUnderDomain — see
+// docs/identity.md on why not 127.0.0.1) plus the in-cluster service names.
+// Also the fixed half of the CA's name constraints.
 var dexSANNames = []string{localhostName, componentDex, "dex.dex.svc", "dex.dex.svc.cluster.local"}
+
+// dexLeafNames are the DNS names the Dex server cert carries: dexSANNames
+// plus the issuer's name under the platform domain (config.DexHost), which
+// the CA's domain constraint permits. Whichever name the lab's issuer is
+// spelled with, the one leaf verifies it.
+func dexLeafNames(domain string) []string {
+	return append(slices.Clone(dexSANNames), "dex."+domain)
+}
 
 // permittedDNSNames is the CA's DNS name-constraint allowlist: the platform
 // domain plus the fixed lab names. Everything a lab leaf will ever carry,
@@ -147,7 +156,8 @@ func GenCerts(domain string, force bool) error {
 			caCertPath, caValidityDays, strings.Join(permittedDNSNames(domain), ", "))
 	}
 
-	leafReason := leafRemintReason(readCertFile(tlsCertPath), caCert, dexSANNames)
+	leafNames := dexLeafNames(domain)
+	leafReason := leafRemintReason(readCertFile(tlsCertPath), caCert, leafNames)
 	if force && leafReason == "" {
 		leafReason = "agentlab certs --force"
 	}
@@ -159,12 +169,12 @@ func GenCerts(domain string, force bool) error {
 	if err != nil {
 		return err
 	}
-	if err := mintLeaf(caCert, caKey, componentDex, dexSANNames,
+	if err := mintLeaf(caCert, caKey, componentDex, leafNames,
 		[]net.IP{net.ParseIP("127.0.0.1")}, tlsCertPath, tlsKeyPath); err != nil {
 		return err
 	}
 	fmt.Printf("Generated %s (%s; %d-day leaf, SAN: IP:127.0.0.1, DNS:%s)\n",
-		tlsCertPath, leafReason, leafValidityDays, strings.Join(dexSANNames, ","))
+		tlsCertPath, leafReason, leafValidityDays, strings.Join(leafNames, ","))
 	return nil
 }
 
@@ -179,35 +189,37 @@ func trustBundleFile(cfg *config.Config) string {
 	return caCertPath
 }
 
-// writeIssuerFiles writes what the issuer under the platform domain needs
-// with an externally provisioned pair (platform.tls): the trust bundle —
-// the lab CA plus every certificate of the pair's cert file, so a private
-// or self-signed pair verifies wherever the lab CA did, and a public one
-// where only the lab CA is trusted (the apiserver's oidc-ca-file replaces
-// the system roots) — and the apiserver's hosts file. Without a pair there
-// is nothing to write.
+// writeIssuerFiles writes what the issuer under the platform domain
+// (IssuerUnderDomain) needs: the apiserver's hosts file and, with an
+// externally provisioned pair (platform.tls), the trust bundle — the lab CA
+// plus every certificate of the pair's cert file, so a private or
+// self-signed pair verifies wherever the lab CA did, and a public one where
+// only the lab CA is trusted (the apiserver's oidc-ca-file replaces the
+// system roots). With the localhost issuer there is nothing to write.
 func writeIssuerFiles(cfg *config.Config) error {
-	if !cfg.Platform.TLS.Set() {
+	if !cfg.IssuerUnderDomain() {
 		return nil
 	}
-	ca, err := os.ReadFile(caCertPath)
-	if err != nil {
-		return fmt.Errorf("reading lab CA (run `agentlab certs` first?): %w", err)
-	}
-	chain, err := pemCertificates(cfg.Platform.TLS.CertFile)
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(trustBundlePath, append(ca, chain...), 0o644); err != nil { // #nosec G306 G703 -- public certificates, to a lab-owned path constant
-		return err
+	if cfg.Platform.TLS.Set() {
+		ca, err := os.ReadFile(caCertPath)
+		if err != nil {
+			return fmt.Errorf("reading lab CA (run `agentlab certs` first?): %w", err)
+		}
+		chain, err := pemCertificates(cfg.Platform.TLS.CertFile)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(trustBundlePath, append(ca, chain...), 0o644); err != nil { // #nosec G306 G703 -- public certificates, to a lab-owned path constant
+			return err
+		}
 	}
 	hosts := fmt.Sprintf("127.0.0.1 localhost %s\n::1 localhost\n", cfg.DexHost())
 	return os.WriteFile(apiserverHostsPath, []byte(hosts), 0o644) // #nosec G306 -- read in the node like ca.crt
 }
 
-// dexServingPair is the certificate pair Dex serves: the lab-CA leaf for
-// localhost, or the externally provisioned pair its issuer then lives
-// under (config.Issuer).
+// dexServingPair is the certificate pair Dex serves: the lab-CA leaf
+// (dexLeafNames), or the externally provisioned pair (platform.tls) its
+// issuer then lives under (config.Issuer).
 func dexServingPair(cfg *config.Config) (cert, key string) {
 	if cfg.Platform.TLS.Set() {
 		return cfg.Platform.TLS.CertFile, cfg.Platform.TLS.KeyFile

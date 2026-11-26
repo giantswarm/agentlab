@@ -21,10 +21,12 @@ a demo or for using the portal as yourself.
   lab's optional `github` MCP server ([GitHub as the person](platform.md#github-as-the-person-platformgithub))
   has a client of its own, and the two are never the same App.
 - Its **callback URL** is the lab Dex's own callback, `<issuer>/callback`:
-  `https://localhost:32000/dex/callback` for the default lab (`dexPort`
-  32000), `https://dex.<domain>:<dexPort>/dex/callback` for a lab with its
-  own certificate ([TLS](tls.md#bring-your-own-certificate)). A loopback URL
-  works because GitHub only redirects the browser there. `agentlab configure`
+  `https://dex.127.0.0.1.nip.io:32000/dex/callback` for the default lab
+  (`dexPort` 32000), `https://dex.<domain>:<dexPort>/dex/callback` for any
+  other domain, `https://localhost:<dexPort>/dex/callback` for a lab whose
+  cluster was created with the localhost issuer ([identity](identity.md#how-the-identity-plumbing-works)) —
+  a recreated lab moves under the domain, so add its new callback URL to the
+  App. A loopback URL works because GitHub only redirects the browser there. `agentlab configure`
   and the `up`/`platform`/`reload` runs print it.
 - One App serves several labs: GitHub Apps take up to ten callback URLs, so
   every lab, or every Dex port, adds its own to the list. The same holds for
@@ -83,7 +85,7 @@ a demo or for using the portal as yourself.
    the pod once and says so:
 
    ```
-   GitHub sign-in on: connector github with client <client id>; the App's callback URL is https://localhost:32000/dex/callback
+   GitHub sign-in on: connector github with client <client id>; the App's callback URL is https://dex.127.0.0.1.nip.io:32000/dex/callback
    ```
 
    Without the Secret the run warns, names the Secret and the key it looked

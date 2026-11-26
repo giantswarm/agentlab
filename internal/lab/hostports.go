@@ -3,6 +3,7 @@ package lab
 import (
 	"bufio"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -32,7 +33,7 @@ func checkHostPortsFree(cfg *config.Config) error {
 		if name := portHolder(c.Port); name != "" {
 			holder = name
 		}
-		lines = append(lines, fmt.Sprintf("127.0.0.1:%d (%s, %s) of the lab %q is held by %s", c.Port, c.Field, c.What, cfg.ClusterName, holder))
+		lines = append(lines, fmt.Sprintf("%s (%s, %s) of the lab %q is held by %s", net.JoinHostPort(c.Addr, strconv.Itoa(c.Port)), c.Field, c.What, cfg.ClusterName, holder))
 	}
 	return fmt.Errorf("%s: stop it, or run `agentlab configure` to move the lab to free ports, then `agentlab up`", strings.Join(lines, "; "))
 }

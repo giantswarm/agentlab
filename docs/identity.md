@@ -194,51 +194,76 @@ portal surface is the browser suite's `organizations.spec.ts`, not
 ## How the identity plumbing works
 
 ```
-                    issuer: https://localhost:32000/dex
+                 issuer: https://dex.127.0.0.1.nip.io:32000/dex
                                     |
-  Mac: localhost:32000 ---> kind port mapping ---.
-                                                 +--> NodePort 32000 --> Dex :5556
-  apiserver static pod (hostNetwork) ------------'
-       localhost:32000
+  host: nip.io -> 127.0.0.1:32000 --> kind port mapping --.
+                                                          +--> NodePort 32000 --> Dex :5556
+  apiserver static pod: its own /etc/hosts -> 127.0.0.1 --'
+  every pod: CoreDNS -> Service dex/dex-issuer :32000 ---------------------------> Dex :5556
 ```
 
 The single trick that makes this work is the **shared issuer URL**. The
 apiserver has to validate tokens against the same URL the browser was
-redirected to. Because the apiserver static pod runs with `hostNetwork`, its
-`localhost:32000` lands on the node's NodePort — and kind maps that same port
-onto the Mac. One URL, valid from both sides. (32000 is the default; the Dex
-port is a form question, constrained to the NodePort range 30000-32767.)
+redirected to, and every platform pod that validates a forwarded token has to
+fetch the keys from it too. The issuer lives under the platform domain,
+`https://dex.<domain>:<dexPort>/dex`, and each vantage point resolves that one
+name to Dex:
+
+- **the host** resolves `dex.<domain>` like every name of the domain (nip.io
+  for the default, to the edge's loopback address), where kind publishes the
+  Dex NodePort;
+- **the apiserver** reads its own hosts file (`certs/apiserver-hosts`, mounted
+  over its `/etc/hosts`): the name on the node's loopback, where the NodePort
+  answers — there from its first start, since it reads the issuer at boot;
+- **every pod**, the hostNetwork muster and Backstage included, gets the name
+  from cluster DNS as the `dex-issuer` Service on the same port, ahead of the
+  rewrite that sends the rest of the domain to the edge.
+
+A pod therefore dials the issuer on a private address (the Service's
+ClusterIP), the way an installation's pods reach their issuer. That is what
+the platform's OAuth resource servers need: mcp-oauth lets the issuer's host
+resolve to RFC 1918 and RFC 4193 addresses for its keys, never to loopback.
+(32000 is the default; the Dex port is a form question, constrained to the
+NodePort range 30000-32767.)
 
 Everything else follows from that:
 
 - `agentlab up` mints the name-constrained lab CA and a Dex server cert
-  (crypto/x509) whose SAN carries both `IP:127.0.0.1` and `DNS:localhost`. The
-  issuer uses the **name**, not the IP — see
-  [Why `localhost` and not `127.0.0.1`](#why-localhost-and-not-127001).
+  (crypto/x509) whose SAN carries `DNS:dex.<domain>`, `DNS:localhost`, the
+  in-cluster Service names and `IP:127.0.0.1`. The issuer uses a **name**,
+  never an IP — see [Why a name and not `127.0.0.1`](#why-a-name-and-not-127001).
 - The rendered kind config bind-mounts `certs/` into `/etc/kubernetes/pki/dex`
   on the node. kubeadm already mounts `/etc/kubernetes/pki` into the apiserver
-  pod, so a subdirectory of it is the one place the CA is visible without extra
-  plumbing.
+  pod, so a subdirectory of it is the one place the CA and the hosts file are
+  visible without extra plumbing.
 - The apiserver gets `--oidc-issuer-url`, `--oidc-client-id`, `--oidc-ca-file`,
   `--oidc-username-claim=email`, `--oidc-groups-claim=groups` and `oidc:` prefixes.
 - RBAC binds `Group: oidc:platform-admins` (etc.) to ClusterRoles.
+
+The issuer is fixed when the cluster is created: the apiserver reads it only
+then. A lab whose cluster was created by an agentlab before
+`platform.issuerOnDomain` keeps `https://localhost:<dexPort>/dex` (its
+`agentlab.yaml` has no `issuerOnDomain` key) until it is recreated:
+`agentlab down`, then `agentlab up`, which moves the issuer under the domain
+for the new cluster and records `issuerOnDomain: true`. On such a lab the
+apiserver, muster and Backstage reach `localhost:<dexPort>` through the node's
+loopback (hostNetwork), every other pod through the `dex-localhost` sidecar on
+its own loopback (HACKS.md U13) — an address mcp-oauth refuses for the keys,
+so the managers from mcp-oauth v1.15 on (agent-manager 3.5, vm-manager 0.27)
+answer a forwarded token with 401 there.
 
 Every manifest the binary applies is also written to `state/` (gitignored), so
 `kubectl diff -f state/dex.yaml` and plain reading remain possible. The
 templates live in `internal/lab/templates/`.
 
-## Why `localhost` and not `127.0.0.1`
+## Why a name and not `127.0.0.1`
 
 The issuer was originally `https://127.0.0.1:32000/dex`. muster refuses that:
 `mcp-oauth`'s `ValidateIssuerURL` rejects any issuer whose host **parses as a
 loopback or private IP**, unconditionally — `allowPrivateIPOIDC` only relaxes the
 *dial-time* SSRF guard, not this static check. A hostname that merely *resolves*
-to 127.0.0.1 passes, because `net.ParseIP("localhost")` returns nil.
-
-So the lab issuer is `https://localhost:32000/dex`. Nothing else changed: the
-Dex cert already carried `DNS:localhost` in its SAN, and `localhost` resolves to
-127.0.0.1 on the Mac, inside the kind node, and inside any `hostNetwork` pod — the
-same one-URL trick, just spelled with a name.
+to such an address passes, because `net.ParseIP("dex.127.0.0.1.nip.io")` returns
+nil.
 
 ## Why Dex v2.45.1 specifically
 
@@ -267,7 +292,7 @@ next version lands.
 The rendered Dex config carries the shared `agent-platform` static client:
 
 ```
-issuer:        https://localhost:32000/dex
+issuer:        https://dex.127.0.0.1.nip.io:32000/dex
 client id:     agent-platform
 client secret: agent-platform-lab-secret
 redirect URIs: https://muster.127.0.0.1.nip.io/oauth/callback

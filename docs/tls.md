@@ -1,7 +1,7 @@
 # TLS: one lab CA, trusted explicitly
 
 Everything the lab serves over TLS — the agentgateway edge
-(`*.127.0.0.1.nip.io`) and the bundled Dex (`https://localhost:32000/dex`) —
+(`*.127.0.0.1.nip.io`) and the bundled Dex (`https://dex.127.0.0.1.nip.io:32000/dex`) —
 chains to a **lab CA** that `agentlab up` mints per machine into `certs/`
 (key 0600, gitignored, never leaves the machine). Every in-cluster consumer
 trusts it automatically (muster's trust pool, Backstage, the apiserver's OIDC
@@ -105,17 +105,18 @@ platform:
 ```
 
 The edge then serves your certificate instead of a minted wildcard, and the
-Dex issuer moves under your domain: `https://dex.lab.example.com:32000/dex`
-(the `dexPort`), served with the same pair — so the pair must cover
-`dex.<domain>` (a `*.<domain>` wildcard does; `configure` and `up` refuse a
-pair that does not). The login hop then shows your certificate too: no lab-CA
-trust anywhere in the browser flow. Renewals: re-run `agentlab platform`
-after the files change (Dex rolls on the new certificate).
+Dex issuer under your domain, `https://dex.lab.example.com:32000/dex` (the
+`dexPort`), is served with the same pair instead of the lab-CA leaf — so the
+pair must cover `dex.<domain>` (a `*.<domain>` wildcard does; `configure` and
+`up` refuse a pair that does not). The login hop then shows your certificate
+too: no lab-CA trust anywhere in the browser flow. Renewals: re-run `agentlab
+platform` after the files change (Dex rolls on the new certificate).
 
-The one issuer URL holds from every vantage point, as with `localhost`:
+The one issuer URL holds from every vantage point, as it does for every lab
+([identity](identity.md#how-the-identity-plumbing-works)):
 
-- **the host** resolves `dex.<domain>` through your wildcard record, to
-  loopback, where the Dex port is mapped;
+- **the host** resolves `dex.<domain>` through your wildcard record, to the
+  loopback address the edge and the Dex port are published on;
 - **the apiserver** in the kind node reads its own hosts file
   (`certs/apiserver-hosts`, mounted over its `/etc/hosts`): `dex.<domain>` on
   loopback, the Dex NodePort — there from its first start, since it reads the
@@ -129,5 +130,7 @@ Every consumer that trusted the lab CA trusts `certs/trust-bundle.crt`
 instead: the lab CA plus the certificates of your `certFile`, so a private
 or self-signed pair verifies too, and a public one where the system roots are
 not consulted (the apiserver's `oidc-ca-file`). The issuer is fixed when the
-cluster is created: switching `platform.tls` on or off on an existing lab is
-refused by `up` until you recreate it (`agentlab down`, then `agentlab up`).
+cluster is created: a change of the domain under it — `platform.tls` on a
+lab whose cluster still runs the localhost issuer, or a pair for another
+domain — is refused by `up` until you recreate it (`agentlab down`, then
+`agentlab up`).
