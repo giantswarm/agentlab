@@ -95,6 +95,18 @@ runs reuse it. It cannot be `backstage.port` (7007), which kind publishes for
 the in-cluster Backstage. Removing the key and running `agentlab reload`
 unregisters it.
 
+**Returning from muster's approval page.** A tool approval opened from the
+portal's chat sends the browser back to the page it came from, but muster only
+returns to origins on `oauth.mcpClient.postLoginRedirectAllowlist`; the meta
+chart lists the edge portal (`https://portal.<domain>:<backstage.publicPort>/sessions`),
+not `http://localhost:3000`. While `backstage.localDevPort` is set the lab adds
+`http://localhost:3000/sessions` (the frontend's fixed port) to muster's own
+list, which the chart keeps next to its derived entry. Lab only. It is part of
+the platform values, so after the first `portal dev` (or after removing the
+key) run `agentlab platform` once; Dex alone is re-applied by `portal dev`. Without it muster logs
+`Ignoring a return not in oauth.mcpClient.postLoginRedirectAllowlist` and shows
+its own "answer recorded" page.
+
 **Limits.**
 
 - The database is in memory, so every backend restart starts it empty: the

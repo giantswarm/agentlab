@@ -1,8 +1,11 @@
 package lab
 
 import (
+	"reflect"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -40,5 +43,40 @@ func TestDexTemplateRegistersThePortalClient(t *testing.T) {
 	if !strings.Contains(out, "/oauth/proxy/callback\n        # The portal requests this client's audience") ||
 		!strings.Contains(out, "trustedPeers:\n          - "+config.PortalClientID+"\n      # The portal's own client") {
 		t.Errorf("agent-platform must trust %s for its audience:\n%s", config.PortalClientID, out)
+	}
+}
+
+// TestPlatformValuesAdmitHotReloadPortalReturn: while a hot-reload run is
+// configured (backstage.localDevPort) muster's own return allowlist carries
+// the frontend's /sessions, so the approval page can return the browser to
+// `agentlab portal dev`; otherwise the lab sets no list of its own.
+func TestPlatformValuesAdmitHotReloadPortalReturn(t *testing.T) {
+	allowlist := func(cfg *config.Config) any {
+		raw, err := renderTemplate(cfg, "agent-platform-values.yaml.tmpl", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var values map[string]any
+		if err := yaml.Unmarshal(raw, &values); err != nil {
+			t.Fatalf("%v\n%s", err, raw)
+		}
+		var cur any = values
+		for _, key := range []string{"muster", "muster", "oauth", "mcpClient", "postLoginRedirectAllowlist"} {
+			m, ok := cur.(map[string]any)
+			if !ok {
+				return nil
+			}
+			cur = m[key]
+		}
+		return cur
+	}
+	cfg := config.Default()
+	if got := allowlist(cfg); got != nil {
+		t.Errorf("no hot-reload run: postLoginRedirectAllowlist = %v, want unset", got)
+	}
+	cfg.Backstage.LocalDevPort = config.DefaultBackstageLocalDevPort
+	got, want := allowlist(cfg), []any{"http://localhost:3000/sessions"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("hot-reload run: postLoginRedirectAllowlist = %v, want %v", got, want)
 	}
 }

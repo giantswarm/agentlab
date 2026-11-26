@@ -99,6 +99,7 @@ func BackstageDev(cfg *config.Config, checkout string, port int) error {
 		if err := cfg.Save(); err != nil {
 			return err
 		}
+		note("muster's approval page returns to this portal only after `agentlab platform` re-renders the platform values (the return allowlist carries %s/sessions)", backstageFrontendURL)
 	}
 	// Always: a recorded localDevPort does not prove Dex was rendered with it
 	// (a hand-edited agentlab.yaml never was). The apply is checksummed, so a

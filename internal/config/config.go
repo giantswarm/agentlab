@@ -3329,6 +3329,18 @@ func (c *Config) BackstageLocalDevURL() string {
 	return fmt.Sprintf("http://localhost:%d", c.Backstage.LocalDevPort)
 }
 
+// BackstageLocalDevFrontendURL is where the hot-reload run's frontend serves
+// (the page a person's browser is on), "" when no hot-reload run is
+// configured (backstage.localDevPort unset). muster's approval page may only
+// return the browser to a page on its post-login return allowlist, so the
+// lab lists this origin's /sessions there.
+func (c *Config) BackstageLocalDevFrontendURL() string {
+	if c.Backstage.LocalDevPort == 0 {
+		return ""
+	}
+	return fmt.Sprintf("http://localhost:%d", BackstageFrontendPort)
+}
+
 func (c *Config) KagentUIBaseURL() string {
 	return fmt.Sprintf("http://localhost:%d", c.Platform.AgentsPort)
 }
