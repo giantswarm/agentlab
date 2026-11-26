@@ -40,7 +40,9 @@ func (ch PortChange) String() string {
 type PortConflict struct {
 	Field string
 	What  string
-	Port  int
+	// Addr is the host address the mapping binds (labPort.addr).
+	Addr string
+	Port int
 }
 
 func (pc PortConflict) String() string {
@@ -53,7 +55,7 @@ type labPort struct {
 	field, what string
 	port        *int
 	// addr is the host address the mapping binds: 127.0.0.1, or for the edge
-	// platform.gatewayAddress.
+	// (and Dex under the domain, DexHostAddress) platform.gatewayAddress.
 	addr string
 	// pick chooses a free replacement given the scanner; a nil note means
 	// the move has no caveat beyond the number.
@@ -68,7 +70,7 @@ func (c *Config) ports() []labPort {
 	return []labPort{
 		// Dex must stay in the NodePort range (host port == NodePort); scan
 		// upward from the current value and wrap around the range.
-		{"dexPort", "the Dex issuer", &c.DexPort, lo, func(scan func(int, int) (int, bool)) (int, bool) {
+		{"dexPort", "the Dex issuer", &c.DexPort, c.DexHostAddress(), func(scan func(int, int) (int, bool)) (int, bool) {
 			if p, ok := scan(c.DexPort+1, 32767); ok {
 				return p, true
 			}
@@ -145,7 +147,7 @@ func (c *Config) portConflicts(taken func(addr string, port int) bool) []PortCon
 	var conflicts []PortConflict
 	for _, lp := range c.ports() {
 		if taken(lp.addr, *lp.port) {
-			conflicts = append(conflicts, PortConflict{Field: lp.field, What: lp.what, Port: *lp.port})
+			conflicts = append(conflicts, PortConflict{Field: lp.field, What: lp.what, Addr: lp.addr, Port: *lp.port})
 		}
 	}
 	return conflicts

@@ -506,20 +506,22 @@ Load-bearing invariants (details in docs/):
   install (on by default); its controller runs in `trusted-proxy` mode behind
   the edge's JWT policy on the current line (`unsecure` on the released 3.x
   line, which runs no JWT-validating front proxy).
-- **One issuer URL from every vantage point**: `https://localhost:<dexPort>/dex`
-  works from the Mac, inside the node, and inside hostNetwork pods because the
-  Dex NodePort equals the kind host port. The issuer must be spelled
-  `localhost`, not `127.0.0.1` — muster rejects IP-literal loopback issuers.
-  With an externally provisioned pair (`platform.tls`) it is
-  `https://dex.<domain>:<dexPort>/dex` instead, served with that pair: the
-  apiserver resolves it through its own hosts file, pods through a CoreDNS
-  rewrite to the `dex-issuer` Service (no sidecar) — docs/tls.md "Bring your
-  own certificate".
+- **One issuer URL from every vantage point**: `https://dex.<domain>:<dexPort>/dex`
+  (`platform.issuerOnDomain`, every cluster `up` creates) — the host resolves
+  it like every name of the domain to the loopback address the Dex NodePort is
+  published on, the apiserver through its own hosts file, every pod through a
+  CoreDNS rewrite to the `dex-issuer` Service, a private address the
+  mcp-oauth resource servers fetch the keys from (they refuse loopback).
+  Served with the lab-CA leaf, or with an externally provisioned pair
+  (`platform.tls`, docs/tls.md "Bring your own certificate"). A name, never
+  an IP literal — muster rejects those. A lab whose cluster was created
+  before keeps `https://localhost:<dexPort>/dex`, bridged into pods by the
+  `dex-localhost` sidecar, until `down` + `up` — docs/identity.md.
 - **muster runs on the host network at one replica** by default, the issuer
   reached as the host does. `platform.musterPodNetwork` (`configure
   --muster-pod-network`) is the installation's shape instead: two replicas
   on the pod network behind a PodDisruptionBudget of minAvailable 1, the
-  issuer bridged by the `dex-localhost` sidecar, proven by `platform-test`'s
+  issuer reached through cluster DNS like every pod's, proven by `platform-test`'s
   `muster replicas` stage (one pod deleted mid-session) — docs/platform.md
   "muster on the pod network".
 - **The platform's network policies are off** by default.

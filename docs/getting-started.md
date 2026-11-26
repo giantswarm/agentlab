@@ -258,8 +258,8 @@ Applied to the configuration:
   in the browser: cookies, a trusted CA and its sign-ins never cross over.
   Linux routes all of 127.0.0.0/8 to loopback; where only 127.0.0.1 binds
   (macOS) the lab takes `lab<n>.<base>` alone and the edge a free port. The
-  Dex issuer stays `https://localhost:<dexPort>/dex`, each lab on its own
-  port. An existing cluster keeps both (its CA, its port mapping and every
+  Dex issuer follows the domain, `https://dex.<domain>:<dexPort>/dex`,
+  published on the lab's own address, each lab on its own port. An existing cluster keeps both (its CA, its port mapping and every
   rendered URL name them); a clash is reported with the way out (`agentlab
   down`, `configure`, `up`). A moved domain re-mints the lab CA, whose name
   constraints pin the domain ([TLS](tls.md)): `agentlab trust` again. A domain of your own certificate

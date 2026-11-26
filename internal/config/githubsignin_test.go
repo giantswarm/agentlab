@@ -26,7 +26,7 @@ func TestGitHubSignInDefaults(t *testing.T) {
 	if cfg.Platform.GitHubSignIn.Secret != "" {
 		t.Fatalf("the default lives in the accessor, not in the file: %q", cfg.Platform.GitHubSignIn.Secret)
 	}
-	if got, want := cfg.GitHubSignInCallbackURL(), "https://localhost:32000/dex/callback"; got != want {
+	if got, want := cfg.GitHubSignInCallbackURL(), "https://dex.127.0.0.1.nip.io:32000/dex/callback"; got != want {
 		t.Fatalf("callback %q, want %q", got, want)
 	}
 	cfg.Platform.GitHubSignIn = GitHubSignIn{Enabled: true, ClientID: testSignInClientID, Secret: testSignInSecret}
