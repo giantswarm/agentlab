@@ -61,7 +61,7 @@ func TestPlatformValuesAdmitHotReloadPortalReturn(t *testing.T) {
 			t.Fatalf("%v\n%s", err, raw)
 		}
 		var cur any = values
-		for _, key := range []string{"muster", "muster", "oauth", "mcpClient", "postLoginRedirectAllowlist"} {
+		for _, key := range strings.Split("muster.muster.oauth.mcpClient.postLoginRedirectAllowlist", ".") {
 			m, ok := cur.(map[string]any)
 			if !ok {
 				return nil
