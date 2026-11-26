@@ -55,16 +55,21 @@ const (
 // Deployments of the platform namespace, by the meta chart's component names.
 var organizationKindComponents = []string{agentPlatformOperator, agentManagerMCPServer}
 
-// organizationShapeFloors are the releases from which each component reads
-// and writes the shape of organizationShapeContract: the dev builds of
-// giantswarm/agent-platform-operator#69 from dee58c4
-// (0.4.9-r1b5e09bdt20261126140120hdee58c4) and of giantswarm/agent-manager#475
-// from 6f0d54a (3.5.11-r1b5e09bdt20261126135049h6f0d54a). Their earlier
-// builds, which hold the RBAC on the Organizations too, read
-// spec.agentPlatform and status.agentPlatform.
+// organizationShapeBranch is the branch of giantswarm/agent-platform-operator#69
+// and giantswarm/agent-manager#475, whose dev builds are the only builds of
+// the two components that serve the shape of organizationShapeContract: no
+// release serves it yet.
+const organizationShapeBranch = "organization-kind-prototype"
+
+// organizationShapeFloors are each component's first dev build of
+// organizationShapeBranch that reads and writes the shape: the build of
+// dee58c4 and of 6f0d54a. The branch's earlier builds, on the same release
+// line too (0.4.9-...h34fb3f4), hold the RBAC on the Organizations and read
+// spec.agentPlatform and status.agentPlatform. Before this lab merges, after
+// the two pull requests, the floors move to their first releases.
 var organizationShapeFloors = map[string]*semver.Version{
-	agentPlatformOperator: semver.MustParse("0.4.9"),
-	agentManagerMCPServer: semver.MustParse("3.5.11"),
+	agentPlatformOperator: semver.MustParse("0.4.9-r1b5e09bdt20261126140120hdee58c4"),
+	agentManagerMCPServer: semver.MustParse("3.5.11-r1b5e09bdt20261126135049h6f0d54a"),
 }
 
 // checkOrganizationsChart refuses platform.organizations on a chart whose
@@ -120,52 +125,60 @@ func (c componentAccess) user() string {
 	return "system:serviceaccount:" + c.namespace + ":" + c.serviceAccount
 }
 
-// earlierShape is the component's floor of organizationShapeFloors when its
-// image is a build from before it: a tag that is a semantic version whose
-// release (the prerelease of a dev build left out, so that every dev build of
-// the floor's release passes) is below the floor. A tag that is no semantic
-// version (a local build) is left to the run, nil.
-func (c componentAccess) earlierShape() *semver.Version {
+// shapeProblem words why the component's image is no build of the shape of
+// organizationShapeContract, by its tag: a dev build of
+// organizationShapeBranch before the component's floor, or a release (a
+// release candidate too), since no release serves the shape yet. "" for a
+// build of the branch from the floor on, and for a tag that cannot tell: no
+// semantic version (a local build) or another branch's dev build, which are
+// left to the run.
+func (c componentAccess) shapeProblem() string {
 	floor, ok := organizationShapeFloors[c.component]
 	if !ok {
-		return nil
+		return ""
 	}
 	ref, _, _ := strings.Cut(c.image, "@")
 	_, tag, ok := strings.Cut(ref[strings.LastIndex(ref, "/")+1:], ":")
 	if !ok {
-		return nil
+		return ""
 	}
 	v, err := semver.StrictNewVersion(strings.TrimPrefix(tag, "v"))
 	if err != nil {
-		return nil
+		return ""
 	}
-	if release := semver.New(v.Major(), v.Minor(), v.Patch(), "", ""); release.LessThan(floor) {
-		return floor
+	switch {
+	case devTagFilter(organizationShapeBranch)(v.Prerelease()):
+		// One branch's builds sort by their time (chartbranch.go).
+		if v.LessThan(floor) {
+			return fmt.Sprintf("a build of %s before %s, which reads the earlier shape (spec.agentPlatform, status.agentPlatform, the conditions Ready and Orphaned)", organizationShapeBranch, floor)
+		}
+		return ""
+	case isDevTag(v.Prerelease()):
+		return ""
 	}
-	return nil
+	return fmt.Sprintf("a release, and no release serves the shape yet: its first builds are those of %s from %s", organizationShapeBranch, floor)
 }
 
 // organizationKindProblem words the components whose ServiceAccount may not
-// read the Organizations, and those whose build reads the earlier shape, with
-// the overlay that installs the builds that serve the shape; "" when every
+// read the Organizations, and those whose build does not serve the shape,
+// with the overlay that installs the builds that serve it; "" when every
 // component does.
 func organizationKindProblem(access []componentAccess) string {
 	var problems []string
 	for _, c := range access {
-		switch floor := c.earlierShape(); {
+		switch shape := c.shapeProblem(); {
 		case !c.mayRead:
 			problems = append(problems, fmt.Sprintf("%s (image %s): ServiceAccount %s/%s may not %s %s",
 				c.component, c.image, c.namespace, c.serviceAccount, organizationReadVerb, organizationResource))
-		case floor != nil:
-			problems = append(problems, fmt.Sprintf("%s (image %s): a build before %s, which reads the earlier shape (spec.agentPlatform, status.agentPlatform, the conditions Ready and Orphaned)",
-				c.component, c.image, floor))
+		case shape != "":
+			problems = append(problems, fmt.Sprintf("%s (image %s): %s", c.component, c.image, shape))
 		}
 	}
 	if len(problems) == 0 {
 		return ""
 	}
 	return fmt.Sprintf("%s and %s must serve the Organization kind in the shape of %s (spec.capabilities.agentPlatform, the agentPlatform entry of status.namespaces, the AgentPlatform conditions), but:\n\n%s\n\n"+
-		"Their released charts carry no RBAC on the Organization kind, and their earlier dev builds read the earlier shape; the prototype's current dev builds serve it, chart and image together. "+
+		"No release of either serves that shape yet, and the earlier dev builds of their pull requests read the earlier shape; the prototype's current dev builds serve it, chart and image together. "+
 		"Point both components at those builds with the platform.valuesFiles overlay of %s "+
 		"(components.%s.versionRange and components.%s.versionRange), then `agentlab platform`",
 		agentPlatformOperator, agentManagerMCPServer, organizationShapeContract,

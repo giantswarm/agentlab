@@ -415,9 +415,11 @@ yet. To run the prototype:
    ```
 
    These are the first builds of the shape of
-   giantswarm/organization-operator#673. The earlier builds of the two pull
-   requests (agent-platform-operator before 0.4.9, agent-manager before
-   3.5.11) read `spec.agentPlatform` and `status.agentPlatform`.
+   giantswarm/organization-operator#673, from the branch
+   `organization-kind-prototype` of both repositories. The branch's earlier
+   builds read `spec.agentPlatform` and `status.agentPlatform`, also those
+   on the same release line (`0.4.9-r1b5e09bdt20261126115358h34fb3f4`), and
+   no release of either component serves the shape yet.
 
    This agent-manager build takes every organization by its name: each
    tool of an organization's contents takes one argument `organization`,
@@ -476,15 +478,15 @@ The lab checks the first two steps and stops at once when one is missing:
   the API server whether the ServiceAccounts of the Deployments
   `agent-platform-operator` and `agent-manager` may list
   `organizations.security.giantswarm.io` (a `SelfSubjectAccessReview` as
-  each), and read their images: an image whose tag is a semantic version
-  before agent-platform-operator 0.4.9 or agent-manager 3.5.11 (the
-  prerelease of a dev build left out) is a build of the earlier shape. A tag
-  that is no semantic version, a local build, is left to the run. Every part
-  of `organizations-test` asks the same at its start. When a component may
-  not read the Organizations or is a build of the earlier shape, the run
-  stops and names the component, its image and the overlay of step 2, in
-  place of an organization that is not `AgentPlatformReady` after three
-  minutes.
+  each), and read their images' tags: a dev build of
+  `organization-kind-prototype` before the build of step 2 reads the earlier
+  shape, and so does a release (a release candidate too), since no release
+  serves the shape yet. A tag that is no semantic version (a local build)
+  and another branch's dev build are left to the run. Every part of
+  `organizations-test` asks the same at its start. When a component may not
+  read the Organizations or is no build of the shape, the run stops and
+  names the component, its image and the overlay of step 2, in place of an
+  organization that is not `AgentPlatformReady` after three minutes.
 
 `organizations-test --part admins` also proves that nobody switches an
 organization's Agent Platform off: the chart's policy

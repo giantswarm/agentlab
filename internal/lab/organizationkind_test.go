@@ -58,10 +58,11 @@ func TestCheckOrganizationsChart(t *testing.T) {
 
 // The check reads each component's Deployment for the ServiceAccount it
 // reviews and the image it names, and the problem names each component whose
-// ServiceAccount may not read the Organizations, or whose image is a build
-// of the earlier shape, its image, and the overlay of the prototype's docs;
-// nothing when both may read and serve the shape of
-// giantswarm/organization-operator#673.
+// ServiceAccount may not read the Organizations, or whose image is no build
+// of the shape of giantswarm/organization-operator#673 (an earlier build of
+// the prototype's branch, on the same release line too, or a release), its
+// image, and the overlay of the prototype's docs; nothing when both may read
+// and serve the shape, and nothing for a tag that cannot tell.
 func TestOrganizationKindProblem(t *testing.T) {
 	deployment := func(name, serviceAccount, image string) *appsv1.Deployment {
 		return &appsv1.Deployment{
@@ -73,11 +74,13 @@ func TestOrganizationKindProblem(t *testing.T) {
 		}
 	}
 	const (
-		// The first dev builds of the shape, and the builds before them.
+		// The first dev builds of the shape, and builds of the prototype's
+		// branch before them: the operator's on the same release line.
 		operatorImage        = "gsoci.azurecr.io/giantswarm/agent-platform-operator:0.4.9-r1b5e09bdt20261126140120hdee58c4"
 		managerImage         = "gsoci.azurecr.io/giantswarm/agent-manager:3.5.11-r1b5e09bdt20261126135049h6f0d54a"
-		earlierOperatorImage = "gsoci.azurecr.io/giantswarm/agent-platform-operator:0.4.7-r1b5e09bdt20261125225215h814713a"
+		earlierOperatorImage = "gsoci.azurecr.io/giantswarm/agent-platform-operator:0.4.9-r1b5e09bdt20261126115358h34fb3f4"
 		earlierManagerImage  = "gsoci.azurecr.io/giantswarm/agent-manager:3.5.9-r1b5e09bdt20261125120439h31a58c6"
+		releasedManagerImage = "gsoci.azurecr.io/giantswarm/agent-manager:3.5.12"
 	)
 	operator := componentAccessOf(deployment(agentPlatformOperator, agentPlatformOperator, operatorImage))
 	manager := componentAccessOf(deployment(agentManagerMCPServer, "", managerImage))
@@ -99,15 +102,16 @@ func TestOrganizationKindProblem(t *testing.T) {
 			named:    []string{platformNamespace + "/default", managerImage},
 			notNamed: []string{platformNamespace + "/" + agentPlatformOperator, operatorImage}},
 		{name: "an earlier build of the operator", operator: true, manager: true, operatorImage: earlierOperatorImage,
-			named:    []string{earlierOperatorImage, "before 0.4.9", earlierSpecPath},
+			named:    []string{earlierOperatorImage, "before 0.4.9-r1b5e09bdt20261126140120hdee58c4", earlierSpecPath},
 			notNamed: []string{managerImage}},
 		{name: "an earlier build of agent-manager", operator: true, manager: true, managerImage: earlierManagerImage,
-			named:    []string{earlierManagerImage, "before 3.5.11", earlierSpecPath},
+			named:    []string{earlierManagerImage, "before 3.5.11-r1b5e09bdt20261126135049h6f0d54a", earlierSpecPath},
 			notNamed: []string{operatorImage}},
-		{name: "releases after the floors", operator: true, manager: true, wantNoProblemAtAll: true,
-			operatorImage: "gsoci.azurecr.io/giantswarm/agent-platform-operator:0.5.0", managerImage: "gsoci.azurecr.io/giantswarm/agent-manager:3.6.0"},
-		{name: "local builds are left to the run", operator: true, manager: true, wantNoProblemAtAll: true,
-			operatorImage: "localhost/agent-platform-operator:dev-1a2b", managerImage: "localhost/agent-manager:1"},
+		{name: "a release of agent-manager, which may read", operator: true, manager: true, managerImage: releasedManagerImage,
+			named:    []string{releasedManagerImage, "no release serves the shape"},
+			notNamed: []string{operatorImage}},
+		{name: "another branch's build and a local build are left to the run", operator: true, manager: true, wantNoProblemAtAll: true,
+			operatorImage: "gsoci.azurecr.io/giantswarm/agent-platform-operator:0.4.9-r89373ccct20261126135429h3109993", managerImage: "localhost/agent-manager:dev-1a2b"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			o, m := operator, manager

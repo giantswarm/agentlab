@@ -755,8 +755,9 @@ tenants:
 
 # platform.organizations: Agent Platform organizations. The meta chart
 # installs agent-platform-operator, which reconciles each Organization
-# (security.giantswarm.io, cluster-scoped) with spec.agentPlatform.enabled
-# into its namespace agents-<name> and binds its spec.admins there, and the
+# (security.giantswarm.io, cluster-scoped) with
+# spec.capabilities.agentPlatform.enabled into its namespace agents-<name>
+# and binds its spec.admins there, and the
 # connectivity chart renders the organizations' roles and admission policies
 # and selects those namespaces by the label
 # agent-platform.giantswarm.io/organization (the credential provider's
