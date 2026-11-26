@@ -349,17 +349,17 @@ puts the released chart back.
 
 ## Running a lab in governed mode
 
-The agent-platform chart's `governance.mode` (`trusted`, the default, or
+The agent-platform chart's `governance` value (`trusted`, the default, or
 `governed`) decides whether muster also asks a person before an agent runs a
-write on the platform's own servers (see [Governing tool
+write on the platform's own servers; the chart's README describes it (further
+reading, optional: [Governing tool
 calls](https://docs.giantswarm.io/overview/agent-platform/governing-tool-calls/)).
 The lab sets it with a `platform.valuesFiles` overlay, like any other chart
 value:
 
 ```yaml
 # governed.yaml
-governance:
-  mode: governed
+governance: governed
 ```
 
 ```yaml
@@ -372,7 +372,8 @@ Then `agentlab platform`; `agentlab status` names the overlay and the mode it
 sets. muster reads the mode once at start, so the run rolls muster. Removing
 the entry and running `agentlab platform` again puts the lab back on trusted.
 
-Until the tool-approval releases exist the chart's release floors are unset,
+Until muster and agent-manager releases with tool approval exist, the chart's
+release floors are unset,
 and the chart refuses `governed` at render: the boot stops before the install,
 naming the guard. A released chart that carries tool approval needs no more
 than the overlay. Before that, use a dev chart whose floors name the dev builds
