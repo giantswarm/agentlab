@@ -443,6 +443,24 @@ yet. To run the prototype:
    [Bring your own certificate](tls.md#bring-your-own-certificate).
 5. `agentlab platform`, then `agentlab organizations-test`.
 
+The lab checks the first two steps and stops at once when one is missing:
+
+- **A chart without the `Organization` CRD switch.** With organizations on,
+  `agentlab up` and `agentlab platform` read the values schema of the chart
+  they install. When it has no
+  `agentPlatformOrganizations.organizationCRD`, they stop before the
+  install, in place of Helm's schema error, and name this section and
+  `agentlab configure --organizations=false`. A chart that cannot be read,
+  or that has no schema, is left to the install.
+- **An operator or agent-manager without the `Organization` kind.** Before
+  the default organization, `up` and `platform` ask the API server whether
+  the ServiceAccounts of the Deployments `agent-platform-operator` and
+  `agent-manager` may list `organizations.security.giantswarm.io` (a
+  `SelfSubjectAccessReview` as each). Every part of `organizations-test`
+  asks the same at its start. When one may not, the run stops and names the
+  component, its image and the overlay of step 2, in place of an
+  organization that is not `Ready` after three minutes.
+
 `organizations-test --part admins` also proves that nobody switches an
 organization's Agent Platform off: the chart's policy
 `agent-platform-organization-switch-off` refuses the update (decision D10;

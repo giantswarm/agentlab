@@ -438,6 +438,12 @@ func ensureOrganizationModel(cfg *config.Config, ns string) error {
 // HelmRelease field lock among them) judge.
 func ensureDefaultOrganization(cfg *config.Config) (string, error) {
 	step("The default organization %s (Organization), its admins, editors and model", defaultOrganization)
+	// The components that reconcile and serve it first, so that a release
+	// without the Organization kind is named now, not after
+	// organizationReadyTimeout (organizationkind.go).
+	if err := checkOrganizationKindServed(); err != nil {
+		return "", err
+	}
 	ns, err := ensureOrganization(defaultOrganization, defaultOrganizationDisplayName, []organizationAdmin{adminGroup(platformAdminsGroup)})
 	if err != nil {
 		return "", err

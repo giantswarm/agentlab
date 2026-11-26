@@ -266,6 +266,13 @@ func OrganizationsTest(cfg *config.Config, opts OrganizationsTestOptions) error 
 	if err := checkApiserverOIDC(cfg); err != nil {
 		return err
 	}
+	// Every part stands on the operator and agent-manager serving the
+	// Organization kind: a release without it fails here, by name, not
+	// deep in a part (organizationkind.go).
+	step("The Organization CRD, and %s and %s may %s %s as their ServiceAccounts", agentPlatformOperator, agentManagerMCPServer, organizationReadVerb, organizationResource)
+	if err := checkOrganizationKindServed(); err != nil {
+		return err
+	}
 	if part == organizationCredentialsPart {
 		return organizationCredentialsTest(cfg, admin)
 	}
@@ -390,14 +397,11 @@ func (p *organizationsProof) add(v organizationVerdict) {
 	p.verdicts = append(p.verdicts, v)
 }
 
-// preconditions checks what the proof stands on: the CRD and its operator,
-// the organizations' roles, and the kagent authorizer judging people as the
-// API server does.
+// preconditions checks what the proof stands on beside the Organization kind
+// (checkOrganizationKindServed, before every part): the organizations' roles,
+// and the kagent authorizer judging people as the API server does.
 func (p *organizationsProof) preconditions() error {
-	step("The Organization CRD and the organizations' roles (agentPlatformOrganizations on the installed chart)")
-	if _, err := gvrFor(organizationResource); err != nil {
-		return fmt.Errorf("the apiserver serves no %s: the installed chart does not install the Organization CRD (agentPlatformOrganizations.organizationCRD.enabled, giantswarm/agent-platform#1489) — docs/agents.md \"The Organization kind prototype\": %w", organizationResource, err)
-	}
+	step("The organizations' roles (agentPlatformOrganizations on the installed chart)")
 	for _, role := range []string{organizationEditorRole, organizationUserRole, organizationAdminRole} {
 		if err := checkOrganizationRole(role); err != nil {
 			return err

@@ -168,6 +168,11 @@ func PlatformUp(cfg *config.Config, offers Offers) error {
 func platformTopologyFor(cfg *config.Config) (platformTopology, error) {
 	var roster *platformRoster
 	if cfg.Platform.Enabled {
+		// The organizations' CRD switch on a chart without it is refused
+		// first, in the lab's words (organizationkind.go).
+		if err := checkOrganizationsChart(cfg); err != nil {
+			return platformTopology{}, err
+		}
 		chart := platformChartFor(cfg)
 		_, valuesPath, err := renderManifest(cfg, platformValuesTemplate)
 		if err == nil {
@@ -311,6 +316,11 @@ func platformUp(cfg *config.Config, header string, offers Offers) error {
 		}
 	}
 	if err := cfg.CheckFamiliesChartFloor(); err != nil {
+		return err
+	}
+	// A chart that would refuse the organizations' CRD switch is refused
+	// here, before anything is applied (organizationkind.go).
+	if err := checkOrganizationsChart(cfg); err != nil {
 		return err
 	}
 	chart := platformChartFor(cfg)
