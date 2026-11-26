@@ -61,8 +61,10 @@ import (
 //     rule over the component charts' renders, not a list: every Deployment
 //     whose containers are told the lab Dex's localhost address
 //     (dexLocalhostTargets) — so a component the chart turns on by default or
-//     an overlay turns on is covered the day it appears. Lab only (HACKS.md
-//     U13).
+//     an overlay turns on is covered the day it appears. Only on a lab
+//     whose cluster was created with the localhost issuer: under the domain
+//     (IssuerUnderDomain) cluster DNS answers the issuer's name with Dex's
+//     own Service and no sidecar is patched. Lab only (HACKS.md U13).
 //
 //  5. The dev images (platform.devImages): a kustomize image override to the
 //     build on this host plus imagePullPolicy IfNotPresent on its container,
@@ -148,7 +150,7 @@ import (
 // 11. The lab Dex as a peer of every egress policy, while
 //     platform.networkPolicy is on: the pods that validate people's tokens
 //     dial the issuer inside the cluster (the dex-localhost sidecar, or
-//     cluster DNS under platform.tls), on a private address an
+//     cluster DNS under the domain), on a private address an
 //     installation's policies never name — its issuer is reached through
 //     the world rule. Every NetworkPolicy of the component renders that
 //     isolates such a pod's egress gains one rule to the dex namespace on
@@ -759,10 +761,11 @@ func dexLocalhostAddr(cfg *config.Config) string {
 }
 
 // dexLocalhostBridged reports whether pods reach the issuer through the
-// sidecar: only while it is spelled localhost. Under the platform domain
-// (platform.tls) cluster DNS answers its name with Dex's own Service
-// (coredns.yaml.tmpl), from every pod, and no sidecar is patched.
-func dexLocalhostBridged(cfg *config.Config) bool { return !cfg.Platform.TLS.Set() }
+// sidecar: only while it is spelled localhost, on a lab created before
+// IssuerUnderDomain. Under the platform domain cluster DNS answers its name
+// with Dex's own Service (coredns.yaml.tmpl), from every pod, and no sidecar
+// is patched.
+func dexLocalhostBridged(cfg *config.Config) bool { return !cfg.IssuerUnderDomain() }
 
 // dexLocalhostTargets is the rule that picks the sidecar's targets (patch 4)
 // off the component renders (keyed by release name, platformImages): every
@@ -785,8 +788,8 @@ func dexLocalhostTargets(cfg *config.Config, renders map[string]string) (map[str
 
 // dexDialers is the rule of dexLocalhostTargets whatever the issuer's
 // spelling: the Deployments of the renders that dial the lab Dex — through
-// the sidecar while it is spelled localhost, through cluster DNS under
-// platform.tls. The network policies' Dex peer (networkpolicy.go) is theirs
+// the sidecar while it is spelled localhost, through cluster DNS under the
+// domain. The network policies' Dex peer (networkpolicy.go) is theirs
 // in both.
 func dexDialers(cfg *config.Config, renders map[string]string) (map[string][]dexLocalhostTarget, error) {
 	addr := dexLocalhostAddr(cfg)

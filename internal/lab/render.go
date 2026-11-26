@@ -410,7 +410,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 }
 
 // dexIssuerService is the ClusterIP Service pods reach the issuer under the
-// platform domain through (platform.tls; dex.yaml.tmpl, coredns.yaml.tmpl).
+// platform domain through (IssuerUnderDomain; dex.yaml.tmpl, coredns.yaml.tmpl).
 const dexIssuerService = "dex-issuer"
 
 const (
