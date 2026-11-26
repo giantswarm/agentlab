@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -115,6 +116,51 @@ func TestVMImageHasGolden(t *testing.T) {
 			}
 			if img.ref() != "giantswarm-vm-base_0.1.0" {
 				t.Fatalf("ref %q", img.ref())
+			}
+		})
+	}
+}
+
+// TestVMImageSigned: an image with a certificate (vm-manager 0.28 and
+// later) is signed, and the proof then reads its IPE state.
+func TestVMImageSigned(t *testing.T) {
+	if (vmImage{}).signed() {
+		t.Error("an image without a certificate is signed")
+	}
+	var img vmImage
+	if err := json.Unmarshal([]byte(`{"id":"giantswarm-vm-base","version":"0.1.0","certificate":"/var/lib/vm-manager/images/giantswarm-vm-base_0.1.0.crt"}`), &img); err != nil {
+		t.Fatal(err)
+	}
+	if !img.signed() {
+		t.Error("an image with a certificate is not signed")
+	}
+}
+
+// TestCheckIPEInForce: the policy active and the LSM enforcing pass; an
+// inactive policy, a permissive LSM, a missing file and a short read fail,
+// naming what the guest said.
+func TestCheckIPEInForce(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		res  vmExecResult
+		want string
+	}{
+		{"in force", vmExecResult{Stdout: "1\n1\n"}, ""},
+		{"policy inactive", vmExecResult{Stdout: "0\n1\n"}, `read "0\n1"`},
+		{"permissive", vmExecResult{Stdout: "1\n0\n"}, `read "1\n0"`},
+		{"no policy", vmExecResult{Stdout: "1\n", Stderr: "cat: " + ipeActiveFile + ": No such file or directory\n", ExitCode: 1}, "exited 1: cat: " + ipeActiveFile},
+		{"short read", vmExecResult{Stdout: "1\n"}, `read "1"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := checkIPEInForce(tc.res)
+			if tc.want == "" {
+				if err != nil {
+					t.Fatalf("checkIPEInForce = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("checkIPEInForce = %v, want an error containing %q", err, tc.want)
 			}
 		})
 	}
