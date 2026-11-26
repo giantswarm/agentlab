@@ -509,6 +509,19 @@ type Platform struct {
 	// moves under the domain too (Issuer: dex.<domain>) and serves the same
 	// pair, which must therefore cover that name; see docs/tls.md.
 	TLS PlatformTLS `yaml:"tls"`
+	// IssuerOnDomain puts the Dex issuer under the platform domain,
+	// https://dex.<domain>:<dexPort>/dex, served with the lab-CA leaf (or the
+	// TLS pair): the host resolves the name like every other one of the
+	// domain, the apiserver through its own hosts file, and every pod through
+	// cluster DNS to Dex's own Service — a private address, the way an
+	// installation's pods reach its issuer, which the platform's OAuth
+	// resource servers (mcp-oauth) fetch the issuer's keys from. Every
+	// cluster `up` creates runs it. Off is a lab whose cluster was created
+	// before: its issuer stays https://localhost:<dexPort>/dex, bridged into
+	// pods by the dex-localhost sidecar on their own loopback, an address
+	// mcp-oauth refuses for the keys. Fixed when the cluster is created, like
+	// the issuer the apiserver reads.
+	IssuerOnDomain bool `yaml:"issuerOnDomain,omitempty"`
 	// The agent-platform chart release the lab installs
 	// (oci://gsoci.azurecr.io/charts/giantswarm/agent-platform): an exact
 	// version, never a range — two runs install the same thing, and the lab
@@ -635,10 +648,10 @@ type Platform struct {
 	// network at two replicas behind the edge, a PodDisruptionBudget of
 	// minAvailable 1 — the shape muster's availability work is proven in.
 	// The issuer stays reachable from its pods as from every other platform
-	// pod: the dex-localhost sidecar while it is spelled localhost, cluster
-	// DNS under platform.tls. Off (the default), muster runs on the host
-	// network at one replica, which muster's direct debug port (musterPort)
-	// needs; with it on that port answers nothing. --muster-pod-network turns
+	// pod: cluster DNS under the domain (IssuerUnderDomain), the
+	// dex-localhost sidecar while it is spelled localhost. Off (the default),
+	// muster runs on the host network at one replica, which muster's direct
+	// debug port (musterPort) needs; with it on that port answers nothing. --muster-pod-network turns
 	// it on. See docs/platform.md "muster on the pod network".
 	MusterPodNetwork bool `yaml:"musterPodNetwork,omitempty"`
 	// NetworkPolicy turns the platform's own network policies on, in the
@@ -1770,15 +1783,16 @@ func Default() *Config {
 				Groups: []string{groupViewers}},
 		},
 		Platform: Platform{
-			Enabled:       true,
-			Agents:        true,
-			Observability: true,
-			Organizations: Organizations{Enabled: true},
-			AgentsPort:    8081,
-			MusterPort:    8090,
-			Domain:        "127.0.0.1.nip.io",
-			GatewayPort:   443,
-			ChartVersion:  DefaultChartVersion,
+			Enabled:        true,
+			Agents:         true,
+			Observability:  true,
+			Organizations:  Organizations{Enabled: true},
+			AgentsPort:     8081,
+			MusterPort:     8090,
+			Domain:         "127.0.0.1.nip.io",
+			IssuerOnDomain: true,
+			GatewayPort:    443,
+			ChartVersion:   DefaultChartVersion,
 			// The lab registry behind the `harness` dev image; a container
 			// on the kind network, so no node port mapping is involved.
 			DevRegistryPort: DefaultDevRegistryPort,
@@ -1789,6 +1803,16 @@ func Default() *Config {
 			Portal:  PortalAgentPlatform,
 		},
 	}
+}
+
+// recorded is what a recorded agentlab.yaml decodes over: Default(), except
+// for a default whose key a file written before it existed lacks and must
+// read as off — IssuerOnDomain, whose absence is the localhost issuer the
+// lab's cluster was created with.
+func recorded() *Config {
+	cfg := Default()
+	cfg.Platform.IssuerOnDomain = false
+	return cfg
 }
 
 // Load reads agentlab.yaml. A missing file is reported as os.ErrNotExist so
@@ -1810,7 +1834,7 @@ func load(validate bool) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	cfg := Default()
+	cfg := recorded()
 	if err := decodeStrict(raw, cfg); err != nil {
 		return nil, err
 	}
@@ -1864,7 +1888,7 @@ func Peek(dir string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	cfg := Default()
+	cfg := recorded()
 	if _, err := decodeTolerant(raw, cfg); err != nil {
 		return nil, err
 	}
@@ -1884,7 +1908,7 @@ func LoadReadOnly() (cfg *Config, note string, err error) {
 	if err != nil {
 		return nil, "", err
 	}
-	cfg = Default()
+	cfg = recorded()
 	note, err = decodeTolerant(raw, cfg)
 	if err != nil {
 		return nil, "", err
@@ -1944,7 +1968,7 @@ func RebasePaths(file, dir string) error {
 	if err != nil {
 		return err
 	}
-	cfg := Default()
+	cfg := recorded()
 	note, err := decodeTolerant(raw, cfg)
 	if err != nil {
 		return err
@@ -3125,20 +3149,41 @@ func (c *Config) FindUserInGroup(group string) *User {
 }
 
 // Issuer is the Dex issuer URL, one URL on both sides of the kind boundary:
-// https://localhost:<DexPort>/dex, or with an externally provisioned pair
-// (platform.tls) https://dex.<domain>:<DexPort>/dex, served with that pair.
+// https://dex.<domain>:<DexPort>/dex (IssuerUnderDomain), served with the
+// lab-CA leaf or an externally provisioned pair (platform.tls), or on a lab
+// created before https://localhost:<DexPort>/dex.
 func (c *Config) Issuer() string {
 	return fmt.Sprintf("https://%s:%d/dex", c.DexHost(), c.DexPort)
 }
 
-// DexHost is the issuer's host: localhost, or dex.<domain> with an
-// externally provisioned pair. A name either way, never an IP literal:
+// IssuerUnderDomain reports whether the issuer lives under the platform
+// domain (platform.issuerOnDomain, or an externally provisioned pair, which
+// carries no localhost): pods resolve it to Dex's own Service through
+// cluster DNS, the apiserver through its own hosts file, and no dex-localhost
+// sidecar is patched.
+func (c *Config) IssuerUnderDomain() bool {
+	return c.Platform.IssuerOnDomain || c.Platform.TLS.Set()
+}
+
+// DexHost is the issuer's host: dex.<domain> (IssuerUnderDomain), or
+// localhost on a lab created before. A name either way, never an IP literal:
 // muster refuses an issuer whose host is one.
 func (c *Config) DexHost() string {
-	if c.Platform.TLS.Set() {
+	if c.IssuerUnderDomain() {
 		return "dex." + c.Platform.Domain
 	}
 	return "localhost"
+}
+
+// DexHostAddress is the host address the Dex port is published on: where
+// the issuer's host resolves on this machine — the edge's address for a name
+// under the domain (GatewayHostAddress, what *.<domain> resolves to), else
+// 127.0.0.1, which localhost dials.
+func (c *Config) DexHostAddress() string {
+	if c.IssuerUnderDomain() {
+		return c.GatewayHostAddress()
+	}
+	return DefaultGatewayAddress
 }
 
 // ControlPlaneNode is the docker container name kind gives the (only) node.

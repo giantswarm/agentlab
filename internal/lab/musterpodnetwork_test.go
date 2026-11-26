@@ -11,25 +11,29 @@ import (
 
 // TestMusterPodNetwork pins platform.musterPodNetwork's shape: off, muster
 // keeps the host-network patch at one replica and the values name no replica
-// count; on, muster loses that patch, takes the dex-localhost sidecar on the
-// lab Dex port (none under platform.tls, where cluster DNS answers the
-// issuer), and the values run two replicas behind minAvailable 1. Backstage
-// stays on the host network either way.
+// count; on, muster loses that patch — cluster DNS answers the issuer under
+// the domain, and on a lab with the localhost issuer it takes the
+// dex-localhost sidecar on the lab Dex port — and the values run two
+// replicas behind minAvailable 1. Backstage stays on the host network either
+// way.
 func TestMusterPodNetwork(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		podNetwork  bool
+		localhost   bool
 		tls         bool
 		hostNetwork bool
 		sidecar     bool
 		replicas    int
 	}{
 		{name: "host network, the default", hostNetwork: true, replicas: 1},
-		{name: "pod network", podNetwork: true, sidecar: true, replicas: 2},
+		{name: "pod network", podNetwork: true, replicas: 2},
+		{name: "pod network with the localhost issuer", podNetwork: true, localhost: true, sidecar: true, replicas: 2},
 		{name: "pod network under platform.tls", podNetwork: true, tls: true, replicas: 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := config.Default()
+			cfg.Platform.IssuerOnDomain = !tc.localhost
 			cfg.Platform.MusterPodNetwork = tc.podNetwork
 			if tc.tls {
 				cfg.Platform.TLS = config.PlatformTLS{CertFile: "c", KeyFile: "k"}

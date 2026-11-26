@@ -18,7 +18,7 @@ import (
 // The network policies' Dex peer (platform.networkPolicy, post-renderer
 // patch 11): every platform pod that validates people's tokens dials the
 // lab Dex inside the cluster — through the dex-localhost sidecar while the
-// issuer is spelled localhost, through cluster DNS under platform.tls — on a
+// issuer is spelled localhost, through cluster DNS under the domain — on a
 // private address no policy of an installation names, since an
 // installation reaches its issuer through the world rule. So every egress
 // policy of the component renders that selects such a pod gains one rule:

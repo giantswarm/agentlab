@@ -36,6 +36,16 @@ const (
 	vmToolGetAttestation = "get_vm_attestation"
 	vmToolCreateVM       = "create_vm"
 	vmToolDeleteVM       = "delete_vm"
+	vmToolExecVM         = "exec_vm"
+)
+
+// The IPE policy a signed guest image loads at boot (vm-manager's
+// images/README.md, section IPE), and the securityfs files in the guest that
+// say it is in force: the policy active, the LSM enforcing.
+const (
+	ipePolicyName  = "giantswarm-vm"
+	ipeActiveFile  = "/sys/kernel/security/ipe/policies/" + ipePolicyName + "/active"
+	ipeEnforceFile = "/sys/kernel/security/ipe/enforce"
 )
 
 // vmManagerCoreTools is the set the registration must surface: the reads a
@@ -102,9 +112,16 @@ type vmImage struct {
 	Version            string          `json:"version"`
 	KubernetesVersions []string        `json:"kubernetesVersions"`
 	Policy             json.RawMessage `json:"policy"`
+	Certificate        string          `json:"certificate"`
 }
 
 func (i vmImage) ref() string { return i.ID + "_" + i.Version }
+
+// signed reports whether the image carries the certificate its verity root
+// hash, sysexts and IPE policy are signed with (<id>_<version>.crt, vm-manager
+// 0.28 and later): create_vm enrolls it into the VM's UEFI db, and the guest
+// runs only code from the kernel-verified signed dm-verity root and sysexts.
+func (i vmImage) signed() bool { return i.Certificate != "" }
 
 // hasGolden reports whether the image's PCR policy carries golden firmware
 // values: without them vm-manager's verifier rejects every quote, so a VM
@@ -175,7 +192,8 @@ type vmRecord struct {
 // --skip-vm, the lifecycle through muster: create_vm on the newest image,
 // the states followed with get_vm until ready (the installer boot, the
 // installed boot, READY=1 over vsock), the attestation verdicts read when
-// the image's policy has golden values, the console tailed, and delete_vm
+// the image's policy has golden values, on a signed image the IPE policy
+// active and enforcing in the guest (exec_vm), the console tailed, and delete_vm
 // leaving nothing behind. A host that is not ready (get_host's `missing`)
 // or has no image skips the lifecycle with the reason.
 func VMManagerTest(cfg *config.Config, email string, opts VMManagerTestOptions) error {
@@ -455,7 +473,8 @@ func proveVMManagerRegistration() error {
 
 // proveVMLifecycle boots one VM through muster and removes it: create_vm on
 // the image, the states followed with get_vm until ready, the attestation
-// read when the policy has golden values, the console tailed, delete_vm and
+// read when the policy has golden values, the IPE state read on a signed
+// image, the console tailed, delete_vm and
 // list_vms without it. On any failure the VM is deleted before returning.
 func proveVMLifecycle(session *musterSession, prefix string, img vmImage, host *vmHostInfo, timeout time.Duration) error {
 	if err := removeStaleTestVMs(session, prefix); err != nil {
@@ -508,6 +527,13 @@ func proveVMLifecycle(session *musterSession, prefix string, img vmImage, host *
 		}
 	}
 
+	if img.signed() {
+		step("%s: the IPE policy %s active and enforcing in the guest (the image is signed)", vmToolExecVM, ipePolicyName)
+		if err := proveVMIPE(session, prefix, created.ID); err != nil {
+			return err
+		}
+	}
+
 	step("%s (the last lines of the serial console)", vmToolGetVMConsole)
 	var console struct {
 		Console string `json:"console"`
@@ -536,6 +562,52 @@ func proveVMLifecycle(session *musterSession, prefix string, img vmImage, host *
 		}
 	}
 	note("gone: disk, vTPM state, lease and record removed")
+	return nil
+}
+
+// vmExecResult is exec_vm's payload.
+type vmExecResult struct {
+	Stdout   string `json:"stdout"`
+	Stderr   string `json:"stderr"`
+	ExitCode int    `json:"exitCode"`
+}
+
+// ipeFlags are the guest's IPE securityfs flags the proof reads, each with
+// what its 1 means.
+var ipeFlags = []struct{ file, means string }{
+	{ipeActiveFile, "the policy active"},
+	{ipeEnforceFile, "the LSM enforcing"},
+}
+
+// proveVMIPE reads the guest's IPE state as root over exec_vm, one flag per
+// call: the kernel writes each without a newline, so one `cat` of both
+// prints them run together. A signed image whose policy cannot be loaded
+// stops at PID 1 and never reaches ready; this catches the guest that booted
+// with the policy inactive or the LSM permissive.
+func proveVMIPE(session *musterSession, prefix, id string) error {
+	for _, flag := range ipeFlags {
+		var res vmExecResult
+		if err := callVMTool(session, prefix+vmToolExecVM, map[string]any{
+			"id": id, "command": []string{"cat", flag.file},
+		}, &res); err != nil {
+			return err
+		}
+		if err := checkIPEFlag(flag.file, flag.means, res); err != nil {
+			return err
+		}
+		note("%s: 1 (%s)", flag.file, flag.means)
+	}
+	return nil
+}
+
+// checkIPEFlag judges `cat <file>` of an IPE flag in the guest: it reads 1.
+func checkIPEFlag(file, means string, res vmExecResult) error {
+	if res.ExitCode != 0 {
+		return fmt.Errorf("cat %s in the guest exited %d: %s", file, res.ExitCode, strings.TrimSpace(res.Stderr))
+	}
+	if got := strings.TrimSpace(res.Stdout); got != "1" {
+		return fmt.Errorf("IPE is not in force in the guest: %s reads %q, want 1 (%s)", file, got, means)
+	}
 	return nil
 }
 

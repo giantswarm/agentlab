@@ -221,7 +221,7 @@ does it, the way `oauth-consent-test` does), and note
 
 The lab's patches on the component charts — `hostNetwork` on muster and
 Backstage, the `dex-localhost` sidecar on every server told the lab Dex's
-address, the kagent UI NodePort, agentgateway's IPv4 binds, and the dev
+address on a lab created with the localhost issuer, the kagent UI NodePort, agentgateway's IPv4 binds, and the dev
 images below — are per-component
 **`postRenderers` values** (`components.<name>.postRenderers` in
 `state/agent-platform-values.yaml`): Kustomize patches the chart forwards to
@@ -237,7 +237,12 @@ the data-plane image).
 
 ### Which Deployments get the `dex-localhost` sidecar
 
-A Deployment off the host network is a sidecar target when a container is told
+None on a lab whose issuer lives under the domain, every lab `agentlab up`
+creates (`platform.issuerOnDomain`, [identity](identity.md#how-the-identity-plumbing-works)):
+cluster DNS answers `dex.<domain>` with Dex's own Service from every pod.
+The sidecar is the bridge of a lab whose cluster was created with the
+issuer `https://localhost:<dexPort>/dex`, until it is recreated. There a
+Deployment off the host network is a sidecar target when a container is told
 the lab Dex's localhost address through a name the platform's OAuth resource
 servers **dial** the issuer by — for OIDC discovery and the JWKS:
 
@@ -580,10 +585,10 @@ runs muster the way an installation does, the shape its availability work is
 proven in: on the pod network, at two replicas behind the edge, with a
 PodDisruptionBudget of `minAvailable: 1` (the values set `muster.replicaCount`
 and `muster.podDisruptionBudget`). The host-network patch is not applied to
-muster then; the `dex-localhost` sidecar bridges the issuer
-`https://localhost:<dexPort>/dex` into each muster pod as it does for the MCP
-servers (under `platform.tls` cluster DNS answers the issuer and no sidecar is
-patched). Both replicas share the Valkey stores, and muster checks an MCP
+muster then; cluster DNS answers the issuer under the domain from each muster
+pod as from every other pod (on a lab created with the localhost issuer, the
+`dex-localhost` sidecar bridges `https://localhost:<dexPort>/dex` into each
+muster pod as it does for the MCP servers). Both replicas share the Valkey stores, and muster checks an MCP
 session ID for its format only, so a session needs no affinity: a request on
 the other replica is served as is. Backstage stays on the host network. The
 direct debug port (`platform.musterPort`) answers nothing in this shape: use
@@ -2051,7 +2056,7 @@ installation that runs the release, per the agentlab-first exception.
 Claude Code ──https://muster.127.0.0.1.nip.io/mcp──> agentgateway ──> muster ──> mcp-kubernetes ──> kube-apiserver
                      │                                 (edge, TLS)     │
                      │ 401 + WWW-Authenticate                          │ OIDC discovery + token exchange
-                     └──── browser ────────────────────────────────────┴──> https://localhost:32000/dex
+                     └──── browser ────────────────────────────────────┴──> https://dex.127.0.0.1.nip.io:32000/dex
 ```
 
 muster is the OAuth **server** towards Claude Code (DCR, `/oauth/authorize`,
@@ -2364,7 +2369,7 @@ data the page reads — see [The muster plugin](backstage.md#the-muster-plugin).
 | `muster.muster.oauth.mcpClient.enabled: true` + the `lab-oauth-fixture` MCPServer | The chart leaves muster's OAuth *client* role — the proxy behind `core_auth_login` and the portal's Sign in — off; real installations turn it on, and without it no per-server sign-in can be exercised. The fixture is the one `Auth Required` downstream to sign in to (muster's own protected `/mcp`); see [Signing in to a downstream server](#signing-in-to-a-downstream-server-muster-as-oauth-client). |
 | `muster.rbac.{mcpServerEditor,workflowEditor}.subjects` → `oidc:platform-admins` | The chart binds muster's editor Roles to Giant Swarm's admin groups, which do not exist here. Rebound to the lab's own admin group (`--oidc-groups-prefix=oidc:`, same spelling as the lab RBAC). Lists replace, so the GS groups are dropped. |
 | muster patched to `hostNetwork` + one replica + `maxSurge: 0` (unless `platform.musterPodNetwork`) | Same issuer trick as the apiserver and Backstage. One replica and `maxSurge: 0` because two hostNetwork pods cannot both bind `:8090` on a one-node cluster. With [muster on the pod network](#muster-on-the-pod-network) it runs two replicas with the `dex-localhost` sidecar instead. A Kustomize strategic-merge patch in `components.muster.postRenderers`, which the chart forwards to muster's `HelmRelease` and the bundled helm-controller applies over the muster chart's render. |
-| The `dex-localhost` sidecar on every Deployment told the lab Dex's address — mcp-kubernetes, the managers (model-manager, agent-manager, vm-manager, cluster-manager) and mcp-prometheus | Those servers validate the forwarded Dex token themselves and must reach the issuer URL `https://localhost:32000/dex`, but all listen on `:8080` and cannot share the host network. A socat sidecar on the pod's own loopback forwards `:32000` to the Dex Service (HACKS.md U13) — a `postRenderers` patch on each component, and on the lab's own mcp-prometheus `HelmRelease`. The targets are a rule over the component renders (a Deployment whose containers are told the address through a name they dial it by — `--dex-issuer-url`, `DEX_ISSUER_URL`, `OIDC_ISSUER_URL` — or that the `agentlab.giantswarm.io/dex-localhost` annotation selects; an identity-only variable such as `OAUTH_AUTHORIZATION_SERVER` selects nothing), not a list: a component the chart turns on by default or an overlay turns on is covered without a lab release, and the roster's trailing range renders `components.<name>.postRenderers` for one the lab names no block for. `agentlab platform-test` asserts the sidecar, a clean rollout with no container restarted since the release — a kind node restart, which restarts every container once together, is history, not a crash loop — and the MCPServer reachable (Connected, Awaiting Session or Auth Required) on every such Deployment, naming the key each was selected by; `agentlab platform` rolls such a Deployment once when it crash-looped since its release. |
+| On a lab created with the localhost issuer (no `platform.issuerOnDomain`): the `dex-localhost` sidecar on every Deployment told the lab Dex's address — mcp-kubernetes, the managers (model-manager, agent-manager, vm-manager, cluster-manager) and mcp-prometheus | Those servers validate the forwarded Dex token themselves and must reach the issuer URL `https://localhost:32000/dex`, but all listen on `:8080` and cannot share the host network. A socat sidecar on the pod's own loopback forwards `:32000` to the Dex Service (HACKS.md U13) — a `postRenderers` patch on each component, and on the lab's own mcp-prometheus `HelmRelease`. The targets are a rule over the component renders (a Deployment whose containers are told the address through a name they dial it by — `--dex-issuer-url`, `DEX_ISSUER_URL`, `OIDC_ISSUER_URL` — or that the `agentlab.giantswarm.io/dex-localhost` annotation selects; an identity-only variable such as `OAUTH_AUTHORIZATION_SERVER` selects nothing), not a list: a component the chart turns on by default or an overlay turns on is covered without a lab release, and the roster's trailing range renders `components.<name>.postRenderers` for one the lab names no block for. `agentlab platform-test` asserts the sidecar, a clean rollout with no container restarted since the release — a kind node restart, which restarts every container once together, is history, not a crash loop — and the MCPServer reachable (Connected, Awaiting Session or Auth Required) on every such Deployment, naming the key each was selected by; `agentlab platform` rolls such a Deployment once when it crash-looped since its release. |
 | agentgateway binds IPv4: `rawConfig.config.enableIpv6: false` on every AgentgatewayParameters (the edge, the models Gateway), `IPV6_ENABLED=false` on every agentgateway container a component chart runs (Substrate's atenet router and egress) | agentgateway binds its readiness, stats and listener sockets on `[::]` by default, which a host booted with `ipv6.disable=1` cannot create — the pods crash-loop on `Address family not supported by protocol (os error 97)`. The kind cluster is IPv4 single-stack, so the setting is on for every host (HACKS.md U38). A `postRenderers` patch on the connectivity and substrate components, its targets a rule over their renders. |
 | `components.kagent.enabled` from `platform.agents`; kagent ServiceMonitor + OTel off | Agents are part of what the lab tests, so kagent is on by default (the chart defaults it off) but optional — `platform.agents: false` skips the runtime. The controller's authentication is the fleet's (`trusted-proxy` behind the JWT `Strict` policy on the controller route); the kagent line serves no /metrics and there is no OTLP gateway in kind. See [Agents (kagent)](agents.md). |
 | `kagent.controllerRoute.jwtAuthentication.jwks` = the lab Dex (`dex.dex.svc.cluster.local:5556/dex/keys` over TLS) | The chart's default JWKS source is a Giant Swarm Dex; the policy itself (`Strict`, the identity transformation) is the chart's default, unchanged. |
@@ -2425,8 +2430,8 @@ data the page reads — see [The muster plugin](backstage.md#the-muster-plugin).
   registry. The renders are more than the image list: the lab's patches for
   a component (the `dex-localhost` sidecar's targets, the `platform.devImages`
   image names) are read off them, so a component without its render would be
-  installed unpatched — mcp-kubernetes crash-looping on `connection refused`
-  to `https://localhost:<dexPort>/dex`, the install failing minutes later on
+  installed unpatched — on a lab with the localhost issuer mcp-kubernetes
+  crash-looping on `connection refused` to `https://localhost:<dexPort>/dex`, the install failing minutes later on
   its `HelmRelease`, nothing pointing at the network. A name the resolver
   does not know or a refused dial is tried again (three retries over some
   twenty seconds, each noted with the resolver's or the dialer's words; a

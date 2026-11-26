@@ -6,15 +6,15 @@ toolchain go1.27.4
 
 require (
 	buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go v1.36.12-20260825204119-511051f7f437.2
-	charm.land/bubbletea/v2 v2.1.2
+	charm.land/bubbletea/v2 v2.1.3
 	charm.land/huh/v2 v2.0.3
 	filippo.io/age v1.3.2
 	github.com/BurntSushi/toml v1.6.0
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/a2aproject/a2a-go/v2 v2.9.0
-	github.com/aws/aws-sdk-go-v2 v1.48.0
-	github.com/aws/aws-sdk-go-v2/credentials v1.21.3
-	github.com/aws/aws-sdk-go-v2/service/s3 v1.116.0
+	github.com/aws/aws-sdk-go-v2 v1.48.1
+	github.com/aws/aws-sdk-go-v2/credentials v1.21.4
+	github.com/aws/aws-sdk-go-v2/service/s3 v1.116.1
 	github.com/charmbracelet/x/ansi v0.11.10
 	github.com/fluxcd/cli-utils v1.4.0
 	github.com/giantswarm/go-selfupdate v1.7.7
@@ -22,7 +22,7 @@ require (
 	github.com/giantswarm/pagekit v0.3.8
 	github.com/giantswarm/selfupdate-cosign v0.3.30
 	github.com/giantswarm/telemetrydeck-go v0.3.19
-	github.com/giantswarm/vm-manager v0.27.6
+	github.com/giantswarm/vm-manager v0.28.0-rc.1
 	github.com/google/go-github/v93 v93.0.0
 	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0
@@ -70,15 +70,15 @@ require (
 	github.com/ProtonMail/go-crypto v1.5.2 // indirect
 	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 // indirect
 	github.com/atotto/clipboard v0.1.4 // indirect
-	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.27 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/configsources v1.5.12 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.8.12 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/v4a v1.5.12 // indirect
-	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.25 // indirect
-	github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.11.13 // indirect
-	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.14.12 // indirect
-	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.20.12 // indirect
-	github.com/aws/smithy-go v1.28.9 // indirect
+	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.28 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/configsources v1.5.13 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.8.13 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/v4a v1.5.13 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.26 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.11.14 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.14.13 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.20.13 // indirect
+	github.com/aws/smithy-go v1.28.10 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/blang/semver/v4 v4.0.0 // indirect
 	github.com/catppuccin/go v0.3.0 // indirect
@@ -101,7 +101,7 @@ require (
 	github.com/davidmz/go-pageant v1.0.2 // indirect
 	github.com/digitorus/pkcs7 v0.0.0-20260821105541-05f79448fa77 // indirect
 	github.com/digitorus/timestamp v0.0.0-20231217203849-220c5c2851b7 // indirect
-	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/dylibso/observe-sdk/go v0.0.0-20240819160327-2d926c5d788a // indirect
 	github.com/emicklei/go-restful/v3 v3.13.0 // indirect
 	github.com/evanphx/json-patch/v5 v5.9.11 // indirect
@@ -109,6 +109,7 @@ require (
 	github.com/extism/go-sdk v1.7.1 // indirect
 	github.com/fatih/color v1.19.0 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
+	github.com/foxcpp/go-mockdns v1.3.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.3 // indirect
 	github.com/go-errors/errors v1.5.1 // indirect
 	github.com/go-fed/httpsig v1.1.0 // indirect
@@ -180,6 +181,8 @@ require (
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/oklog/ulid/v2 v2.1.2 // indirect
+	github.com/onsi/ginkgo/v2 v2.33.0 // indirect
+	github.com/onsi/gomega v1.44.0 // indirect
 	github.com/pelletier/go-toml v1.9.5 // indirect
 	github.com/peterbourgon/diskv v2.0.1+incompatible // indirect
 	github.com/pkg/errors v0.9.1 // indirect

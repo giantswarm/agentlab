@@ -175,8 +175,11 @@ BOM carries it since the curation that pinned muster 5.7.2. The post-render
 ConfigMap edit is deleted — the values entry alone is effective now.
 
 ### U2. hostNetwork + dnsPolicy + one replica + maxSurge 0 on the muster (and Backstage) Deployment
-muster must resolve `https://localhost:32000/dex` to the Dex NodePort from
-inside the pod (the lab's one-issuer-URL trick), which needs hostNetwork; and
+On a lab created with the localhost issuer, muster must resolve
+`https://localhost:32000/dex` to the Dex NodePort from inside the pod (the
+lab's one-issuer-URL trick), which needs hostNetwork (under the domain,
+`platform.issuerOnDomain`, cluster DNS answers it, and hostNetwork remains for
+muster's direct debug port); and
 with hostNetwork a default rolling update deadlocks on a single node because
 both pods want :8090. For the same reason the lab runs one replica: the
 agent-platform chart's HA default of two muster replicas would leave the
@@ -379,6 +382,15 @@ The sidecar's securityContext meets PodSecurity `restricted`
 (`allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`,
 `seccompProfile: RuntimeDefault`), so a rollout of a server prints no
 PodSecurity warning. Lab-only by construction: real installations have a routable issuer.
+**Retired for new labs:** mcp-oauth (v1.15 on: agent-manager 3.5, vm-manager
+0.27) lets the issuer's host resolve to RFC 1918 and RFC 4193 addresses for
+its JWKS, never to loopback, so a manager behind the sidecar answers every
+forwarded token with 401 (agentlab#1347). Every cluster `agentlab up` creates
+puts the issuer under the domain (`platform.issuerOnDomain`,
+`https://dex.<domain>:<dexPort>/dex`): pods reach it on the `dex-issuer`
+Service through cluster DNS and no sidecar is patched. The sidecar remains
+for a lab whose cluster was created with the localhost issuer, until `down` +
+`up` (docs/identity.md).
 
 ### U14. `hostmodels.go`: the further host backends are wired as static ModelConfigs — FIXED upstream
 `platform.modelManager.backends` lists every model server on the lab host

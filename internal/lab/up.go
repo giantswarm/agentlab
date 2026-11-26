@@ -40,6 +40,13 @@ func Up(cfg *config.Config, offers Offers) error {
 			return err
 		}
 	}
+	// A cluster about to be created binds every host port of the
+	// configuration and takes the issuer it records; an existing one already
+	// holds its own.
+	clusterExists := kindClusterExists(cfg.ClusterName)
+	if err := moveIssuerUnderDomain(cfg, clusterExists); err != nil {
+		return err
+	}
 	// The certificates first: the pre-boot render reads the CA bundle
 	// (trustBundleFile) the platform values carry.
 	if err := GenCerts(cfg.Platform.Domain, false); err != nil {
@@ -55,9 +62,6 @@ func Up(cfg *config.Config, offers Offers) error {
 	if err := preflightRuntimeResources(cfg, topology); err != nil {
 		return err
 	}
-	// A cluster about to be created binds every host port of the
-	// configuration; an existing one already holds its own.
-	clusterExists := kindClusterExists(cfg.ClusterName)
 	if !clusterExists {
 		if err := checkHostPortsFree(cfg); err != nil {
 			return err
@@ -329,9 +333,33 @@ func kindClusterExists(name string) bool {
 	return err == nil && slices.Contains(clusters, name)
 }
 
+// moveIssuerUnderDomain records the issuer under the platform domain
+// (platform.issuerOnDomain) for a cluster about to be created, from a
+// configuration that still records the localhost issuer of a cluster
+// created before: the apiserver reads the issuer only at creation, so this
+// is the one moment it can move, and under the domain every pod reaches it
+// on Dex's Service, a private address the platform's OAuth resource servers
+// fetch its keys from — a loopback one they refuse. An existing cluster
+// keeps the issuer it was created with (checkClusterIssuer).
+func moveIssuerUnderDomain(cfg *config.Config, clusterExists bool) error {
+	if cfg.Platform.IssuerOnDomain || clusterExists {
+		return nil
+	}
+	from := cfg.Issuer()
+	cfg.Platform.IssuerOnDomain = true
+	if err := cfg.Save(); err != nil {
+		return err
+	}
+	if to := cfg.Issuer(); to != from {
+		note("issuer %s replaces %s: the new cluster's pods reach it on Dex's Service through cluster DNS (platform.issuerOnDomain)", to, from)
+	}
+	return nil
+}
+
 // checkClusterIssuer refuses an existing cluster whose apiserver pins
 // another issuer than the configuration's: the OIDC flags are fixed at
-// `kind create`, so a platform.tls or dexPort change on a running lab would
+// `kind create`, so an issuer host (platform.issuerOnDomain, platform.tls),
+// domain or dexPort change on a running lab would
 // leave every token rejected behind a Dex that answers fine.
 func checkClusterIssuer(cfg *config.Config) error {
 	node := cfg.ControlPlaneNode()
@@ -344,7 +372,7 @@ func checkClusterIssuer(cfg *config.Config) error {
 		return fmt.Errorf("node %s's apiserver manifest carries no %s flag", node, oidcIssuerFlag)
 	}
 	if issuer != cfg.Issuer() {
-		return fmt.Errorf("cluster %q was created for the issuer %s, the configuration's is %s (platform.tls moves it under platform.domain): the apiserver reads it only at creation, so recreate the lab (`agentlab down`, then `agentlab up`)", cfg.ClusterName, issuer, cfg.Issuer())
+		return fmt.Errorf("cluster %q was created for the issuer %s, the configuration's is %s (platform.issuerOnDomain and platform.tls put it under platform.domain): the apiserver reads it only at creation, so recreate the lab (`agentlab down`, then `agentlab up`)", cfg.ClusterName, issuer, cfg.Issuer())
 	}
 	return nil
 }

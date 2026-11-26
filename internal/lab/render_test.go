@@ -499,8 +499,8 @@ func TestPlatformValuesModelManagerToggle(t *testing.T) {
 }
 
 // The lab's mcp-prometheus release is a Flux HelmRelease through the
-// platform's engine: pinned chart, the tenant identity, the sidecar patch,
-// the workloads in monitoring.
+// platform's engine: pinned chart, the tenant identity, the workloads in
+// monitoring, and the sidecar patch with the localhost issuer only.
 func TestMCPPrometheusRelease(t *testing.T) {
 	cfg := config.Default()
 	out, err := renderTemplate(cfg, mcpPrometheusTemplate, nil)
@@ -523,9 +523,21 @@ func TestMCPPrometheusRelease(t *testing.T) {
 		t.Errorf("values: %s", rel.Values)
 	}
 	s := string(out)
-	for _, want := range []string{"serviceAccountName: agent-platform-flux", "name: " + dexLocalhostContainer, "TCP6-LISTEN:32000,fork,reuseaddr", "namespace: " + platformNamespace} {
+	for _, want := range []string{"serviceAccountName: agent-platform-flux", "namespace: " + platformNamespace} {
 		if !strings.Contains(s, want) {
 			t.Errorf("mcp-prometheus.yaml lacks %q", want)
+		}
+	}
+	if strings.Contains(s, "name: "+dexLocalhostContainer) {
+		t.Errorf("mcp-prometheus.yaml carries the %s sidecar under the domain", dexLocalhostContainer)
+	}
+	out, err = renderTemplate(localhostIssuerConfig(), mcpPrometheusTemplate, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"name: " + dexLocalhostContainer, "TCP6-LISTEN:32000,fork,reuseaddr"} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("mcp-prometheus.yaml with the localhost issuer lacks %q", want)
 		}
 	}
 }
@@ -558,9 +570,10 @@ func TestMCPPrometheusChartVersionOverride(t *testing.T) {
 
 // platform.devImages.mcp-prometheus swaps the image of the lab's own
 // mcp-prometheus through that HelmRelease's postRenderers (next to the
-// dex-localhost sidecar), never as a meta chart component's values.
+// dex-localhost sidecar of a lab with the localhost issuer), never as a meta
+// chart component's values.
 func TestMCPPrometheusDevImage(t *testing.T) {
-	cfg := config.Default()
+	cfg := localhostIssuerConfig()
 	cfg.Platform.DevImages = map[string]string{config.DevImageMCPPrometheus: "mcp-prometheus:dev"}
 	out, err := renderTemplate(cfg, mcpPrometheusTemplate, nil)
 	if err != nil {
@@ -684,7 +697,9 @@ func TestKindConfigGatewayAddress(t *testing.T) {
 		}
 		for _, m := range kindCfg.Nodes[0].ExtraPortMappings {
 			wantAddr := config.DefaultGatewayAddress
-			if m.ContainerPort == config.GatewayNodePort {
+			// The edge, and Dex under the domain, whose name resolves
+			// where the edge's does (TestKindConfigPublishesDexWhereTheIssuerResolves).
+			if m.ContainerPort == config.GatewayNodePort || int(m.ContainerPort) == cfg.DexPort {
 				wantAddr = want
 			}
 			if m.ListenAddress != wantAddr {

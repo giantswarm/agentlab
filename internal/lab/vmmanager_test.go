@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -115,6 +116,51 @@ func TestVMImageHasGolden(t *testing.T) {
 			}
 			if img.ref() != "giantswarm-vm-base_0.1.0" {
 				t.Fatalf("ref %q", img.ref())
+			}
+		})
+	}
+}
+
+// TestVMImageSigned: an image with a certificate (vm-manager 0.28 and
+// later) is signed, and the proof then reads its IPE state.
+func TestVMImageSigned(t *testing.T) {
+	if (vmImage{}).signed() {
+		t.Error("an image without a certificate is signed")
+	}
+	var img vmImage
+	if err := json.Unmarshal([]byte(`{"id":"giantswarm-vm-base","version":"0.1.0","certificate":"/var/lib/vm-manager/images/giantswarm-vm-base_0.1.0.crt"}`), &img); err != nil {
+		t.Fatal(err)
+	}
+	if !img.signed() {
+		t.Error("an image with a certificate is not signed")
+	}
+}
+
+// TestCheckIPEFlag: a flag that reads 1 passes, with or without a newline
+// (the kernel writes none); 0, an empty read and a missing file fail, naming
+// what the guest said.
+func TestCheckIPEFlag(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		res  vmExecResult
+		want string
+	}{
+		{"set", vmExecResult{Stdout: "1"}, ""},
+		{"set with a newline", vmExecResult{Stdout: "1\n"}, ""},
+		{"policy inactive", vmExecResult{Stdout: "0"}, `reads "0", want 1 (the policy active)`},
+		{"nothing read", vmExecResult{}, `reads "", want 1`},
+		{"no policy", vmExecResult{Stderr: "cat: " + ipeActiveFile + ": No such file or directory\n", ExitCode: 1}, "exited 1: cat: " + ipeActiveFile},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := checkIPEFlag(ipeActiveFile, "the policy active", tc.res)
+			if tc.want == "" {
+				if err != nil {
+					t.Fatalf("checkIPEFlag = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("checkIPEFlag = %v, want an error containing %q", err, tc.want)
 			}
 		})
 	}

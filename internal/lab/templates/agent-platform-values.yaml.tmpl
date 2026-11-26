@@ -32,13 +32,14 @@
 # Differences from a real management cluster:
 #   * the issuer is {{ .Issuer }} — the apiserver's OIDC flags need an
 #     issuer reachable at boot from the node, which only the Dex NodePort
-#     trick provides. muster and Backstage reach it the same way: both run
-#     hostNetwork, exactly like the kube-apiserver static pod — a
-#     per-component `postRenderers` patch below (not a chart value in either
-#     chart); the MCP servers get a `dex-localhost` sidecar the same way.
-#     With an externally provisioned pair (platform.tls) the issuer lives
-#     under the domain instead, and inside pods its name is Dex's own
-#     Service (the CoreDNS rewrite): no sidecar.
+#     trick provides. It lives under the domain, and inside pods — the
+#     hostNetwork muster and Backstage included — its name is Dex's own
+#     Service (the CoreDNS rewrite), a private address like an
+#     installation's issuer. On a lab created with the localhost issuer
+#     muster and Backstage reach it as the host does — both run hostNetwork,
+#     exactly like the kube-apiserver static pod, a per-component
+#     `postRenderers` patch below (not a chart value in either chart) — and
+#     the MCP servers get a `dex-localhost` sidecar on their own loopback.
 #   * no Cilium, and Kyverno only for the fleet's flux-multi-tenancy policy
 #     (admission.go): the chart's own Kyverno objects are pinned off below —
 #     the `auto` knob would render them once kyverno.io/v1 is served — and
