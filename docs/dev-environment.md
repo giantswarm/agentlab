@@ -95,31 +95,23 @@ runs reuse it. It cannot be `backstage.port` (7007), which kind publishes for
 the in-cluster Backstage. Removing the key and running `agentlab reload`
 unregisters it.
 
-**Returning from muster's approval page.** A tool approval opened from the
-portal's chat sends the browser back to the page it came from, but muster only
-returns to origins on `oauth.mcpClient.postLoginRedirectAllowlist`; the meta
-chart lists the edge portal (`https://portal.<domain>:<backstage.publicPort>/sessions`),
-not `http://localhost:3000`. While `backstage.localDevPort` is set the lab adds
-`http://localhost:3000/sessions` (the frontend's fixed port) to muster's own
-list, which the chart keeps next to its derived entry. Lab only. It is part of
-the platform values, so after the first `portal dev` (or after removing the
-key) run `agentlab platform` once; Dex alone is re-applied by `portal dev`. Without it muster logs
-`Ignoring a return not in oauth.mcpClient.postLoginRedirectAllowlist` and shows
-its own "answer recorded" page.
+**Approving tool calls from `portal dev`.** Lab only.
 
-**Deciding approvals inline.** muster takes the portal's inline approval
-decisions and sign-in handoff requests only with the portal backend's own
-workload token beside the person's: the in-cluster portal's projected
-ServiceAccount token (audience `muster`), which muster reviews for verb
-`decide` on `toolapprovals` (the chart binds the portal's ServiceAccount to
-`muster-approval-decider`). The local backend has no projected token, so every
-`portal dev` mints one for the lab portal's ServiceAccount
-(`agent-platform/backstage`, TokenRequest, audience `muster`, 12 hours), writes
-it to `state/backstage-dev/muster-workload-token` (mode 0600) and points the
-backend's `muster.workloadTokenFile` at it. Lab only: it uses the lab's admin
-kubeconfig and stands in for the lab's own portal. Without that ServiceAccount
-(no portal in the lab) it says so and approvals open muster's own pages.
-Restart `portal dev` after 12 hours.
+- *Return from muster's approval page:* muster returns only to origins on
+  `oauth.mcpClient.postLoginRedirectAllowlist`. While `backstage.localDevPort`
+  is set the lab adds `http://localhost:3000/sessions` to muster's list. It is
+  part of the platform values: run `agentlab platform` once after the first
+  `portal dev` (or after removing the key). Without it muster logs `Ignoring a
+  return not in oauth.mcpClient.postLoginRedirectAllowlist` and shows its own
+  page.
+- *Inline decisions:* muster takes them only with the portal backend's workload
+  token beside the person's (audience `muster`, reviewed for verb `decide` on
+  `toolapprovals`). Every `portal dev` mints one for the lab portal's
+  ServiceAccount (`agent-platform/backstage`, 12 hours) with the lab's admin
+  kubeconfig, writes it to `state/backstage-dev/muster-workload-token` (0600)
+  and points `muster.workloadTokenFile` at it. Without that ServiceAccount (no
+  portal in the lab) approvals open muster's own pages. Restart `portal dev`
+  after 12 hours.
 
 **Limits.**
 

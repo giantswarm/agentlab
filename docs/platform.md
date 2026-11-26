@@ -349,13 +349,9 @@ puts the released chart back.
 
 ## Running a lab in governed mode
 
-The agent-platform chart's `governance.mode` value (`trusted`, the default,
-or `governed`) decides whether muster also asks a person before an agent runs a
-write on the platform's own servers; the chart's README describes it (further
-reading, optional: [Governing tool
-calls](https://docs.giantswarm.io/overview/agent-platform/governing-tool-calls/)).
-The lab sets it with a `platform.valuesFiles` overlay, like any other chart
-value:
+The chart's `governance.mode` (`trusted`, the default, or `governed`) decides
+whether muster asks a person before an agent runs a write on the platform's own
+servers (see the chart's README). Set it with a `platform.valuesFiles` overlay:
 
 ```yaml
 # governed.yaml
@@ -369,24 +365,19 @@ platform:
     - /path/to/governed.yaml
 ```
 
-Then `agentlab platform`; `agentlab status` names the overlay and the mode it
-sets. muster reads the mode once at start, so the run rolls muster. Removing
-the entry and running `agentlab platform` again puts the lab back on trusted.
+Then `agentlab platform`; it rolls muster, which reads the mode once at start.
+`agentlab status` names the overlay and mode. Removing the entry and re-running
+returns the lab to trusted.
 
-Until muster and agent-manager releases with tool approval exist, the chart's
-release floors are unset,
-and the chart refuses `governed` at render: the boot stops before the install,
-naming the guard. A released chart that carries tool approval needs no more
-than the overlay. Before that, use a dev chart whose floors name the dev builds
-of muster and the managers: point `platform.chartPath` at the checkout (see
-[Installing an unreleased chart](#installing-an-unreleased-chart)), push the
-dev muster chart and agent-manager chart into the lab registry and name them
-with `components.<name>.versionRange` in the same overlay (see [An unreleased
-component chart](#an-unreleased-component-chart)), and set the checkout's
-floors to those versions. Approving a call also needs the OAuth server and
-`muster.muster.oauth.mcpClient.publicUrl` on the lab's edge, which the chart
-renders in the lab; a portal on another port than 443 needs
-`backstage.publicPort` (8443 on the default edge).
+- A released chart with tool approval needs only the overlay. Until then the chart
+  refuses `governed` at render (release floors unset): use a dev chart whose
+  floors name dev builds ([Installing an unreleased
+  chart](#installing-an-unreleased-chart)), push the dev muster and
+  agent-manager charts into the lab registry and name them with
+  `components.<name>.versionRange` in the overlay ([An unreleased component
+  chart](#an-unreleased-component-chart)).
+- A portal on another port than 443 needs `backstage.publicPort` (8443 on the
+  default edge).
 
 ## Dev images
 
