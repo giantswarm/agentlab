@@ -90,6 +90,13 @@ const (
 	// so a token minted for either carries an audience the other trusts.
 	AgentPlatformClientID     = "agent-platform"
 	AgentPlatformClientSecret = "agent-platform-lab-secret" // #nosec G101 -- static throwaway lab credential, by design
+	// The portal's own client (the chart's backstage.oidcClientId): only the
+	// portal signs in with it, so muster may trust it for the sign-in handoff
+	// (approval.handoffClients) without trusting the shared client every CLI
+	// helper and proof logs in with. Its tokens carry agent-platform's
+	// audience (cross-client scope), so every consumer accepts them as before.
+	PortalClientID     = "agent-platform-portal"
+	PortalClientSecret = "agent-platform-portal-lab-secret" // #nosec G101 -- static throwaway lab credential, by design
 	// An audience-only client: Giant Swarm apiservers trust its id, and it
 	// trusts agent-platform to request its audience. It never runs a flow.
 	DexK8sAuthenticatorClientID = "dex-k8s-authenticator"

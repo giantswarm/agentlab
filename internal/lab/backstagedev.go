@@ -286,6 +286,11 @@ func backstageDevInputs(ctx context.Context, cfg *config.Config) ([]devFile, []s
 		}
 		env = append(env, name+"="+string(value))
 	}
+	// The portal's own client's secret, which the chart's app-config names
+	// while backstage.oidcClientId is set (a chart without it never reads it).
+	if value := secrets.Data[portalClientSecretKey]; len(value) > 0 {
+		env = append(env, "AGENT_PLATFORM_PORTAL_OIDC_CLIENT_SECRET="+string(value))
+	}
 	return files, env, nil
 }
 

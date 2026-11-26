@@ -118,6 +118,7 @@ stringData:
           - http://localhost:{{ .BrowserCallbackPort }}/callback
         trustedPeers:
           - agent-platform
+          - {{ .PortalClientID }}
       # The ONE platform client, the chart's global.identity convention:
       # muster (an OAuth *client* of Dex and an OAuth *server* towards MCP
       # clients like Claude Code) and Backstage both authenticate with it, so
@@ -133,6 +134,9 @@ stringData:
         redirectURIs:
           - {{ .MusterBaseURL }}/oauth/callback
           - {{ .GatewayURL "mcp-kubernetes" }}/oauth/callback
+          # The portal's callbacks stay here for a chart without
+          # backstage.oidcClientId (the portal then signs in with this client);
+          # with it the portal uses its own client below.
           - {{ .BackstageBaseURL }}/api/auth/oidc-agent-platform/handler/frame
           {{- with .BackstageLocalDevURL }}
           # A Backstage run with hot reload from a checkout on this machine
@@ -147,6 +151,23 @@ stringData:
           # exactly, no DNS lookups -- unlike muster's own authorization
           # server, whose SSRF guards reject every lab hostname.
           - {{ .MusterBaseURL }}/oauth/proxy/callback
+        # The portal requests this client's audience (the chart adds
+        # audience:server:client_id:agent-platform for a dedicated portal
+        # client), so muster and the managers accept its tokens as before.
+        trustedPeers:
+          - {{ .PortalClientID }}
+      # The portal's own client (the chart's backstage.oidcClientId): only
+      # the portal's callbacks, so no CLI or proof can sign in with it, and
+      # muster trusts it alone for the sign-in handoff
+      # (muster.approval.handoffClients).
+      - id: {{ .PortalClientID }}
+        name: Agent Platform portal
+        secret: {{ .PortalClientSecret }}
+        redirectURIs:
+          - {{ .BackstageBaseURL }}/api/auth/oidc-agent-platform/handler/frame
+          {{- with .BackstageLocalDevURL }}
+          - {{ . }}/api/auth/oidc-agent-platform/handler/frame
+          {{- end }}
       # Cross-client audience target. Backstage's GS auth provider requests
       # the scope audience:server:client_id:dex-k8s-authenticator by default
       # (components.backstage.extraScopes); Dex only honors that when the
@@ -157,6 +178,7 @@ stringData:
         secret: {{ .KubernetesClientSecret }}
         trustedPeers:
           - agent-platform
+          - {{ .PortalClientID }}
 ---
 # Kubernetes storage needs its own identity: Dex creates its CRDs on first
 # boot and then CRUDs its resources (keys, auth codes, sessions) through the

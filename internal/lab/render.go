@@ -45,7 +45,9 @@ type tmplData struct {
 	KubernetesClientID,
 	KubernetesClientSecret,
 	AgentPlatformClientID,
-	AgentPlatformClientSecret string
+	AgentPlatformClientSecret,
+	PortalClientID,
+	PortalClientSecret string
 	// ModelManagerEnabled mirrors cfg.ModelManagerEnabled(); Backends is
 	// platform.modelManager.backends (the first is model-manager's default
 	// backend) and Endpoints the URL model-manager dials for each of them
@@ -78,6 +80,11 @@ type tmplData struct {
 	// registers the family-less mcp-kubernetes (the 3.x line, an upgrade
 	// seed's 4.x line), whose mcp-kubernetes chart refuses mcpServer.
 	FamilylessChart bool
+	// PortalClient is whether the meta chart takes backstage.oidcClientId
+	// (portalClientChartCarries): the portal then signs in with its own Dex
+	// client (config.PortalClientID) and muster trusts that one for the
+	// sign-in handoff.
+	PortalClient bool
 	// ExtraModels is what extra-models.yaml.tmpl renders: the
 	// platform.extraModels entries.
 	ExtraModels []config.ExtraModel
@@ -353,6 +360,7 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		ModelManagerEnabled:          cfg.ModelManagerEnabled() || cfg.Platform.ManagerGitHubProof,
 		LegacyChart:                  cfg.LegacyChart(),
 		FamilylessChart:              cfg.FamilylessChart(),
+		PortalClient:                 portalClientChartCarries(cfg),
 		ModelManagerBackends:         cfg.ChartBackends(),
 		ModelManagerEndpoints:        endpoints,
 		ExtraModels:                  cfg.Platform.ExtraModels,
@@ -406,6 +414,8 @@ func newTmplData(cfg *config.Config) (*tmplData, error) {
 		KubernetesClientSecret:       config.KubernetesClientSecret,
 		AgentPlatformClientID:        config.AgentPlatformClientID,
 		AgentPlatformClientSecret:    config.AgentPlatformClientSecret,
+		PortalClientID:               config.PortalClientID,
+		PortalClientSecret:           config.PortalClientSecret,
 	}, nil
 }
 

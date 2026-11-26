@@ -302,7 +302,29 @@ redirect URIs: https://muster.127.0.0.1.nip.io/oauth/callback
 The Backstage redirect path carries the **provider name** from the app-config,
 not the literal word `oidc` — Backstage serves each provider at
 `/api/auth/<provider>/handler/frame`, and the chart names it
-`oidc-agent-platform`. More clients means editing the Dex template
+`oidc-agent-platform`.
+
+### The portal's own client
+
+With an agent-platform chart that takes `backstage.oidcClientId`, the portal
+signs in with a client of its own, `agent-platform-portal` (secret
+`agent-platform-portal-lab-secret`, key `portal-dex-client-secret` of
+`agent-platform/agent-platform-secrets`; `agentlab portal dev` passes it as
+`AGENT_PLATFORM_PORTAL_OIDC_CLIENT_SECRET`). Its only redirect URIs are the
+portal's (in-cluster and `portal dev`), so no CLI helper or proof can sign in
+with it, and muster trusts it alone for the sign-in handoff
+(`approval.handoffClients`): a click on *Open* on an approval or connector
+sign-in prompt in portal chat opens muster's page signed in. The portal
+requests the `agent-platform`, `dex-k8s-authenticator` and `kubernetes`
+audiences, so `agent-platform`, `dex-k8s-authenticator` and `kubernetes` list
+`agent-platform-portal` under `trustedPeers`, and every consumer accepts its
+tokens as before; their `azp` is `agent-platform-portal`. The portal's
+callbacks stay on `agent-platform` too, for a chart without the key. muster
+keys a person's sessions by the token's client as well, so the portal's
+connector sign-ins are not those of a password-grant token of
+`agent-platform`, except subject-scoped ones.
+
+More clients means editing the Dex template
 (`internal/lab/templates/dex.yaml.tmpl`), rebuilding and `agentlab reload`.
 
 ### `trustedPeers` points the other way round
