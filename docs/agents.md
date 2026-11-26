@@ -340,25 +340,29 @@ reconciler) is gone from the lab: an `agentlab.yaml` that still names it
 loads, and the key is not written back.
 
 Each organization is an `Organization` (`security.giantswarm.io/v1alpha1`,
-cluster-scoped) with `spec.agentPlatform.enabled: true`. The operator
+cluster-scoped) with `spec.capabilities.agentPlatform.enabled: true`, the
+shape agreed on giantswarm/organization-operator#673. The operator
 reconciles it into one organization namespace, `agents-<name>`, and reports
-the name in `status.agentPlatform.namespace`; the lab reads that field and
-never computes the name. `status.agentPlatform.erasureStep` names the
-cleanup step of a deleted organization, and `status.conditions` holds
-`Ready` and `Orphaned`. No organization-operator runs in the lab, so
-`status.namespace` (its `org-<name>`) stays empty. The organization's admins
-are `spec.admins` (`kind` `User` or `Group`, and `name`): the operator binds
-them to `agent-platform:admin` in the namespace (RoleBinding
-`organization-admins`), and the chart's admission policy refuses every other
-writer of a binding to that role, the lab's admin too. The lab writes no
-admin binding.
+the name in the entry of `status.namespaces` with `capability:
+agentPlatform`; the lab reads that entry and never computes the name.
+`status.conditions` holds the operator's conditions: `AgentPlatformReady`,
+`AgentPlatformOrphaned` (reasons `InInventory`, `MissingFromGit`,
+`DeleteMerged`), and, while a deleted organization is erased,
+`AgentPlatformErasing`, whose reason names the cleanup step. No
+organization-operator runs in the lab, so `status.namespace` and the `kaas`
+entry of `status.namespaces` (its `org-<name>`) stay empty. The
+organization's admins are `spec.admins` (`kind` `User` or `Group`, and
+`name`): the operator binds them to `agent-platform:admin` in the namespace
+(RoleBinding `organization-admins`), and the chart's admission policy
+refuses every other writer of a binding to that role, the lab's admin too.
+The lab writes no admin binding.
 
 **The default organization.** `agentlab up` (and `agentlab platform`) keeps
 the `Organization` `default` (display name `Lab`, the annotation
 `agent-platform.giantswarm.io/display-name`), with the platform Harness, one
-worker (`spec.agentPlatform.workers.replicas`) and the group
+worker (`spec.capabilities.agentPlatform.workers.replicas`) and the group
 `platform-admins` in `spec.admins`, and waits until the operator reports it
-`Ready`. Then it writes the editors, `organization-editors` to
+`AgentPlatformReady`. Then it writes the editors, `organization-editors` to
 `agent-platform:editor` for the group `developers`, and the organization's
 model: the ModelConfig `anthropic` on
 the lab's model, marked default, its key in the tenant credential
@@ -380,9 +384,12 @@ pull requests of giantswarm/giantswarm#39492; no released chart carries it
 yet. To run the prototype:
 
 1. **The chart** from branch `organization-kind-chart` of
-   giantswarm/agent-platform (giantswarm/agent-platform#1489), which
-   installs the `Organization` CRD and the roles and admission policies of
-   this model. Either a checkout (`agentlab configure --chart-path
+   giantswarm/agent-platform (giantswarm/agent-platform#1489), at its
+   current head, which installs the `Organization` CRD in the shape of
+   giantswarm/organization-operator#673 (`spec.capabilities.agentPlatform`)
+   and the roles and admission policies of this model. Its earlier builds
+   carry the earlier shape (`spec.agentPlatform`). Either a checkout
+   (`agentlab configure --chart-path
    /path/to/agent-platform/helm/agent-platform`, the branch checked out) or
    its dev builds (`agentlab configure --chart-path "" --chart-branch
    organization-kind-chart`). See [Installing an unreleased
@@ -399,13 +406,18 @@ yet. To run the prototype:
    # organization-kind.yaml, listed in platform.valuesFiles
    components:
      agent-platform-operator:
-       # giantswarm/agent-platform-operator#69
-       versionRange: "0.4.7-r1b5e09bdt20261124180250he5d00ae"
+       # giantswarm/agent-platform-operator#69 at its head dee58c4
+       versionRange: "0.4.9-r1b5e09bdt20261126140120hdee58c4"
      agent-manager:
-       # giantswarm/agent-manager#475 at its head 31a58c6, with main's
+       # giantswarm/agent-manager#475 at its head 6f0d54a, with main's
        # A2A-Version fix (giantswarm/agent-manager#480)
-       versionRange: "3.5.9-r1b5e09bdt20261125120439h31a58c6"
+       versionRange: "3.5.11-r1b5e09bdt20261126135049h6f0d54a"
    ```
+
+   These are the first builds of the shape of
+   giantswarm/organization-operator#673. The earlier builds of the two pull
+   requests (agent-platform-operator before 0.4.9, agent-manager before
+   3.5.11) read `spec.agentPlatform` and `status.agentPlatform`.
 
    This agent-manager build takes every organization by its name: each
    tool of an organization's contents takes one argument `organization`,
@@ -452,14 +464,27 @@ The lab checks the first two steps and stops at once when one is missing:
   install, in place of Helm's schema error, and name this section and
   `agentlab configure --organizations=false`. A chart that cannot be read,
   or that has no schema, is left to the install.
-- **An operator or agent-manager without the `Organization` kind.** Before
-  the default organization, `up` and `platform` ask the API server whether
-  the ServiceAccounts of the Deployments `agent-platform-operator` and
-  `agent-manager` may list `organizations.security.giantswarm.io` (a
-  `SelfSubjectAccessReview` as each). Every part of `organizations-test`
-  asks the same at its start. When one may not, the run stops and names the
-  component, its image and the overlay of step 2, in place of an
-  organization that is not `Ready` after three minutes.
+- **A CRD of the earlier shape.** Before the default organization, `up`
+  and `platform` read the served `Organization` CRD. When the schema of
+  `v1alpha1` names the fields of `spec` and `spec.capabilities.agentPlatform`
+  is not among them (the chart's earlier builds have `spec.agentPlatform`),
+  the run stops and names the chart branch of step 1. A schema that does not
+  name the fields of `spec` is left to the run. Every part of
+  `organizations-test` reads it at its start too.
+- **An operator or agent-manager without the `Organization` kind, or of the
+  earlier shape.** Before the default organization, `up` and `platform` ask
+  the API server whether the ServiceAccounts of the Deployments
+  `agent-platform-operator` and `agent-manager` may list
+  `organizations.security.giantswarm.io` (a `SelfSubjectAccessReview` as
+  each), and read their images: an image whose tag is a semantic version
+  before agent-platform-operator 0.4.9 or agent-manager 3.5.11 (the
+  prerelease of a dev build left out) is a build of the earlier shape. A tag
+  that is no semantic version, a local build, is left to the run. Every part
+  of `organizations-test` asks the same at its start. When a component may
+  not read the Organizations or is a build of the earlier shape, the run
+  stops and names the component, its image and the overlay of step 2, in
+  place of an organization that is not `AgentPlatformReady` after three
+  minutes.
 
 `organizations-test --part admins` also proves that nobody switches an
 organization's Agent Platform off: the chart's policy
@@ -469,8 +494,9 @@ see [The admins part](#the-admins-part)).
 #### The tools take the organization's name
 
 From giantswarm/agent-manager#475 at 31a58c6 (giantswarm/giantswarm#39503),
-agent-manager finds an organization's namespace itself, in its
-`Organization`'s `status.agentPlatform.namespace`:
+agent-manager finds an organization's namespace itself, in the
+`agentPlatform` entry of its `Organization`'s `status.namespaces` (from
+6f0d54a; before it, in `status.agentPlatform.namespace`):
 
 - The member tools (`list_organization_members`,
   `add_organization_member`, `remove_organization_member`),
@@ -624,7 +650,7 @@ the namespace's atespace from that namespace only. Then:
   and a list; the connectivity install hooks, whose identity exists only
   during a hook event, get it from the release's own hook manifests for the
   check (removed afterwards) and read the pool only. A get the authorizer
-  allows may answer NotFound; a refusal must be 403. The cleanup check starts a member-owned READY session, records its organization in a suspended installation Kustomization's settled inventory, then removes that inventory entry and waits for the operator to report `Orphaned=True` with the reason `MissingFromGit`. First the refusal, a verdict of its own: the lab admin's delete with `kustomize.toolkit.fluxcd.io/prune: enabled` must be refused by the chart's ValidatingAdmissionPolicy `agent-platform-organization-delete-intent`, and the organization, its namespace and the session must still be there; the prune marker alone does not erase an organization whose file is gone from git. Then the path of a merged delete pull request: the check sets `agent-platform.giantswarm.io/delete-pull-request` on the organization (a URL-shaped value that names no real pull request, as agent-manager writes it in mode commit), waits for `Orphaned=True` with the reason `DeleteMerged`, and deletes. That deletion must remove the organization, namespace, actors and snapshot prefix, and refuse another resume of the session. A seeded control object under the second organization's UID must survive that cleanup. The check requires kagent 1.31.1-rc.3 or newer and an operator that supports the configured path-style store; it preserves the five-minute snapshot cleanup delay.
+  allows may answer NotFound; a refusal must be 403. The cleanup check starts a member-owned READY session, records its organization in a suspended installation Kustomization's settled inventory, then removes that inventory entry and waits for the operator to report `AgentPlatformOrphaned=True` with the reason `MissingFromGit`. First the refusal, a verdict of its own: the lab admin's delete with `kustomize.toolkit.fluxcd.io/prune: enabled` must be refused by the chart's ValidatingAdmissionPolicy `agent-platform-organization-delete-intent`, and the organization, its namespace and the session must still be there; the prune marker alone does not erase an organization whose file is gone from git. Then the path of a merged delete pull request: the check sets `agent-platform.giantswarm.io/delete-pull-request` on the organization (a URL-shaped value that names no real pull request, as agent-manager writes it in mode commit), waits for `AgentPlatformOrphaned=True` with the reason `DeleteMerged`, and deletes. That deletion must remove the organization, namespace, actors and snapshot prefix, and refuse another resume of the session. A seeded control object under the second organization's UID must survive that cleanup. The check requires kagent 1.31.1-rc.3 or newer and an operator that supports the configured path-style store; it preserves the five-minute snapshot cleanup delay.
 
 ### The credentials part
 
@@ -857,10 +883,11 @@ outsider. The verdicts:
   `create_organization`, and no organization of that name exists
   afterwards;
 - the lab's admin (`cluster-admin`) sends an update that sets
-  `spec.agentPlatform.enabled` of `agentlab-admins-a` (Ready) to false: the
-  chart's ValidatingAdmissionPolicy `agent-platform-organization-switch-off`
-  refuses it, while an update of `spec.agentPlatform.workers.replicas` that
-  keeps the switch on is admitted (dry runs; decision D10 of
+  `spec.capabilities.agentPlatform.enabled` of `agentlab-admins-a`
+  (`AgentPlatformReady`) to false: the chart's ValidatingAdmissionPolicy
+  `agent-platform-organization-switch-off` refuses it, while an update of
+  `spec.capabilities.agentPlatform.workers.replicas` that keeps the switch
+  on is admitted (dry runs; decision D10 of
   giantswarm/giantswarm#39492). A chart without the policy fails the check,
   which then names the policy and giantswarm/agent-platform#1489;
 - `update_organization` replaces the admin group of `agentlab-admins-a` with
@@ -882,7 +909,7 @@ U35). On macOS a `--gateway-binary` is refused before the proof starts
 unless the lab CA is in the system trust store (`agentlab trust`): the
 gateway calls muster, and a Go program on macOS verifies against the system
 trust store, not the `SSL_CERT_FILE` the lab gives it. Use `--gateway-image`
-there. Successful runs delete both proof organizations and remove the installation inventory fixture and its temporary operator setting. Failed cleanup retains the organizations, the session, the fixture Kustomization `agentlab-organizations-inventory` and the operator's setting for diagnosis and reports the failing step. The next run (the full proof or `--part cleanup`) removes them first and says so: the proof organizations that carry the proof's ownership label (one `Orphaned` with `MissingFromGit` through the same delete pull request annotation), the fixture Kustomization with its Role and RoleBinding, and the operator's flag. It refuses, naming the object, one of those names without the proof's ownership label. Other failures remove the transient agents, Sessions, PolicyException and quota ServiceAccounts.
+there. Successful runs delete both proof organizations and remove the installation inventory fixture and its temporary operator setting. Failed cleanup retains the organizations, the session, the fixture Kustomization `agentlab-organizations-inventory` and the operator's setting for diagnosis and reports the failing step. The next run (the full proof or `--part cleanup`) removes them first and says so: the proof organizations that carry the proof's ownership label (one `AgentPlatformOrphaned` with `MissingFromGit` through the same delete pull request annotation), the fixture Kustomization with its Role and RoleBinding, and the operator's flag. It refuses, naming the object, one of those names without the proof's ownership label. Other failures remove the transient agents, Sessions, PolicyException and quota ServiceAccounts.
 
 After the erase, the reads through kagent and Substrate that prove the end state (`GetSession` and `ResumeSession` on the member's session, `ListActors` in the organization's namespace) try a transport error (gRPC `Unavailable`: the kagent controller restarting, a reset connection) again, with a note that names the read and its error. The session's reads try for up to three minutes; `ListActors` within the one minute the actors have to go. Every other answer is judged at once, and a transport error past the bound fails the check with that error and the bound.
 

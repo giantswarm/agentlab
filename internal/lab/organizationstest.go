@@ -267,9 +267,10 @@ func OrganizationsTest(cfg *config.Config, opts OrganizationsTestOptions) error 
 		return err
 	}
 	// Every part stands on the operator and agent-manager serving the
-	// Organization kind: a release without it fails here, by name, not
-	// deep in a part (organizationkind.go).
-	step("The Organization CRD, and %s and %s may %s %s as their ServiceAccounts", agentPlatformOperator, agentManagerMCPServer, organizationReadVerb, organizationResource)
+	// Organization kind in its current shape: a release without it, or a
+	// build of the earlier shape, fails here, by name, not deep in a part
+	// (organizationkind.go).
+	step("The Organization CRD in the shape of %s, and %s and %s as builds of that shape that may %s %s as their ServiceAccounts", organizationShapeContract, agentPlatformOperator, agentManagerMCPServer, organizationReadVerb, organizationResource)
 	if err := checkOrganizationKindServed(); err != nil {
 		return err
 	}

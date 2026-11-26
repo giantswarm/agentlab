@@ -50,8 +50,9 @@ func TestSettledOrganizationInventory(t *testing.T) {
 }
 
 func TestOrphanedAs(t *testing.T) {
+	// The condition type of giantswarm/organization-operator#673.
 	state := func(status, reason string, observed int64) organizationState {
-		return organizationState{generation: 3, conditions: []organizationCondition{{Type: orphanedCondition, Status: status, Reason: reason, ObservedGeneration: observed}}}
+		return organizationState{generation: 3, conditions: []organizationCondition{{Type: "AgentPlatformOrphaned", Status: status, Reason: reason, ObservedGeneration: observed}}}
 	}
 	require.True(t, orphanedAs(state(conditionTrue, orphanedDeleteMerged, 3), true, orphanedDeleteMerged))
 	require.False(t, orphanedAs(state(conditionTrue, orphanedMissingInGit, 3), true, orphanedDeleteMerged), "another reason")

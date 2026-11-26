@@ -21,7 +21,7 @@ func TestSwitchOffRefusal(t *testing.T) {
 		err      error
 		accepted bool
 	}{
-		"refused by the switch-off policy":    {err: forbidden("ValidatingAdmissionPolicy 'agent-platform-organization-switch-off' with binding 'agent-platform-organization-switch-off' denied request: the Agent Platform cannot be switched off for an organization yet: keep spec.agentPlatform.enabled: true; refused: agentlab-admins-a"), accepted: true},
+		"refused by the switch-off policy":    {err: forbidden("ValidatingAdmissionPolicy 'agent-platform-organization-switch-off' with binding 'agent-platform-organization-switch-off' denied request: the Agent Platform cannot be switched off for an organization yet: keep spec.capabilities.agentPlatform.enabled: true; refused: agentlab-admins-a"), accepted: true},
 		"admitted":                            {},
 		"refused by another policy":           {err: forbidden("ValidatingAdmissionPolicy 'agent-platform-organization-names' with binding 'agent-platform-organization-names' denied request: an Organization with the Agent Platform enabled has a name that makes agents-<name> a namespace name; refused: agentlab-admins-a")},
 		"refused by RBAC":                     {err: forbidden(`User "oidc:admin@lab.local" cannot patch resource "organizations" in API group "security.giantswarm.io" at the cluster scope`)},

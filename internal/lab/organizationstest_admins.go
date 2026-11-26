@@ -70,13 +70,11 @@ const (
 	// organizationSwitchOffPolicy is the chart's ValidatingAdmissionPolicy
 	// that keeps an organization's Agent Platform on once it is on, for every
 	// writer (decision D10 of giantswarm/giantswarm#39492): an update that
-	// sets spec.agentPlatform.enabled to false or removes it is refused.
-	// organizationSwitchOffChart is the chart pull request that adds it.
+	// sets spec.capabilities.agentPlatform.enabled to false or removes it is
+	// refused. organizationSwitchOffChart is the chart pull request that adds
+	// it.
 	organizationSwitchOffPolicy = "agent-platform-organization-switch-off"
-	organizationSwitchOffChart  = "giantswarm/agent-platform#1489"
-	// organizationSpecAgentPlatformKey is the Agent Platform's block of an
-	// Organization's spec.
-	organizationSpecAgentPlatformKey = "agentPlatform"
+	organizationSwitchOffChart  = organizationKindChart
 )
 
 // createOrganizationAnswer is the part of create_organization's answer the
@@ -173,7 +171,7 @@ func (p *adminsProof) checks() []organizationCheck {
 		{surface: surfaceKubernetes, boundary: "nobody but agent-platform-operator binds agent-platform:admin: the organization's admin and the lab's admin (cluster-admin) are refused at admission, while the admin binds agent-platform:editor", run: p.adminBindingRefused},
 		{surface: surfaceAgentManager, boundary: "add_organization_member refuses the admin role, nothing written, while the admin adds a user", run: p.memberToolRefusesAdmin},
 		{surface: surfaceAgentManager, boundary: "a person without create on Organizations is refused create_organization, nothing written", run: p.createRefused},
-		{surface: surfaceKubernetes, boundary: "nobody switches an organization's Agent Platform off (decision D10): the lab's admin (cluster-admin) is refused at admission an update that sets spec.agentPlatform.enabled to false, while an update that keeps it on is admitted", run: p.switchOffRefused},
+		{surface: surfaceKubernetes, boundary: "nobody switches an organization's Agent Platform off (decision D10): the lab's admin (cluster-admin) is refused at admission an update that sets spec.capabilities.agentPlatform.enabled to false, while an update that keeps it on is admitted", run: p.switchOffRefused},
 		{surface: surfaceKubernetes, boundary: "a change of spec.admins (update_organization) changes organization-admins: the group replaced by a user", run: p.adminsChanged},
 		{surface: surfaceKubernetes, boundary: "an empty spec.admins (update_organization) removes organization-admins, and the organization stays Ready", run: p.adminsEmptied},
 	}
@@ -415,10 +413,11 @@ func switchOffRefusal(what string, err error) error {
 // switchOffRefused: the lab's admin, on their own token, sends two updates
 // of organization A, Ready with its Agent Platform on, as server-side dry
 // runs, so nothing is written whatever the answer. The one that sets
-// spec.agentPlatform.enabled to false must be refused by the chart's
-// switch-off policy; its twin, a change of spec.agentPlatform.workers.replicas
-// that keeps the switch on, must be admitted, so a refusal of every update
-// does not pass. A chart without the policy fails the check, naming it.
+// spec.capabilities.agentPlatform.enabled to false must be refused by the
+// chart's switch-off policy; its twin, a change of
+// spec.capabilities.agentPlatform.workers.replicas that keeps the switch on,
+// must be admitted, so a refusal of every update does not pass. A chart
+// without the policy fails the check, naming it.
 func (p *adminsProof) switchOffRefused() (string, error) {
 	org := adminsOrgA
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
@@ -454,28 +453,28 @@ func (p *adminsProof) switchOffRefused() (string, error) {
 	if ready, why := state.ready(); !ready {
 		return "", fmt.Errorf("organization %s is not Ready: %s", org, why)
 	}
-	if on, _, _ := unstructured.NestedBool(current.Object, crSpec, organizationSpecAgentPlatformKey, "enabled"); !on {
-		return "", fmt.Errorf("organization %s does not have spec.agentPlatform.enabled true: the switch-off policy holds only an organization whose Agent Platform is on", org)
+	if on, _, _ := unstructured.NestedBool(current.Object, crSpec, organizationSpecCapabilitiesKey, organizationCapabilityAgentPlatform, "enabled"); !on {
+		return "", fmt.Errorf("organization %s does not have spec.capabilities.agentPlatform.enabled true: the switch-off policy holds only an organization whose Agent Platform is on", org)
 	}
-	replicas, found, err := unstructured.NestedInt64(current.Object, crSpec, organizationSpecAgentPlatformKey, "workers", "replicas")
+	replicas, found, err := unstructured.NestedInt64(current.Object, crSpec, organizationSpecCapabilitiesKey, organizationCapabilityAgentPlatform, "workers", "replicas")
 	if err != nil {
-		return "", fmt.Errorf("organization %s: spec.agentPlatform.workers.replicas: %w", org, err)
+		return "", fmt.Errorf("organization %s: spec.capabilities.agentPlatform.workers.replicas: %w", org, err)
 	}
 	if !found {
 		replicas = organizationWorkerReplicas
 	}
 	dry := metav1.PatchOptions{DryRun: []string{metav1.DryRunAll}}
-	what := fmt.Sprintf("%s's update of organization %s that sets spec.agentPlatform.enabled to false (a dry run)", p.admin.Email, org)
-	_, err = organizations.Patch(ctx, org, types.MergePatchType, []byte(`{"spec":{"agentPlatform":{"enabled":false}}}`), dry)
+	what := fmt.Sprintf("%s's update of organization %s that sets spec.capabilities.agentPlatform.enabled to false (a dry run)", p.admin.Email, org)
+	_, err = organizations.Patch(ctx, org, types.MergePatchType, []byte(`{"spec":{"capabilities":{"agentPlatform":{"enabled":false}}}}`), dry)
 	if err := switchOffRefusal(what, err); err != nil {
 		return "", err
 	}
 	twin := replicas + 1
-	if _, err := organizations.Patch(ctx, org, types.MergePatchType, fmt.Appendf(nil, `{"spec":{"agentPlatform":{"workers":{"replicas":%d}}}}`, twin), dry); err != nil {
-		return "", fmt.Errorf("the twin: %s's update of organization %s that sets spec.agentPlatform.workers.replicas to %d and keeps the switch on (a dry run): %w", p.admin.Email, org, twin, err)
+	if _, err := organizations.Patch(ctx, org, types.MergePatchType, fmt.Appendf(nil, `{"spec":{"capabilities":{"agentPlatform":{"workers":{"replicas":%d}}}}}`, twin), dry); err != nil {
+		return "", fmt.Errorf("the twin: %s's update of organization %s that sets spec.capabilities.agentPlatform.workers.replicas to %d and keeps the switch on (a dry run): %w", p.admin.Email, org, twin, err)
 	}
-	return fmt.Sprintf("as %s (cluster-admin), on %s (Ready): spec.agentPlatform.enabled false refused by the %s %s; spec.agentPlatform.workers.replicas %d to %d admitted (dry runs, nothing written)",
-		p.admin.Email, org, validatingAdmissionPolicy, organizationSwitchOffPolicy, replicas, twin), nil
+	return fmt.Sprintf("as %s (cluster-admin), on %s (%s): spec.capabilities.agentPlatform.enabled false refused by the %s %s; spec.capabilities.agentPlatform.workers.replicas %d to %d admitted (dry runs, nothing written)",
+		p.admin.Email, org, organizationConditionTypeReady, validatingAdmissionPolicy, organizationSwitchOffPolicy, replicas, twin), nil
 }
 
 // adminBindingRefused writes, as dry runs, a RoleBinding to

@@ -8,6 +8,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -57,8 +58,10 @@ func TestCheckOrganizationsChart(t *testing.T) {
 
 // The check reads each component's Deployment for the ServiceAccount it
 // reviews and the image it names, and the problem names each component whose
-// ServiceAccount may not read the Organizations, its image, and the overlay
-// of the prototype's docs; nothing when both may.
+// ServiceAccount may not read the Organizations, or whose image is a build
+// of the earlier shape, its image, and the overlay of the prototype's docs;
+// nothing when both may read and serve the shape of
+// giantswarm/organization-operator#673.
 func TestOrganizationKindProblem(t *testing.T) {
 	deployment := func(name, serviceAccount, image string) *appsv1.Deployment {
 		return &appsv1.Deployment{
@@ -69,28 +72,52 @@ func TestOrganizationKindProblem(t *testing.T) {
 			}}},
 		}
 	}
-	operator := componentAccessOf(deployment(agentPlatformOperator, agentPlatformOperator, "gsoci.azurecr.io/giantswarm/agent-platform-operator:0.4.3"))
-	manager := componentAccessOf(deployment(agentManagerMCPServer, "", "gsoci.azurecr.io/giantswarm/agent-manager:3.5.2"))
+	const (
+		// The first dev builds of the shape, and the builds before them.
+		operatorImage        = "gsoci.azurecr.io/giantswarm/agent-platform-operator:0.4.9-r1b5e09bdt20261126140120hdee58c4"
+		managerImage         = "gsoci.azurecr.io/giantswarm/agent-manager:3.5.11-r1b5e09bdt20261126135049h6f0d54a"
+		earlierOperatorImage = "gsoci.azurecr.io/giantswarm/agent-platform-operator:0.4.7-r1b5e09bdt20261125225215h814713a"
+		earlierManagerImage  = "gsoci.azurecr.io/giantswarm/agent-manager:3.5.9-r1b5e09bdt20261125120439h31a58c6"
+	)
+	operator := componentAccessOf(deployment(agentPlatformOperator, agentPlatformOperator, operatorImage))
+	manager := componentAccessOf(deployment(agentManagerMCPServer, "", managerImage))
 	if got, want := manager.user(), "system:serviceaccount:"+platformNamespace+":default"; got != want {
 		t.Errorf("a template without a ServiceAccount is reviewed as %q, want the namespace's default %q", got, want)
 	}
 	for _, tc := range []struct {
-		name               string
-		operator, manager  bool
-		named, notNamed    []string
-		wantNoProblemAtAll bool
+		name                        string
+		operator, manager           bool
+		operatorImage, managerImage string
+		named, notNamed             []string
+		wantNoProblemAtAll          bool
 	}{
 		{name: "both may read", operator: true, manager: true, wantNoProblemAtAll: true},
 		{name: "the operator may not", manager: true,
-			named:    []string{platformNamespace + "/" + agentPlatformOperator, "agent-platform-operator:0.4.3"},
-			notNamed: []string{platformNamespace + "/default", "agent-manager:3.5.2"}},
+			named:    []string{platformNamespace + "/" + agentPlatformOperator, operatorImage},
+			notNamed: []string{platformNamespace + "/default", managerImage}},
 		{name: "agent-manager may not", operator: true,
-			named:    []string{platformNamespace + "/default", "agent-manager:3.5.2"},
-			notNamed: []string{platformNamespace + "/" + agentPlatformOperator, "agent-platform-operator:0.4.3"}},
+			named:    []string{platformNamespace + "/default", managerImage},
+			notNamed: []string{platformNamespace + "/" + agentPlatformOperator, operatorImage}},
+		{name: "an earlier build of the operator", operator: true, manager: true, operatorImage: earlierOperatorImage,
+			named:    []string{earlierOperatorImage, "before 0.4.9", earlierSpecPath},
+			notNamed: []string{managerImage}},
+		{name: "an earlier build of agent-manager", operator: true, manager: true, managerImage: earlierManagerImage,
+			named:    []string{earlierManagerImage, "before 3.5.11", earlierSpecPath},
+			notNamed: []string{operatorImage}},
+		{name: "releases after the floors", operator: true, manager: true, wantNoProblemAtAll: true,
+			operatorImage: "gsoci.azurecr.io/giantswarm/agent-platform-operator:0.5.0", managerImage: "gsoci.azurecr.io/giantswarm/agent-manager:3.6.0"},
+		{name: "local builds are left to the run", operator: true, manager: true, wantNoProblemAtAll: true,
+			operatorImage: "localhost/agent-platform-operator:dev-1a2b", managerImage: "localhost/agent-manager:1"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			o, m := operator, manager
 			o.mayRead, m.mayRead = tc.operator, tc.manager
+			if tc.operatorImage != "" {
+				o.image = tc.operatorImage
+			}
+			if tc.managerImage != "" {
+				m.image = tc.managerImage
+			}
 			problem := organizationKindProblem([]componentAccess{o, m})
 			if tc.wantNoProblemAtAll {
 				if problem != "" {
@@ -106,6 +133,55 @@ func TestOrganizationKindProblem(t *testing.T) {
 			for _, never := range tc.notNamed {
 				if strings.Contains(problem, never) {
 					t.Errorf("the problem names %q, which may read:\n%s", never, problem)
+				}
+			}
+		})
+	}
+}
+
+// earlierSpecPath is the Agent Platform's block in the Organization's shape
+// before giantswarm/organization-operator#673.
+const earlierSpecPath = "spec.agentPlatform"
+
+// The served Organization CRD must carry the shape of
+// giantswarm/organization-operator#673: one with spec.agentPlatform, the
+// earlier shape, is refused naming the chart branch that installs the
+// current one; the current shape, and a schema that cannot tell, pass.
+func TestOrganizationCRDShapeProblem(t *testing.T) {
+	// The lab's version of the Organization kind.
+	const version = "v1alpha1"
+	properties := func(p map[string]any) map[string]any { return map[string]any{"properties": p} }
+	crd := func(specProperties map[string]any) *unstructured.Unstructured {
+		schema := map[string]any{}
+		if specProperties != nil {
+			schema = properties(map[string]any{crSpec: properties(specProperties)})
+		}
+		return &unstructured.Unstructured{Object: map[string]any{crSpec: map[string]any{
+			"versions": []any{map[string]any{nameKey: version, "served": true, "schema": map[string]any{"openAPIV3Schema": schema}}},
+		}}}
+	}
+	block := properties(map[string]any{})
+	for name, tc := range map[string]struct {
+		crd   *unstructured.Unstructured
+		named []string
+	}{
+		"the current shape": {crd: crd(map[string]any{organizationSpecCapabilitiesKey: properties(map[string]any{organizationCapabilityAgentPlatform: block})})},
+		"the earlier shape": {crd: crd(map[string]any{organizationCapabilityAgentPlatform: block}),
+			named: []string{earlierSpecPath, "giantswarm/organization-operator#673", "organization-kind-chart", "giantswarm/agent-platform#1489", organizationKindDocs}},
+		"no Agent Platform at all":         {crd: crd(map[string]any{}), named: []string{"no spec.capabilities.agentPlatform", "organization-kind-chart"}},
+		"a schema without spec properties": {crd: crd(nil)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			problem := organizationCRDShapeProblem(tc.crd)
+			if len(tc.named) == 0 {
+				if problem != "" {
+					t.Fatalf("refused:\n%s", problem)
+				}
+				return
+			}
+			for _, want := range tc.named {
+				if !strings.Contains(problem, want) {
+					t.Errorf("the problem does not name %q:\n%s", want, problem)
 				}
 			}
 		})

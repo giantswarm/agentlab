@@ -224,7 +224,7 @@ func writeOrganizationInventory(ctx context.Context, organizations ...*unstructu
 }
 
 // waitOrganizationOrphaned waits until the operator reports the organization
-// Orphaned=expected with reason for its current generation.
+// AgentPlatformOrphaned=expected with reason for its current generation.
 func waitOrganizationOrphaned(ctx context.Context, name string, expected bool, reason string) error {
 	var last organizationState
 	err := wait.PollUntilContextTimeout(ctx, pollInterval, organizationReadyTimeout, true, func(context.Context) (bool, error) {
@@ -236,13 +236,13 @@ func waitOrganizationOrphaned(ctx context.Context, name string, expected bool, r
 		return orphanedAs(state, expected, reason), nil
 	})
 	if err != nil {
-		return errors.Join(err, fmt.Errorf("organization %s has no current Orphaned=%t with reason %s: %+v", name, expected, reason, last.conditions))
+		return errors.Join(err, fmt.Errorf("organization %s has no current AgentPlatformOrphaned=%t with reason %s: %+v", name, expected, reason, last.conditions))
 	}
 	return nil
 }
 
-// orphanedAs reports whether state has a current Orphaned condition with
-// status expected and reason.
+// orphanedAs reports whether state has a current AgentPlatformOrphaned
+// condition with status expected and reason.
 func orphanedAs(state organizationState, expected bool, reason string) bool {
 	condition, found := state.condition(orphanedCondition)
 	return found && condition.ObservedGeneration >= state.generation &&
@@ -325,7 +325,7 @@ const (
 	// condition is stale, or still InInventory while the emptied inventory
 	// reaches it), or not yet answered the delete pull request annotation.
 	leftoverWait leftoverAction = iota
-	// leftoverMarkDeletePullRequest: Orphaned=True, MissingFromGit; the
+	// leftoverMarkDeletePullRequest: AgentPlatformOrphaned=True, MissingFromGit; the
 	// delete pull request annotation turns it into DeleteMerged.
 	leftoverMarkDeletePullRequest
 	// leftoverDelete: the chart's delete-intent policy admits the delete,
@@ -335,9 +335,10 @@ const (
 
 // nextLeftoverAction is the next step for a leftover organization in state,
 // annotated when it carries the delete pull request annotation. An
-// organization without an Orphaned condition is not judged applied from git
-// and is deleted with Flux's prune marker alone; one Orphaned from git goes
-// the path of a merged delete pull request, as the proof itself does.
+// organization without an AgentPlatformOrphaned condition is not judged
+// applied from git and is deleted with Flux's prune marker alone; one
+// orphaned from git goes the path of a merged delete pull request, as the
+// proof itself does.
 func nextLeftoverAction(state organizationState, annotated bool) leftoverAction {
 	if state.deleting {
 		return leftoverDelete
@@ -441,8 +442,9 @@ func (p *organizationsProof) removeCleanupLeftovers() error {
 	fixture, err := k.resource(kustomizationGVR, platformNamespace).Get(ctx, organizationCleanupFixture, metav1.GetOptions{})
 	switch {
 	case apierrors.IsNotFound(err):
-		// Without its Kustomization the operator keeps an Orphaned condition
-		// as it was: its own setting back first lets it drop the condition.
+		// Without its Kustomization the operator keeps an
+		// AgentPlatformOrphaned condition as it was: its own setting back
+		// first lets it drop the condition.
 		if restored, err := restoreOperatorSetting(ctx); err != nil {
 			return err
 		} else if restored {
@@ -508,7 +510,7 @@ func eraseLeftoverOrganization(ctx context.Context, resource dynamic.ResourceInt
 		annotated := organization.GetAnnotations()[organizationDeletePullRequestAnnotation] != ""
 		switch nextLeftoverAction(state, annotated) {
 		case leftoverMarkDeletePullRequest:
-			note("organization %s is Orphaned=True (%s): setting %s", name, orphanedMissingInGit, organizationDeletePullRequestAnnotation)
+			note("organization %s is AgentPlatformOrphaned=True (%s): setting %s", name, orphanedMissingInGit, organizationDeletePullRequestAnnotation)
 			return false, patchDeletePullRequest(ctx, resource, name, uid)
 		case leftoverDelete:
 			ready = organization

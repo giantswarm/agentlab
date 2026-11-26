@@ -41,8 +41,9 @@ const (
 	organizationSnapshotBody   = "agentlab organization cleanup control"
 	// organizationDeleteIntentPolicy is the chart's ValidatingAdmissionPolicy
 	// that holds an Organization's delete: an organization applied from git
-	// (it has an Orphaned condition) is erased only once its delete pull
-	// request merged (Orphaned=True, reason DeleteMerged).
+	// (it has an AgentPlatformOrphaned condition) is erased only once its
+	// delete pull request merged (AgentPlatformOrphaned=True, reason
+	// DeleteMerged).
 	organizationDeleteIntentPolicy = "agent-platform-organization-delete-intent"
 	// organizationDeletePullRequestAnnotation is what agent-manager writes in
 	// mode commit on an Organization whose delete pull request it opened: the
@@ -55,8 +56,8 @@ const (
 	// fluxPruneAnnotation is Flux's marker of an intended prune, which the
 	// delete-intent policy asks of every delete.
 	fluxPruneAnnotation = "kustomize.toolkit.fluxcd.io/prune"
-	// The operator's Orphaned condition and its reasons.
-	orphanedCondition    = "Orphaned"
+	// The operator's AgentPlatformOrphaned condition and its reasons.
+	orphanedCondition    = "AgentPlatformOrphaned"
 	orphanedInInventory  = "InInventory"
 	orphanedMissingInGit = "MissingFromGit"
 	orphanedDeleteMerged = "DeleteMerged"
@@ -173,7 +174,7 @@ func (p *organizationsProof) cleanupOrphanedOrganization() (detail string, resul
 	if err := waitOrganizationOrphaned(ctx, p.names[0], true, orphanedMissingInGit); err != nil {
 		return "", err
 	}
-	note("organization %s is Orphaned=True (%s) after its inventory entry was removed; session %s belongs to %s", p.names[0], orphanedMissingInGit, session.GetId(), p.members[0].Email)
+	note("organization %s is AgentPlatformOrphaned=True (%s) after its inventory entry was removed; session %s belongs to %s", p.names[0], orphanedMissingInGit, session.GetId(), p.members[0].Email)
 	// The refusal first: Flux's prune marker alone does not erase an
 	// organization whose file is gone from git without a delete pull request.
 	refused, err := p.deleteRefusedWhileMissingFromGit(ctx, session.GetId())
@@ -189,7 +190,7 @@ func (p *organizationsProof) cleanupOrphanedOrganization() (detail string, resul
 	if err := waitOrganizationOrphaned(ctx, p.names[0], true, orphanedDeleteMerged); err != nil {
 		return "", err
 	}
-	note("organization %s is Orphaned=True (%s) with %s: %s", p.names[0], orphanedDeleteMerged, organizationDeletePullRequestAnnotation, organizationCleanupPullRequest)
+	note("organization %s is AgentPlatformOrphaned=True (%s) with %s: %s", p.names[0], orphanedDeleteMerged, organizationDeletePullRequestAnnotation, organizationCleanupPullRequest)
 	if err := p.deleteProofOrganization(ctx, 0); err != nil {
 		return "", err
 	}
@@ -233,7 +234,7 @@ func (p *organizationsProof) cleanupOrphanedOrganization() (detail string, resul
 	}
 	p.sessions[1] = nil
 	p.retainCleanupDiagnostics = false
-	return fmt.Sprintf("after its delete pull request merged (Orphaned=True, %s), member-owned READY session %s and %d actors removed; both organizations and namespaces gone; snapshot prefix %s empty; control %s survived the first cleanup and was deleted with its own organization", orphanedDeleteMerged, session.GetId(), len(actors), prefix, controlKey), nil
+	return fmt.Sprintf("after its delete pull request merged (AgentPlatformOrphaned=True, %s), member-owned READY session %s and %d actors removed; both organizations and namespaces gone; snapshot prefix %s empty; control %s survived the first cleanup and was deleted with its own organization", orphanedDeleteMerged, session.GetId(), len(actors), prefix, controlKey), nil
 }
 
 // endStateReadTimeout bounds the retries of an end-state read of the cleanup
@@ -401,7 +402,7 @@ func (p *organizationsProof) deleteRefusedWhileMissingFromGit(ctx context.Contex
 	if _, err := resource.Patch(ctx, organization.GetName(), types.MergePatchType, pruneMarkerPatch(uid), metav1.PatchOptions{}); err != nil {
 		return "", err
 	}
-	what := fmt.Sprintf("the lab admin's delete of organization %s (Orphaned=True, %s, %s: enabled)", organization.GetName(), orphanedMissingInGit, fluxPruneAnnotation)
+	what := fmt.Sprintf("the lab admin's delete of organization %s (AgentPlatformOrphaned=True, %s, %s: enabled)", organization.GetName(), orphanedMissingInGit, fluxPruneAnnotation)
 	if err := deleteIntentRefusal(what, resource.Delete(ctx, organization.GetName(), metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &uid}})); err != nil {
 		return "", err
 	}
@@ -513,7 +514,7 @@ func eraseOrganization(ctx context.Context, resource dynamic.ResourceInterface, 
 		if err != nil {
 			return false, err
 		}
-		step := state.erasureStep
+		step := state.erasureStep()
 		if step != last {
 			note("organization %s cleanup: %s", organization.GetName(), step)
 			last = step

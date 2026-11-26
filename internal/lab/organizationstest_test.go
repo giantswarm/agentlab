@@ -90,10 +90,11 @@ func TestOrganizationCheckVerdict(t *testing.T) {
 	}
 }
 
-// The Organization's state: Ready only for its current generation with the
-// Agent Platform's namespace (status.agentPlatform.namespace, not
-// organization-operator's status.namespace); a deleted one names its
-// cleanup step (status.agentPlatform.erasureStep).
+// The Organization's state (the shape of giantswarm/organization-operator#673):
+// AgentPlatformReady only for its current generation with the Agent
+// Platform's namespace (the agentPlatform entry of status.namespaces, not
+// organization-operator's kaas entry or status.namespace); a deleted one
+// names its cleanup step (the reason of AgentPlatformErasing).
 func TestOrganizationReady(t *testing.T) {
 	org := func(generation int64, status map[string]any, deleting bool) *unstructured.Unstructured {
 		u := &unstructured.Unstructured{Object: map[string]any{}}
@@ -109,11 +110,19 @@ func TestOrganizationReady(t *testing.T) {
 		}
 		return u
 	}
-	conditions := func(gen int64, status string) []any {
-		return []any{map[string]any{"type": conditionReady, crStatus: status, fieldReason: "Reconciled", "observedGeneration": gen}}
+	conditions := func(kind string, gen int64, status, reason string) []any {
+		return []any{map[string]any{fieldTypeKey: kind, crStatus: status, fieldReason: reason, "observedGeneration": gen}}
 	}
+	// organization-operator's namespace of the organization, and its entry
+	// of status.namespaces.
+	const kaasNamespace, namespaces = "org-agentlab-a", "namespaces"
+	kaas := map[string]any{nameKey: kaasNamespace, "capability": "kaas"}
 	ready := func(gen int64, status string) map[string]any {
-		return map[string]any{namespaceKey: "org-agentlab-a", "agentPlatform": map[string]any{namespaceKey: orgAlpha}, crConditions: conditions(gen, status)}
+		return map[string]any{
+			namespaceKey: kaasNamespace,
+			namespaces:   []any{kaas, map[string]any{nameKey: orgAlpha, "capability": "agentPlatform"}},
+			crConditions: conditions("AgentPlatformReady", gen, status, "Reconciled"),
+		}
 	}
 	for name, tc := range map[string]struct {
 		obj  *unstructured.Unstructured
@@ -122,10 +131,10 @@ func TestOrganizationReady(t *testing.T) {
 	}{
 		"Ready now":                 {org(2, ready(2, conditionTrue), false), true, ""},
 		"an older generation":       {org(3, ready(2, conditionTrue), false), false, "generation 2"},
-		"not Ready":                 {org(2, ready(2, condFalseStatus), false), false, "Ready=False"},
-		"without a status":          {org(1, nil, false), false, "no Ready condition"},
-		"being deleted":             {org(2, map[string]any{"agentPlatform": map[string]any{"erasureStep": "Sessions"}}, true), false, `"Sessions"`},
-		"Ready without a namespace": {org(1, map[string]any{namespaceKey: "org-agentlab-a", crConditions: conditions(1, conditionTrue)}, false), false, "without status.agentPlatform.namespace"},
+		"not Ready":                 {org(2, ready(2, condFalseStatus), false), false, "AgentPlatformReady=False"},
+		"without a status":          {org(1, nil, false), false, "no AgentPlatformReady condition"},
+		"being deleted":             {org(2, map[string]any{crConditions: conditions("AgentPlatformErasing", 2, conditionTrue, "Sessions")}, true), false, `"Sessions"`},
+		"Ready without a namespace": {org(1, map[string]any{namespaceKey: kaasNamespace, namespaces: []any{kaas}, crConditions: conditions("AgentPlatformReady", 1, conditionTrue, "Reconciled")}, false), false, "without the agentPlatform entry of status.namespaces"},
 	} {
 		state, err := organizationStateFrom(tc.obj)
 		if err != nil {
@@ -157,11 +166,11 @@ func TestOrganizationManifest(t *testing.T) {
 	if got := u.GetAnnotations()["agent-platform.giantswarm.io/display-name"]; got != defaultOrganizationDisplayName {
 		t.Errorf("display name %q", got)
 	}
-	enabled, _, _ := unstructured.NestedBool(obj, "spec", "agentPlatform", "enabled")
-	harnesses, _, _ := unstructured.NestedStringSlice(obj, "spec", "agentPlatform", "harnesses")
-	replicas, _, _ := unstructured.NestedFieldNoCopy(obj, "spec", "agentPlatform", "workers", "replicas")
+	enabled, _, _ := unstructured.NestedBool(obj, "spec", "capabilities", "agentPlatform", "enabled")
+	harnesses, _, _ := unstructured.NestedStringSlice(obj, "spec", "capabilities", "agentPlatform", "harnesses")
+	replicas, _, _ := unstructured.NestedFieldNoCopy(obj, "spec", "capabilities", "agentPlatform", "workers", "replicas")
 	if !enabled || !slices.Equal(harnesses, []string{kagentHarness}) || replicas != 1 {
-		t.Errorf("spec.agentPlatform enabled %v harnesses %v workers %v", enabled, harnesses, replicas)
+		t.Errorf("spec.capabilities.agentPlatform enabled %v harnesses %v workers %v", enabled, harnesses, replicas)
 	}
 	got, _, _ := unstructured.NestedSlice(obj, "spec", "admins")
 	want := []any{map[string]any{beekeeperKeyKind: "Group", nameKey: testPlatformAdminsSubject}, map[string]any{beekeeperKeyKind: "User", nameKey: testAliceSubject}}

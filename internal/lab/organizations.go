@@ -20,9 +20,12 @@ import (
 // Agent Platform organizations on the lab (platform.organizations;
 // giantswarm/giantswarm#38891, #39492). Each organization is an
 // Organization (security.giantswarm.io/v1alpha1, cluster-scoped) with
-// spec.agentPlatform.enabled, which agent-platform-operator reconciles into
-// one organization namespace, agents-<name>, labelled with the organization
-// and its UID, and reports in status.agentPlatform.namespace. The lab has no
+// spec.capabilities.agentPlatform.enabled, which agent-platform-operator
+// reconciles into one organization namespace, agents-<name>, labelled with
+// the organization and its UID, and reports in the agentPlatform entry of
+// status.namespaces (the shape of giantswarm/organization-operator#673; its
+// conditions are AgentPlatformReady, AgentPlatformOrphaned,
+// AgentPlatformErasing and the other AgentPlatform ones). The lab has no
 // KaaS: the agent-platform chart installs the Organization CRD
 // (agentPlatformOrganizations.organizationCRD.enabled), and no
 // organization-operator runs, so status.namespace (its org-<name>) stays
@@ -83,14 +86,17 @@ const (
 	organizationModelConfigKind       = "ModelConfig"
 	organizationModelResolveTimeout   = 2 * time.Minute
 	organizationReasonNotObserved     = "NotObserved"
-	organizationConditionTypeReady    = conditionReady
 	organizationReadyStatusTrue       = conditionTrue
-	// The Organization's status: the Agent Platform's part under
-	// status.agentPlatform, the conditions generic.
-	organizationStatusAgentPlatformKey = "agentPlatform"
-	organizationStatusNamespaceKey     = "namespace"
-	organizationStatusConditionsKey    = "conditions"
-	organizationStatusErasureStepKey   = "erasureStep"
+	// The Agent Platform's conditions of an Organization: Ready for its
+	// current generation, and, while a deleted one is erased, Erasing with
+	// the erasure step as its reason.
+	organizationConditionTypeReady   = "AgentPlatformReady"
+	organizationConditionTypeErasing = "AgentPlatformErasing"
+	// The Agent Platform's blocks of an Organization: its spec under
+	// spec.capabilities, its namespace the entry of status.namespaces with
+	// this capability.
+	organizationSpecCapabilitiesKey     = "capabilities"
+	organizationCapabilityAgentPlatform = "agentPlatform"
 )
 
 // organizationAdmin is one entry of an Organization's spec.admins: a User or
@@ -132,17 +138,25 @@ type organizationState struct {
 	generation      int64
 	conditions      []organizationCondition
 	deleting        bool
-	erasureStep     string
+}
+
+// organizationStatus is the part of an Organization's status the lab reads:
+// one namespace per capability (organization-operator's kaas entry, the
+// operator's agentPlatform entry) and the conditions of every controller.
+type organizationStatus struct {
+	Namespaces []struct {
+		Name       string `json:"name"`
+		Capability string `json:"capability"`
+	} `json:"namespaces"`
+	Conditions []organizationCondition `json:"conditions"`
 }
 
 // organizationStateFrom reads an Organization: the Agent Platform's
-// namespace and erasure step from status.agentPlatform, the conditions from
-// status.conditions.
+// namespace from the agentPlatform entry of status.namespaces, the
+// conditions from status.conditions.
 func organizationStateFrom(obj *unstructured.Unstructured) (organizationState, error) {
 	s := organizationState{name: obj.GetName(), generation: obj.GetGeneration(), deleting: obj.GetDeletionTimestamp() != nil}
-	s.namespace, _, _ = unstructured.NestedString(obj.Object, "status", organizationStatusAgentPlatformKey, organizationStatusNamespaceKey)
-	s.erasureStep, _, _ = unstructured.NestedString(obj.Object, "status", organizationStatusAgentPlatformKey, organizationStatusErasureStepKey)
-	raw, found, _ := unstructured.NestedSlice(obj.Object, "status", organizationStatusConditionsKey)
+	raw, found, _ := unstructured.NestedFieldNoCopy(obj.Object, "status")
 	if !found {
 		return s, nil
 	}
@@ -150,10 +164,26 @@ func organizationStateFrom(obj *unstructured.Unstructured) (organizationState, e
 	if err != nil {
 		return s, err
 	}
-	if err := json.Unmarshal(b, &s.conditions); err != nil {
-		return s, fmt.Errorf("organization %s: status.conditions: %w", s.name, err)
+	var status organizationStatus
+	if err := json.Unmarshal(b, &status); err != nil {
+		return s, fmt.Errorf("organization %s: status: %w", s.name, err)
 	}
+	for _, ns := range status.Namespaces {
+		if ns.Capability == organizationCapabilityAgentPlatform {
+			s.namespace = ns.Name
+		}
+	}
+	s.conditions = status.Conditions
 	return s, nil
+}
+
+// erasureStep is the step of a deleted organization's erasure: the reason
+// of its AgentPlatformErasing condition while that is True, "" otherwise.
+func (s organizationState) erasureStep() string {
+	if c, ok := s.condition(organizationConditionTypeErasing); ok && c.Status == conditionTrue {
+		return c.Reason
+	}
+	return ""
 }
 
 // condition is the named condition, and whether the status has it.
@@ -172,15 +202,15 @@ func (s organizationState) ready() (bool, string) {
 	c, ok := s.condition(organizationConditionTypeReady)
 	switch {
 	case s.deleting:
-		return false, fmt.Sprintf("being deleted (cleanup step %q)", s.erasureStep)
+		return false, fmt.Sprintf("being deleted (cleanup step %q)", s.erasureStep())
 	case !ok:
-		return false, "no Ready condition yet: is agent-platform-operator running?"
+		return false, fmt.Sprintf("no %s condition yet: is agent-platform-operator running?", organizationConditionTypeReady)
 	case c.ObservedGeneration < s.generation:
-		return false, fmt.Sprintf("Ready reports generation %d, the organization is at %d (%s)", c.ObservedGeneration, s.generation, organizationReasonNotObserved)
+		return false, fmt.Sprintf("%s reports generation %d, the organization is at %d (%s)", organizationConditionTypeReady, c.ObservedGeneration, s.generation, organizationReasonNotObserved)
 	case c.Status != organizationReadyStatusTrue:
-		return false, fmt.Sprintf("Ready=%s %s: %s", c.Status, c.Reason, c.Message)
+		return false, fmt.Sprintf("%s=%s %s: %s", organizationConditionTypeReady, c.Status, c.Reason, c.Message)
 	case s.namespace == "":
-		return false, "Ready without status.agentPlatform.namespace"
+		return false, fmt.Sprintf("%s without the %s entry of status.namespaces", organizationConditionTypeReady, organizationCapabilityAgentPlatform)
 	}
 	return true, ""
 }
@@ -205,11 +235,12 @@ spec:
 			fmt.Fprintf(&b, "    - kind: %s\n      name: %q\n", a.Kind, a.Name)
 		}
 	}
-	fmt.Fprintf(&b, `  agentPlatform:
-    enabled: true
-    harnesses: [%s]
-    workers:
-      replicas: %d
+	fmt.Fprintf(&b, `  capabilities:
+    agentPlatform:
+      enabled: true
+      harnesses: [%s]
+      workers:
+        replicas: %d
 `, organizationHarness, organizationWorkerReplicas)
 	return b.String()
 }
