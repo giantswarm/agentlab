@@ -304,7 +304,7 @@ agentlab platform-test   # headless Dex -> muster -> mcp-kubernetes proof
 agentlab polex-test      # the chart's Kyverno PolicyExceptions dry-run against the lab's Kyverno (--chart-version <release> for a candidate)
 agentlab models-test     # managed models: 401 -> pull -> ModelConfig -> dry runs, gitops_owned -> agent turn -> MCP -> unload -> delete (on lmstudio: the 501 refusal -> unwire, U23)
 agentlab serving-test    # platform.serving: llm-d controller + models Gateway up -> 401 -> the lab preset fits the node -> load -> Ready on the CPU runtime -> ModelConfig -> a completion through the models Gateway -> agent turn -> unload
-agentlab vm-manager-test # the vm-manager pod as the person: 401 anonymous -> tools via muster -> create_vm -> ready -> attestation -> delete_vm
+agentlab vm-manager-test # the vm-manager pod as the person: 401 anonymous -> tools via muster -> create_vm -> ready -> attestation -> IPE in force (signed image) -> delete_vm
 agentlab klaus-gateway-test # Swarmgeist on the host against the edge, and with platform.klausGateway the in-cluster component: the OBO link store in a Secret across a pod loss
 agentlab klaus-gateway-test --part signin  # a sign-in a turn needs, decided from Slack (Not now, a typed no, stop, the Sign in click resuming with accept, its retry held in muster's sign-in wait for --hold) and the portal's answer route; an answer to a request the other surface already answered is refused on both
 agentlab klaus-gateway-test --part refresh  # a real Slack sign-in through muster, then two replicas refreshing the same link at once: the person stays signed in and muster logs no refresh token reuse
