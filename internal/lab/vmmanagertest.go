@@ -572,33 +572,41 @@ type vmExecResult struct {
 	ExitCode int    `json:"exitCode"`
 }
 
-// proveVMIPE reads the guest's IPE state as root over exec_vm. A signed
-// image whose policy cannot be loaded stops at PID 1 and never reaches
-// ready; this catches the guest that booted with the policy inactive or the
-// LSM permissive.
+// ipeFlags are the guest's IPE securityfs flags the proof reads, each with
+// what its 1 means.
+var ipeFlags = []struct{ file, means string }{
+	{ipeActiveFile, "the policy active"},
+	{ipeEnforceFile, "the LSM enforcing"},
+}
+
+// proveVMIPE reads the guest's IPE state as root over exec_vm, one flag per
+// call: the kernel writes each without a newline, so one `cat` of both
+// prints them run together. A signed image whose policy cannot be loaded
+// stops at PID 1 and never reaches ready; this catches the guest that booted
+// with the policy inactive or the LSM permissive.
 func proveVMIPE(session *musterSession, prefix, id string) error {
-	var res vmExecResult
-	if err := callVMTool(session, prefix+vmToolExecVM, map[string]any{
-		"id": id, "command": []string{"cat", ipeActiveFile, ipeEnforceFile},
-	}, &res); err != nil {
-		return err
+	for _, flag := range ipeFlags {
+		var res vmExecResult
+		if err := callVMTool(session, prefix+vmToolExecVM, map[string]any{
+			"id": id, "command": []string{"cat", flag.file},
+		}, &res); err != nil {
+			return err
+		}
+		if err := checkIPEFlag(flag.file, flag.means, res); err != nil {
+			return err
+		}
+		note("%s: 1 (%s)", flag.file, flag.means)
 	}
-	if err := checkIPEInForce(res); err != nil {
-		return err
-	}
-	note("%s: 1, %s: 1", ipeActiveFile, ipeEnforceFile)
 	return nil
 }
 
-// checkIPEInForce judges `cat <active> <enforce>` in the guest: both files
-// read 1.
-func checkIPEInForce(res vmExecResult) error {
+// checkIPEFlag judges `cat <file>` of an IPE flag in the guest: it reads 1.
+func checkIPEFlag(file, means string, res vmExecResult) error {
 	if res.ExitCode != 0 {
-		return fmt.Errorf("cat %s %s in the guest exited %d: %s", ipeActiveFile, ipeEnforceFile, res.ExitCode, strings.TrimSpace(res.Stderr))
+		return fmt.Errorf("cat %s in the guest exited %d: %s", file, res.ExitCode, strings.TrimSpace(res.Stderr))
 	}
-	got := strings.Fields(res.Stdout)
-	if len(got) != 2 || got[0] != "1" || got[1] != "1" {
-		return fmt.Errorf("IPE is not in force in the guest: %s and %s read %q, want 1 and 1 (the policy active, the LSM enforcing)", ipeActiveFile, ipeEnforceFile, strings.TrimSpace(res.Stdout))
+	if got := strings.TrimSpace(res.Stdout); got != "1" {
+		return fmt.Errorf("IPE is not in force in the guest: %s reads %q, want 1 (%s)", file, got, means)
 	}
 	return nil
 }

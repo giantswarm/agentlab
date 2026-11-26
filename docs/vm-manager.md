@@ -184,7 +184,8 @@ agentlab vm-manager-test [email] [--skip-vm] [--vm-timeout 6m]
    and the proof says so); on a signed image (one whose artifact carries its
    certificate, `<id>_<version>.crt`, which `create_vm` enrolls into the VM's
    UEFI db — vm-manager 0.28 and later) `exec_vm` reads the guest's IPE state
-   as root: `/sys/kernel/security/ipe/policies/giantswarm-vm/active` and
+   as root, one file per call (the kernel writes each flag without a newline):
+   `/sys/kernel/security/ipe/policies/giantswarm-vm/active` and
    `/sys/kernel/security/ipe/enforce` both `1`; the last console lines; `delete_vm`, and
    `list_vms` without it. A failed boot carries vm-manager's `lastError` and
    the console tail. A leftover of an interrupted run
