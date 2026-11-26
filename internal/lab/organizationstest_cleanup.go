@@ -438,9 +438,7 @@ func deleteIntentRefusal(what string, err error) error {
 	switch {
 	case err == nil:
 		return fmt.Errorf("%s was admitted; the ValidatingAdmissionPolicy %s refuses it until the delete pull request merged", what, organizationDeleteIntentPolicy)
-	case (apierrors.IsForbidden(err) || apierrors.IsInvalid(err)) &&
-		strings.Contains(err.Error(), validatingAdmissionPolicy+" '"+organizationDeleteIntentPolicy+"'") &&
-		strings.Contains(err.Error(), orphanedDeleteMerged):
+	case deniedByPolicy(err, organizationDeleteIntentPolicy) && strings.Contains(err.Error(), orphanedDeleteMerged):
 		return nil
 	}
 	return fmt.Errorf("%s failed, but not as the refusal of the ValidatingAdmissionPolicy %s for an organization without a merged delete pull request: %w", what, organizationDeleteIntentPolicy, err)

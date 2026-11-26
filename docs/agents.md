@@ -443,6 +443,11 @@ yet. To run the prototype:
    [Bring your own certificate](tls.md#bring-your-own-certificate).
 5. `agentlab platform`, then `agentlab organizations-test`.
 
+`organizations-test --part admins` also proves that nobody switches an
+organization's Agent Platform off: the chart's policy
+`agent-platform-organization-switch-off` refuses the update (decision D10;
+see [The admins part](#the-admins-part)).
+
 #### The tools take the organization's name
 
 From giantswarm/agent-manager#475 at 31a58c6 (giantswarm/giantswarm#39503),
@@ -833,6 +838,13 @@ outsider. The verdicts:
 - alice, who may not create `Organization`s, is refused
   `create_organization`, and no organization of that name exists
   afterwards;
+- the lab's admin (`cluster-admin`) sends an update that sets
+  `spec.agentPlatform.enabled` of `agentlab-admins-a` (Ready) to false: the
+  chart's ValidatingAdmissionPolicy `agent-platform-organization-switch-off`
+  refuses it, while an update of `spec.agentPlatform.workers.replicas` that
+  keeps the switch on is admitted (dry runs; decision D10 of
+  giantswarm/giantswarm#39492). A chart without the policy fails the check,
+  which then names the policy and giantswarm/agent-platform#1489;
 - `update_organization` replaces the admin group of `agentlab-admins-a` with
   alice by name: `organization-admins` follows;
 - `update_organization` empties the admins of `agentlab-admins-b`:
