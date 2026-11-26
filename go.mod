@@ -15,7 +15,7 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.48.1
 	github.com/aws/aws-sdk-go-v2/credentials v1.21.4
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.116.1
-	github.com/charmbracelet/x/ansi v0.11.10
+	github.com/charmbracelet/x/ansi v0.12.0
 	github.com/fluxcd/cli-utils v1.4.0
 	github.com/giantswarm/go-selfupdate v1.7.7
 	github.com/giantswarm/klaus-gateway v1.21.0
