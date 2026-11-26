@@ -16,7 +16,10 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+	authenticationv1 "k8s.io/api/authentication/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -46,7 +49,18 @@ const (
 	// urlKey and dbClientKey are app-config keys of the generated overlay.
 	urlKey      = "url"
 	dbClientKey = "client"
+	// portalServiceAccount is the in-cluster portal's ServiceAccount (the
+	// backstage chart's name), which the platform binds to muster's
+	// muster-approval-decider; musterWorkloadTokenFile is where the local
+	// run keeps a token of it for audience muster.
+	portalServiceAccount    = "backstage"
+	musterWorkloadTokenFile = "muster-workload-token"
+	musterWorkloadAudience  = musterValues
 )
+
+// musterWorkloadTokenTTL is how long the local portal's workload token for
+// muster lasts: a working day; every `agentlab portal dev` mints a new one.
+const musterWorkloadTokenTTL = 12 * time.Hour
 
 // backstageFrontendURL is where `yarn start` serves the frontend, on the port
 // backstage.localDevPort validation holds free (config.BackstageFrontendPort).
@@ -270,7 +284,27 @@ func backstageDevInputs(ctx context.Context, cfg *config.Config) ([]devFile, []s
 	if len(caData) == 0 {
 		return nil, nil, fmt.Errorf("%s carries no cluster CA: the generated app-config cannot pin the apiserver", labKubeconfig())
 	}
-	overlay, err := backstageDevOverlay(cfg, k.cfg.Host, caData, users)
+	// muster takes the portal's inline approval decisions and sign-in
+	// handoff requests only with the portal backend's own workload token
+	// beside the person's (muster-approval-decider). The local run stands in
+	// for the lab's in-cluster portal, so it gets a token of that portal's
+	// ServiceAccount, minted here (lab only: the lab's admin kubeconfig).
+	workloadToken := ""
+	token, err := mintPortalWorkloadToken(ctx, k.clientset)
+	switch {
+	case err != nil:
+		return nil, nil, err
+	case token == nil:
+		note("the lab has no ServiceAccount %s/%s: the local portal sends muster no workload token, so approvals open muster's own pages", platformNamespace, portalServiceAccount)
+	default:
+		path, err := filepath.Abs(filepath.Join(StateDir, backstageDevDir, musterWorkloadTokenFile))
+		if err != nil {
+			return nil, nil, err
+		}
+		files = append(files, devFile{name: musterWorkloadTokenFile, data: token})
+		workloadToken = path
+	}
+	overlay, err := backstageDevOverlay(cfg, k.cfg.Host, caData, users, workloadToken)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -295,11 +329,31 @@ func backstageDevInputs(ctx context.Context, cfg *config.Config) ([]devFile, []s
 	return files, env, nil
 }
 
+// mintPortalWorkloadToken asks the lab for a token of the in-cluster portal's
+// ServiceAccount for audience muster (TokenRequest), nil when the lab has no
+// such ServiceAccount.
+func mintPortalWorkloadToken(ctx context.Context, cs kubernetes.Interface) ([]byte, error) {
+	ttl := int64(musterWorkloadTokenTTL.Seconds())
+	got, err := cs.CoreV1().ServiceAccounts(platformNamespace).CreateToken(ctx, portalServiceAccount, &authenticationv1.TokenRequest{
+		Spec: authenticationv1.TokenRequestSpec{Audiences: []string{musterWorkloadAudience}, ExpirationSeconds: &ttl},
+	}, metav1.CreateOptions{})
+	switch {
+	case apierrors.IsNotFound(err):
+		return nil, nil
+	case err != nil:
+		return nil, fmt.Errorf("minting the portal's workload token for muster (%s/%s): %w", platformNamespace, portalServiceAccount, err)
+	case got.Status.Token == "":
+		return nil, fmt.Errorf("minting the portal's workload token for muster (%s/%s): the API server answered no token", platformNamespace, portalServiceAccount)
+	}
+	return []byte(got.Status.Token), nil
+}
+
 // backstageDevOverlay is the app-config the local run layers last: the local
-// URLs, and every in-cluster address of the chart's app-config swapped for
-// the one this machine reaches — the apiserver on its published port, muster
-// and the kagent API through the edge.
-func backstageDevOverlay(cfg *config.Config, apiserver string, caData []byte, usersFile string) ([]byte, error) {
+// URLs, every in-cluster address of the chart's app-config swapped for the
+// one this machine reaches — the apiserver on its published port, muster and
+// the kagent API through the edge — and, when one was minted, the file of
+// the portal's workload token for muster (muster.workloadTokenFile).
+func backstageDevOverlay(cfg *config.Config, apiserver string, caData []byte, usersFile, workloadTokenFile string) ([]byte, error) {
 	backend := cfg.BackstageLocalDevURL()
 	overlay := map[string]any{
 		"app": map[string]any{"baseUrl": backstageFrontendURL},
@@ -335,13 +389,7 @@ func backstageDevOverlay(cfg *config.Config, apiserver string, caData []byte, us
 				}},
 			}},
 		},
-		musterValues: map[string]any{
-			"installations": []any{map[string]any{
-				nameKey:        platformNamespace,
-				urlKey:         cfg.MusterBaseURL() + "/mcp",
-				"authProvider": "oidc-agent-platform",
-			}},
-		},
+		musterValues: musterOverlay(cfg, workloadTokenFile),
 		"agentPlatform": map[string]any{
 			"kagent": map[string]any{
 				"installations": map[string]any{
@@ -355,6 +403,22 @@ func backstageDevOverlay(cfg *config.Config, apiserver string, caData []byte, us
 		return nil, err
 	}
 	return append([]byte("# Generated by `agentlab portal dev` on every start.\n"), raw...), nil
+}
+
+// musterOverlay is the local portal's muster block: the lab's muster through
+// the edge, and the workload token file when there is one.
+func musterOverlay(cfg *config.Config, workloadTokenFile string) map[string]any {
+	muster := map[string]any{
+		"installations": []any{map[string]any{
+			nameKey:        platformNamespace,
+			urlKey:         cfg.MusterBaseURL() + "/mcp",
+			"authProvider": "oidc-agent-platform",
+		}},
+	}
+	if workloadTokenFile != "" {
+		muster["workloadTokenFile"] = workloadTokenFile
+	}
+	return muster
 }
 
 // BackstageBuild builds the checkout's image as its CI does, records it as

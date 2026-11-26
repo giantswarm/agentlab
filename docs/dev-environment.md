@@ -107,6 +107,20 @@ key) run `agentlab platform` once; Dex alone is re-applied by `portal dev`. With
 `Ignoring a return not in oauth.mcpClient.postLoginRedirectAllowlist` and shows
 its own "answer recorded" page.
 
+**Deciding approvals inline.** muster takes the portal's inline approval
+decisions and sign-in handoff requests only with the portal backend's own
+workload token beside the person's: the in-cluster portal's projected
+ServiceAccount token (audience `muster`), which muster reviews for verb
+`decide` on `toolapprovals` (the chart binds the portal's ServiceAccount to
+`muster-approval-decider`). The local backend has no projected token, so every
+`portal dev` mints one for the lab portal's ServiceAccount
+(`agent-platform/backstage`, TokenRequest, audience `muster`, 12 hours), writes
+it to `state/backstage-dev/muster-workload-token` (mode 0600) and points the
+backend's `muster.workloadTokenFile` at it. Lab only: it uses the lab's admin
+kubeconfig and stands in for the lab's own portal. Without that ServiceAccount
+(no portal in the lab) it says so and approvals open muster's own pages.
+Restart `portal dev` after 12 hours.
+
 **Limits.**
 
 - The database is in memory, so every backend restart starts it empty: the

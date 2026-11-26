@@ -312,9 +312,13 @@ signs in with a client of its own, `agent-platform-portal` (secret
 `agent-platform/agent-platform-secrets`; `agentlab portal dev` passes it as
 `AGENT_PLATFORM_PORTAL_OIDC_CLIENT_SECRET`). Its only redirect URIs are the
 portal's (in-cluster and `portal dev`), so no CLI helper or proof can sign in
-with it, and muster trusts it alone for the sign-in handoff
-(`approval.handoffClients`): a click on *Open* on an approval or connector
-sign-in prompt in portal chat opens muster's page signed in. The portal
+with it, and muster trusts it alone for the sign-in handoff and inline
+decisions (`approval.trustedClients`, formerly `approval.handoffClients`),
+together with the portal backend's own ServiceAccount token (audience
+`muster`; `agentlab portal dev` mints one for the lab portal's ServiceAccount,
+see [dev-environment.md](dev-environment.md)): a click on *Open* on a
+connector sign-in prompt in portal chat opens muster's page signed in, after
+muster's own *Connect <connector> as <person>?* confirmation. The portal
 requests the `agent-platform`, `dex-k8s-authenticator` and `kubernetes`
 audiences, so `agent-platform`, `dex-k8s-authenticator` and `kubernetes` list
 `agent-platform-portal` under `trustedPeers`, and every consumer accepts its
