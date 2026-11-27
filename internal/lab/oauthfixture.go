@@ -325,6 +325,11 @@ func completeSignInVia(transport http.RoundTripper, challengeURL string, user *c
 	}
 	body, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
+	// muster asks before it lets a client it has not seen the person approve
+	// (a CIMD client such as klaus-gateway's); the person allows it.
+	if resp, body, err = approveConsentPage(browser, resp, body); err != nil {
+		return err
+	}
 	landed := resp.Request.URL.String()
 	if local := localConnectorLink(resp.Request.URL, body); resp.StatusCode == http.StatusOK && local != "" && !strings.Contains(landed, "/auth/local") {
 		// A Dex with more than one connector (platform.githubSignIn) shows
@@ -365,6 +370,43 @@ func completeSignInVia(transport http.RoundTripper, challengeURL string, user *c
 			where, final, resp.StatusCode, excerpt(string(body), 300))
 	}
 	return nil
+}
+
+// approveConsentPage answers an authorization server's consent page the way
+// the person does: the page's POST form carrying a consent_id, submitted with
+// decision=approve and the form's own origin, redirects followed. Any other
+// page is returned as it came.
+func approveConsentPage(browser *http.Client, resp *http.Response, body []byte) (*http.Response, []byte, error) {
+	if resp.StatusCode != http.StatusOK {
+		return resp, body, nil
+	}
+	for _, form := range htmlForms(body) {
+		consentID := form.fields.Get("consent_id")
+		if form.method != htmlPost || consentID == "" {
+			continue
+		}
+		ref, err := url.Parse(form.action)
+		if err != nil {
+			return nil, nil, fmt.Errorf("the consent page at %s has an unreadable form action %q: %w", resp.Request.URL, form.action, err)
+		}
+		action := resp.Request.URL.ResolveReference(ref)
+		request, err := http.NewRequest(http.MethodPost, action.String(), strings.NewReader(url.Values{
+			"consent_id": {consentID}, consentDecisionParam: {consentApprove},
+		}.Encode()))
+		if err != nil {
+			return nil, nil, err
+		}
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		request.Header.Set("Origin", action.Scheme+"://"+action.Host)
+		approved, err := browser.Do(request)
+		if err != nil {
+			return nil, nil, fmt.Errorf("approving the consent page at %s: %w", action, err)
+		}
+		approvedBody, _ := io.ReadAll(approved.Body)
+		_ = approved.Body.Close()
+		return approved, approvedBody, nil
+	}
+	return resp, body, nil
 }
 
 // localConnectorLinkPattern is the local connector's link on Dex's connector
