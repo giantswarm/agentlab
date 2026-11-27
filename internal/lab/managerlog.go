@@ -1,25 +1,23 @@
 package lab
 
-import (
-	"strconv"
-	"strings"
-)
+import "strings"
 
-// managerLoggedUser reports whether a text-format log line of a manager names
-// the person: user.subject=<sub> from mcp-oauth's UserInfo, or caller=<email>
-// in releases that log the caller's email.
-func managerLoggedUser(line, email, subject string) bool {
-	line += " "
-	if subject != "" && (strings.Contains(line, " user.subject="+subject+" ") || strings.Contains(line, " user.subject="+strconv.Quote(subject)+" ")) {
-		return true
+// managerLoggedUser matches the issuer and subject together. The caller
+// field identifies the person only when structured identity is absent.
+func managerLoggedUser(line, email, issuer, subject string) bool {
+	fields := logfmtFields(line)
+	_, hasIssuer := fields["user.issuer"]
+	_, hasSubject := fields["user.subject"]
+	if hasIssuer || hasSubject {
+		return issuer != "" && subject != "" && fields["user.issuer"] == issuer && fields["user.subject"] == subject
 	}
-	return email != "" && strings.Contains(line, " caller="+email+" ")
+	return email != "" && fields["caller"] == email
 }
 
 // managerLogNamesUser reports whether any line of the log names the person.
-func managerLogNamesUser(logs, email, subject string) bool {
-	for _, line := range strings.Split(logs, "\n") {
-		if managerLoggedUser(line, email, subject) {
+func managerLogNamesUser(logs, email, issuer, subject string) bool {
+	for line := range strings.SplitSeq(logs, "\n") {
+		if managerLoggedUser(line, email, issuer, subject) {
 			return true
 		}
 	}

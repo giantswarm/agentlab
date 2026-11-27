@@ -115,7 +115,7 @@ func proveModelsPage(cfg *config.Config, primary, viewer *portalSession) ([]stri
 	if err := musterAttributes(started, email, subject, len(order)); err != nil {
 		return verdicts, err
 	}
-	if err := modelManagerLoggedWrites(started, email, subject, model.Name); err != nil {
+	if err := modelManagerLoggedWrites(started, email, stringAt(primary.claims, "iss"), subject, model.Name); err != nil {
 		return verdicts, err
 	}
 	note("muster attributes the calls to %s; model-manager logged the load and the unload as %s", email, email)
@@ -217,7 +217,7 @@ func musterAttributes(since time.Time, email, subject string, n int) error {
 
 // modelManagerLoggedWrites checks model-manager's log for the load and the
 // unload of the model attributed to the person since the instant.
-func modelManagerLoggedWrites(since time.Time, email, subject, model string) error {
+func modelManagerLoggedWrites(since time.Time, email, issuer, subject, model string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	defer cancel()
 	logs, err := podLogs(ctx, platformNamespace, "deploy/"+modelManagerMCPServer, modelManagerMCPServer, time.Since(since)+5*time.Second)
@@ -225,8 +225,8 @@ func modelManagerLoggedWrites(since time.Time, email, subject, model string) err
 		return fmt.Errorf("reading model-manager's log: %w", err)
 	}
 	for _, msg := range []string{modelManagerLoggedLoad, modelManagerLoggedUnload} {
-		if !loggedFor(logs, msg, model, email, subject) {
-			return fmt.Errorf("model-manager's log carries no `%s model=%s` line naming %s (user.subject=%s, or caller=%s)", msg, model, email, subject, email)
+		if !loggedFor(logs, msg, model, email, issuer, subject) {
+			return fmt.Errorf("model-manager's log carries no `%s model=%s` line naming %s (user.issuer=%s user.subject=%s, or caller=%s)", msg, model, email, issuer, subject, email)
 		}
 	}
 	return nil
@@ -234,9 +234,9 @@ func modelManagerLoggedWrites(since time.Time, email, subject, model string) err
 
 // loggedFor reports whether a line of a text-format log carries the message,
 // the model and the person.
-func loggedFor(logs, msg, model, email, subject string) bool {
-	for _, line := range strings.Split(logs, "\n") {
-		if strings.Contains(line, msg) && strings.Contains(line, " model="+model+" ") && managerLoggedUser(line, email, subject) {
+func loggedFor(logs, msg, model, email, issuer, subject string) bool {
+	for line := range strings.SplitSeq(logs, "\n") {
+		if strings.Contains(line, msg) && strings.Contains(line, " model="+model+" ") && managerLoggedUser(line, email, issuer, subject) {
 			return true
 		}
 	}

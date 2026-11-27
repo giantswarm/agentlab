@@ -270,8 +270,9 @@ func AgentsTest(cfg *config.Config, email string, opts AgentsTestOptions) error 
 	if err != nil {
 		return err
 	}
-	if subject := stringAt(claims, claimSubject); !managerLogNamesUser(events, user.Email, subject) {
-		return fmt.Errorf("agent-manager's log carries no line naming %s (user.subject=%s, or caller=%s) for the create", user.Email, subject, user.Email)
+	issuer, subject := stringAt(claims, "iss"), stringAt(claims, claimSubject)
+	if !managerLogNamesUser(events, user.Email, issuer, subject) {
+		return fmt.Errorf("agent-manager's log carries no line naming %s (user.issuer=%s user.subject=%s, or caller=%s) for the create", user.Email, issuer, subject, user.Email)
 	}
 	note("HelmRelease managers %q, chartRef OCIRepository/%s, serviceAccountName %q, values.toolset %v, agent.harness %s, skill %s @ %.12s; OCIRepository %s -> %s @ %s (managers %q); agent-manager logged the write as %s",
 		release.managers, release.Spec.ChartRef.Name, release.Spec.ServiceAccountName, toolset, kagentHarness, fixture.name(), fixture.Commit, agentChartOCIRepository, chartURL, chartRange, sourceManagers, user.Email)

@@ -318,15 +318,15 @@ func portalAgentStatus(ps *portalSession, name, want string, timeout time.Durati
 // agentManagerLoggedCaller checks agent-manager's log for a write it attributed
 // to the person since the given duration — the identity the muster hop
 // forwarded, as the service logs it.
-func agentManagerLoggedCaller(email, subject string, since time.Duration) error {
+func agentManagerLoggedCaller(email, issuer, subject string, since time.Duration) error {
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	defer cancel()
 	events, err := podLogs(ctx, platformNamespace, "deploy/"+agentManagerMCPServer, agentManagerMCPServer, since+5*time.Second)
 	if err != nil {
 		return fmt.Errorf("reading agent-manager's log: %w", err)
 	}
-	if !managerLogNamesUser(events, email, subject) {
-		return fmt.Errorf("agent-manager's log carries no line naming %s (user.subject=%s, or caller=%s) for the write", email, subject, email)
+	if !managerLogNamesUser(events, email, issuer, subject) {
+		return fmt.Errorf("agent-manager's log carries no line naming %s (user.issuer=%s user.subject=%s, or caller=%s) for the write", email, issuer, subject, email)
 	}
 	return nil
 }
@@ -428,7 +428,7 @@ func proveCreatePath(primary, viewer *portalSession) (agentSpec, *agentTemplate,
 	if !slices.Contains(release.managers, agentManagerFieldManager) {
 		return fail(fmt.Errorf("HelmRelease %s has no %s field manager: %q", spec.Name, agentManagerFieldManager, release.managers))
 	}
-	if err := agentManagerLoggedCaller(email, stringAt(primary.claims, claimSubject), time.Since(started)); err != nil {
+	if err := agentManagerLoggedCaller(email, stringAt(primary.claims, "iss"), stringAt(primary.claims, claimSubject), time.Since(started)); err != nil {
 		return fail(err)
 	}
 	template := readiness.template
