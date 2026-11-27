@@ -796,15 +796,35 @@ construction: an installation's edge serves a publicly trusted certificate.
 the image on the host's network. Docker Desktop leaves host networking off by
 default, so the Mac has no route to the container's loopback ports and the
 readiness probe times out with an empty log; a darwin build of the gateway
-cannot verify the lab CA either (`SSL_CERT_FILE` is not read on macOS, and the
-system verifier calls the lab certificate not standards compliant). **Fix:**
+cannot verify the lab CA either: `SSL_CERT_FILE` is not read on macOS (a
+module whose `go` directive is below 1.27), so it verifies against the system
+trust store. (The system verifier's "not standards compliant" seen on
+2026-10-19 was a leaf valid for 825 days and two hours, which `certs.go`
+mints within the cap since 1936eeb.) The proofs whose gateway calls muster
+refuse such a binary before they start unless the lab CA is in the system
+trust store (`hostGatewayTrustProblem`). **Fix:**
 on darwin, with the image, the container joins the `kind` network, its two
 ports are published on 127.0.0.1, `--add-host` names the edge's and muster's
 public hostnames as the node's address, the target and muster are the edge's
 NodePort (`config.GatewayNodePort`) under those names (TLS verifies as on the
-host), and the fake Slack Web API is `host.docker.internal`. Linux keeps the
-host network. The bridged shape is `organizations-test`'s only; `klaus-gateway-test`
-is unchanged.
+host), the fake Slack Web API is `host.docker.internal`, and the gateway's
+kubeconfig names the API server as the control-plane node's port 6443 on that
+network (U52). Linux keeps the host network. The bridged shape is
+`organizations-test`'s only; `klaus-gateway-test` is unchanged.
+
+### U52. `organizationstest_slack.go`: the Slack part's gateway reads the API server with the lab's admin kubeconfig — ACCEPTED
+klaus-gateway names an organization's tenant by the label
+`agent-platform.giantswarm.io/organization` on the organization's namespace,
+which it lists and watches through the API server (`pkg/orgnamespaces`);
+without a Kubernetes client it writes `namespace <namespace>`, and the
+proof's S1, S2 and S4 fail. On an installation the gateway's ServiceAccount
+gives it that access. **Fix:** the proof gives its gateway the lab's admin
+kubeconfig in each shape, explicitly also to a binary (never the environment
+agentlab runs in): as it is on the host, and with its server moved to the
+control-plane node on the `kind` network (U35). Lab-only: the admin
+kubeconfig is more than the ServiceAccount has; a narrower credential is not
+worth a ServiceAccount and a token per run while the proof judges the
+wording, not the gateway's RBAC.
 
 ### U36. `organizationstest_slack.go`: an allowed collaborator sends again after the replay note — BLOCKED UPSTREAM
 After the thread's person allows a collaborator who may not use the thread's

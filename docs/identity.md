@@ -27,9 +27,10 @@ group:
 | `alice@lab.local` | `tenant-a` | the platform tenant; with `organizations-test`, `agent-platform:editor` in the organization `agentlab-a` |
 | `bob@lab.local`   | `tenant-b` | the platform tenant; with `organizations-test`, `agent-platform:editor` in the organization `agentlab-b` |
 
-The default organization `agentlab-organizations/default`, which `agentlab
-up` keeps ([Organizations](agents.md#organizations)), binds `platform-admins`
-as its first admins and `developers` as its editors.
+The default `Organization` `default`, which `agentlab up` keeps
+([Organizations](agents.md#organizations)), has `platform-admins` in
+`spec.admins` (agent-platform-operator binds them as its admins) and binds
+`developers` as its editors.
 
 Users are fully configurable: `agentlab configure` lets you keep, edit, remove
 and add users, with per-user passwords and group membership. The **groups are
@@ -49,8 +50,9 @@ giantswarm/giantswarm#36698 and #38891):
 
 - **A tenant is a namespace.** The platform tenant is `kagent` (until
   giantswarm/agent-manager#166); an organization's tenant is the namespace
-  agent-platform-operator keeps for an `AgentPlatformOrganization`,
-  `agents-<name>-<random>`, labelled `agent-platform.giantswarm.io/organization`.
+  agent-platform-operator keeps for an `Organization` with the Agent
+  Platform enabled, `agents-<name>`, labelled
+  `agent-platform.giantswarm.io/organization`.
 - **Kubernetes RBAC decides, at the kagent controller.** The chart's three
   ClusterRoles are bound per tenant: `agent-platform:user` (see the agents,
   start conversations), `agent-platform:editor` (also write agents),

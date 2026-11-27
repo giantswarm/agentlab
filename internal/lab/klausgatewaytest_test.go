@@ -255,7 +255,10 @@ func TestGatewayProcessExitsBeforeReady(t *testing.T) {
 }
 
 // fakeDockerScript stands in for the docker CLI in $FAKE_DOCKER_DIR: the
-// image is cached once pulled (`image inspect` fails before); `run` pulls an
+// image is cached once pulled (`image inspect` fails before), with
+// $FAKE_AMD64_ONLY (the engine's error) only a pull for --platform
+// linux/amd64 finds it, and with
+// $FAKE_PULL_UNREACHABLE no pull reaches the registry; `run` pulls an
 // uncached image itself, taking $FAKE_PULL seconds, then creates the
 // container (the file container), marks it ready unless $FAKE_NEVER_READY,
 // and runs until killed; `stop` ends it unless $FAKE_STOP_MISSES (the client
@@ -265,7 +268,10 @@ d="$FAKE_DOCKER_DIR"
 echo "$*" >> "$d/calls"
 case "$1" in
 image) [ -e "$d/pulled" ] ;;
-pull) sleep "$FAKE_PULL"; touch "$d/pulled" ;;
+pull)
+  [ -z "$FAKE_PULL_UNREACHABLE" ] || { echo "dial tcp: connection refused" >&2; exit 1; }
+  case "$*" in *"--platform linux/amd64"*) ;; *) [ -z "$FAKE_AMD64_ONLY" ] || { echo "$FAKE_AMD64_ONLY" >&2; exit 1; } ;; esac
+  sleep "$FAKE_PULL"; touch "$d/pulled" ;;
 run)
   [ -e "$d/pulled" ] || { sleep "$FAKE_PULL"; touch "$d/pulled"; }
   echo $$ > "$d/pid"; touch "$d/container"
@@ -277,6 +283,9 @@ stop)
 rm) rm -f "$d/container" "$d/ready" ;;
 esac
 `
+
+// fakePullEnv is the seconds fakeDockerScript's pull takes.
+const fakePullEnv = "FAKE_PULL"
 
 // fakeDockerGateway puts fakeDockerScript first on PATH and serves the
 // gateway's readiness on an admin port of its own, 200 while the fake's
@@ -309,7 +318,7 @@ func fakeDockerGateway(t *testing.T, env map[string]string) (string, *gatewayPro
 // TestGatewayImagePullNotCounted: an uncached image whose pull outlasts the
 // readiness wait still starts — the pull happens before the wait begins.
 func TestGatewayImagePullNotCounted(t *testing.T) {
-	dir, g := fakeDockerGateway(t, map[string]string{"FAKE_PULL": "2"})
+	dir, g := fakeDockerGateway(t, map[string]string{fakePullEnv: "2"})
 	if err := g.start(); err != nil {
 		t.Fatalf("start() with an uncached image = %v", err)
 	}
@@ -319,10 +328,81 @@ func TestGatewayImagePullNotCounted(t *testing.T) {
 	}
 }
 
+// TestGatewayImagePullFallsBackToAmd64: a dev image built for linux/amd64
+// alone, which the host's own platform finds no manifest for, is pulled for
+// linux/amd64 and starts.
+func TestGatewayImagePullFallsBackToAmd64(t *testing.T) {
+	for engine, msg := range map[string]string{
+		"Docker":                    "no matching manifest for linux/arm64/v8 in the manifest list entries",
+		"Docker's containerd store": "no match for platform in manifest: not found",
+		"Podman, an OCI index":      "choosing an image from manifest list docker://x: no image found in image index for architecture arm64",
+		"Podman, a manifest list":   "no image found in manifest list for architecture arm64, variant v8, OS linux",
+	} {
+		t.Run(engine, func(t *testing.T) {
+			dir, g := fakeDockerGateway(t, map[string]string{fakePullEnv: "0", "FAKE_AMD64_ONLY": msg})
+			if err := g.start(); err != nil {
+				t.Fatalf("start() with an amd64-only image = %v", err)
+			}
+			calls, _ := os.ReadFile(filepath.Join(dir, "calls")) // #nosec G304 -- the test's own temporary file
+			if !strings.Contains(string(calls), "pull -q --platform linux/amd64 "+g.opts.GatewayImage) {
+				t.Errorf("docker calls =\n%s\nwant the pull for linux/amd64", calls)
+			}
+		})
+	}
+}
+
+// TestGatewayImagePullFailureNotRetriedForAmd64: a pull that fails for
+// another reason than the platform is not tried again for linux/amd64, so a
+// multi-platform image is never cached as amd64 on an arm64 host.
+func TestGatewayImagePullFailureNotRetriedForAmd64(t *testing.T) {
+	dir, g := fakeDockerGateway(t, map[string]string{fakePullEnv: "0", "FAKE_PULL_UNREACHABLE": "1"})
+	if err := g.start(); err == nil || !strings.Contains(err.Error(), "connection refused") {
+		t.Fatalf("start() with an unreachable registry = %v, want the pull's error", err)
+	}
+	calls, _ := os.ReadFile(filepath.Join(dir, "calls")) // #nosec G304 -- the test's own temporary file
+	if strings.Contains(string(calls), "--platform") {
+		t.Errorf("docker calls =\n%s\nwant no pull for another platform", calls)
+	}
+}
+
+// A gateway binary on macOS verifies muster against the system trust store
+// alone (SSL_CERT_FILE is ignored there), so a proof whose gateway calls
+// muster refuses it up front unless the lab CA is trusted; the image, any
+// other host, an externally provisioned pair and a certificate variable in
+// agentlab's environment (its probe would not read the store) are not judged.
+func TestHostGatewayTrustProblem(t *testing.T) {
+	const binary = "/bin/klaus-gateway"
+	for name, tc := range map[string]struct {
+		binary string
+		trust  hostTrust
+		want   []string
+	}{
+		"a binary on macOS, lab CA untrusted":  {binary, hostTrust{goos: goosDarwin}, []string{"--gateway-image", "agentlab trust"}},
+		"a binary on macOS, SSL_CERT_FILE set": {binary, hostTrust{goos: goosDarwin, certEnv: "SSL_CERT_FILE"}, nil},
+		"a binary on macOS, lab CA trusted":    {binary, hostTrust{goos: goosDarwin, labCATrusted: true}, nil},
+		"a binary on macOS, external pair":     {binary, hostTrust{goos: goosDarwin, externalTLS: true}, nil},
+		"the image on macOS":                   {"", hostTrust{goos: goosDarwin}, nil},
+		"a binary on Linux":                    {binary, hostTrust{goos: "linux"}, nil},
+	} {
+		p := hostGatewayTrustProblem(tc.binary, tc.trust)
+		if tc.want == nil && p != "" {
+			t.Errorf("%s refused: %s", name, p)
+		}
+		if tc.want != nil && p == "" {
+			t.Errorf("%s not refused", name)
+		}
+		for _, want := range tc.want {
+			if !strings.Contains(p, want) {
+				t.Errorf("%s: the refusal %q does not name %s", name, p, want)
+			}
+		}
+	}
+}
+
 // TestGatewayTimeoutRemovesContainer: after a readiness timeout no container
 // is left, even when `docker stop` missed it and the client had to be killed.
 func TestGatewayTimeoutRemovesContainer(t *testing.T) {
-	dir, g := fakeDockerGateway(t, map[string]string{"FAKE_PULL": "0", "FAKE_NEVER_READY": "1", "FAKE_STOP_MISSES": "1"})
+	dir, g := fakeDockerGateway(t, map[string]string{fakePullEnv: "0", "FAKE_NEVER_READY": "1", "FAKE_STOP_MISSES": "1"})
 	err := g.start()
 	if err == nil || !strings.Contains(err.Error(), "did not become ready") {
 		t.Fatalf("start() = %v, want the readiness timeout", err)

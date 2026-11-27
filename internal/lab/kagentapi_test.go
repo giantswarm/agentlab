@@ -80,6 +80,9 @@ type fakeKagent struct {
 	// "not yet settled" that many times first, as for a session whose turn's
 	// runtime work the controller still settles.
 	busy int
+	// answers are what a method answers first, in order, before the fake's
+	// own answer: an outage of the controller, say.
+	answers map[string][]error
 	// shares are the session shares RevokeSessionShare withdraws, by id: the
 	// id of the session each one shares.
 	shares map[string]string
@@ -146,6 +149,18 @@ func (f *fakeKagent) record(ctx context.Context, method string) {
 	defer f.mu.Unlock()
 	f.calls[method] = append(f.calls[method], md)
 	f.order = append(f.order, method)
+}
+
+// answer is the next of the answers set for method, nil when none is left.
+func (f *fakeKagent) answer(method string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	queued := f.answers[method]
+	if len(queued) == 0 {
+		return nil
+	}
+	f.answers[method] = queued[1:]
+	return queued[0]
 }
 
 func (f *fakeKagent) lastMD(method string) metadata.MD {
@@ -435,6 +450,9 @@ func (f *fakeKagent) CreateSession(ctx context.Context, req *apiv1alpha1.CreateS
 
 func (f *fakeKagent) GetSession(ctx context.Context, req *apiv1alpha1.GetSessionRequest) (*apiv1alpha1.GetSessionResponse, error) {
 	f.record(ctx, "GetSession")
+	if err := f.answer("GetSession"); err != nil {
+		return nil, err
+	}
 	who, err := edge(ctx)
 	if err != nil {
 		return nil, err
@@ -516,6 +534,9 @@ func (f *fakeKagent) ResumeSession(ctx context.Context, req *apiv1alpha1.ResumeS
 // busy lasts, then the session in the state the operation leaves it.
 func (f *fakeKagent) operate(ctx context.Context, method, id string, to apiv1alpha1.RuntimeState) (*apiv1alpha1.Session, error) {
 	f.record(ctx, method)
+	if err := f.answer(method); err != nil {
+		return nil, err
+	}
 	if _, err := edge(ctx); err != nil {
 		return nil, err
 	}
@@ -816,7 +837,7 @@ func TestDeleteSessionWaitsForSettle(t *testing.T) {
 	if elapsed := time.Since(started); elapsed > 2*sessionSettleTimeout {
 		t.Errorf("the retry ran %s, past its %s deadline", elapsed, sessionSettleTimeout)
 	}
-	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "did not settle within 500ms") || !strings.Contains(err.Error(), "not yet settled") {
+	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "no final answer within 500ms") || !strings.Contains(err.Error(), "not yet settled") {
 		t.Errorf("the error names neither the deadline nor the last answer: %v", err)
 	}
 	if listed, _ := api.listSessions(t.Context()); len(listed) != 1 || listed[0].GetId() != stuck.GetId() {
@@ -876,7 +897,7 @@ func TestSuspendResumeWaitForSettle(t *testing.T) {
 	if elapsed := time.Since(started); elapsed > 2*sessionOperationSettleTimeout {
 		t.Errorf("the retry ran %s, past its %s bound", elapsed, sessionOperationSettleTimeout)
 	}
-	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "did not settle within 500ms") || !strings.Contains(err.Error(), "not yet settled") {
+	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "no final answer within 500ms") || !strings.Contains(err.Error(), "not yet settled") {
 		t.Errorf("the error names neither the bound nor the last answer: %v", err)
 	}
 

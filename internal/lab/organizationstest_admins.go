@@ -13,6 +13,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 
@@ -20,91 +21,78 @@ import (
 )
 
 // The admins part of the organizations proof (giantswarm/agentlab#1225,
-// docs/agents.md "The admins part"): the admins of a Giant Swarm
-// Organization are cluster-admin only inside its org-<name> namespace,
-// through a RoleBinding rbac-operator writes (write-all-customer-group, a
-// RoleBindingTemplate's copy). The lab runs no rbac-operator, so the part
-// writes those bindings itself, with rbac-operator's label, as the lab's
-// admin. agent-platform-operator mirrors their Users and Groups into each
-// organization namespace as agent-platform:organizations-admin, so such an
-// admin creates an organization alone: agent-manager's create_organization
-// answers it created with its first admins bound, never pending.
+// giantswarm/giantswarm#39501, docs/agents.md "The admins part"): an
+// organization's admins exist only in its Organization's spec.admins.
+// agent-platform-operator binds them to agent-platform:admin in the
+// organization namespace (RoleBinding organization-admins), the chart's
+// admission policy refuses every other writer of a binding to that role, and
+// agent-manager's member tools refuse the admin role. The right to create an
+// Organization is one RBAC rule on the kind, which the lab's admin holds.
 //
-// Two Giant Swarm Organizations stand in: alice's, whose binding names her
-// group, and bob's, whose binding names him. Neither holds a right
-// cluster-wide. Beside them, bindings the operator must not mirror: a
-// cluster-admin one written by hand, one whose subjects are a
-// ServiceAccount and a system: name, and one held by a finalizer while it
-// is deleted. Everything is judged on what the cluster and the tool answer,
-// never on a copy of the operator's rule.
+// The lab's admin creates two organizations through create_organization:
+// one whose admin is alice's group, one whose admin is bob by name. Neither
+// alice, bob nor the outsider holds a right cluster-wide. Everything is
+// judged on what the cluster and the tools answer, never on a copy of the
+// operator's or the chart's rule.
 const (
 	organizationAdminsPart = "admins"
-	// adminsParentA and adminsParentB are the two Giant Swarm Organizations'
-	// namespaces, the organizations' parents; adminsOrgA and adminsOrgB the
-	// organizations their admins create there.
-	adminsParentA = "org-agentlab-admins-a"
-	adminsParentB = "org-agentlab-admins-b"
-	adminsOrgA    = "agentlab-admins-a"
-	adminsOrgB    = "agentlab-admins-b"
+	// adminsOrgA and adminsOrgB are the organizations of the part.
+	adminsOrgA = "agentlab-admins-a"
+	adminsOrgB = "agentlab-admins-b"
 	// adminsOrgRefused is the organization every refused create names; it
 	// never exists.
 	adminsOrgRefused = "agentlab-admins-refused"
-	// The parent bindings: rbac-operator's to alice's group (with a
-	// ServiceAccount beside it) and to bob, one written by hand, one of
-	// machines only, and one held by a finalizer.
-	adminsGroupBinding    = "agentlab-customer-group"
-	adminsUserBinding     = "agentlab-customer-user"
-	adminsHandBinding     = "agentlab-hand-written"
-	adminsMachinesBinding = "agentlab-machines"
-	adminsHeldBinding     = "agentlab-held"
-	// adminsHoldFinalizer keeps adminsHeldBinding while it is being deleted.
-	adminsHoldFinalizer = "agentlab.giantswarm.io/hold"
-	// adminsAutomation is the parent's ServiceAccount, never mirrored.
-	adminsAutomation = "automation"
-	// adminsSystemUser is a system: name, never mirrored.
-	adminsSystemUser = "system:agentlab-admins-proof"
-	// adminsHeldUser is the held binding's subject, a person nobody signs
-	// in as, so the binding gives no one of the part a right.
-	adminsHeldUser = apiserverUserPrefix + "agentlab-held@lab.local"
-	// rbac-operator's label on every RoleBinding it writes.
-	rbacOperatorLabel = "giantswarm.io/managed-by"
-	rbacOperatorValue = "rbac-operator"
-	// organizationsAdminClusterRole is the ClusterRole every mirror binds;
-	// clusterAdminRole the one of rbac-operator's bindings.
+	// adminsDryRunBinding names the RoleBindings the part writes as dry runs.
+	adminsDryRunBinding = "agentlab-admins-proof"
+	// organizationsAdminClusterRole is the role of the people who manage
+	// Organizations, bound cluster-wide.
 	organizationsAdminClusterRole = "agent-platform:organizations-admin"
-	clusterAdminRole              = "cluster-admin"
 	clusterRoleKind               = "ClusterRole"
-	// copiedFromAnnotation names the parent binding a mirror was made from.
-	copiedFromAnnotation = "agent-platform.giantswarm.io/copied-from"
-	// adminsMirrorWait bounds the operator's reaction to a parent binding.
-	adminsMirrorWait = 2 * time.Minute
-	// adminsCreateTimeout bounds one create_organization: agent-manager
-	// waits up to two minutes for Ready before it answers.
-	adminsCreateTimeout = 4 * time.Minute
+	// validatingAdmissionPolicy is the API server's word in a refusal by a
+	// ValidatingAdmissionPolicy: a refusal without it may be RBAC's.
+	validatingAdmissionPolicy = "ValidatingAdmissionPolicy"
+	// adminsCallTimeout bounds one organization tool call.
+	adminsCallTimeout = 4 * time.Minute
+	// The arguments of agent-manager's organization tools the part sends:
+	// the admins of create_organization and update_organization, and the
+	// role of add_organization_member, whose person argument is "user" too.
+	// organizationArg is the organization every tool of an organization's
+	// contents takes: the name of its Organization, never its namespace.
+	organizationArg = "organization"
+	argAdminGroups  = "adminGroups"
+	argAdminUsers   = "adminUsers"
+	argRole         = "role"
+	argRoleUser     = "user"
+	argRoleAdmin    = "admin"
+	// memberToolsAdminRefusal is agent-manager's refusal of the admin role
+	// in its member tools (internal/organizations/members.go, roleOf).
+	memberToolsAdminRefusal = "the member tools do not give or remove the admin role"
+	// organizationSwitchOffPolicy is the chart's ValidatingAdmissionPolicy
+	// that keeps an organization's Agent Platform on once it is on, for every
+	// writer (decision D10 of giantswarm/giantswarm#39492): an update that
+	// sets spec.capabilities.agentPlatform.enabled to false or removes it is
+	// refused. organizationSwitchOffChart is the chart pull request that adds
+	// it.
+	organizationSwitchOffPolicy = "agent-platform-organization-switch-off"
+	organizationSwitchOffChart  = organizationKindChart
 )
 
 // createOrganizationAnswer is the part of create_organization's answer the
 // part reads.
 type createOrganizationAnswer struct {
-	Created     bool `json:"created"`
-	FirstAdmins *struct {
-		Name     string `json:"name"`
-		Role     string `json:"role"`
-		Written  bool   `json:"written"`
-		Subjects []struct {
-			Kind string `json:"kind"`
-			Name string `json:"name"`
-		} `json:"subjects"`
-	} `json:"firstAdmins"`
-	Pending string `json:"pending"`
+	Created      bool `json:"created"`
+	Organization struct {
+		Admins []organizationAdmin `json:"admins"`
+	} `json:"organization"`
+	Next string `json:"next"`
 }
 
 // adminsProof is one run of the part.
 type adminsProof struct {
 	cfg *config.Config
-	// alice and bob are each the admin of one Giant Swarm Organization;
-	// outsider is named only by the hand-written binding.
-	alice, bob, outsider *config.User
+	// admin is the lab's admin (platform-admins), who creates the
+	// organizations; alice and bob are their admins; outsider is neither.
+	admin, alice, bob, outsider *config.User
 	// musterTokens are their tokens for muster, kubeTokens for the API server.
 	musterTokens map[string]string
 	kubeTokens   map[string]string
@@ -122,9 +110,13 @@ func organizationAdminsTest(cfg *config.Config) error {
 	}
 	outsider := adminsOutsider(cfg, members)
 	if outsider == nil {
-		return fmt.Errorf("the admins part needs a lab user outside %s besides %s and %s, for the hand-written binding; %s has none", platformAdminsGroup, members[0].Email, members[1].Email, config.File)
+		return fmt.Errorf("the admins part needs a lab user outside %s besides %s and %s, whom the admins add as a member; %s has none", platformAdminsGroup, members[0].Email, members[1].Email, config.File)
 	}
-	p := &adminsProof{cfg: cfg, alice: members[0], bob: members[1], outsider: outsider,
+	admin := cfg.AdminUser()
+	if admin == nil {
+		return fmt.Errorf("no platform-admins user in %s", config.File)
+	}
+	p := &adminsProof{cfg: cfg, admin: admin, alice: members[0], bob: members[1], outsider: outsider,
 		musterTokens: map[string]string{}, kubeTokens: map[string]string{}, namespaces: map[string]string{}}
 	defer p.cleanup()
 	if err := p.run(); err != nil {
@@ -152,7 +144,7 @@ func adminsOutsider(cfg *config.Config, members [2]*config.User) *config.User {
 }
 
 func (p *adminsProof) run() error {
-	if err := p.removeLeftovers(); err != nil {
+	if err := removeAdminsFixtures(); err != nil {
 		return err
 	}
 	if err := p.setUp(); err != nil {
@@ -169,74 +161,35 @@ func (p *adminsProof) run() error {
 }
 
 // checks are the part's verdicts in the order they run: the creates first,
-// the refusals while every parent binding is in place, then the changes to
-// the parent bindings, which end the admins' rights.
+// the refusals while both organizations hold their first admins, then the
+// changes of spec.admins.
 func (p *adminsProof) checks() []organizationCheck {
 	return []organizationCheck{
-		{surface: surfaceKubernetes, boundary: "the Giant Swarm Organizations' admins hold no right cluster-wide to create or bind RoleBindings", run: p.noRightClusterWide},
-		{surface: surfaceAgentManager, boundary: "an admin by group of a Giant Swarm Organization creates an organization alone: created, its first admins bound, not pending", run: p.created(adminsOrgA)},
-		{surface: surfaceKubernetes, boundary: "rbac-operator's cluster-admin binding of a group is mirrored as organizations-admin: the group alone, its ServiceAccount left out, the copied-from annotation, nothing binding cluster-admin", run: p.mirrored(adminsOrgA, adminsGroupBinding, groupSubject(config.GroupTenantA))},
-		{surface: surfaceAgentManager, boundary: "an admin by name of a Giant Swarm Organization creates an organization alone: created, its first admins bound, not pending", run: p.created(adminsOrgB)},
-		{surface: surfaceKubernetes, boundary: "rbac-operator's cluster-admin binding of a user is mirrored as organizations-admin: the user alone, the copied-from annotation, nothing binding cluster-admin", run: p.mirrored(adminsOrgB, adminsUserBinding, userSubject(p.bob))},
-		{surface: surfaceKubernetes, boundary: "a cluster-admin binding without rbac-operator's label, and one whose only subjects are a ServiceAccount and a system: name, are not mirrored", run: p.notMirrored},
-		{surface: surfaceAgentManager, boundary: "a person whose cluster-admin binding in the parent has no rbac-operator label is refused before any write, naming that binding", run: p.handWrittenRefused},
-		{surface: surfaceAgentManager, boundary: "the admin of one Giant Swarm Organization cannot create an organization in the other's namespace, either way", run: p.crossRefused},
-		{surface: surfaceKubernetes, boundary: "a parent binding being deleted is not mirrored: its mirror goes while a finalizer still holds the binding", run: p.deletingUnmirrored},
-		{surface: surfaceKubernetes, boundary: "a group removed from rbac-operator's binding leaves the organization namespace", run: p.groupRemoved},
+		{surface: surfaceKubernetes, boundary: "the organizations' admins hold no right cluster-wide to create RoleBindings, bind agent-platform:admin or create Organizations", run: p.noRightClusterWide},
+		{surface: surfaceAgentManager, boundary: "create_organization writes an organization's admin group into spec.admins and no RoleBinding; agent-platform-operator makes it Ready and binds the group alone to agent-platform:admin", run: p.created(adminsOrgA)},
+		{surface: surfaceAgentManager, boundary: "create_organization writes an organization's admin user into spec.admins and no RoleBinding; agent-platform-operator makes it Ready and binds the user alone to agent-platform:admin", run: p.created(adminsOrgB)},
+		{surface: surfaceKubernetes, boundary: "nobody but agent-platform-operator binds agent-platform:admin: the organization's admin and the lab's admin (cluster-admin) are refused at admission, while the admin binds agent-platform:editor", run: p.adminBindingRefused},
+		{surface: surfaceAgentManager, boundary: "add_organization_member refuses the admin role, nothing written, while the admin adds a user", run: p.memberToolRefusesAdmin},
+		{surface: surfaceAgentManager, boundary: "a person without create on Organizations is refused create_organization, nothing written", run: p.createRefused},
+		{surface: surfaceKubernetes, boundary: "nobody switches an organization's Agent Platform off (decision D10): the lab's admin (cluster-admin) is refused at admission an update that sets spec.capabilities.agentPlatform.enabled to false, while an update that keeps it on is admitted", run: p.switchOffRefused},
+		{surface: surfaceKubernetes, boundary: "a change of spec.admins (update_organization) changes organization-admins: the group replaced by a user", run: p.adminsChanged},
+		{surface: surfaceKubernetes, boundary: "an empty spec.admins (update_organization) removes organization-admins, and the organization stays Ready", run: p.adminsEmptied},
 	}
 }
 
-// adminsBinding is a RoleBinding of a parent namespace to a ClusterRole,
-// rbac-operator's when byRBACOperator.
-func adminsBinding(ns, name, role string, byRBACOperator bool, subjects ...rbacv1.Subject) *rbacv1.RoleBinding {
-	labels := map[string]string{organizationsTestLabel: organizationsTestMark}
-	if byRBACOperator {
-		labels[rbacOperatorLabel] = rbacOperatorValue
+// caseOf is an organization of the part with its first admins.
+func (p *adminsProof) caseOf(org string) (args map[string]any, admins []organizationAdmin) {
+	if org == adminsOrgA {
+		group := adminGroup(config.GroupTenantA)
+		return map[string]any{argAdminGroups: []string{group.Name}}, []organizationAdmin{group}
 	}
-	return &rbacv1.RoleBinding{
-		TypeMeta:   metav1.TypeMeta{APIVersion: rbacv1.SchemeGroupVersion.String(), Kind: organizationInventoryBindingKind},
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: labels},
-		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: clusterRoleKind, Name: role},
-		Subjects:   subjects,
-	}
+	user := adminUser(p.bob)
+	return map[string]any{argAdminUsers: []string{user.Name}}, []organizationAdmin{user}
 }
 
-// serviceAccountSubject is the parent's automation ServiceAccount.
-func serviceAccountSubject(ns string) rbacv1.Subject {
-	return rbacv1.Subject{Kind: rbacv1.ServiceAccountKind, Name: adminsAutomation, Namespace: ns}
-}
-
-// setUp writes the two Giant Swarm Organizations' namespaces and every
-// parent binding before any organization exists, so the operator meets them
-// all on its first reconcile, and signs the three people in.
+// setUp signs the four people in.
 func (p *adminsProof) setUp() error {
-	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
-	defer cancel()
-	step("The Giant Swarm Organizations' namespaces %s and %s, and their bindings as rbac-operator writes them (the lab runs no rbac-operator)", adminsParentA, adminsParentB)
-	held := adminsBinding(adminsParentA, adminsHeldBinding, clusterAdminRole, true, rbacv1.Subject{APIGroup: rbacv1.GroupName, Kind: rbacv1.UserKind, Name: adminsHeldUser})
-	held.Finalizers = []string{adminsHoldFinalizer}
-	bindings := []*rbacv1.RoleBinding{
-		adminsBinding(adminsParentA, adminsGroupBinding, clusterAdminRole, true, groupSubject(config.GroupTenantA), serviceAccountSubject(adminsParentA)),
-		adminsBinding(adminsParentA, adminsHandBinding, clusterAdminRole, false, userSubject(p.outsider)),
-		adminsBinding(adminsParentA, adminsMachinesBinding, clusterAdminRole, true, serviceAccountSubject(adminsParentA), rbacv1.Subject{APIGroup: rbacv1.GroupName, Kind: rbacv1.UserKind, Name: adminsSystemUser}),
-		held,
-		adminsBinding(adminsParentB, adminsUserBinding, clusterAdminRole, true, userSubject(p.bob)),
-	}
-	for _, ns := range []string{adminsParentA, adminsParentB} {
-		if err := ensureNamespace(ns); err != nil {
-			return err
-		}
-		if err := markNamespace(ctx, ns); err != nil {
-			return err
-		}
-	}
-	for _, b := range bindings {
-		if _, err := applyTyped(ctx, b); err != nil {
-			return fmt.Errorf("RoleBinding %s/%s: %w", b.Namespace, b.Name, err)
-		}
-		note("%s/%s binds %s to %s (rbac-operator's label: %t)", b.Namespace, b.Name, subjectsLine(b.Subjects), b.RoleRef.Name, b.Labels[rbacOperatorLabel] == rbacOperatorValue)
-	}
-	for _, u := range []*config.User{p.alice, p.bob, p.outsider} {
+	for _, u := range []*config.User{p.admin, p.alice, p.bob, p.outsider} {
 		step("Logging in to Dex as %s", u.Email)
 		token, err := passwordGrant(p.cfg, config.AgentPlatformClientID, config.AgentPlatformClientSecret, u.Email, u.Password, musterLoginScopes)
 		if err != nil {
@@ -250,17 +203,6 @@ func (p *adminsProof) setUp() error {
 	return nil
 }
 
-// markNamespace labels a namespace the part owns, for its cleanup.
-func markNamespace(ctx context.Context, ns string) error {
-	k, err := labKube()
-	if err != nil {
-		return err
-	}
-	patch := fmt.Sprintf(`{"metadata":{"labels":{%q:%q}}}`, organizationsTestLabel, organizationsTestMark)
-	_, err = k.clientset.CoreV1().Namespaces().Patch(ctx, ns, types.MergePatchType, []byte(patch), metav1.PatchOptions{})
-	return err
-}
-
 // subjectsLine names subjects as a binding lists them.
 func subjectsLine(subjects []rbacv1.Subject) string {
 	names := make([]string, 0, len(subjects))
@@ -271,9 +213,9 @@ func subjectsLine(subjects []rbacv1.Subject) string {
 }
 
 // noRightClusterWide asks the API server, as each person, whether they may
-// create RoleBindings and bind agent-platform:admin in every namespace: a
-// yes would let create_organization pass on that right instead of the
-// mirror.
+// create RoleBindings, bind agent-platform:admin and create Organizations in
+// every namespace: a yes would let them pass the part's refusals on that
+// right.
 func (p *adminsProof) noRightClusterWide() (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	defer cancel()
@@ -285,58 +227,38 @@ func (p *adminsProof) noRightClusterWide() (string, error) {
 		for _, attrs := range []authorizationv1.ResourceAttributes{
 			{Verb: "create", Group: rbacv1.GroupName, Resource: "rolebindings"},
 			{Verb: "bind", Group: rbacv1.GroupName, Resource: "clusterroles", Name: organizationAdminRole},
+			{Verb: "create", Group: "security.giantswarm.io", Resource: "organizations"},
 		} {
 			review, err := cs.AuthorizationV1().SelfSubjectAccessReviews().Create(ctx, &authorizationv1.SelfSubjectAccessReview{Spec: authorizationv1.SelfSubjectAccessReviewSpec{ResourceAttributes: &attrs}}, metav1.CreateOptions{})
 			if err != nil {
 				return "", fmt.Errorf("access review as %s: %w", u.Email, err)
 			}
 			if review.Status.Allowed {
-				return "", fmt.Errorf("%s may %s %s.%s %s in every namespace: the part needs people whose right is in their Giant Swarm Organization's namespace only", u.Email, attrs.Verb, attrs.Resource, attrs.Group, attrs.Name)
+				return "", fmt.Errorf("%s may %s %s.%s %s in every namespace: the part needs people with no right outside their organizations", u.Email, attrs.Verb, attrs.Resource, attrs.Group, attrs.Name)
 			}
 		}
 	}
-	return fmt.Sprintf("%s, %s and %s may neither create RoleBindings nor bind %s cluster-wide", p.alice.Email, p.bob.Email, p.outsider.Email, organizationAdminRole), nil
+	return fmt.Sprintf("%s, %s and %s may neither create RoleBindings, bind %s nor create Organizations cluster-wide", p.alice.Email, p.bob.Email, p.outsider.Email, organizationAdminRole), nil
 }
 
-// adminsCase is who creates an organization in which parent, with which
-// first admins.
-type adminsCase struct {
-	person *config.User
-	parent string
-	args   map[string]any
-	// admins are the first admins' subjects, kind and name, as args names
-	// them.
-	admins []string
-}
-
-// caseOf is the create of an organization of the part.
-func (p *adminsProof) caseOf(org string) adminsCase {
-	if org == adminsOrgA {
-		group := groupSubject(config.GroupTenantA)
-		return adminsCase{person: p.alice, parent: adminsParentA, args: map[string]any{"adminGroups": []string{group.Name}}, admins: []string{group.Kind + " " + group.Name}}
-	}
-	user := userSubject(p.bob)
-	return adminsCase{person: p.bob, parent: adminsParentB, args: map[string]any{"adminUsers": []string{user.Name}}, admins: []string{user.Kind + " " + user.Name}}
-}
-
-// createOrganization calls create_organization through muster as the
-// person, in mode apply, and returns the tool's envelope.
-func (p *adminsProof) createOrganization(person *config.User, parent, name string, extra map[string]any) (*toolEnvelope, error) {
+// callOrganizationTool calls an agent-manager tool through muster as the
+// person and returns the tool's envelope.
+func (p *adminsProof) callOrganizationTool(person *config.User, tool string, args map[string]any) (*toolEnvelope, error) {
 	session, err := openMusterSession(p.cfg, p.musterTokens[person.Email], "organizations-admins")
 	if err != nil {
 		return nil, err
 	}
-	session.client.Timeout = adminsCreateTimeout
-	args := map[string]any{namespaceKey: parent, nameKey: name, "displayName": "Admins proof", "harnesses": []string{organizationHarness}, "mode": modeApply}
+	session.client.Timeout = adminsCallTimeout
+	return session.callToolEnvelope(agentManagerToolPrefix+tool, args)
+}
+
+// createOrganization calls create_organization as the person, mode apply.
+func (p *adminsProof) createOrganization(person *config.User, name string, extra map[string]any) (*toolEnvelope, error) {
+	args := map[string]any{nameKey: name, "displayName": "Admins proof", "harnesses": []string{organizationHarness}, modeArg: modeApply}
 	for k, v := range extra {
 		args[k] = v
 	}
-	if _, ok := args["adminGroups"]; !ok {
-		if _, ok := args["adminUsers"]; !ok {
-			args["adminUsers"] = []string{userSubject(person).Name}
-		}
-	}
-	return session.callToolEnvelope(agentManagerToolPrefix+"create_organization", args)
+	return p.callOrganizationTool(person, "create_organization", args)
 }
 
 // envelopeText is a tool answer's text.
@@ -348,152 +270,306 @@ func envelopeText(env *toolEnvelope) string {
 	return strings.Join(parts, "\n")
 }
 
-// created has the organization's Giant Swarm Organization admin create it
-// alone: the answer is created with the first admins written and nothing
-// pending, the organization is Ready, and its organization-admins binds the
-// first admins to agent-platform:admin.
+// answerOrganization is the organization an agent-manager answer names in
+// its top-level organization field, "" for none or an answer that is not a
+// JSON object.
+func answerOrganization(text string) string {
+	var answer struct {
+		Organization string `json:"organization"`
+	}
+	if json.Unmarshal([]byte(text), &answer) != nil {
+		return ""
+	}
+	return answer.Organization
+}
+
+// readAdminsBinding reads the namespace's organization-admins; nil when
+// there is none.
+func readAdminsBinding(ns string) (*rbacv1.RoleBinding, error) {
+	k, err := labKube()
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
+	defer cancel()
+	binding, err := k.clientset.RbacV1().RoleBindings(ns).Get(ctx, organizationAdminsBinding, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil, nil
+	}
+	return binding, err
+}
+
+// created has the lab's admin create the organization through
+// create_organization with its first admins: the answer is created with
+// those admins in spec.admins, the organization becomes Ready, and the
+// operator's organization-admins binds those admins alone to
+// agent-platform:admin.
 func (p *adminsProof) created(org string) func() (string, error) {
 	return func() (string, error) {
-		c := p.caseOf(org)
-		step("%s calls %screate_organization %s/%s through muster, mode apply", c.person.Email, agentManagerToolPrefix, c.parent, org)
-		env, err := p.createOrganization(c.person, c.parent, org, c.args)
+		args, admins := p.caseOf(org)
+		step("%s calls %screate_organization %s through muster, mode apply", p.admin.Email, agentManagerToolPrefix, org)
+		env, err := p.createOrganization(p.admin, org, args)
 		if err != nil {
 			return "", err
 		}
 		text := envelopeText(env)
 		if env.IsError {
-			return "", fmt.Errorf("create_organization as %s was refused: %s", c.person.Email, text)
+			return "", fmt.Errorf("create_organization as %s was refused: %s", p.admin.Email, text)
+		}
+		// Marked before the answer is judged, so that a failed verdict
+		// leaves an organization the next run removes first.
+		if err := labelProofOrganization(org); err != nil {
+			return "", err
 		}
 		var answer createOrganizationAnswer
 		if err := json.Unmarshal([]byte(text), &answer); err != nil {
 			return "", fmt.Errorf("create_organization's answer is not the expected JSON: %w\n%.500s", err, text)
 		}
 		switch {
-		case answer.Pending != "":
-			return "", fmt.Errorf("create_organization as %s answered pending (the part needs agent-platform-operator 0.2.0 or later, which mirrors rbac-operator's bindings: agent-platform %s or later; %s): %s", c.person.Email, config.DefaultChartVersion, operatorRunning(), answer.Pending)
 		case !answer.Created:
-			return "", fmt.Errorf("create_organization as %s answered created=false: %.500s", c.person.Email, text)
-		case answer.FirstAdmins == nil || !answer.FirstAdmins.Written:
-			return "", fmt.Errorf("create_organization as %s did not write the first admins: %.500s", c.person.Email, text)
+			return "", fmt.Errorf("create_organization as %s answered created=false: %.500s", p.admin.Email, text)
+		case !slices.Equal(answer.Organization.Admins, admins):
+			return "", fmt.Errorf("create_organization's organization has admins %v, want %v: %.500s", answer.Organization.Admins, admins, text)
 		}
-		state, err := readOrganization(c.parent, org)
+		ns, err := waitOrganizationReady(org)
 		if err != nil {
 			return "", err
 		}
-		if ok, why := state.ready(); !ok {
-			return "", fmt.Errorf("organization %s/%s is not Ready after create_organization: %s", c.parent, org, why)
-		}
-		p.namespaces[org] = state.namespace
-		want := c.admins
-		ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
-		defer cancel()
-		k, err := labKube()
+		p.namespaces[org] = ns
+		got, err := waitOrganizationAdmins(ns, admins)
 		if err != nil {
 			return "", err
 		}
-		binding, err := k.clientset.RbacV1().RoleBindings(state.namespace).Get(ctx, organizationAdminsBinding, metav1.GetOptions{})
-		if err != nil {
-			return "", fmt.Errorf("the first admins' RoleBinding %s/%s: %w", state.namespace, organizationAdminsBinding, err)
-		}
-		var got []string
-		for _, s := range binding.Subjects {
-			got = append(got, s.Kind+" "+s.Name)
-		}
-		if binding.RoleRef.Name != organizationAdminRole || !slices.Equal(got, want) {
-			return "", fmt.Errorf("RoleBinding %s/%s binds %v to %s, want %v to %s", state.namespace, organizationAdminsBinding, got, binding.RoleRef.Name, want, organizationAdminRole)
-		}
-		return fmt.Sprintf("%s created %s/%s (namespace %s, Ready); the answer: created, %s written, nothing pending; %s binds %v to %s",
-			c.person.Email, c.parent, org, state.namespace, organizationAdminsBinding, organizationAdminsBinding, got, organizationAdminRole), nil
+		return fmt.Sprintf("%s created %s (namespace %s, Ready): spec.admins %v; the operator's %s/%s binds %s to %s", p.admin.Email, org, ns, admins, ns, organizationAdminsBinding, got, organizationAdminRole), nil
 	}
 }
 
-// mirrored reads the organization namespace's mirror of a parent binding:
-// bound to organizations-admin, the wanted subject alone, annotated with
-// the binding it was copied from; and no RoleBinding of the namespace binds
-// cluster-admin.
-func (p *adminsProof) mirrored(org, name string, want rbacv1.Subject) func() (string, error) {
-	return func() (string, error) {
-		ns := p.namespaces[org]
-		parent := p.caseOf(org).parent
-		ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
-		defer cancel()
-		k, err := labKube()
-		if err != nil {
-			return "", err
-		}
-		mirror, err := k.clientset.RbacV1().RoleBindings(ns).Get(ctx, name, metav1.GetOptions{})
-		if err != nil {
-			return "", fmt.Errorf("the mirror of %s/%s in %s: %w", parent, name, ns, err)
-		}
-		switch {
-		case mirror.RoleRef.Kind != clusterRoleKind || mirror.RoleRef.Name != organizationsAdminClusterRole:
-			return "", fmt.Errorf("RoleBinding %s/%s binds %s %s, want ClusterRole %s", ns, name, mirror.RoleRef.Kind, mirror.RoleRef.Name, organizationsAdminClusterRole)
-		case len(mirror.Subjects) != 1 || mirror.Subjects[0].Kind != want.Kind || mirror.Subjects[0].Name != want.Name:
-			return "", fmt.Errorf("RoleBinding %s/%s binds %s, want %s %s alone", ns, name, subjectsLine(mirror.Subjects), want.Kind, want.Name)
-		case mirror.Annotations[copiedFromAnnotation] != parent+"/"+name:
-			return "", fmt.Errorf("RoleBinding %s/%s has %s=%q, want %s/%s", ns, name, copiedFromAnnotation, mirror.Annotations[copiedFromAnnotation], parent, name)
-		}
-		all, err := k.clientset.RbacV1().RoleBindings(ns).List(ctx, metav1.ListOptions{})
-		if err != nil {
-			return "", err
-		}
-		for _, rb := range all.Items {
-			if rb.RoleRef.Name == clusterAdminRole {
-				return "", fmt.Errorf("RoleBinding %s/%s binds %s in the organization namespace", ns, rb.Name, clusterAdminRole)
-			}
-		}
-		return fmt.Sprintf("%s/%s binds %s %s to %s, %s=%s; none of the %d RoleBindings of %s binds %s", ns, name, want.Kind, want.Name, organizationsAdminClusterRole, copiedFromAnnotation, parent+"/"+name, len(all.Items), ns, clusterAdminRole), nil
+// labelProofOrganization marks an Organization the part created through
+// agent-manager, which writes no agentlab label, for the part's cleanup.
+func labelProofOrganization(name string) error {
+	gvr, err := gvrFor(organizationResource)
+	if err != nil {
+		return err
+	}
+	k, err := labKube()
+	if err != nil {
+		return err
+	}
+	patch, err := json.Marshal(map[string]any{crMetadata: map[string]any{organizationInventoryLabelsKey: map[string]string{organizationsTestLabel: organizationsTestMark}}})
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
+	defer cancel()
+	_, err = k.resource(gvr, "").Patch(ctx, name, types.MergePatchType, patch, metav1.PatchOptions{})
+	return err
+}
+
+// adminRoleBinding is a RoleBinding of the role in the namespace to the
+// subject, which the part writes as a dry run.
+func adminRoleBinding(ns, role string, subject rbacv1.Subject) *rbacv1.RoleBinding {
+	return &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: adminsDryRunBinding, Namespace: ns, Labels: map[string]string{organizationsTestLabel: organizationsTestMark}},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: clusterRoleKind, Name: role},
+		Subjects:   []rbacv1.Subject{subject},
 	}
 }
 
-// notMirrored checks, once the organization namespace holds the mirror of
-// rbac-operator's group binding (the same reconcile), that it holds none of
-// the hand-written binding and none of the machines' one.
-func (p *adminsProof) notMirrored() (string, error) {
-	ns := p.namespaces[adminsOrgA]
+// refusedAtAdmission reads a write's answer as a refusal by a
+// ValidatingAdmissionPolicy: nil for one, an error naming what happened
+// otherwise. RBAC's refusal does not count: the admin holds the role and may
+// bind it as far as RBAC goes, and the lab's admin is cluster-admin.
+func refusedAtAdmission(what string, err error) error {
+	switch {
+	case err == nil:
+		return fmt.Errorf("%s was admitted", what)
+	case (apierrors.IsForbidden(err) || apierrors.IsInvalid(err)) && strings.Contains(err.Error(), validatingAdmissionPolicy):
+		return nil
+	}
+	return fmt.Errorf("%s failed, but not as a refusal by a %s: %w", what, validatingAdmissionPolicy, err)
+}
+
+// deniedByPolicy reports whether a write's answer is a refusal by the named
+// ValidatingAdmissionPolicy: the API server names it in the refusal
+// ("ValidatingAdmissionPolicy '<name>' with binding '<binding>' denied
+// request: ...").
+func deniedByPolicy(err error, policy string) bool {
+	return (apierrors.IsForbidden(err) || apierrors.IsInvalid(err)) && strings.Contains(err.Error(), validatingAdmissionPolicy+" '"+policy+"'")
+}
+
+// switchOffRefusal reads an update's answer as the switch-off policy's
+// refusal: nil for it, an error naming what happened otherwise (the update
+// was admitted, or RBAC or another policy refused it).
+func switchOffRefusal(what string, err error) error {
+	switch {
+	case err == nil:
+		return fmt.Errorf("%s was admitted; the ValidatingAdmissionPolicy %s (%s) refuses it for every writer", what, organizationSwitchOffPolicy, organizationSwitchOffChart)
+	case deniedByPolicy(err, organizationSwitchOffPolicy):
+		return nil
+	}
+	return fmt.Errorf("%s failed, but not as the refusal of the ValidatingAdmissionPolicy %s: %w", what, organizationSwitchOffPolicy, err)
+}
+
+// switchOffRefused: the lab's admin, on their own token, sends two updates
+// of organization A, Ready with its Agent Platform on, as server-side dry
+// runs, so nothing is written whatever the answer. The one that sets
+// spec.capabilities.agentPlatform.enabled to false must be refused by the
+// chart's switch-off policy; its twin, a change of
+// spec.capabilities.agentPlatform.workers.replicas that keeps the switch on,
+// must be admitted, so a refusal of every update does not pass. A chart
+// without the policy fails the check, naming it.
+func (p *adminsProof) switchOffRefused() (string, error) {
+	org := adminsOrgA
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	defer cancel()
 	k, err := labKube()
 	if err != nil {
 		return "", err
 	}
-	// The mirrors of the parent's other labelled bindings, written in the
-	// same reconcile: the absences below are read once both are there.
-	for _, name := range []string{adminsGroupBinding, adminsHeldBinding} {
-		if err := waitMirror(ns, name, true); err != nil {
-			return "", fmt.Errorf("the mirror the negative cases are read beside: %w", err)
-		}
+	_, err = k.clientset.AdmissionregistrationV1().ValidatingAdmissionPolicies().Get(ctx, organizationSwitchOffPolicy, metav1.GetOptions{})
+	switch {
+	case apierrors.IsNotFound(err):
+		return "", fmt.Errorf("the installed chart has no ValidatingAdmissionPolicy %s, which refuses an organization's switch-off (decision D10): it needs the chart of %s — docs/agents.md \"The Organization kind prototype\"", organizationSwitchOffPolicy, organizationSwitchOffChart)
+	case err != nil:
+		return "", fmt.Errorf("the ValidatingAdmissionPolicy %s: %w", organizationSwitchOffPolicy, err)
 	}
-	for _, name := range []string{adminsHandBinding, adminsMachinesBinding} {
-		_, err := k.clientset.RbacV1().RoleBindings(ns).Get(ctx, name, metav1.GetOptions{})
-		if err == nil {
-			return "", fmt.Errorf("RoleBinding %s/%s exists: %s/%s was mirrored", ns, name, adminsParentA, name)
-		}
-		if !apierrors.IsNotFound(err) {
-			return "", err
-		}
+	gvr, err := gvrFor(organizationResource)
+	if err != nil {
+		return "", err
 	}
-	return fmt.Sprintf("%s holds the mirror of %s and none of %s (cluster-admin to %s, no rbac-operator label) or %s (cluster-admin to ServiceAccount %s/%s and User %s)",
-		ns, adminsGroupBinding, adminsHandBinding, userSubject(p.outsider).Name, adminsMachinesBinding, adminsParentA, adminsAutomation, adminsSystemUser), nil
+	admin, _, err := personClients(p.kubeTokens[p.admin.Email])
+	if err != nil {
+		return "", err
+	}
+	organizations := admin.Resource(gvr)
+	current, err := organizations.Get(ctx, org, metav1.GetOptions{})
+	if err != nil {
+		return "", fmt.Errorf("organization %s as %s: %w", org, p.admin.Email, err)
+	}
+	state, err := organizationStateFrom(current)
+	if err != nil {
+		return "", err
+	}
+	if ready, why := state.ready(); !ready {
+		return "", fmt.Errorf("organization %s is not Ready: %s", org, why)
+	}
+	if on, _, _ := unstructured.NestedBool(current.Object, crSpec, organizationSpecCapabilitiesKey, organizationCapabilityAgentPlatform, "enabled"); !on {
+		return "", fmt.Errorf("organization %s does not have spec.capabilities.agentPlatform.enabled true: the switch-off policy holds only an organization whose Agent Platform is on", org)
+	}
+	replicas, found, err := unstructured.NestedInt64(current.Object, crSpec, organizationSpecCapabilitiesKey, organizationCapabilityAgentPlatform, "workers", "replicas")
+	if err != nil {
+		return "", fmt.Errorf("organization %s: spec.capabilities.agentPlatform.workers.replicas: %w", org, err)
+	}
+	if !found {
+		replicas = organizationWorkerReplicas
+	}
+	dry := metav1.PatchOptions{DryRun: []string{metav1.DryRunAll}}
+	what := fmt.Sprintf("%s's update of organization %s that sets spec.capabilities.agentPlatform.enabled to false (a dry run)", p.admin.Email, org)
+	_, err = organizations.Patch(ctx, org, types.MergePatchType, []byte(`{"spec":{"capabilities":{"agentPlatform":{"enabled":false}}}}`), dry)
+	if err := switchOffRefusal(what, err); err != nil {
+		return "", err
+	}
+	twin := replicas + 1
+	if _, err := organizations.Patch(ctx, org, types.MergePatchType, fmt.Appendf(nil, `{"spec":{"capabilities":{"agentPlatform":{"workers":{"replicas":%d}}}}}`, twin), dry); err != nil {
+		return "", fmt.Errorf("the twin: %s's update of organization %s that sets spec.capabilities.agentPlatform.workers.replicas to %d and keeps the switch on (a dry run): %w", p.admin.Email, org, twin, err)
+	}
+	return fmt.Sprintf("as %s (cluster-admin), on %s (%s): spec.capabilities.agentPlatform.enabled false refused by the %s %s; spec.capabilities.agentPlatform.workers.replicas %d to %d admitted (dry runs, nothing written)",
+		p.admin.Email, org, organizationConditionTypeReady, validatingAdmissionPolicy, organizationSwitchOffPolicy, replicas, twin), nil
 }
 
-// refusedBeforeWrite calls create_organization as the person and wants a
-// refusal whose text holds every one of want, and no organization of that
-// name in the parent afterwards.
-func (p *adminsProof) refusedBeforeWrite(person *config.User, parent string, want ...string) (string, error) {
-	step("%s calls %screate_organization %s/%s through muster, mode apply", person.Email, agentManagerToolPrefix, parent, adminsOrgRefused)
-	env, err := p.createOrganization(person, parent, adminsOrgRefused, nil)
+// adminBindingRefused writes, as dry runs, a RoleBinding to
+// agent-platform:admin in organization A's namespace as alice (its admin by
+// group) and as the lab's admin: both must be refused by an admission
+// policy. The twin: alice's RoleBinding to agent-platform:editor there is
+// admitted.
+func (p *adminsProof) adminBindingRefused() (string, error) {
+	ns := p.namespaces[adminsOrgA]
+	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
+	defer cancel()
+	dry := metav1.CreateOptions{DryRun: []string{metav1.DryRunAll}}
+	outsider := userSubject(p.outsider)
+	_, alice, err := personClients(p.kubeTokens[p.alice.Email])
+	if err != nil {
+		return "", err
+	}
+	_, err = alice.RbacV1().RoleBindings(ns).Create(ctx, adminRoleBinding(ns, organizationAdminRole, outsider), dry)
+	if err := refusedAtAdmission(fmt.Sprintf("%s's RoleBinding %s/%s to %s (a dry run)", p.alice.Email, ns, adminsDryRunBinding, organizationAdminRole), err); err != nil {
+		return "", err
+	}
+	k, err := labKube()
+	if err != nil {
+		return "", err
+	}
+	_, err = k.clientset.RbacV1().RoleBindings(ns).Create(ctx, adminRoleBinding(ns, organizationAdminRole, outsider), dry)
+	if err := refusedAtAdmission(fmt.Sprintf("the lab admin's RoleBinding %s/%s to %s (a dry run)", ns, adminsDryRunBinding, organizationAdminRole), err); err != nil {
+		return "", err
+	}
+	if _, err := alice.RbacV1().RoleBindings(ns).Create(ctx, adminRoleBinding(ns, organizationEditorRole, outsider), dry); err != nil {
+		return "", fmt.Errorf("the twin: %s's RoleBinding %s/%s to %s (a dry run): %w", p.alice.Email, ns, adminsDryRunBinding, organizationEditorRole, err)
+	}
+	return fmt.Sprintf("in %s, the RoleBinding of %s to %s is refused by a %s as %s (its admin by group) and as the lab's admin; %s's binding to %s is admitted (dry runs)",
+		ns, outsider.Name, organizationAdminRole, validatingAdmissionPolicy, p.alice.Email, p.alice.Email, organizationEditorRole), nil
+}
+
+// memberToolRefusesAdmin: alice, the admin of organization A, adds the
+// outsider with the admin role through add_organization_member: refused,
+// and organization-admins does not change. The twin: the same call with the
+// user role, a dry run, is admitted.
+func (p *adminsProof) memberToolRefusesAdmin() (string, error) {
+	ns := p.namespaces[adminsOrgA]
+	_, admins := p.caseOf(adminsOrgA)
+	user := userSubject(p.outsider).Name
+	twin, err := p.callOrganizationTool(p.alice, "add_organization_member", map[string]any{organizationArg: adminsOrgA, argRoleUser: user, argRole: argRoleUser, dryRunArg: true})
+	if err != nil {
+		return "", err
+	}
+	if twin.IsError {
+		return "", fmt.Errorf("the twin: %s's add_organization_member %s as user in %s (a dry run) was refused: %s", p.alice.Email, user, ns, envelopeText(twin))
+	}
+	if got := answerOrganization(envelopeText(twin)); got != adminsOrgA {
+		return "", fmt.Errorf("the twin: %s's add_organization_member %s as user (a dry run) answered for organization %q, want %s: %.300s", p.alice.Email, user, got, adminsOrgA, envelopeText(twin))
+	}
+	env, err := p.callOrganizationTool(p.alice, "add_organization_member", map[string]any{organizationArg: adminsOrgA, argRoleUser: user, argRole: argRoleAdmin, modeArg: modeApply})
+	if err != nil {
+		return "", err
+	}
+	text := envelopeText(env)
+	switch {
+	case !env.IsError:
+		return "", fmt.Errorf("%s's add_organization_member %s as admin in %s was not refused: %.500s", p.alice.Email, user, ns, text)
+	case !strings.Contains(text, memberToolsAdminRefusal):
+		// agent-manager's own refusal of the role, before any write; an
+		// admission refusal of a tool that tried to write the admin binding
+		// carries agent-manager's hint on spec.admins too, but not this.
+		return "", fmt.Errorf("%s's add_organization_member %s as admin in %s was refused, but not by agent-manager's refusal of the role (%q): %.500s", p.alice.Email, user, ns, memberToolsAdminRefusal, text)
+	}
+	binding, err := readAdminsBinding(ns)
+	if err != nil {
+		return "", err
+	}
+	if problem := adminsBindingProblem(binding, admins); problem != "" {
+		return "", fmt.Errorf("after the refused add of %s as admin in %s: %s", user, ns, problem)
+	}
+	return fmt.Sprintf("%s's add of %s as admin in %s refused (%s), %s unchanged; as user (a dry run) admitted", p.alice.Email, user, ns, excerpt(text, 200), organizationAdminsBinding), nil
+}
+
+// createRefused: alice, an organization's admin without create on
+// Organizations, calls create_organization: refused, and no Organization of
+// that name exists afterwards.
+func (p *adminsProof) createRefused() (string, error) {
+	step("%s calls %screate_organization %s through muster, mode apply", p.alice.Email, agentManagerToolPrefix, adminsOrgRefused)
+	env, err := p.createOrganization(p.alice, adminsOrgRefused, map[string]any{argAdminUsers: []string{userSubject(p.alice).Name}})
 	if err != nil {
 		return "", err
 	}
 	text := envelopeText(env)
 	if !env.IsError {
-		return "", fmt.Errorf("create_organization as %s in %s was not refused: %.500s", person.Email, parent, text)
-	}
-	for _, w := range want {
-		if !strings.Contains(text, w) {
-			return "", fmt.Errorf("create_organization as %s in %s was refused without %q: %s", person.Email, parent, w, text)
+		// alice's create was answered: this run wrote the Organization, so
+		// the next run's cleanup may remove it.
+		if err := labelProofOrganization(adminsOrgRefused); err != nil {
+			note("labelling Organization %s for the next run's cleanup: %v", adminsOrgRefused, err)
 		}
+		return "", fmt.Errorf("create_organization as %s was not refused: %.500s", p.alice.Email, text)
 	}
 	gvr, err := gvrFor(organizationResource)
 	if err != nil {
@@ -501,151 +577,70 @@ func (p *adminsProof) refusedBeforeWrite(person *config.User, parent string, wan
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	defer cancel()
-	exists, err := objectExists(ctx, gvr, parent, adminsOrgRefused)
+	exists, err := objectExists(ctx, gvr, "", adminsOrgRefused)
 	if err != nil {
 		return "", err
 	}
 	if exists {
-		return "", fmt.Errorf("create_organization as %s was refused, but %s/%s exists", person.Email, parent, adminsOrgRefused)
+		// Not labelled for cleanup: the refused call did not create it, so
+		// nothing shows this run owns it.
+		return "", fmt.Errorf("create_organization as %s was refused, but Organization %s exists", p.alice.Email, adminsOrgRefused)
 	}
-	return excerpt(text, 200), nil
+	return fmt.Sprintf("%s refused, no Organization %s afterwards: %s", p.alice.Email, adminsOrgRefused, excerpt(text, 200)), nil
 }
 
-// handWrittenRefused: the outsider is cluster-admin in parent A by a binding
-// without rbac-operator's label, so may write there what create_organization
-// asks first; its refusal must come from the check that the right reaches
-// the new namespace, which names the binding.
-func (p *adminsProof) handWrittenRefused() (string, error) {
-	text, err := p.refusedBeforeWrite(p.outsider, adminsParentA, "nothing was written", adminsHandBinding)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("%s (cluster-admin in %s by %s) refused, no %s/%s afterwards: %s", p.outsider.Email, adminsParentA, adminsHandBinding, adminsParentA, adminsOrgRefused, text), nil
-}
-
-// crossRefused: each admin, who created an organization in their own
-// Giant Swarm Organization's namespace, is refused in the other's.
-func (p *adminsProof) crossRefused() (string, error) {
-	var seen []string
-	for _, c := range []struct {
-		person *config.User
-		parent string
-	}{{p.bob, adminsParentA}, {p.alice, adminsParentB}} {
-		// agent-manager's first check, as the person in the parent:
-		// they hold no right there at all.
-		text, err := p.refusedBeforeWrite(c.person, c.parent, "you may not", c.parent)
-		if err != nil {
-			return "", err
-		}
-		seen = append(seen, fmt.Sprintf("%s in %s: %s", c.person.Email, c.parent, text))
-	}
-	return "refused, no organization written: " + strings.Join(seen, "; "), nil
-}
-
-// waitMirror waits until the organization namespace holds (or no longer
-// holds) a RoleBinding of the name.
-func waitMirror(ns, name string, present bool) error {
-	k, err := labKube()
+// updateAdmins calls update_organization as the lab's admin with the
+// admins arguments.
+func (p *adminsProof) updateAdmins(org string, args map[string]any) error {
+	args = withArgs(map[string]any{nameKey: org, modeArg: modeApply}, args)
+	env, err := p.callOrganizationTool(p.admin, "update_organization", args)
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), adminsMirrorWait)
-	defer cancel()
-	err = wait.PollUntilContextCancel(ctx, pollInterval, true, func(ctx context.Context) (bool, error) {
-		_, err := k.clientset.RbacV1().RoleBindings(ns).Get(ctx, name, metav1.GetOptions{})
-		if apierrors.IsNotFound(err) {
-			return !present, nil
-		}
-		return present && err == nil, err
-	})
-	if err != nil {
-		return fmt.Errorf("RoleBinding %s/%s present=%t within %s: %w", ns, name, present, adminsMirrorWait, err)
+	if env.IsError {
+		return fmt.Errorf("update_organization %s as %s was refused: %s", org, p.admin.Email, envelopeText(env))
 	}
 	return nil
 }
 
-// deletingUnmirrored deletes the held parent binding, whose finalizer keeps
-// it: its mirror must go while the binding still exists, being deleted.
-func (p *adminsProof) deletingUnmirrored() (string, error) {
+// adminsChanged: organization A's admin group is replaced by alice by name;
+// the operator's binding follows.
+func (p *adminsProof) adminsChanged() (string, error) {
 	ns := p.namespaces[adminsOrgA]
-	if err := waitMirror(ns, adminsHeldBinding, true); err != nil {
-		return "", fmt.Errorf("before the delete: %w", err)
+	want := []organizationAdmin{adminUser(p.alice)}
+	step("%s replaces the admins of %s: no group, user %s", p.admin.Email, adminsOrgA, want[0].Name)
+	if err := p.updateAdmins(adminsOrgA, map[string]any{argAdminGroups: []string{}, argAdminUsers: []string{want[0].Name}}); err != nil {
+		return "", err
 	}
-	k, err := labKube()
+	got, err := waitOrganizationAdmins(ns, want)
 	if err != nil {
 		return "", err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
-	defer cancel()
-	step("Deleting %s/%s, which the finalizer %s holds", adminsParentA, adminsHeldBinding, adminsHoldFinalizer)
-	if err := k.clientset.RbacV1().RoleBindings(adminsParentA).Delete(ctx, adminsHeldBinding, metav1.DeleteOptions{}); err != nil {
-		return "", err
-	}
-	if err := waitMirror(ns, adminsHeldBinding, false); err != nil {
-		return "", err
-	}
-	ctx, cancel = context.WithTimeout(context.Background(), kubeReadTimeout)
-	defer cancel()
-	held, err := k.clientset.RbacV1().RoleBindings(adminsParentA).Get(ctx, adminsHeldBinding, metav1.GetOptions{})
-	if err != nil {
-		return "", fmt.Errorf("%s/%s is gone, so its mirror's removal does not show a binding being deleted: %w", adminsParentA, adminsHeldBinding, err)
-	}
-	if held.DeletionTimestamp == nil {
-		return "", fmt.Errorf("%s/%s has no deletion timestamp", adminsParentA, adminsHeldBinding)
-	}
-	if err := releaseHeld(ctx); err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("%s/%s mirrored before the delete; its mirror gone while the binding was still there, deleted since %s", ns, adminsHeldBinding, held.DeletionTimestamp.UTC().Format(time.RFC3339)), nil
+	return fmt.Sprintf("after update_organization, %s/%s binds %s alone to %s; group %s left it", ns, organizationAdminsBinding, got, organizationAdminRole, adminGroup(config.GroupTenantA).Name), nil
 }
 
-// releaseHeld removes the finalizer of the held binding, if it is there.
-func releaseHeld(ctx context.Context) error {
-	k, err := labKube()
-	if err != nil {
-		return err
-	}
-	held, err := k.clientset.RbacV1().RoleBindings(adminsParentA).Get(ctx, adminsHeldBinding, metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if !slices.Contains(held.Finalizers, adminsHoldFinalizer) {
-		return nil
-	}
-	held.Finalizers = slices.DeleteFunc(held.Finalizers, func(f string) bool { return f == adminsHoldFinalizer })
-	_, err = k.clientset.RbacV1().RoleBindings(adminsParentA).Update(ctx, held, metav1.UpdateOptions{})
-	return err
-}
-
-// groupRemoved removes alice's group from rbac-operator's binding, which
-// keeps its ServiceAccount: the mirror, left without a subject, must go.
-func (p *adminsProof) groupRemoved() (string, error) {
-	ns := p.namespaces[adminsOrgA]
-	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
-	defer cancel()
-	step("Removing group %s from %s/%s", groupSubject(config.GroupTenantA).Name, adminsParentA, adminsGroupBinding)
-	if _, err := applyTyped(ctx, adminsBinding(adminsParentA, adminsGroupBinding, clusterAdminRole, true, serviceAccountSubject(adminsParentA))); err != nil {
+// adminsEmptied: organization B's admins are emptied; the operator removes
+// its binding and the organization stays Ready.
+func (p *adminsProof) adminsEmptied() (string, error) {
+	ns := p.namespaces[adminsOrgB]
+	step("%s removes every admin of %s", p.admin.Email, adminsOrgB)
+	if err := p.updateAdmins(adminsOrgB, map[string]any{argAdminUsers: []string{}}); err != nil {
 		return "", err
 	}
-	if err := waitMirror(ns, adminsGroupBinding, false); err != nil {
+	if _, err := waitOrganizationAdmins(ns, nil); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("with only ServiceAccount %s/%s left in %s/%s, %s holds no RoleBinding %s", adminsParentA, adminsAutomation, adminsParentA, adminsGroupBinding, ns, adminsGroupBinding), nil
-}
-
-// removeLeftovers erases a previous run's organizations and parents.
-func (p *adminsProof) removeLeftovers() error {
-	return removeAdminsFixtures()
+	if _, err := waitOrganizationReady(adminsOrgB); err != nil {
+		return "", fmt.Errorf("organization %s without admins: %w", adminsOrgB, err)
+	}
+	return fmt.Sprintf("with spec.admins empty, %s holds no RoleBinding %s and %s stays Ready", ns, organizationAdminsBinding, adminsOrgB), nil
 }
 
 // cleanup removes what the part wrote, unless it failed: then the
 // fixtures stay for diagnosis, and the next run removes them first.
 func (p *adminsProof) cleanup() {
 	if p.failed {
-		note("the admins part failed: %s and %s, their organizations and bindings stay for diagnosis; the next run removes them first", adminsParentA, adminsParentB)
+		note("the admins part failed: %s and %s stay for diagnosis; the next run removes them first", adminsOrgA, adminsOrgB)
 		return
 	}
 	if err := removeAdminsFixtures(); err != nil {
@@ -655,8 +650,8 @@ func (p *adminsProof) cleanup() {
 
 // removeAdminsFixtures deletes the part's organizations (with Flux's prune
 // marker, which the chart's admission asks of a delete) and waits until
-// they and their namespaces are gone, then the parents, which it refuses
-// to delete without the part's label.
+// they and their namespaces are gone. It refuses an organization without the
+// part's label.
 func removeAdminsFixtures() error {
 	gvr, err := gvrFor(organizationResource)
 	if err != nil {
@@ -669,8 +664,8 @@ func removeAdminsFixtures() error {
 	ctx, cancel := context.WithTimeout(context.Background(), organizationCleanupWait+namespaceDeleteTimeout)
 	defer cancel()
 	var errs []error
-	for _, parent := range []string{adminsParentA, adminsParentB} {
-		ns, err := k.clientset.CoreV1().Namespaces().Get(ctx, parent, metav1.GetOptions{})
+	for _, name := range []string{adminsOrgA, adminsOrgB, adminsOrgRefused} {
+		org, err := getObject(ctx, gvr, "", name)
 		if apierrors.IsNotFound(err) {
 			continue
 		}
@@ -678,70 +673,34 @@ func removeAdminsFixtures() error {
 			errs = append(errs, err)
 			continue
 		}
-		if ns.Labels[organizationsTestLabel] != organizationsTestMark {
-			errs = append(errs, fmt.Errorf("refusing to delete namespace %s without the label %s=%s", parent, organizationsTestLabel, organizationsTestMark))
+		if org.GetLabels()[organizationsTestLabel] != organizationsTestMark {
+			errs = append(errs, fmt.Errorf("refusing to delete Organization %s without the label %s=%s", name, organizationsTestLabel, organizationsTestMark))
 			continue
 		}
-		if parent == adminsParentA {
-			if err := releaseHeld(ctx); err != nil {
-				errs = append(errs, err)
-			}
-		}
-		orgs, err := listObjects(ctx, gvr, parent, "")
-		if err != nil {
+		step("Deleting organization %s", name)
+		state, _ := organizationStateFrom(org)
+		resource := k.resource(gvr, "")
+		if _, err := resource.Patch(ctx, name, types.MergePatchType, []byte(`{"metadata":{"annotations":{"kustomize.toolkit.fluxcd.io/prune":"enabled"}}}`), metav1.PatchOptions{}); err != nil {
 			errs = append(errs, err)
 			continue
 		}
-		for _, org := range orgs {
-			step("Deleting organization %s/%s", parent, org.GetName())
-			state, _ := organizationStateFrom(&org)
-			resource := k.resource(gvr, parent)
-			if _, err := resource.Patch(ctx, org.GetName(), types.MergePatchType, []byte(`{"metadata":{"annotations":{"kustomize.toolkit.fluxcd.io/prune":"enabled"}}}`), metav1.PatchOptions{}); err != nil {
-				errs = append(errs, err)
-				continue
-			}
-			if err := resource.Delete(ctx, org.GetName(), metav1.DeleteOptions{}); ignoreNotFound(err) != nil {
-				errs = append(errs, err)
-				continue
-			}
-			if err := wait.PollUntilContextCancel(ctx, pollInterval, true, func(ctx context.Context) (bool, error) {
-				_, err := getObject(ctx, gvr, parent, org.GetName())
-				if !apierrors.IsNotFound(err) {
-					return false, ignoreNotFound(err)
-				}
-				if state.namespace == "" {
-					return true, nil
-				}
-				_, err = getObject(ctx, gvrNamespaces, "", state.namespace)
-				return apierrors.IsNotFound(err), ignoreNotFound(err)
-			}); err != nil {
-				errs = append(errs, fmt.Errorf("organization %s/%s not gone: %w", parent, org.GetName(), err))
-				continue
-			}
-		}
-		if err := deleteNamespace(ctx, parent); err != nil {
+		if err := resource.Delete(ctx, name, metav1.DeleteOptions{}); ignoreNotFound(err) != nil {
 			errs = append(errs, err)
+			continue
+		}
+		if err := wait.PollUntilContextCancel(ctx, pollInterval, true, func(ctx context.Context) (bool, error) {
+			_, err := getObject(ctx, gvr, "", name)
+			if !apierrors.IsNotFound(err) {
+				return false, ignoreNotFound(err)
+			}
+			if state.namespace == "" {
+				return true, nil
+			}
+			_, err = getObject(ctx, gvrNamespaces, "", state.namespace)
+			return apierrors.IsNotFound(err), ignoreNotFound(err)
+		}); err != nil {
+			errs = append(errs, fmt.Errorf("organization %s not gone: %w", name, err))
 		}
 	}
 	return errors.Join(errs...)
-}
-
-// operatorRunning names the agent-platform-operator image the lab runs, for
-// a failure that depends on its release.
-func operatorRunning() string {
-	k, err := labKube()
-	if err != nil {
-		return "its release not read: " + err.Error()
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
-	defer cancel()
-	deployment, err := k.clientset.AppsV1().Deployments(platformNamespace).Get(ctx, "agent-platform-operator", metav1.GetOptions{})
-	if err != nil {
-		return "its release not read: " + err.Error()
-	}
-	var images []string
-	for _, c := range deployment.Spec.Template.Spec.Containers {
-		images = append(images, c.Image)
-	}
-	return "the lab runs " + strings.Join(images, ", ")
 }

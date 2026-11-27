@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -457,13 +456,7 @@ func ensureBeekeeperNamespace() (func(), error) {
 // nodeKubeconfig is the lab kubeconfig for a process in the node's network:
 // the API server on 127.0.0.1:6443 there, not the host's published port.
 func nodeKubeconfig(runDir string) (string, error) {
-	raw, err := os.ReadFile(labKubeconfig()) //nolint:gosec // the lab's own kubeconfig
-	if err != nil {
-		return "", err
-	}
-	out := regexp.MustCompile(`server: https://127\.0\.0\.1:\d+`).ReplaceAll(raw, []byte("server: https://127.0.0.1:6443"))
-	path := filepath.Join(runDir, beekeeperKubeconfig)
-	return path, os.WriteFile(path, out, 0o600) //nolint:gosec // the run directory
+	return labKubeconfigAt(runDir, beekeeperKubeconfig, "https://127.0.0.1:6443")
 }
 
 func copyFile(from, to string) error {

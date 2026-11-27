@@ -101,6 +101,7 @@ const (
 	gatewayKubeconfigPath = "/etc/klaus-gateway/kubeconfig"
 	gatewayBoltFile       = "routes.bolt"
 	gatewayLinksFile      = "links.bolt"
+	gatewayKubeconfigFile = "kubeconfig"
 	gatewayLogFile        = "klaus-gateway.log"
 	gatewaySecrets        = "slack-secrets.yaml"
 	gatewayStateKey       = "obo-state.key"
@@ -257,6 +258,14 @@ func KlausGatewayTest(cfg *config.Config, email string, opts KlausGatewayTestOpt
 	opts = opts.withDefaults()
 	if opts.Part == KlausGatewayPartRefresh {
 		return klausGatewayRefreshTest(cfg, user, opts)
+	}
+	// The host gateway starts a thread's Session through muster
+	// (trustLabCA); --refusal-only starts none, unless --part signin, which
+	// runs before it, does.
+	if !opts.RefusalOnly || opts.Part == KlausGatewayPartSignIn {
+		if err := refuseUntrustedHostGateway(cfg, opts.GatewayBinary); err != nil {
+			return err
+		}
 	}
 	if err := portsFree(opts.Port, opts.Port+1, opts.Port+3); err != nil {
 		return err
@@ -1391,11 +1400,42 @@ func pullGatewayImage(image string, wait time.Duration) error {
 		return nil
 	}
 	note("pulling %s (not counted against the %s readiness wait)", image, wait)
-	if _, err := outputQuiet(dockerBin, "pull", "-q", image); err != nil {
+	_, err := outputQuiet(dockerBin, "pull", "-q", image)
+	if err == nil {
+		return nil
+	}
+	// A dev image of klaus-gateway is built for linux/amd64 alone: on an
+	// arm64 host the plain pull finds no manifest for its platform, and
+	// the engine runs the amd64 image under emulation once it is pulled.
+	// Any other failure (the network, the registry) is the pull's own: a
+	// multi-platform image is never cached as amd64 for it.
+	if !noManifestForPlatform(err) {
 		return fmt.Errorf("pulling the klaus-gateway image: %w", err)
+	}
+	note("the pull failed (%v); pulling %s for %s", err, image, gatewayFallbackPlatform)
+	if _, err2 := outputQuiet(dockerBin, "pull", "-q", "--platform", gatewayFallbackPlatform, image); err2 != nil {
+		return fmt.Errorf("pulling the klaus-gateway image: %w; for %s: %w", err, gatewayFallbackPlatform, err2)
 	}
 	return nil
 }
+
+// noManifestForPlatform reports whether a failed pull found the image but
+// nothing for the host's platform: Docker's classic store says "no matching
+// manifest", its containerd store "no match for platform", Podman "no image
+// found in image index" or "in manifest list".
+func noManifestForPlatform(err error) bool {
+	msg := err.Error()
+	for _, s := range []string{"no matching manifest", "no match for platform", "no image found in image index", "no image found in manifest list"} {
+		if strings.Contains(msg, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// gatewayFallbackPlatform is the platform pullGatewayImage asks for when the
+// host's own finds nothing: the one a klaus-gateway dev image is built for.
+const gatewayFallbackPlatform = "linux/amd64"
 
 // version is the gateway's own "starting" record, for the notes.
 func (g *gatewayProcess) version() string { return gatewayVersion(g.logs()) }

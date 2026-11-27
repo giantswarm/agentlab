@@ -277,3 +277,15 @@ users:
 		t.Errorf("an entry with the live CA was rewritten:\n%s", raw)
 	}
 }
+
+// A gateway on the kind network reads the API server at the control-plane
+// node's port 6443, not at the port kind published on the host's loopback,
+// which that network has no route to; everything else of the lab kubeconfig
+// (its CA and its credentials) stays as kind wrote it.
+func TestWithAPIServer(t *testing.T) {
+	got := string(withAPIServer([]byte(fakeKindKubeconfig), kindNetworkAPIServer("agentlab-control-plane")))
+	want := strings.Replace(fakeKindKubeconfig, "server: https://127.0.0.1:34547", "server: https://agentlab-control-plane:6443", 1)
+	if got != want {
+		t.Errorf("withAPIServer =\n%s\nwant\n%s", got, want)
+	}
+}

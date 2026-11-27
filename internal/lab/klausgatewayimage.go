@@ -2,8 +2,10 @@ package lab
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -156,4 +158,65 @@ func resolveGatewayImage(cfg *config.Config, image, binary string) (string, erro
 	}
 	note("host gateway: %s — %s", img.ref, img.source)
 	return img.ref, nil
+}
+
+// hostTrust is what decides whether a gateway binary on this host verifies
+// muster: the host's OS, whether the lab serves an externally provisioned
+// pair (platform.tls), whether the lab CA is in the system trust store, and
+// the certificate variables of agentlab's own environment.
+type hostTrust struct {
+	goos         string
+	externalTLS  bool
+	labCATrusted bool
+	// certEnv names SSL_CERT_FILE or SSL_CERT_DIR when either is set, "" when
+	// neither is.
+	certEnv string
+}
+
+// hostGatewayTrustProblem words why a gateway binary (--gateway-binary)
+// cannot call muster on this host, "" when it can. The lab gives a host
+// process the lab CA through SSL_CERT_FILE, and a Go program on macOS
+// ignores it (a module whose go directive is below 1.27 keeps
+// x509sslcertoverrideplatform=0) and verifies against the system trust
+// store alone: the muster call fails "x509: certificate signed by unknown
+// authority" unless `agentlab trust` put the lab CA there. The image runs on
+// Linux, where SSL_CERT_FILE holds.
+//
+// The lab judges only what it can see. The probe of the system trust store
+// runs in agentlab, which reads SSL_CERT_FILE and SSL_CERT_DIR on macOS in
+// place of the store: with either set, its answer is not the gateway's. An
+// externally provisioned pair serves a certificate the lab CA does not sign.
+// In both cases the binary runs, as before this check: a wrong refusal
+// would stop a healthy run, a wrong pass fails at the muster call as it did.
+func hostGatewayTrustProblem(binary string, t hostTrust) string {
+	switch {
+	case binary == "" || t.goos != goosDarwin || t.externalTLS || t.certEnv != "":
+		return ""
+	case !t.labCATrusted:
+		return fmt.Sprintf("--gateway-binary %s: on macOS the gateway verifies muster against the system trust store, which does not hold the lab CA, so its muster calls would fail with an unknown authority; run the image instead (--gateway-image), or put the lab CA in the system trust store first (`agentlab trust`)", binary)
+	}
+	return ""
+}
+
+// refuseUntrustedHostGateway is hostGatewayTrustProblem for this host, as
+// an error: a proof whose host gateway calls muster asks it before it
+// starts.
+func refuseUntrustedHostGateway(cfg *config.Config, binary string) error {
+	if binary == "" || runtime.GOOS != goosDarwin {
+		return nil
+	}
+	t := hostTrust{goos: runtime.GOOS, externalTLS: cfg.Platform.TLS.Set(), labCATrusted: systemTrusted()}
+	for _, env := range []string{"SSL_CERT_FILE", "SSL_CERT_DIR"} {
+		if os.Getenv(env) != "" {
+			t.certEnv = env
+			break
+		}
+	}
+	if t.certEnv != "" {
+		note("%s is set: agentlab cannot see whether the gateway binary trusts the lab CA on macOS, so the binary runs unchecked", t.certEnv)
+	}
+	if problem := hostGatewayTrustProblem(binary, t); problem != "" {
+		return errors.New(problem)
+	}
+	return nil
 }

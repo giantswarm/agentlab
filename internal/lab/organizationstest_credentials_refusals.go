@@ -407,12 +407,12 @@ func (p *credentialsProof) connectorAndEgressConfirmations() (string, error) {
 	}{
 		{
 			tool: "set_organization_connector", kind: remoteMCPServerKind, name: credentialsConnector,
-			args: map[string]any{namespaceKey: p.namespace, nameKey: credentialsConnector, "url": credentialsConnectorURL, "credentialHeader": authorizationHeader, modeArg: modeApply},
+			args: map[string]any{organizationArg: credentialsOrganization, nameKey: credentialsConnector, "url": credentialsConnectorURL, "credentialHeader": authorizationHeader, modeArg: modeApply},
 			want: credentialReference{Kind: remoteMCPServerKind, Name: credentialsConnector, Key: credentialTokenKey, URL: credentialsConnectorURL},
 		},
 		{
 			tool: "set_organization_egress_policy", kind: egressPolicyKind, name: credentialsEgress,
-			args: map[string]any{namespaceKey: p.namespace, nameKey: credentialsEgress, modeArg: modeApply, "destinations": []any{
+			args: map[string]any{organizationArg: credentialsOrganization, nameKey: credentialsEgress, modeArg: modeApply, "destinations": []any{
 				withArgs(bearer, map[string]any{egressOriginKey: credentialsEgressOrigin}),
 				withArgs(bearer, map[string]any{egressOriginKey: credentialsEgressOtherOrigin}),
 				map[string]any{egressOriginKey: credentialsEgressPlainOrigin},

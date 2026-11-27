@@ -94,4 +94,7 @@ type accessStarted struct {
 		Creator string `json:"creator"`
 	} `json:"session"`
 	Workspace string `json:"workspace"`
+	// Organization names the organization whose agent it is, "" for the
+	// installation's own.
+	Organization string `json:"organization"`
 }

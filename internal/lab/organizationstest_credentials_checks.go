@@ -159,8 +159,8 @@ func (c credentialPrerequisites) orgsContentPrefix() string {
 // credentialSecretPath is where agent-manager's commit mode writes an
 // organization's credential Secret (agent-manager
 // docs/organizations-commit-mode.md "The layout").
-func credentialSecretPath(contentPrefix, parent, organization, secret string) string {
-	return strings.Join([]string{strings.Trim(contentPrefix, "/"), parent, organization, secret + "-secret.enc.yaml"}, "/")
+func credentialSecretPath(contentPrefix, organization, secret string) string {
+	return strings.Join([]string{strings.Trim(contentPrefix, "/"), organization, secret + "-secret.enc.yaml"}, "/")
 }
 
 // strongETag reads an ETag header as RFC 9110 section 8.8.3 writes a strong
@@ -202,6 +202,7 @@ func signInAttribution(message, key string) string {
 // credentialAnswer is the part of agent-manager's ResourceResult the proof
 // reads: the credentials and the pending operation, or the receipt.
 type credentialAnswer struct {
+	Organization        string            `json:"organization"`
 	Namespace           string            `json:"namespace"`
 	Kind                string            `json:"kind"`
 	Name                string            `json:"name"`
@@ -310,7 +311,6 @@ func valueCarried(s, value string) string {
 // The variables of agent-manager's credential UI URL template.
 const (
 	uiVarOperation    = "operation"
-	uiVarParent       = "parent"
 	uiVarOrganization = "organization"
 	uiVarNamespace    = "namespace"
 )
@@ -329,16 +329,15 @@ var operationRe = regexp.MustCompile(`^[A-Za-z0-9._~-]+$`)
 
 // formOperation reads the operation from a link to the credential UI: the
 // link must be the template expanded as agent-manager expands it (RFC 6570,
-// with operation, parent, organization and namespace only), so nothing else,
-// no value and no token, travels in it.
-func formOperation(template, link, parent, organization, namespace string) (string, error) {
+// with operation, organization and namespace only), so nothing else, no
+// value and no token, travels in it.
+func formOperation(template, link, organization, namespace string) (string, error) {
 	tpl, err := uritemplate.New(template)
 	if err != nil {
 		return "", fmt.Errorf("credential UI URL template %q: %w", template, err)
 	}
 	expanded, err := tpl.Expand(uritemplate.Values{
 		uiVarOperation:    uritemplate.String(formOperationMarker),
-		uiVarParent:       uritemplate.String(parent),
 		uiVarOrganization: uritemplate.String(organization),
 		uiVarNamespace:    uritemplate.String(namespace),
 	})
@@ -478,22 +477,19 @@ func sopsRuleHint(contentPrefix, recipient string) string {
 
 // organizationRef names one organization for the erasure's leftovers.
 type organizationRef struct {
-	parent, name, namespace, uid string
+	name, namespace, uid string
 }
-
-// The operator's labels on what it keeps for an organization.
-const organizationUIDLabel = "agent-platform.giantswarm.io/organization-uid"
 
 // organizationBindingLeftovers names the RoleBindings that still refer to
 // the erased organization: one in its namespace, one carrying its UID or
-// its name and parent, or one binding a ServiceAccount of its namespace or
-// named after it (its Flux identity).
+// its name, or one binding a ServiceAccount of its namespace or named after
+// it (its Flux identity).
 func organizationBindingLeftovers(bindings []rbacv1.RoleBinding, org organizationRef) []string {
 	var out []string
 	for _, b := range bindings {
 		refers := b.Namespace == org.namespace ||
 			(org.uid != "" && b.Labels[organizationUIDLabel] == org.uid) ||
-			(b.Labels[organizationLabel] == org.name && b.Labels[organizationParentLabel] == org.parent)
+			b.Labels[organizationLabel] == org.name
 		for _, s := range b.Subjects {
 			if s.Kind == rbacv1.ServiceAccountKind && (s.Namespace == org.namespace || s.Name == org.namespace) {
 				refers = true

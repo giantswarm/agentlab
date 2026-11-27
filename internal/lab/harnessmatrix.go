@@ -267,7 +267,7 @@ func (m *matrixCell) run(api *kagentAPI, ms *musterSession, timeout time.Duratio
 	defer cancel()
 	sessions := &sessionSet{api: api, manager: ms}
 	defer sessions.removeAll()
-	session, err := startSessionOf(ctx, ms, api, sessions, agentRef(m.parent), uuid.NewString())
+	session, err := startSessionOf(ctx, ms, api, sessions, "", agentRef(m.parent), uuid.NewString())
 	if err != nil {
 		return err
 	}

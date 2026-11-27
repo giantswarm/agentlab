@@ -916,7 +916,7 @@ var chartSourceGrant = saGrant{resource: fluxOCIRepositoryResource, names: []str
 //   - namespaces get/list: agent-manager finds the organization namespaces
 //     by their label agent-platform.giantswarm.io/organization
 //     (internal/organizations/namespaces.go);
-//   - agentplatformorganizations get/list: list_organizations reads the
+//   - organizations.security.giantswarm.io get/list: list_organizations reads the
 //     organizations and answers only those the caller's access reviews allow
 //     (agent-manager 2.24.0 on, since
 //     https://github.com/giantswarm/agent-manager/pull/361; optional, as an
@@ -990,7 +990,7 @@ func (g saGrant) String() string {
 // the agent-manager ServiceAccount hold in the kagent namespace
 // according to the enabled mode:
 //   - agentPlatformOrganizations.enabled, with --multi-tenant: get and list
-//     namespaces and AgentPlatformOrganizations for organization discovery
+//     namespaces and Organizations for organization discovery
 //     (organizationDiscoveryGrants). Organization operations themselves run
 //     as the caller; no reconciler writes or Secret reads belong to the
 //     ServiceAccount. With the organizations off the chart renders neither;

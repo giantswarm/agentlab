@@ -227,12 +227,12 @@ func A2ATest(cfg *config.Config, email string, opts A2ATestOptions) error {
 	step("start_session as %s, idempotent on requestId", user.Email)
 	requestID := uuid.NewString()
 	ctx, cancel = context.WithTimeout(context.Background(), kagentTurnTimeout)
-	session, err := startSessionOf(ctx, ms, api, sessions, agentRef(a2aTestAgent), requestID)
+	session, err := startSessionOf(ctx, ms, api, sessions, "", agentRef(a2aTestAgent), requestID)
 	if err != nil {
 		cancel()
 		return err
 	}
-	again, err := startSessionOf(ctx, ms, api, sessions, agentRef(a2aTestAgent), requestID)
+	again, err := startSessionOf(ctx, ms, api, sessions, "", agentRef(a2aTestAgent), requestID)
 	cancel()
 	if err != nil {
 		return fmt.Errorf("the second start_session with requestId %s: %w", requestID, err)
@@ -253,7 +253,7 @@ func A2ATest(cfg *config.Config, email string, opts A2ATestOptions) error {
 		// tried once more on a fresh instance, never silently.
 		note("the first turn failed (%s) — one retry on a fresh session, a cold worker's ResumeActor deadline is not retried by Substrate", excerpt(err.Error(), 200))
 		ctx, cancel = context.WithTimeout(context.Background(), kagentTurnTimeout)
-		session, err = startSessionOf(ctx, ms, api, sessions, agentRef(a2aTestAgent), uuid.NewString())
+		session, err = startSessionOf(ctx, ms, api, sessions, "", agentRef(a2aTestAgent), uuid.NewString())
 		cancel()
 		if err != nil {
 			return err
@@ -294,7 +294,7 @@ func A2ATest(cfg *config.Config, email string, opts A2ATestOptions) error {
 	// On a fresh instance: the first one's conversation already holds the
 	// count, and a model that answers from it makes no tool call to pause on.
 	ctx, cancel = context.WithTimeout(context.Background(), kagentTurnTimeout)
-	fresh, err := startSessionOf(ctx, ms, api, sessions, agentRef(a2aTestAgent), uuid.NewString())
+	fresh, err := startSessionOf(ctx, ms, api, sessions, "", agentRef(a2aTestAgent), uuid.NewString())
 	cancel()
 	if err != nil {
 		return err

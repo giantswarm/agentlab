@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -15,18 +16,19 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
 
-// Two organization namespaces as the operator names them, and a boundary,
+// Two organization namespaces as the operator names them (agents-<name>), and a boundary,
 // for the cases below.
 const (
 	testBoundary = "role bindings"
-	orgAlpha     = "agents-alpha-x7k2q"
-	orgBeta      = "agents-beta-p4m9z"
+	orgAlpha     = "agents-alpha"
+	orgBeta      = "agents-beta"
 )
 
 // Every verdict names its surface and its boundary, and a passing one what
@@ -88,8 +90,11 @@ func TestOrganizationCheckVerdict(t *testing.T) {
 	}
 }
 
-// The organization's state: Ready only for its current generation with a
-// namespace; a deleted one names its cleanup step.
+// The Organization's state (the shape of giantswarm/organization-operator#673):
+// AgentPlatformReady only for its current generation with the Agent
+// Platform's namespace (the agentPlatform entry of status.namespaces, not
+// organization-operator's kaas entry or status.namespace); a deleted one
+// names its cleanup step (the reason of AgentPlatformErasing).
 func TestOrganizationReady(t *testing.T) {
 	org := func(generation int64, status map[string]any, deleting bool) *unstructured.Unstructured {
 		u := &unstructured.Unstructured{Object: map[string]any{}}
@@ -105,11 +110,19 @@ func TestOrganizationReady(t *testing.T) {
 		}
 		return u
 	}
-	conditions := func(gen int64, status string) []any {
-		return []any{map[string]any{"type": conditionReady, crStatus: status, fieldReason: "Reconciled", "observedGeneration": gen}}
+	conditions := func(kind string, gen int64, status, reason string) []any {
+		return []any{map[string]any{fieldTypeKey: kind, crStatus: status, fieldReason: reason, "observedGeneration": gen}}
 	}
+	// organization-operator's namespace of the organization, and its entry
+	// of status.namespaces.
+	const kaasNamespace, namespaces = "org-agentlab-a", "namespaces"
+	kaas := map[string]any{nameKey: kaasNamespace, "capability": "kaas"}
 	ready := func(gen int64, status string) map[string]any {
-		return map[string]any{organizationStatusNamespaceKey: orgAlpha, organizationStatusConditionsKey: conditions(gen, status)}
+		return map[string]any{
+			namespaceKey: kaasNamespace,
+			namespaces:   []any{kaas, map[string]any{nameKey: orgAlpha, "capability": "agentPlatform"}},
+			crConditions: conditions("AgentPlatformReady", gen, status, "Reconciled"),
+		}
 	}
 	for name, tc := range map[string]struct {
 		obj  *unstructured.Unstructured
@@ -118,10 +131,10 @@ func TestOrganizationReady(t *testing.T) {
 	}{
 		"Ready now":                 {org(2, ready(2, conditionTrue), false), true, ""},
 		"an older generation":       {org(3, ready(2, conditionTrue), false), false, "generation 2"},
-		"not Ready":                 {org(2, ready(2, condFalseStatus), false), false, "Ready=False"},
-		"without a status":          {org(1, nil, false), false, "no Ready condition"},
-		"being deleted":             {org(2, map[string]any{organizationStatusErasureStepKey: "Sessions"}, true), false, `"Sessions"`},
-		"Ready without a namespace": {org(1, map[string]any{organizationStatusConditionsKey: conditions(1, conditionTrue)}, false), false, "without status.namespace"},
+		"not Ready":                 {org(2, ready(2, condFalseStatus), false), false, "AgentPlatformReady=False"},
+		"without a status":          {org(1, nil, false), false, "no AgentPlatformReady condition"},
+		"being deleted":             {org(2, map[string]any{crConditions: conditions("AgentPlatformErasing", 2, conditionTrue, "Sessions")}, true), false, `"Sessions"`},
+		"Ready without a namespace": {org(1, map[string]any{namespaceKey: kaasNamespace, namespaces: []any{kaas}, crConditions: conditions("AgentPlatformReady", 1, conditionTrue, "Reconciled")}, false), false, "without the agentPlatform entry of status.namespaces"},
 	} {
 		state, err := organizationStateFrom(tc.obj)
 		if err != nil {
@@ -137,24 +150,68 @@ func TestOrganizationReady(t *testing.T) {
 	}
 }
 
-// The default organization and the proof's are AgentPlatformOrganizations
-// of the lab's root namespace, on the platform Harness with one worker.
+// The default organization and the proof's are cluster-scoped Organizations
+// with the Agent Platform on, the platform Harness, one worker and their
+// admins in spec.admins.
 func TestOrganizationManifest(t *testing.T) {
 	var obj map[string]any
-	if err := yaml.Unmarshal([]byte(organizationManifest(organizationsRootNamespace, defaultOrganization, defaultOrganizationDisplayName)), &obj); err != nil {
+	admins := []organizationAdmin{adminGroup(platformAdminsGroup), {Kind: organizationAdminUser, Name: testAliceSubject}}
+	if err := yaml.Unmarshal([]byte(organizationManifest(defaultOrganization, defaultOrganizationDisplayName, admins)), &obj); err != nil {
 		t.Fatal(err)
 	}
 	u := unstructured.Unstructured{Object: obj}
-	if u.GetAPIVersion() != organizationAPIVersion || u.GetKind() != organizationKind || u.GetNamespace() != organizationsRootNamespace || u.GetName() != defaultOrganization {
+	if u.GetAPIVersion() != "security.giantswarm.io/v1alpha1" || u.GetKind() != "Organization" || u.GetNamespace() != "" || u.GetName() != defaultOrganization {
 		t.Errorf("object %s %s %s/%s", u.GetAPIVersion(), u.GetKind(), u.GetNamespace(), u.GetName())
 	}
-	if got := u.GetAnnotations()[organizationDisplayNameAnnotation]; got != defaultOrganizationDisplayName {
+	if got := u.GetAnnotations()["agent-platform.giantswarm.io/display-name"]; got != defaultOrganizationDisplayName {
 		t.Errorf("display name %q", got)
 	}
-	harnesses, _, _ := unstructured.NestedStringSlice(obj, "spec", "harnesses")
-	replicas, _, _ := unstructured.NestedFieldNoCopy(obj, "spec", "workers", "replicas")
-	if !slices.Equal(harnesses, []string{kagentHarness}) || replicas != 1 {
-		t.Errorf("spec harnesses %v workers %v", harnesses, replicas)
+	enabled, _, _ := unstructured.NestedBool(obj, "spec", "capabilities", "agentPlatform", "enabled")
+	harnesses, _, _ := unstructured.NestedStringSlice(obj, "spec", "capabilities", "agentPlatform", "harnesses")
+	replicas, _, _ := unstructured.NestedFieldNoCopy(obj, "spec", "capabilities", "agentPlatform", "workers", "replicas")
+	if !enabled || !slices.Equal(harnesses, []string{kagentHarness}) || replicas != 1 {
+		t.Errorf("spec.capabilities.agentPlatform enabled %v harnesses %v workers %v", enabled, harnesses, replicas)
+	}
+	got, _, _ := unstructured.NestedSlice(obj, "spec", "admins")
+	want := []any{map[string]any{beekeeperKeyKind: "Group", nameKey: testPlatformAdminsSubject}, map[string]any{beekeeperKeyKind: "User", nameKey: testAliceSubject}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("spec.admins %v, want %v", got, want)
+	}
+}
+
+// The API server's names of the group platform-admins and of alice, as
+// spec.admins and a binding spell them.
+const (
+	testPlatformAdminsSubject = "oidc:platform-admins"
+	testAliceSubject          = "oidc:alice@lab.local"
+)
+
+// The admins' binding matches spec.admins only when it binds exactly those
+// subjects, in their order, to agent-platform:admin; no admins match no
+// binding or one without subjects.
+func TestAdminsBindingProblem(t *testing.T) {
+	admins := []organizationAdmin{adminGroup(platformAdminsGroup), {Kind: organizationAdminUser, Name: testAliceSubject}}
+	binding := func(role string, subjects ...rbacv1.Subject) *rbacv1.RoleBinding {
+		return &rbacv1.RoleBinding{RoleRef: rbacv1.RoleRef{Kind: "ClusterRole", Name: role}, Subjects: subjects}
+	}
+	group := rbacv1.Subject{Kind: "Group", Name: testPlatformAdminsSubject}
+	alice := rbacv1.Subject{Kind: "User", Name: testAliceSubject}
+	for name, tc := range map[string]struct {
+		binding *rbacv1.RoleBinding
+		admins  []organizationAdmin
+		ok      bool
+	}{
+		"the admins":             {binding("agent-platform:admin", group, alice), admins, true},
+		"no binding, no admins":  {nil, nil, true},
+		"no binding":             {nil, admins, false},
+		"another order":          {binding("agent-platform:admin", alice, group), admins, false},
+		"one admin missing":      {binding("agent-platform:admin", group), admins, false},
+		"another role":           {binding("agent-platform:editor", group, alice), admins, false},
+		"subjects without admin": {binding("agent-platform:admin", group), nil, false},
+	} {
+		if got := adminsBindingProblem(tc.binding, tc.admins); (got == "") != tc.ok {
+			t.Errorf("%s: problem %q, want ok=%v", name, got, tc.ok)
+		}
 	}
 }
 
@@ -503,15 +560,18 @@ func TestControllerAuthorizationProblem(t *testing.T) {
 }
 
 // A Slack roster passes when it lists the member's organization's agent,
-// its row naming the tenant as klaus-gateway words it, and nothing of
-// another organization; the platform tenant's rows are not judged.
+// its row naming the organization by its name (klaus-gateway reads it from
+// the namespace's label through the API server), and nothing of another
+// organization; the platform tenant's rows are not judged. A row that names
+// the namespace instead says the gateway cannot read the API server.
 func TestRosterProblem(t *testing.T) {
+	const alpha = "alpha"
 	ownRef, otherRef := orgAlpha+"/"+organizationsTestAgent, orgBeta+"/"+organizationsTestAgent
 	good := map[string]string{
 		kagentNamespace + "/assistant": "*assistant* · platform",
-		ownRef:                         "*" + organizationsTestAgent + "* · namespace " + orgAlpha,
+		ownRef:                         "*" + organizationsTestAgent + "* · " + alpha + " · default\nThrowaway agent.",
 	}
-	if p := rosterProblem(good, orgAlpha); p != "" {
+	if p := rosterProblem(good, orgAlpha, alpha); p != "" {
 		t.Errorf("a good roster: %s", p)
 	}
 	if got := slackRoster(good); rosterDiff(got, refSet{ownRef: true}) != "" {
@@ -521,38 +581,45 @@ func TestRosterProblem(t *testing.T) {
 	withOther[otherRef] = "*" + organizationsTestAgent + "* · namespace " + orgBeta
 	unlabelled := maps.Clone(good)
 	unlabelled[ownRef] = "*" + organizationsTestAgent + "*"
+	// A gateway without access to the API server names the organization by
+	// its namespace, which also holds the name.
+	byNamespace := maps.Clone(good)
+	byNamespace[ownRef] = "*" + organizationsTestAgent + "* · namespace " + orgAlpha
 	for name, tc := range map[string]struct {
 		rows map[string]string
 		want string
 	}{
-		"another organization's agent": {withOther, "another organization's"},
-		"no tenant on the row":         {unlabelled, "does not name its tenant"},
-		"no row of their own":          {map[string]string{kagentNamespace + "/assistant": "x"}, "no row of " + ownRef},
+		"another organization's agent":      {withOther, "another organization's"},
+		"no tenant on the row":              {unlabelled, `names the tenant ""`},
+		"the own organization by namespace": {byNamespace, `names the tenant "namespace ` + orgAlpha + `", want its organization "alpha"`},
+		"the namespace's hint":              {byNamespace, "no access to the lab's API server"},
+		"no row of their own":               {map[string]string{kagentNamespace + "/assistant": "x"}, "no row of " + ownRef},
 	} {
-		if p := rosterProblem(tc.rows, orgAlpha); !strings.Contains(p, tc.want) {
+		if p := rosterProblem(tc.rows, orgAlpha, alpha); !strings.Contains(p, tc.want) {
 			t.Errorf("%s: %q, want %q", name, p, tc.want)
 		}
 	}
-	if got := organizationTenant("org-acme"); got != "organization acme" {
-		t.Errorf("a KaaS Organization's namespace: %q", got)
-	}
 }
 
-// The refusal must be the not-permitted note, name the other tenant and say
-// nothing was sent: a generic failure note would pass for a refusal
-// otherwise.
+// The refusal must be the not-permitted note, name the other organization
+// by its name (the same wording a member gets: the gateway reads it from the
+// namespace's label) and say nothing was sent: a generic failure note would
+// pass for a refusal otherwise. A refusal that names the namespace instead
+// says the gateway cannot read the API server.
 func TestRefusalProblem(t *testing.T) {
-	note := "You cannot use *agentlab-organizations* (namespace " + orgBeta + "): it is not one of the agents you have access to. Nothing was sent to it."
-	if p := refusalProblem(note, orgBeta); p != "" {
+	const alpha, beta = "alpha", "beta"
+	note := "You cannot use *agentlab-organizations* (" + beta + "): it is not one of the agents you have access to. Nothing was sent to it."
+	if p := refusalProblem(note, beta); p != "" {
 		t.Errorf("the gateway's note: %s", p)
 	}
-	for name, text := range map[string]string{
-		"a failure note":  "Something went wrong talking to the agent.",
-		"another tenant":  strings.ReplaceAll(note, orgBeta, orgAlpha),
-		"no nothing-sent": strings.ReplaceAll(note, "Nothing was sent to it.", ""),
+	for name, tc := range map[string]struct{ text, want string }{
+		"a failure note":       {"Something went wrong talking to the agent.", "it is not the refusal"},
+		"another organization": {strings.ReplaceAll(note, beta, alpha), `does not name the organization "beta"`},
+		"by namespace":         {strings.ReplaceAll(note, "("+beta+")", "(namespace "+orgBeta+")"), "no access to the lab's API server"},
+		"no nothing-sent":      {strings.ReplaceAll(note, "Nothing was sent to it.", ""), "Nothing was sent"},
 	} {
-		if refusalProblem(text, orgBeta) == "" {
-			t.Errorf("%s accepted as the refusal", name)
+		if p := refusalProblem(tc.text, beta); !strings.Contains(p, tc.want) {
+			t.Errorf("%s: %q, want %q", name, p, tc.want)
 		}
 	}
 }
@@ -562,8 +629,8 @@ func TestRefusalProblem(t *testing.T) {
 // otherwise names the missing piece.
 func TestMusterTenancyProblem(t *testing.T) {
 	namespaces := map[string]labels.Set{
-		"agents-agentlab-a-vgfhb": {organizationLabel: "agentlab-a"},
-		"agents-agentlab-b-x7k2p": {organizationLabel: "agentlab-b"},
+		"agents-agentlab-a": {organizationLabel: "agentlab-a"},
+		"agents-agentlab-b": {organizationLabel: "agentlab-b"},
 	}
 	for name, tc := range map[string]struct {
 		config string
@@ -575,8 +642,8 @@ func TestMusterTenancyProblem(t *testing.T) {
 		"the proof's server selected":     {"mcpServerNamespaceSelector: {}\nmcpServerSelector:\n  matchLabels:\n    " + organizationsTestLabel + ": " + organizationsTestMark + "\n", ""},
 		"unset":                           {"namespace: agent-platform\n", "without mcpServerNamespaceSelector"},
 		"null":                            {"mcpServerNamespaceSelector: null\n", "without mcpServerNamespaceSelector"},
-		"another label":                   {"mcpServerNamespaceSelector:\n  matchLabels:\n    team: a\n", "does not select namespace agents-agentlab-a-vgfhb"},
-		"one organization only":           {"mcpServerNamespaceSelector:\n  matchLabels:\n    " + organizationLabel + ": agentlab-a\n", "does not select namespace agents-agentlab-b-x7k2p"},
+		"another label":                   {"mcpServerNamespaceSelector:\n  matchLabels:\n    team: a\n", "does not select namespace agents-agentlab-a"},
+		"one organization only":           {"mcpServerNamespaceSelector:\n  matchLabels:\n    " + organizationLabel + ": agentlab-a\n", "does not select namespace agents-agentlab-b"},
 		"an invalid operator":             {"mcpServerNamespaceSelector:\n  matchExpressions:\n    - key: a\n      operator: Near\n", "mcpServerNamespaceSelector is invalid"},
 		"the proof's server not selected": {"mcpServerNamespaceSelector: {}\nmcpServerSelector:\n  matchLabels:\n    tier: gold\n", "does not select the proof's MCPServer"},
 		"an invalid server selector":      {"mcpServerNamespaceSelector: {}\nmcpServerSelector:\n  matchExpressions:\n    - key: a\n      operator: Near\n", "mcpServerSelector is invalid"},
@@ -592,8 +659,9 @@ func TestMusterTenancyProblem(t *testing.T) {
 	}
 }
 
-// The values: agentPlatformOrganizations and the LLM listener with the
-// organizations on a chart that carries them, muster's MCPServer namespaces
+// The values: agentPlatformOrganizations with the Organization CRD (the lab
+// has no KaaS) and the LLM listener with the organizations on a chart that
+// carries them, muster's MCPServer namespaces
 // left to the chart; nothing of it below the chart floor or off; the
 // tenants key and a hand-listed credential policy never in an install.
 func TestPlatformValuesOrganizations(t *testing.T) {
@@ -626,8 +694,9 @@ func TestPlatformValuesOrganizations(t *testing.T) {
 		values := render(tc.cfg)
 		orgs, _ := values["agentPlatformOrganizations"].(map[string]any)
 		routing, _ := values["llmRouting"].(map[string]any)
-		if got := orgs["enabled"] == true && routing["enabled"] == true; got != tc.on {
-			t.Errorf("%s: agentPlatformOrganizations %v, llmRouting %v; want both on: %v", name, values["agentPlatformOrganizations"], values["llmRouting"], tc.on)
+		crd, _ := orgs["organizationCRD"].(map[string]any)
+		if got := orgs["enabled"] == true && crd["enabled"] == true && routing["enabled"] == true; got != tc.on {
+			t.Errorf("%s: agentPlatformOrganizations %v, llmRouting %v; want the organizations, their CRD and the listener on: %v", name, values["agentPlatformOrganizations"], values["llmRouting"], tc.on)
 		}
 		if musterAll(values) != nil {
 			t.Errorf("%s: muster.muster.mcpServersInAllNamespaces is %v; muster's namespace selector is the chart's", name, musterAll(values))

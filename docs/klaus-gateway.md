@@ -358,6 +358,41 @@ one allowed caller; its token has the audience `klaus-gateway` and the gateway
 verifies it with a TokenReview through the lab's kubeconfig. The gateway
 trusts the lab CA (`SSL_CERT_FILE`), since every answer is a call to muster.
 
+**A gateway binary on macOS.** The lab gives a host gateway the lab CA through
+`SSL_CERT_FILE`. A Go program on macOS ignores that variable (unless its
+module's `go` directive is 1.27 or later) and verifies against the system
+trust store, so its muster calls fail with `x509: certificate signed by
+unknown authority`. `klaus-gateway-test`, `decisions-test` and the Slack part
+of `organizations-test` call muster through the gateway: on macOS they refuse
+`--gateway-binary` before they start unless the lab CA is in the system trust
+store (`agentlab trust`). The check is left out where agentlab cannot see
+what the gateway sees: while `SSL_CERT_FILE` or `SSL_CERT_DIR` is set in
+agentlab's own environment (agentlab then reads that variable in place of the
+system trust store; a note says so), and on a lab with an externally
+provisioned pair (`platform.tls`). There the binary runs as before. The image (`--gateway-image`) runs on Linux, where
+`SSL_CERT_FILE` holds.
+
+**The Slack part of `organizations-test` reads the API server.** The
+gateway names an organization's tenant by the organization's name, which it
+reads from the label `agent-platform.giantswarm.io/organization` on the
+organization's namespace through the Kubernetes API; without that access it
+writes `namespace <namespace>`. The proof gives its gateway the lab's
+kubeconfig: as it is for the binary and for the image on the host network,
+and with the API server at the control-plane node's port 6443 for the image
+on the `kind` network (macOS). It is the lab's admin kubeconfig, more than
+the gateway's ServiceAccount has on an installation (HACKS.md U52). The
+proof's step S3 needs klaus-gateway 4.18.10 or later
+(giantswarm/klaus-gateway#616, a thread's Session started by the
+organization's name); without `--gateway-image` the lab takes the version
+that the component's HelmRelease applied, or, with no such HelmRelease, the
+newest release that the chart's range admits.
+
+**An image for linux/amd64 only.** A dev image of klaus-gateway is built for
+linux/amd64 alone. When the plain `docker pull` of `--gateway-image` finds no
+manifest for the host's platform (an arm64 host), the proof pulls the image
+again for linux/amd64, and Docker runs it under emulation. Any other pull
+failure stops the proof with the pull's own error.
+
 1. No token is 401; a person no member of the fake workspace has the email
    of is 422.
 2. A team decision renders its question as a header and a Choose button per

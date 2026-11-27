@@ -568,7 +568,10 @@ its end (reads every 500 ms):
 
 `--agentgateway-url` and `--agent namespace/name` (an Agent whose Sessions
 reach the provider) measure the Sessions; without them the Session figures
-are not available.
+are not available. An Agent in an organization's namespace is started by
+the organization's name, which the run reads from the namespace's
+`agent-platform.giantswarm.io/organization` label: agent-manager's
+`start_session` refuses an organization's namespace.
 
 The pushes go to a scratch branch `agentlab-workspaces-measure-<start time>`
 of the first small repository and of the large one, with your own git

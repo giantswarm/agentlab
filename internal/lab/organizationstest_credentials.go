@@ -261,8 +261,8 @@ func (p *credentialsProof) setUp() error {
 	if err := p.removeLeftover(); err != nil {
 		return err
 	}
-	step("Organization %s/%s Ready; group %s and %s bound to %s there", organizationsRootNamespace, credentialsOrganization, platformAdminsGroup, p.other.Email, organizationAdminRole)
-	ns, err := ensureOrganization(organizationsRootNamespace, credentialsOrganization, "Credentials proof")
+	step("Organization %s Ready, its spec.admins group %s and %s, which agent-platform-operator binds to %s", credentialsOrganization, platformAdminsGroup, p.other.Email, organizationAdminRole)
+	ns, err := ensureOrganization(credentialsOrganization, "Credentials proof", p.admins(true))
 	if err != nil {
 		return err
 	}
@@ -270,7 +270,7 @@ func (p *credentialsProof) setUp() error {
 	if err := markProofOrganization(credentialsOrganization); err != nil {
 		return err
 	}
-	if err := bindOrganizationRole(ns, organizationAdminsBinding, organizationAdminRole, p.adminsSubjects(true)); err != nil {
+	if _, err := waitOrganizationAdmins(ns, p.admins(true)); err != nil {
 		return err
 	}
 	step("%s bound to %s, the organization's read-only role, in %s", p.viewer.Email, organizationUserRole, ns)
@@ -283,7 +283,7 @@ func (p *credentialsProof) setUp() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	defer cancel()
-	org, err := getObject(ctx, gvr, organizationsRootNamespace, credentialsOrganization)
+	org, err := getObject(ctx, gvr, "", credentialsOrganization)
 	if err != nil {
 		return err
 	}
@@ -313,7 +313,7 @@ func (p *credentialsProof) removeLeftover() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), organizationCleanupWait+kubeReadTimeout)
 	defer cancel()
-	org, err := getObject(ctx, gvr, organizationsRootNamespace, credentialsOrganization)
+	org, err := getObject(ctx, gvr, "", credentialsOrganization)
 	if apierrors.IsNotFound(err) {
 		return nil
 	}
@@ -323,9 +323,12 @@ func (p *credentialsProof) removeLeftover() error {
 	if err := markProofOrganization(credentialsOrganization); err != nil {
 		return err
 	}
-	ns, _, _ := unstructured.NestedString(org.Object, "status", "namespace")
-	step("Erasing a previous run's organization %s/%s", organizationsRootNamespace, credentialsOrganization)
-	op := &organizationsProof{cfg: p.cfg, admin: p.admin, names: [2]string{credentialsOrganization}, namespaces: [2]string{ns}}
+	state, err := organizationStateFrom(org)
+	if err != nil {
+		return err
+	}
+	step("Erasing a previous run's organization %s", credentialsOrganization)
+	op := &organizationsProof{cfg: p.cfg, admin: p.admin, names: [2]string{credentialsOrganization}, namespaces: [2]string{state.namespace}}
 	return op.deleteProofOrganization(ctx, 0)
 }
 
@@ -405,7 +408,7 @@ func (p *credentialsProof) grantProblem() string {
 
 // modelArgs are set_organization_model's arguments: a new model, no key.
 func (p *credentialsProof) modelArgs() map[string]any {
-	return map[string]any{namespaceKey: p.namespace, nameKey: credentialsModel, "provider": organizationModelProvider, modelField: p.cfg.AIModel, modeArg: p.mode}
+	return map[string]any{organizationArg: credentialsOrganization, nameKey: credentialsModel, "provider": organizationModelProvider, modelField: p.cfg.AIModel, modeArg: p.mode}
 }
 
 // modelWithoutKey: the plain client's set_organization_model writes
@@ -479,7 +482,8 @@ func setModelWith(ctx context.Context, m *musterMCP, args map[string]any, roundT
 
 // credentialToolWith calls one of agent-manager's model, connector and
 // egress tools with args, answering a previous input_required with
-// roundTrip, and decodes a result.
+// roundTrip, and decodes a result, which must name the organization of
+// args.
 func credentialToolWith(ctx context.Context, m *musterMCP, tool string, args map[string]any, roundTrip mcp.MultiRoundTripParams) (*musterAnswer, *credentialAnswer, error) {
 	answer, err := m.call(ctx, agentManagerToolPrefix+tool, args, roundTrip)
 	if err != nil || answer.result == nil {
@@ -491,6 +495,10 @@ func credentialToolWith(ctx context.Context, m *musterMCP, tool string, args map
 	var result credentialAnswer
 	if err := json.Unmarshal([]byte(answer.result.text()), &result); err != nil {
 		return nil, nil, fmt.Errorf("%s's answer: %w: %s", tool, err, excerpt(answer.result.text(), 300))
+	}
+	// The answer names the organization the call addressed, by name.
+	if want, _ := args[organizationArg].(string); result.Organization != want {
+		return nil, nil, fmt.Errorf("%s's answer names organization %q, want %q: %s", tool, result.Organization, want, excerpt(answer.result.text(), 300))
 	}
 	return answer, &result, nil
 }
@@ -718,7 +726,7 @@ func oneURLElicitation(a *musterAnswer) (mcp.ElicitationParams, error) {
 // formLink checks a link is the credential UI URL template expanded for the
 // part's organization and returns the operation it carries.
 func (p *credentialsProof) formLink(link string) (string, error) {
-	return formOperation(p.pre.agentManager[flagCredentialUIURL], link, organizationsRootNamespace, credentialsOrganization, p.namespace)
+	return formOperation(p.pre.agentManager[flagCredentialUIURL], link, credentialsOrganization, p.namespace)
 }
 
 // plainGeneration: the plain client's answer carries the link in
@@ -734,7 +742,7 @@ func (p *credentialsProof) plainGeneration() (string, error) {
 	if operation != p.operation {
 		return "", fmt.Errorf("the link %s carries operation %s, the answer names %s", p.formURL, operation, p.operation)
 	}
-	return fmt.Sprintf("credentials[].next carries %s (operation %s), the credential UI URL template expanded with the operation, the parent, the organization and the namespace only", p.formURL, p.operation), nil
+	return fmt.Sprintf("credentials[].next carries %s (operation %s), the credential UI URL template expanded with the operation, the organization and the namespace only", p.formURL, p.operation), nil
 }
 
 // resourceLinkCheck is the structuredContent and resource_link of the plain
@@ -1109,7 +1117,8 @@ type confirmation struct {
 	State        string `json:"state"`
 	Mode         string `json:"mode"`
 	Organization struct {
-		Namespace string `json:"namespace"`
+		Organization string `json:"organization"`
+		Namespace    string `json:"namespace"`
 	} `json:"organization"`
 	GitTarget *struct {
 		Repository string `json:"repository"`
@@ -1141,8 +1150,9 @@ func (p *credentialsProof) save() (string, error) {
 		return "", err
 	}
 	switch {
-	case c.ID != p.operation || c.State != operationPending || c.Mode != p.mode || c.Organization.Namespace != p.namespace:
-		return "", fmt.Errorf("the confirmation names operation %q state %q mode %q in %q, want %s %s %s in %s", c.ID, c.State, c.Mode, c.Organization.Namespace, p.operation, operationPending, p.mode, p.namespace)
+	case c.ID != p.operation || c.State != operationPending || c.Mode != p.mode || c.Organization.Organization != credentialsOrganization || c.Organization.Namespace != p.namespace:
+		return "", fmt.Errorf("the confirmation names operation %q state %q mode %q for organization %q in %q, want %s %s %s for %s in %s",
+			c.ID, c.State, c.Mode, c.Organization.Organization, c.Organization.Namespace, p.operation, operationPending, p.mode, credentialsOrganization, p.namespace)
 	case p.mode == modeCommit && (c.GitTarget == nil || c.GitTarget.Repository != p.pre.agentManager[flagOrgsRepository]):
 		return "", fmt.Errorf("the confirmation's git target %+v is not %s", c.GitTarget, p.pre.agentManager[flagOrgsRepository])
 	}
@@ -1393,7 +1403,7 @@ func (p *credentialsProof) pullRequest() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	secretPath := credentialSecretPath(p.pre.orgsContentPrefix(), organizationsRootNamespace, credentialsOrganization, credentialsModelSecret)
+	secretPath := credentialSecretPath(p.pre.orgsContentPrefix(), credentialsOrganization, credentialsModelSecret)
 	modelPath := credentialsContentPath(p.pre.orgsContentPrefix()) + "/modelconfig-" + credentialsModel + ".yaml"
 	seen, seenModel := false, false
 	dec := json.NewDecoder(strings.NewReader(files))
@@ -1443,7 +1453,7 @@ func (p *credentialsProof) fluxApplied() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	secretPath := credentialSecretPath(p.pre.orgsContentPrefix(), organizationsRootNamespace, credentialsOrganization, credentialsModelSecret)
+	secretPath := credentialSecretPath(p.pre.orgsContentPrefix(), credentialsOrganization, credentialsModelSecret)
 	if err := sopsRuleFor(sopsFile, secretPath, recipient); err != nil {
 		return "", fmt.Errorf("%w — commit to %s@%s's .sops.yaml:\n%s", err, c.Repository, c.Base, sopsRuleHint(p.pre.orgsContentPrefix(), recipient))
 	}
@@ -1647,8 +1657,8 @@ func (p *credentialsProof) erase() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	confirm := organizationsRootNamespace + "/" + credentialsOrganization
-	base := map[string]any{namespaceKey: organizationsRootNamespace, nameKey: credentialsOrganization}
+	confirm := credentialsOrganization
+	base := map[string]any{nameKey: credentialsOrganization}
 	var preview, dry, done deleteResult
 	for _, c := range []struct {
 		args map[string]any
@@ -1682,8 +1692,8 @@ func (p *credentialsProof) erase() (string, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 		defer cancel()
 		left := map[string]error{
-			"AgentPlatformOrganization": absent(getObject(ctx, gvr, organizationsRootNamespace, credentialsOrganization)),
-			"Namespace":                 absent(getObject(ctx, gvrNamespaces, "", p.namespace)),
+			organizationKind: absent(getObject(ctx, gvr, "", credentialsOrganization)),
+			"Namespace":      absent(getObject(ctx, gvrNamespaces, "", p.namespace)),
 		}
 		if fluxNS != "" {
 			left["Kustomization"] = absent(getObject(ctx, kustomizationGVR, fluxNS, p.namespace))
@@ -1710,7 +1720,7 @@ func (p *credentialsProof) erase() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	ref := organizationRef{parent: organizationsRootNamespace, name: credentialsOrganization, namespace: p.namespace, uid: p.uid}
+	ref := organizationRef{name: credentialsOrganization, namespace: p.namespace, uid: p.uid}
 	if left := organizationBindingLeftovers(bindings.Items, ref); len(left) > 0 {
 		return "", fmt.Errorf("RoleBindings referring to the erased organization remain: %s", strings.Join(left, ", "))
 	}
@@ -1759,7 +1769,7 @@ func (p *credentialsProof) cleanup() {
 		removeCredentialsSignInServer(p.namespace)
 	}
 	if p.retainForDiagnostics && p.namespace != "" {
-		note("retaining organization %s/%s (namespace %s) for diagnosis", organizationsRootNamespace, credentialsOrganization, p.namespace)
+		note("retaining organization %s (namespace %s) for diagnosis", credentialsOrganization, p.namespace)
 	}
 	if p.receipt != nil && p.receipt.Commit != nil && !p.merged {
 		c := p.receipt.Commit
@@ -1785,7 +1795,7 @@ func (p *credentialsProof) cleanup() {
 // credentialsContentPath is the part's organization's directory in the
 // organizations repository.
 func credentialsContentPath(prefix string) string {
-	return strings.Join([]string{prefix, organizationsRootNamespace, credentialsOrganization}, "/")
+	return strings.Join([]string{prefix, credentialsOrganization}, "/")
 }
 
 // contentPathRemovalCommand is the shell a person runs to remove path from

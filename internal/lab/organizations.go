@@ -4,48 +4,61 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
 
 // Agent Platform organizations on the lab (platform.organizations;
-// giantswarm/giantswarm#38891). Each organization is an
-// AgentPlatformOrganization in a parent namespace, which
-// agent-platform-operator reconciles into an organization namespace of its
-// own, agents-<name>-<random>, labelled with the organization, its parent
-// and its UID. On an installation the parent is a KaaS org-<name>
-// namespace; the lab has no KaaS, so its parent is one fixed root namespace,
-// organizationsRootNamespace. `agentlab up` keeps one default organization
-// there, with its first admins, its editors and a model, so a person can
+// giantswarm/giantswarm#38891, #39492). Each organization is an
+// Organization (security.giantswarm.io/v1alpha1, cluster-scoped) with
+// spec.capabilities.agentPlatform.enabled, which agent-platform-operator
+// reconciles into one organization namespace, agents-<name>, labelled with
+// the organization and its UID, and reports in the agentPlatform entry of
+// status.namespaces (the shape of giantswarm/organization-operator#673; its
+// conditions are AgentPlatformReady, AgentPlatformOrphaned,
+// AgentPlatformErasing and the other AgentPlatform ones). The lab has no
+// KaaS: the agent-platform chart installs the Organization CRD
+// (agentPlatformOrganizations.organizationCRD.enabled), and no
+// organization-operator runs, so status.namespace (its org-<name>) stays
+// empty. The organization's admins are spec.admins: the operator binds them
+// to agent-platform:admin in the namespace (RoleBinding organization-admins),
+// and the chart's admission policy refuses every other writer of a binding to
+// that role, the lab's admin too. `agentlab up` keeps one default
+// organization with the lab's admins, its editors and a model, so a person can
 // create an agent at once (docs/agents.md "Organizations").
 const (
-	// organizationsRootNamespace is the lab's one parent namespace.
-	organizationsRootNamespace = "agentlab-organizations"
 	// defaultOrganization is the organization `up` keeps.
 	defaultOrganization = "default"
 	// defaultOrganizationDisplayName is its display name.
 	defaultOrganizationDisplayName = "Lab"
-	// organizationResource is the operator's CRD.
-	organizationResource   = "agentplatformorganizations.agent-platform.giantswarm.io"
-	organizationAPIVersion = "agent-platform.giantswarm.io/v1alpha1"
-	organizationKind       = "AgentPlatformOrganization"
+	// organizationResource is the Organization CRD.
+	organizationResource   = "organizations.security.giantswarm.io"
+	organizationAPIVersion = "security.giantswarm.io/v1alpha1"
+	organizationKind       = "Organization"
 	// organizationDisplayNameAnnotation is the organization's display name
 	// (a metadata annotation, not a field).
 	organizationDisplayNameAnnotation = "agent-platform.giantswarm.io/display-name"
 	// organizationLabel marks an organization namespace; its value is the
-	// organization's name. organizationParentLabel names the parent.
-	organizationLabel       = "agent-platform.giantswarm.io/organization"
-	organizationParentLabel = "agent-platform.giantswarm.io/parent"
-	// organizationAdminsBinding is the first admins' RoleBinding, which the
-	// creator writes after Ready and the chart's admission policy holds to
-	// organizationAdminRole.
+	// organization's name. organizationUIDLabel holds the organization's UID.
+	organizationLabel    = "agent-platform.giantswarm.io/organization"
+	organizationUIDLabel = "agent-platform.giantswarm.io/organization-uid"
+	// organizationAdminsBinding is the admins' RoleBinding, which
+	// agent-platform-operator alone writes from spec.admins.
 	organizationAdminsBinding = "organization-admins"
 	organizationAdminRole     = "agent-platform:admin"
+	// organizationAdminUser and organizationAdminGroup are the kinds of a
+	// spec.admins entry.
+	organizationAdminUser  = "User"
+	organizationAdminGroup = "Group"
 	// organizationEditorsBinding binds the people who create agents.
 	organizationEditorsBinding = "organization-editors"
 	organizationEditorRole     = "agent-platform:editor"
@@ -73,12 +86,40 @@ const (
 	organizationModelConfigKind       = "ModelConfig"
 	organizationModelResolveTimeout   = 2 * time.Minute
 	organizationReasonNotObserved     = "NotObserved"
-	organizationConditionTypeReady    = conditionReady
 	organizationReadyStatusTrue       = conditionTrue
-	organizationStatusNamespaceKey    = "namespace"
-	organizationStatusConditionsKey   = "conditions"
-	organizationStatusErasureStepKey  = "erasureStep"
+	// The Agent Platform's conditions of an Organization: Ready for its
+	// current generation, and, while a deleted one is erased, Erasing with
+	// the erasure step as its reason.
+	organizationConditionTypeReady   = "AgentPlatformReady"
+	organizationConditionTypeErasing = "AgentPlatformErasing"
+	// The Agent Platform's blocks of an Organization: its spec under
+	// spec.capabilities, its namespace the entry of status.namespaces with
+	// this capability.
+	organizationSpecCapabilitiesKey     = "capabilities"
+	organizationCapabilityAgentPlatform = "agentPlatform"
 )
+
+// organizationAdmin is one entry of an Organization's spec.admins: a User or
+// a Group by the name the API server authenticates it with.
+type organizationAdmin struct {
+	Kind string `json:"kind"`
+	Name string `json:"name"`
+}
+
+// adminGroup is a lab group as an admin.
+func adminGroup(group string) organizationAdmin {
+	return organizationAdmin{Kind: organizationAdminGroup, Name: apiserverUserPrefix + group}
+}
+
+// adminUser is a lab person as an admin.
+func adminUser(u *config.User) organizationAdmin {
+	return organizationAdmin{Kind: organizationAdminUser, Name: apiserverUserPrefix + u.Email}
+}
+
+// subjectLine is the admin as subjectsLine names a binding's subject.
+func (a organizationAdmin) subjectLine() string {
+	return a.Kind + " " + a.Name
+}
 
 // organizationCondition is one condition of an organization's status.
 type organizationCondition struct {
@@ -97,15 +138,25 @@ type organizationState struct {
 	generation      int64
 	conditions      []organizationCondition
 	deleting        bool
-	erasureStep     string
 }
 
-// organizationStateFrom reads an AgentPlatformOrganization.
+// organizationStatus is the part of an Organization's status the lab reads:
+// one namespace per capability (organization-operator's kaas entry, the
+// operator's agentPlatform entry) and the conditions of every controller.
+type organizationStatus struct {
+	Namespaces []struct {
+		Name       string `json:"name"`
+		Capability string `json:"capability"`
+	} `json:"namespaces"`
+	Conditions []organizationCondition `json:"conditions"`
+}
+
+// organizationStateFrom reads an Organization: the Agent Platform's
+// namespace from the agentPlatform entry of status.namespaces, the
+// conditions from status.conditions.
 func organizationStateFrom(obj *unstructured.Unstructured) (organizationState, error) {
 	s := organizationState{name: obj.GetName(), generation: obj.GetGeneration(), deleting: obj.GetDeletionTimestamp() != nil}
-	s.namespace, _, _ = unstructured.NestedString(obj.Object, "status", organizationStatusNamespaceKey)
-	s.erasureStep, _, _ = unstructured.NestedString(obj.Object, "status", organizationStatusErasureStepKey)
-	raw, found, _ := unstructured.NestedSlice(obj.Object, "status", organizationStatusConditionsKey)
+	raw, found, _ := unstructured.NestedFieldNoCopy(obj.Object, "status")
 	if !found {
 		return s, nil
 	}
@@ -113,10 +164,26 @@ func organizationStateFrom(obj *unstructured.Unstructured) (organizationState, e
 	if err != nil {
 		return s, err
 	}
-	if err := json.Unmarshal(b, &s.conditions); err != nil {
-		return s, fmt.Errorf("organization %s: status.conditions: %w", s.name, err)
+	var status organizationStatus
+	if err := json.Unmarshal(b, &status); err != nil {
+		return s, fmt.Errorf("organization %s: status: %w", s.name, err)
 	}
+	for _, ns := range status.Namespaces {
+		if ns.Capability == organizationCapabilityAgentPlatform {
+			s.namespace = ns.Name
+		}
+	}
+	s.conditions = status.Conditions
 	return s, nil
+}
+
+// erasureStep is the step of a deleted organization's erasure: the reason
+// of its AgentPlatformErasing condition while that is True, "" otherwise.
+func (s organizationState) erasureStep() string {
+	if c, ok := s.condition(organizationConditionTypeErasing); ok && c.Status == conditionTrue {
+		return c.Reason
+	}
+	return ""
 }
 
 // condition is the named condition, and whether the status has it.
@@ -135,63 +202,71 @@ func (s organizationState) ready() (bool, string) {
 	c, ok := s.condition(organizationConditionTypeReady)
 	switch {
 	case s.deleting:
-		return false, fmt.Sprintf("being deleted (cleanup step %q)", s.erasureStep)
+		return false, fmt.Sprintf("being deleted (cleanup step %q)", s.erasureStep())
 	case !ok:
-		return false, "no Ready condition yet: is agent-platform-operator running?"
+		return false, fmt.Sprintf("no %s condition yet: is agent-platform-operator running?", organizationConditionTypeReady)
 	case c.ObservedGeneration < s.generation:
-		return false, fmt.Sprintf("Ready reports generation %d, the organization is at %d (%s)", c.ObservedGeneration, s.generation, organizationReasonNotObserved)
+		return false, fmt.Sprintf("%s reports generation %d, the organization is at %d (%s)", organizationConditionTypeReady, c.ObservedGeneration, s.generation, organizationReasonNotObserved)
 	case c.Status != organizationReadyStatusTrue:
-		return false, fmt.Sprintf("Ready=%s %s: %s", c.Status, c.Reason, c.Message)
+		return false, fmt.Sprintf("%s=%s %s: %s", organizationConditionTypeReady, c.Status, c.Reason, c.Message)
 	case s.namespace == "":
-		return false, "Ready without status.namespace"
+		return false, fmt.Sprintf("%s without the %s entry of status.namespaces", organizationConditionTypeReady, organizationCapabilityAgentPlatform)
 	}
 	return true, ""
 }
 
-// organizationManifest is an AgentPlatformOrganization of the lab: the
-// platform Harness and one worker.
-func organizationManifest(parent, name, displayName string) string {
-	return fmt.Sprintf(`apiVersion: %s
+// organizationManifest is an Organization of the lab with the Agent
+// Platform on: the platform Harness, one worker and its admins.
+func organizationManifest(name, displayName string, admins []organizationAdmin) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, `apiVersion: %s
 kind: %s
 metadata:
   name: %s
-  namespace: %s
   annotations:
     %s: %q
   labels:
     %s: %s
 spec:
-  harnesses: [%s]
-  workers:
-    replicas: %d
-`, organizationAPIVersion, organizationKind, name, parent, organizationDisplayNameAnnotation, displayName, managedByLabel, managedByAgentlabValue, organizationHarness, organizationWorkerReplicas)
+`, organizationAPIVersion, organizationKind, name, organizationDisplayNameAnnotation, displayName, managedByLabel, managedByAgentlabValue)
+	if len(admins) > 0 {
+		b.WriteString("  admins:\n")
+		for _, a := range admins {
+			fmt.Fprintf(&b, "    - kind: %s\n      name: %q\n", a.Kind, a.Name)
+		}
+	}
+	fmt.Fprintf(&b, `  capabilities:
+    agentPlatform:
+      enabled: true
+      harnesses: [%s]
+      workers:
+        replicas: %d
+`, organizationHarness, organizationWorkerReplicas)
+	return b.String()
 }
 
-// ensureOrganization applies the parent namespace and the organization, as
-// the lab's admin (cluster-admin, which holds what
-// agent-platform:organizations-admin grants), and waits until the operator
-// reports it Ready; it returns the organization namespace.
-func ensureOrganization(parent, name, displayName string) (string, error) {
+// ensureOrganization applies the Organization with its admins, as the lab's
+// admin (cluster-admin, which holds what agent-platform:organizations-admin
+// grants), and waits until the operator reports it Ready; it returns the
+// organization namespace.
+func ensureOrganization(name, displayName string, admins []organizationAdmin) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	defer cancel()
-	if err := ensureNamespace(parent); err != nil {
-		return "", err
+	if _, err := applyManifests(ctx, []byte(organizationManifest(name, displayName, admins))); err != nil {
+		return "", fmt.Errorf("the Organization %s: %w", name, err)
 	}
-	if _, err := applyManifests(ctx, []byte(organizationManifest(parent, name, displayName))); err != nil {
-		return "", fmt.Errorf("the AgentPlatformOrganization %s/%s: %w", parent, name, err)
-	}
-	return waitOrganizationReady(parent, name)
+	return waitOrganizationReady(name)
 }
 
 // readOrganization reads one organization's state.
-func readOrganization(parent, name string) (organizationState, error) {
+func readOrganization(name string) (organizationState, error) {
 	gvr, err := gvrFor(organizationResource)
 	if err != nil {
-		return organizationState{}, fmt.Errorf("the apiserver serves no %s: is agent-platform-operator installed (platform.organizations)? %w", organizationResource, err)
+		return organizationState{}, fmt.Errorf("the apiserver serves no %s: is the agent-platform chart's Organization CRD installed (platform.organizations)? %w", organizationResource, err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	defer cancel()
-	obj, err := getObject(ctx, gvr, parent, name)
+	obj, err := getObject(ctx, gvr, "", name)
 	if err != nil {
 		return organizationState{}, err
 	}
@@ -199,12 +274,12 @@ func readOrganization(parent, name string) (organizationState, error) {
 }
 
 // waitOrganizationReady waits for the organization's Ready, bounded.
-func waitOrganizationReady(parent, name string) (string, error) {
+func waitOrganizationReady(name string) (string, error) {
 	var state organizationState
 	var why string
 	var readErr error
 	ready := waitFor(int(organizationReadyTimeout/pollInterval), pollInterval, func() bool {
-		state, readErr = readOrganization(parent, name)
+		state, readErr = readOrganization(name)
 		if readErr != nil {
 			return false
 		}
@@ -218,8 +293,104 @@ func waitOrganizationReady(parent, name string) (string, error) {
 	case readErr != nil:
 		return "", readErr
 	}
-	return "", fmt.Errorf("organization %s/%s not Ready within %s: %s — `KUBECONFIG=state/kubeconfig kubectl -n %s get %s %s -o yaml` and `kubectl -n %s logs deploy/agent-platform-operator`",
-		parent, name, organizationReadyTimeout, why, parent, organizationResource, name, platformNamespace)
+	return "", fmt.Errorf("organization %s not Ready within %s: %s — `KUBECONFIG=state/kubeconfig kubectl get %s %s -o yaml` and `kubectl -n %s logs deploy/agent-platform-operator`",
+		name, organizationReadyTimeout, why, organizationResource, name, platformNamespace)
+}
+
+// setOrganizationAdmins replaces the Organization's spec.admins, as the
+// lab's admin; agent-platform-operator follows it with organization-admins.
+func setOrganizationAdmins(name string, admins []organizationAdmin) error {
+	gvr, err := gvrFor(organizationResource)
+	if err != nil {
+		return err
+	}
+	k, err := labKube()
+	if err != nil {
+		return err
+	}
+	if admins == nil {
+		admins = []organizationAdmin{}
+	}
+	patch, err := json.Marshal(map[string]any{crSpec: map[string]any{"admins": admins}})
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
+	defer cancel()
+	if _, err := k.resource(gvr, "").Patch(ctx, name, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
+		return fmt.Errorf("spec.admins of Organization %s: %w", name, err)
+	}
+	return nil
+}
+
+// adminsBindingProblem is why the namespace's organization-admins does not
+// bind exactly the admins, in their order, to agent-platform:admin; "" when
+// it does. No admins wants no binding.
+func adminsBindingProblem(binding *rbacv1.RoleBinding, admins []organizationAdmin) string {
+	if binding == nil {
+		if len(admins) == 0 {
+			return ""
+		}
+		return fmt.Sprintf("no RoleBinding %s", organizationAdminsBinding)
+	}
+	want := make([]string, 0, len(admins))
+	for _, a := range admins {
+		want = append(want, a.subjectLine())
+	}
+	got := make([]string, 0, len(binding.Subjects))
+	for _, s := range binding.Subjects {
+		got = append(got, s.Kind+" "+s.Name)
+	}
+	switch {
+	case len(admins) == 0 && len(got) > 0:
+		return fmt.Sprintf("%s binds %v, want no admin", organizationAdminsBinding, got)
+	case len(admins) > 0 && (binding.RoleRef.Kind != clusterRoleKind || binding.RoleRef.Name != organizationAdminRole):
+		return fmt.Sprintf("%s binds %s %s, want ClusterRole %s", organizationAdminsBinding, binding.RoleRef.Kind, binding.RoleRef.Name, organizationAdminRole)
+	case !slices.Equal(got, want):
+		return fmt.Sprintf("%s binds %v, want %v", organizationAdminsBinding, got, want)
+	}
+	return ""
+}
+
+// waitOrganizationAdmins waits until the operator's organization-admins in
+// the namespace binds exactly the admins (none: no binding), bounded, and
+// returns its subjects as they read.
+func waitOrganizationAdmins(ns string, admins []organizationAdmin) (string, error) {
+	k, err := labKube()
+	if err != nil {
+		return "", err
+	}
+	var why string
+	var readErr error
+	var seen []rbacv1.Subject
+	ok := waitFor(int(organizationReadyTimeout/pollInterval), pollInterval, func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
+		defer cancel()
+		binding, err := k.clientset.RbacV1().RoleBindings(ns).Get(ctx, organizationAdminsBinding, metav1.GetOptions{})
+		switch {
+		case apierrors.IsNotFound(err):
+			binding, readErr = nil, nil
+		case err != nil:
+			readErr = err
+			return false
+		default:
+			readErr = nil
+		}
+		seen = nil
+		if binding != nil {
+			seen = binding.Subjects
+		}
+		why = adminsBindingProblem(binding, admins)
+		return why == ""
+	})
+	switch {
+	case ok:
+		return subjectsLine(seen), nil
+	case readErr != nil:
+		return "", readErr
+	}
+	return "", fmt.Errorf("RoleBinding %s/%s did not follow spec.admins within %s: %s — agent-platform-operator writes it from spec.admins (agent-platform-operator 0.5 line, giantswarm/agent-platform-operator#69): `kubectl -n %s logs deploy/agent-platform-operator`",
+		ns, organizationAdminsBinding, organizationReadyTimeout, why, platformNamespace)
 }
 
 // bindOrganizationRole writes a RoleBinding of a ClusterRole in the
@@ -290,19 +461,22 @@ func ensureOrganizationModel(cfg *config.Config, ns string) error {
 	return nil
 }
 
-// ensureDefaultOrganization is `up`'s part: the default organization in
-// the root namespace, Ready; its first admins (platform-admins, written
-// after Ready as the creator writes them), its editors (developers) and
-// its model; then a developer's create of an agent there, as a server-side
-// dry run with their own token, which RBAC and every admission policy of
-// the namespace (the HelmRelease field lock among them) judge.
+// ensureDefaultOrganization is `up`'s part: the default organization,
+// Ready, with platform-admins in spec.admins (agent-platform-operator binds
+// them as its admins), its editors (developers) and its model; then a
+// developer's create of an agent there, as a server-side dry run with their
+// own token, which RBAC and every admission policy of the namespace (the
+// HelmRelease field lock among them) judge.
 func ensureDefaultOrganization(cfg *config.Config) (string, error) {
-	step("The default organization %s/%s (AgentPlatformOrganization), its admins, editors and model", organizationsRootNamespace, defaultOrganization)
-	ns, err := ensureOrganization(organizationsRootNamespace, defaultOrganization, defaultOrganizationDisplayName)
-	if err != nil {
+	step("The default organization %s (Organization), its admins, editors and model", defaultOrganization)
+	// The components that reconcile and serve it first, so that a release
+	// without the Organization kind is named now, not after
+	// organizationReadyTimeout (organizationkind.go).
+	if err := checkOrganizationKindServed(); err != nil {
 		return "", err
 	}
-	if err := bindOrganizationRole(ns, organizationAdminsBinding, organizationAdminRole, []rbacv1.Subject{groupSubject(platformAdminsGroup)}); err != nil {
+	ns, err := ensureOrganization(defaultOrganization, defaultOrganizationDisplayName, []organizationAdmin{adminGroup(platformAdminsGroup)})
+	if err != nil {
 		return "", err
 	}
 	if err := bindOrganizationRole(ns, organizationEditorsBinding, organizationEditorRole, []rbacv1.Subject{groupSubject(developersGroup)}); err != nil {
@@ -358,8 +532,8 @@ func organizationsHint(cfg *config.Config, ns string) string {
 	if !cfg.OrganizationsEnabled() {
 		return "  Organizations are off (platform.organizations in agentlab.yaml)."
 	}
-	return fmt.Sprintf("  Organizations: the default organization %s/%s runs its agents in namespace %s (developers create agents there).",
-		organizationsRootNamespace, defaultOrganization, ns)
+	return fmt.Sprintf("  Organizations: the default Organization %s runs its agents in namespace %s (developers create agents there).",
+		defaultOrganization, ns)
 }
 
 // organizationNamespaces lists the organization namespaces (labelled by the

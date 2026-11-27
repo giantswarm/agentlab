@@ -9,12 +9,13 @@ import (
 	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	rbacv1 "k8s.io/api/rbac/v1"
 )
 
 // The credentials part's save after lost rights (giantswarm/agentlab#1250,
 // giantswarm/agent-manager#293 AC3): the other organization admin prepares
-// an operation, is removed from the organization's admins, and POSTs the
+// an operation, is removed from the organization's admins (its
+// Organization's spec.admins, which agent-platform-operator follows with
+// organization-admins), and POSTs the
 // value with the confirmation's ETag. agent-manager checks the person's
 // rights again on every read, save and cancel of an operation (its
 // docs/organization-credentials.md, "Storage and write boundaries"): the
@@ -53,7 +54,7 @@ func lostRightsFixtureProblem(email, ns string, r organizationRights) string {
 	if !r.createSecrets && !r.createModelConfigs {
 		return ""
 	}
-	return fmt.Sprintf("fixture wrong: %s, removed from the RoleBinding %s/%s, may still create Secrets (%v) or ModelConfigs (%v) there: they did not lose the right, so a refusal would not be a lost right's", email, ns, organizationAdminsBinding, r.createSecrets, r.createModelConfigs)
+	return fmt.Sprintf("fixture wrong: %s, removed from spec.admins and from the RoleBinding %s/%s, may still create Secrets (%v) or ModelConfigs (%v) there: they did not lose the right, so a refusal would not be a lost right's", email, ns, organizationAdminsBinding, r.createSecrets, r.createModelConfigs)
 }
 
 // restAnswer is one answer of agent-manager's credential API: its status and
@@ -116,32 +117,44 @@ func operationUnchanged(beforeETag, afterState, afterETag string) error {
 	return nil
 }
 
-// adminsSubjects are the subjects of the organization's admins binding:
-// platform-admins, and the other admin unless they are removed.
-func (p *credentialsProof) adminsSubjects(withOther bool) []rbacv1.Subject {
-	subjects := []rbacv1.Subject{groupSubject(platformAdminsGroup)}
+// admins are the organization's spec.admins: platform-admins, and the
+// other admin unless they are removed.
+func (p *credentialsProof) admins(withOther bool) []organizationAdmin {
+	admins := []organizationAdmin{adminGroup(platformAdminsGroup)}
 	if withOther {
-		subjects = append(subjects, userSubject(p.other))
+		admins = append(admins, adminUser(p.other))
 	}
-	return subjects
+	return admins
 }
 
-// setOtherAdmin binds the other admin as an admin of the organization again,
-// or removes them, and records it for cleanup. While they are removed, an
-// interrupt (Ctrl-C) or SIGTERM binds them again before the program ends:
-// the guard is armed before the removal and disarmed once they are bound
-// again. bindingMu keeps the guard's write after any write of the run.
+// setOtherAdmin makes the other admin an admin of the organization again,
+// or removes them, in spec.admins, records it for cleanup, then waits until
+// agent-platform-operator's organization-admins follows. While they are
+// removed, an interrupt (Ctrl-C) or SIGTERM writes them back into spec.admins
+// before the program ends: the guard is armed before the removal and
+// disarmed once they are back in the spec. bindingMu keeps the guard's write
+// after any write of the run; it is not held during the wait for the
+// operator, so an interrupt then restores the spec within its bound.
 func (p *credentialsProof) setOtherAdmin(admin bool) error {
+	if err := p.writeOtherAdmin(admin); err != nil {
+		return err
+	}
+	_, err := waitOrganizationAdmins(p.namespace, p.admins(admin))
+	return err
+}
+
+// writeOtherAdmin is setOtherAdmin's write of spec.admins, under bindingMu.
+func (p *credentialsProof) writeOtherAdmin(admin bool) error {
 	p.bindingMu.Lock()
 	defer p.bindingMu.Unlock()
 	if !admin && p.disarmRestore == nil {
 		ns := p.namespace
 		p.disarmRestore = restoreOnSignal(func() { p.restoreOnInterrupt(ns) })
 	}
-	if err := bindOrganizationRole(p.namespace, organizationAdminsBinding, organizationAdminRole, p.adminsSubjects(admin)); err != nil {
+	if err := setOrganizationAdmins(credentialsOrganization, p.admins(admin)); err != nil {
 		if !admin {
 			// The removal may have landed although the write failed:
-			// cleanup binds them again, and disarms the guard.
+			// cleanup writes them back, and disarms the guard.
 			p.otherRemoved = true
 		}
 		return err
@@ -160,11 +173,13 @@ func (p *credentialsProof) setOtherAdmin(admin bool) error {
 func (p *credentialsProof) restoreOnInterrupt(ns string) {
 	p.bindingMu.Lock()
 	note("interrupted: binding %s as %s in %s again before the end (at most %s)", p.other.Email, organizationAdminRole, ns, signalRestoreTimeout)
-	if err := bindOrganizationRole(ns, organizationAdminsBinding, organizationAdminRole, p.adminsSubjects(true)); err != nil {
+	// The operator follows spec.admins after the program ends: only the
+	// spec is written here, within the interrupt's bound.
+	if err := setOrganizationAdmins(credentialsOrganization, p.admins(true)); err != nil {
 		warn("binding %s as %s in %s again: %v; the next run creates the organization again", p.other.Email, organizationAdminRole, ns, err)
 		return
 	}
-	note("interrupted: %s bound as %s in %s again", p.other.Email, organizationAdminRole, ns)
+	note("interrupted: %s in spec.admins of %s again; agent-platform-operator binds them as %s in %s", p.other.Email, credentialsOrganization, organizationAdminRole, ns)
 }
 
 // restoreOtherAdmin gives the other admin their binding back after a run
@@ -244,7 +259,7 @@ func (p *credentialsProof) lostRightsSaveRefused() (string, error) {
 		return "", fmt.Errorf("operation %s reads %q before the right is lost, want %s", p.lostOperation, c.State, operationPending)
 	}
 	p.lostETag = etag
-	step("%s removed from the RoleBinding %s/%s (%s)", p.other.Email, p.namespace, organizationAdminsBinding, organizationAdminRole)
+	step("%s removed from spec.admins of %s; the operator's RoleBinding %s/%s (%s) follows", p.other.Email, credentialsOrganization, p.namespace, organizationAdminsBinding, organizationAdminRole)
 	if err := p.setOtherAdmin(false); err != nil {
 		return "", err
 	}
@@ -280,7 +295,7 @@ func (p *credentialsProof) lostRightsSaveRefused() (string, error) {
 	if err := nothingWritten(ctx, p.namespace, credentialsLostModel, credentialsLostModelSecret, false); err != nil {
 		return "", fmt.Errorf("after the save refused for the lost right: %w", err)
 	}
-	return fmt.Sprintf("%s (access review: create secrets and modelconfigs allowed) prepared operation %s at %s; removed from %s/%s, access review: both denied; POST with that ETag 403 %s %q, their GET 403 naming %q; no ModelConfig %s, no Secret %s",
+	return fmt.Sprintf("%s (access review: create secrets and modelconfigs allowed) prepared operation %s at %s; removed from spec.admins and so from %s/%s, access review: both denied; POST with that ETag 403 %s %q, their GET 403 naming %q; no ModelConfig %s, no Secret %s",
 		p.other.Email, p.lostOperation, etag, p.namespace, organizationAdminsBinding, codeForbidden, excerpt(errorMessage(raw), 120), denied, credentialsLostModel, credentialsLostModelSecret), nil
 }
 
@@ -295,7 +310,7 @@ func (p *credentialsProof) lostRightsRestoredSave() (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), credentialsSaveTimeout)
 	defer cancel()
-	step("%s bound again in the RoleBinding %s/%s (%s)", p.other.Email, p.namespace, organizationAdminsBinding, organizationAdminRole)
+	step("%s in spec.admins of %s again; the operator's RoleBinding %s/%s (%s) follows", p.other.Email, credentialsOrganization, p.namespace, organizationAdminsBinding, organizationAdminRole)
 	if err := p.setOtherAdmin(true); err != nil {
 		return "", err
 	}

@@ -405,15 +405,21 @@ func removeSessionsAgents() []error {
 // start_session as the person ms signs in as, with the grant and the
 // toolchains (name[@version] each) when given, and returns its id.
 func startAgentSession(ms *musterSession, agent, grant string, toolchains ...string) (string, error) {
-	return startAgentSessionOf(ms, agentRef(agent), uuid.NewString(), grant, toolchains...)
+	return startAgentSessionOf(ms, "", agentRef(agent), uuid.NewString(), grant, toolchains...)
 }
 
-// startAgentSessionOf is startAgentSession for an Agent of any namespace,
-// keyed by requestID: start_session answers a repeated requestID with the
-// Session it started for it.
-func startAgentSessionOf(ms *musterSession, ref *apiv1alpha1.ResourceReference, requestID, grant string, toolchains ...string) (string, error) {
+// startAgentSessionOf is startAgentSession for any Agent, keyed by
+// requestID: start_session answers a repeated requestID with the Session it
+// started for it. An organization's agent is named by its organization's
+// name, never its namespace, and the answer must name that organization;
+// with organization "" the Agent is in ref's namespace of the installation.
+func startAgentSessionOf(ms *musterSession, organization string, ref *apiv1alpha1.ResourceReference, requestID, grant string, toolchains ...string) (string, error) {
 	agent := ref.GetName()
 	args := map[string]any{nameKey: agent, namespaceKey: ref.GetNamespace(), startSessionRequestIDArg: requestID}
+	if organization != "" {
+		delete(args, namespaceKey)
+		args[organizationArg] = organization
+	}
 	if grant != "" {
 		args[startSessionGrantArg] = grant
 	}
@@ -431,6 +437,9 @@ func startAgentSessionOf(ms *musterSession, ref *apiv1alpha1.ResourceReference, 
 	if err := json.Unmarshal([]byte(env.Content[0].Text), &started); err != nil || started.Session.ID == "" {
 		return "", fmt.Errorf("start_session answered no session: %.400s", env.Content[0].Text)
 	}
+	if started.Organization != organization {
+		return "", fmt.Errorf("start_session on %s answered for organization %q, want %q: %.400s", agent, started.Organization, organization, env.Content[0].Text)
+	}
 	return started.Session.ID, nil
 }
 
@@ -441,7 +450,7 @@ func startAgentSessionOf(ms *musterSession, ref *apiv1alpha1.ResourceReference, 
 // provider verifying the actor's JWT: its runtime would then reach muster as
 // nobody.
 func startBoundSession(ctx context.Context, ms *musterSession, api *kagentAPI, sessions *sessionSet, agent string) (*apiv1alpha1.Session, error) {
-	session, err := startSessionOf(ctx, ms, api, sessions, agentRef(agent), uuid.NewString())
+	session, err := startSessionOf(ctx, ms, api, sessions, "", agentRef(agent), uuid.NewString())
 	if err != nil {
 		return nil, err
 	}
@@ -453,12 +462,14 @@ func startBoundSession(ctx context.Context, ms *musterSession, api *kagentAPI, s
 
 // startSessionOf starts a Session of the Agent through agent-manager's
 // start_session as the person ms signs in as, the way Slack and the portal
-// do, tracks it in sessions and returns it once it is ready. Where muster
+// do, tracks it in sessions and returns it once it is ready. organization
+// names the organization whose agent it is, "" for an agent of the
+// installation's own namespace (agent.Namespace). Where muster
 // trusts the actor JWT, agent-manager binds the Session's actor to the
 // person; a Session created straight at the kagent controller is never
 // bound, and its runtime reaches muster with no credential.
-func startSessionOf(ctx context.Context, ms *musterSession, api *kagentAPI, sessions *sessionSet, agent *apiv1alpha1.ResourceReference, requestID string) (*apiv1alpha1.Session, error) {
-	id, err := startAgentSessionOf(ms, agent, requestID, "")
+func startSessionOf(ctx context.Context, ms *musterSession, api *kagentAPI, sessions *sessionSet, organization string, agent *apiv1alpha1.ResourceReference, requestID string) (*apiv1alpha1.Session, error) {
+	id, err := startAgentSessionOf(ms, organization, agent, requestID, "")
 	if err != nil {
 		return nil, err
 	}

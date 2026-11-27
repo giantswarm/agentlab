@@ -29,8 +29,9 @@ import (
 
 // The organizations proof (giantswarm/agentlab#1149, the
 // agent-platform-organizations plan's testing decisions): two
-// AgentPlatformOrganizations in the lab's root namespace, one member each,
-// bound by the group in their token as an editor of their organization
+// Organizations with the Agent Platform on, the lab's admins in their
+// spec.admins, one member each, bound by the group in their token as an
+// editor in their organization's namespace
 // (alice in tenant-a, bob in tenant-b). Each member creates an agent in
 // their own organization as themselves (a HelmRelease of the agent chart
 // through the Kubernetes API, which the chart's field lock admits) and runs
@@ -44,9 +45,10 @@ import (
 //   - the negative cross-organization tests, each a verdict naming its
 //     surface and its boundary, each with a twin in the member's own
 //     organization that is admitted, so a refusal for any other reason
-//     fails: Kubernetes, the kagent API and A2A, muster, the other
-//     organization's model, in-cluster endpoints on 443 through the egress
-//     gateway;
+//     fails: Kubernetes, the kagent API and A2A, muster, agent-manager
+//     (its tools take the organization's name, never its namespace), the
+//     other organization's model, in-cluster endpoints on 443 through the
+//     egress gateway;
 //   - the management-cluster profile tests that fit the lab: the
 //     object-count ResourceQuota, a Kyverno PolicyException that does not
 //     lift the sandbox admission policies, cleanup of an Orphaned
@@ -241,6 +243,13 @@ func OrganizationsTest(cfg *config.Config, opts OrganizationsTestOptions) error 
 		return err
 	}
 	opts.Part = part
+	// The Slack half's gateway starts a thread's Session through muster: a
+	// binary that cannot verify muster would fail only at S3.
+	if part == "" && !opts.SkipSlack {
+		if err := refuseUntrustedHostGateway(cfg, opts.GatewayBinary); err != nil {
+			return err
+		}
+	}
 	if err := useClusterKubeconfig(cfg); err != nil {
 		return err
 	}
@@ -255,6 +264,14 @@ func OrganizationsTest(cfg *config.Config, opts OrganizationsTestOptions) error 
 		return fmt.Errorf("no platform-admins user in %s", config.File)
 	}
 	if err := checkApiserverOIDC(cfg); err != nil {
+		return err
+	}
+	// Every part stands on the operator and agent-manager serving the
+	// Organization kind in its current shape: a release without it, or a
+	// build of the earlier shape, fails here, by name, not deep in a part
+	// (organizationkind.go).
+	step("The Organization CRD in the shape of %s, and %s and %s as builds of that shape that may %s %s as their ServiceAccounts", organizationShapeContract, agentPlatformOperator, agentManagerMCPServer, organizationReadVerb, organizationResource)
+	if err := checkOrganizationKindServed(); err != nil {
 		return err
 	}
 	if part == organizationCredentialsPart {
@@ -306,7 +323,7 @@ func (p *organizationsProof) run() error {
 			continue
 		}
 		since := time.Now()
-		reply, session, err := agentSessionTurnOf(p.cfg, &apiv1alpha1.ResourceReference{Namespace: ns, Name: organizationsTestAgent}, p.tokens[i], organizationsTestPrompt)
+		reply, session, err := agentSessionTurnOf(p.cfg, p.names[i], &apiv1alpha1.ResourceReference{Namespace: ns, Name: organizationsTestAgent}, p.tokens[i], organizationsTestPrompt)
 		if session != "" {
 			p.sessions[i] = append(p.sessions[i], session)
 		}
@@ -350,7 +367,7 @@ func (p *organizationsProof) run() error {
 		p.add(organizationVerdict{surface: surfaceSlack, boundary: "each member's roster is their own organization's", skip: "--skip-slack"})
 	} else {
 		slack := &organizationsSlack{cfg: p.cfg, opts: KlausGatewayTestOptions{GatewayImage: p.opts.GatewayImage, GatewayBinary: p.opts.GatewayBinary},
-			namespaces: p.namespaces, users: p.members, admin: p.adminAPI}
+			names: p.names, namespaces: p.namespaces, users: p.members, admin: p.adminAPI}
 		slackVerdicts, slackRosters, err := slack.run()
 		if err != nil {
 			return err
@@ -365,7 +382,8 @@ func (p *organizationsProof) run() error {
 	p.add(organizationVerdict{surface: strings.Join(slices.Sorted(maps.Keys(rosters)), ", "), boundary: "every surface gives each member the same agents", detail: same})
 
 	muster := &organizationsMuster{cfg: p.cfg, namespaces: p.namespaces, users: p.members}
-	for _, c := range slices.Concat(p.kubernetesChecks(), muster.checks(), p.modelChecks(), p.egressChecks(), p.profileChecks()) {
+	agentManager := &organizationsAgentManager{cfg: p.cfg, names: p.names, namespaces: p.namespaces, users: p.members}
+	for _, c := range slices.Concat(p.kubernetesChecks(), muster.checks(), agentManager.checks(), p.modelChecks(), p.egressChecks(), p.profileChecks()) {
 		v, err := c.verdict()
 		if err != nil {
 			return err
@@ -380,14 +398,11 @@ func (p *organizationsProof) add(v organizationVerdict) {
 	p.verdicts = append(p.verdicts, v)
 }
 
-// preconditions checks what the proof stands on: the CRD and its operator,
-// the organizations' roles, and the kagent authorizer judging people as the
-// API server does.
+// preconditions checks what the proof stands on beside the Organization kind
+// (checkOrganizationKindServed, before every part): the organizations' roles,
+// and the kagent authorizer judging people as the API server does.
 func (p *organizationsProof) preconditions() error {
-	step("agent-platform-operator and the organizations' roles (agentPlatformOrganizations on the installed chart)")
-	if _, err := gvrFor(organizationResource); err != nil {
-		return fmt.Errorf("the apiserver serves no %s: the installed chart does not run agent-platform-operator — `agentlab platform` with platform.organizations on and agent-platform %s or newer: %w", organizationResource, config.OrganizationsChartFloor, err)
-	}
+	step("The organizations' roles (agentPlatformOrganizations on the installed chart)")
 	for _, role := range []string{organizationEditorRole, organizationUserRole, organizationAdminRole} {
 		if err := checkOrganizationRole(role); err != nil {
 			return err
@@ -405,23 +420,26 @@ func (p *organizationsProof) preconditions() error {
 	return nil
 }
 
-// setUp keeps the two organizations Ready, binds each member's group as
-// an editor of their own, gives each the lab's model, and logs everyone in.
+// setUp removes what an earlier failed run of the cleanup proof left, then
+// keeps the two organizations Ready with platform-admins in
+// spec.admins (the operator binds them; nobody else may), binds each
+// member's group as an editor of their own, gives each the lab's model, and
+// logs everyone in.
 func (p *organizationsProof) setUp() error {
+	if err := p.removeCleanupLeftovers(); err != nil {
+		return err
+	}
 	for i, name := range p.names {
 		if err := checkProofOrganization(name); err != nil {
 			return err
 		}
-		step("Organization %s/%s Ready; group %s bound to %s there; its model %s", organizationsRootNamespace, name, p.members[i].Groups[0], organizationEditorRole, organizationModel)
-		ns, err := ensureOrganization(organizationsRootNamespace, name, name)
+		step("Organization %s Ready, admins group %s; group %s bound to %s in its namespace; its model %s", name, platformAdminsGroup, p.members[i].Groups[0], organizationEditorRole, organizationModel)
+		ns, err := ensureOrganization(name, name, []organizationAdmin{adminGroup(platformAdminsGroup)})
 		if err != nil {
 			return err
 		}
 		p.namespaces[i] = ns
 		if err := markProofOrganization(name); err != nil {
-			return err
-		}
-		if err := bindOrganizationRole(ns, organizationAdminsBinding, organizationAdminRole, []rbacv1.Subject{groupSubject(platformAdminsGroup)}); err != nil {
 			return err
 		}
 		if err := bindOrganizationRole(ns, organizationsTestBinding, organizationEditorRole, []rbacv1.Subject{groupSubject(p.members[i].Groups[0])}); err != nil {
@@ -960,7 +978,7 @@ func (p *organizationsProof) egressChecks() []organizationCheck {
 		run: func() (string, error) {
 			targets := []string{DefaultEgressOrigin + "/", "https://" + kubernetesAPIHost + "/version", "https://" + ateAPIHost + "/"}
 			started := time.Now()
-			reply, session, err := agentSessionTurnOf(p.cfg, &apiv1alpha1.ResourceReference{Namespace: a, Name: organizationsTestAgent}, p.tokens[0], inClusterProbePrompt(targets))
+			reply, session, err := agentSessionTurnOf(p.cfg, p.names[0], &apiv1alpha1.ResourceReference{Namespace: a, Name: organizationsTestAgent}, p.tokens[0], inClusterProbePrompt(targets))
 			if session != "" {
 				p.sessions[0] = append(p.sessions[0], session)
 			}
@@ -1455,7 +1473,7 @@ func (p *organizationsProof) cleanupAgents() {
 		if ns == "" {
 			continue
 		}
-		for _, name := range []string{organizationsTestAgent, organizationsTestCrossAgent} {
+		for _, name := range []string{organizationsTestAgent, organizationsTestCrossAgent, organizationsTestToolAgent} {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*organizationReadyTimeout)
 			if err := deleteObject(ctx, gvr, ns, name, organizationReadyTimeout); err != nil {
 				note("cleanup: %v", err)

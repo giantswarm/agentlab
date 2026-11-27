@@ -156,12 +156,32 @@ with Dex doing the logins.
   env-var -> Secret key handling; entries removed from the config are pruned
   on the next run (see docs/models.md "Extra model configs").
 - `platform.organizations` (on by default, from agent-platform
-  4.175.0-rc.4 on) runs Agent Platform organizations: the chart's
-  agent-platform-operator reconciles each `AgentPlatformOrganization` of a
-  parent namespace into `agents-<name>-<random>`. The lab's parent is the
-  fixed root namespace `agentlab-organizations`; `up` keeps the default
-  organization `default` there, Ready, with `platform-admins` as its first
-  admins, `developers` as its editors and its own model (organizations.go).
+  4.175.0-rc.4 on) runs Agent Platform organizations: each is an
+  `Organization` (`security.giantswarm.io`, cluster-scoped) with
+  `spec.capabilities.agentPlatform.enabled`, which the chart's
+  agent-platform-operator reconciles into `agents-<name>` (read from the
+  `agentPlatform` entry of `status.namespaces`; its conditions are
+  `AgentPlatformReady`, `AgentPlatformOrphaned`, `AgentPlatformErasing`: the
+  shape of giantswarm/organization-operator#673). The lab has no KaaS, so
+  the chart installs the CRD
+  (`agentPlatformOrganizations.organizationCRD.enabled`).
+  The admins are `spec.admins`; the operator alone binds them
+  (`organization-admins`), the lab never does. `up` keeps the default
+  `Organization` `default`, Ready, with `platform-admins` in `spec.admins`,
+  `developers` as its editors and its own model (organizations.go). It runs
+  only on the draft pull requests of giantswarm/giantswarm#39492 for now
+  (docs/agents.md "The Organization kind prototype"); `up`, `platform` and
+  every part of `organizations-test` stop at once on a CRD, an operator or
+  an agent-manager of the earlier shape (organizationkind.go). There
+  agent-manager's tools take an organization by its name (`organization`),
+  never its namespace: the lab passes `namespace` only for `kagent`. The Slack surface
+  of `organizations-test` needs klaus-gateway 4.18.10 or later, the first
+  release with giantswarm/klaus-gateway#616, which starts a thread's Session
+  by the organization's name (the lab takes the component's applied version,
+  or the newest in the chart's range). Its gateway reads the lab's API server in every shape: it names an
+  organization's tenant by the label `agent-platform.giantswarm.io/organization`
+  on the namespace, and without that access it writes `namespace <namespace>`
+  (docs/agents.md "The tools take the organization's name").
   `agentlab organizations-test` is the proof (docs/agents.md "The
   organizations proof"); its two organizations stay between runs, since an
   organization's erasure is skipped on the lab (HACKS.md U41).
@@ -314,9 +334,9 @@ agentlab beekeeper-central-test --part notes  # beekeeper's central notes throug
 agentlab test            # RBAC assertions for every configured user
 agentlab backstage-test  # headless Backstage sign-in for every user, the portal's Agent Platform and Models pages (--agent kagent/<name>: on an existing agent, no create or delete)
 agentlab roadmap-test    # the fake pro (a fixture board) registered with muster as pro: x_pro_list_issues as the person, with backstage.hive the portal's roadmap-backend routes reading it; --keep leaves it for the Hive spec (docs/backstage.md "The roadmap board fixture")
-agentlab organizations-test  # platform.organizations: two AgentPlatformOrganizations, alice and bob each an editor of one by group: each creates and runs an agent in their own; every surface (Kubernetes, kagent API, Slack; the Dev Portal proven by the browser suite's organizations.spec.ts) gives each the same agents; the negative cross-organization tests per surface and boundary (Kubernetes RBAC, kagent API and A2A, muster, the other organization's model, in-cluster 443 through the egress gateway); the profile tests (object-count quota, a PolicyException that does not lift the sandbox policies, the credential provider's grants, each component's Secret reads (ate-controller, both credential providers, the connectivity hooks); the Orphaned erasure skipped, HACKS.md U41)
+agentlab organizations-test  # platform.organizations: two Organizations, alice and bob each an editor of one by group: each creates and runs an agent in their own; every surface (Kubernetes, kagent API, Slack; the Dev Portal proven by the browser suite's organizations.spec.ts) gives each the same agents; the negative cross-organization tests per surface and boundary (Kubernetes RBAC, kagent API and A2A, muster, agent-manager's tools by organization name (an organization's namespace as namespace, the other organization, organization with namespace and no cluster: each refused), the other organization's model, in-cluster 443 through the egress gateway); the profile tests (object-count quota, a PolicyException that does not lift the sandbox policies, the credential provider's grants, each component's Secret reads (ate-controller, both credential providers, the connectivity hooks); the cleanup of an Orphaned organization: its delete refused while MissingFromGit, erased once its delete pull request merged; an earlier failed run's fixtures removed first)
 agentlab organizations-test --part credentials  # an organization admin's model without a key through muster (no ModelConfig, no Secret value, a pending operation); input_required, -32042 (url mode, an elicitationId) and a plain result with the link (structuredContent valid against its outputSchema) per MCP client generation; a declined and a dismissed elicitation ending the call with nothing written; completion notifications only to the initiating client; a viewer (agent-platform:user only, a third person) refused by RBAC and their save refused; a Secret another consumer references refused 409; the connector's and the egress policy's confirmations listing their one consumer and the origins; the other admin's save refused 403 after their admin binding is removed (access reviews before and after, nothing written) and the same operation saved at the same ETag once it is back (a SKIP below agent-manager 2.24.0-rc.2); the save through agent-manager's credential API (strong ETag, a missing If-Match 428 and a stale one refused, another person and an anonymous read refused, a cancel; the other admin's own operation a SKIP below agent-manager 2.24.0-rc.2, agent-manager#360) with a second POST and each generation's retry the same receipt as a pull request opened as the person with the Secret SOPS-encrypted; Flux applying and decrypting it (the Secret's SHA-256, the ModelConfig); no value in agent-manager's or muster's logs; a tenant MCP server's sign-in attributed to its key; delete_organization's erasure; each missing prerequisite a SKIP naming its fix
-agentlab organizations-test --part admins  # a Giant Swarm Organization's admins (cluster-admin in its namespace only, by rbac-operator's RoleBinding) create an organization alone through create_organization: created with its first admins, not pending; the operator's organizations-admin mirror, none of a hand-written binding, ServiceAccount or system: subjects or a binding being deleted; the hand-written binding's person and the other Organization's admin refused with nothing written
+agentlab organizations-test --part admins  # spec.admins: create_organization writes them and no RoleBinding, the operator binds them to agent-platform:admin and follows update_organization (a replace, an empty list); a binding to agent-platform:admin by anyone else refused at admission; add_organization_member refuses the admin role; create_organization refused to a person without create on Organizations; a switch-off of spec.capabilities.agentPlatform.enabled refused at admission (agent-platform-organization-switch-off, decision D10)
 agentlab coding-test     # platform.coding: the coding Harness from the values, agent-manager's guards, a coding agent's sandbox floor (uid split, forwarder paths, a write tool refused, no credentials, DNS canary, egress), a workspace Session's MCP call audited by muster as the person, nothing in the sandbox running between turns, the instruction fixture, suspend/resume, the turn's usage, a share refused, no muster call of the actor accepted after delete_session
 agentlab coding-test --step egress  # one stage of coding-test and the stages it builds on (here create and the sandbox turn); the rest listed as skipped by the step
 agentlab coding-test --part devctl  # platform.devctl: a coding agent opens a pull request as the person, waits for its CI (one pr_wait), merges it (pr_merge) and waits for its release (release_wait) through devctl's MCP server; one pr_wait with a progressToken beside it

@@ -2,6 +2,7 @@ package lab
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/url"
@@ -22,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/dynamic"
 
 	"github.com/giantswarm/agentlab/internal/config"
 
@@ -33,7 +35,32 @@ const (
 	organizationCleanupPart    = "cleanup"
 	organizationCleanupFixture = "agentlab-organizations-inventory"
 	organizationCleanupWait    = 15 * time.Minute
+	// organizationActorsGoneWait bounds the wait for an erased
+	// organization's actors to go, a transport error of the read included.
+	organizationActorsGoneWait = time.Minute
 	organizationSnapshotBody   = "agentlab organization cleanup control"
+	// organizationDeleteIntentPolicy is the chart's ValidatingAdmissionPolicy
+	// that holds an Organization's delete: an organization applied from git
+	// (it has an AgentPlatformOrphaned condition) is erased only once its
+	// delete pull request merged (AgentPlatformOrphaned=True, reason
+	// DeleteMerged).
+	organizationDeleteIntentPolicy = "agent-platform-organization-delete-intent"
+	// organizationDeletePullRequestAnnotation is what agent-manager writes in
+	// mode commit on an Organization whose delete pull request it opened: the
+	// pull request's URL. The operator gives an orphan the reason DeleteMerged
+	// only with it.
+	organizationDeletePullRequestAnnotation = "agent-platform.giantswarm.io/delete-pull-request"
+	// organizationCleanupPullRequest is the proof's value of that annotation:
+	// URL-shaped, as agent-manager writes it, and naming no real pull request.
+	organizationCleanupPullRequest = "https://github.invalid/giantswarm/agentlab-organizations-test/pull/1"
+	// fluxPruneAnnotation is Flux's marker of an intended prune, which the
+	// delete-intent policy asks of every delete.
+	fluxPruneAnnotation = "kustomize.toolkit.fluxcd.io/prune"
+	// The operator's AgentPlatformOrphaned condition and its reasons.
+	orphanedCondition    = "AgentPlatformOrphaned"
+	orphanedInInventory  = "InInventory"
+	orphanedMissingInGit = "MissingFromGit"
+	orphanedDeleteMerged = "DeleteMerged"
 )
 
 func organizationProofPart(part string) (string, error) {
@@ -70,14 +97,14 @@ func (p *organizationsProof) cleanupOrphanedOrganization() (detail string, resul
 	p.retainCleanupDiagnostics = true
 	defer func() {
 		if resultErr != nil {
-			note("cleanup failed: retaining proof organizations, sessions and installation inventory for diagnosis: %v", resultErr)
+			note("cleanup failed: retaining proof organizations, sessions and installation inventory for diagnosis; the next run removes them first: %v", resultErr)
 		}
 	}()
 	organizationGVR, err := gvrFor(organizationResource)
 	if err != nil {
 		return "", err
 	}
-	organization, err := getObject(ctx, organizationGVR, organizationsRootNamespace, p.names[0])
+	organization, err := getObject(ctx, organizationGVR, "", p.names[0])
 	if err != nil {
 		return "", err
 	}
@@ -91,7 +118,7 @@ func (p *organizationsProof) cleanupOrphanedOrganization() (detail string, resul
 			resultErr = removeFixture()
 		}
 	}()
-	if err := waitOrganizationOrphaned(ctx, p.names[0], false); err != nil {
+	if err := waitOrganizationOrphaned(ctx, p.names[0], false, orphanedInInventory); err != nil {
 		return "", err
 	}
 
@@ -127,7 +154,7 @@ func (p *organizationsProof) cleanupOrphanedOrganization() (detail string, resul
 		return "", err
 	}
 	defer stop()
-	control, err := getObject(ctx, organizationGVR, organizationsRootNamespace, p.names[1])
+	control, err := getObject(ctx, organizationGVR, "", p.names[1])
 	if err != nil {
 		return "", err
 	}
@@ -144,18 +171,38 @@ func (p *organizationsProof) cleanupOrphanedOrganization() (detail string, resul
 	if err := writeOrganizationInventory(ctx); err != nil {
 		return "", err
 	}
-	if err := waitOrganizationOrphaned(ctx, p.names[0], true); err != nil {
+	if err := waitOrganizationOrphaned(ctx, p.names[0], true, orphanedMissingInGit); err != nil {
 		return "", err
 	}
-	note("organization %s/%s is Orphaned=True after its inventory entry was removed; session %s belongs to %s", organizationsRootNamespace, p.names[0], session.GetId(), p.members[0].Email)
+	note("organization %s is AgentPlatformOrphaned=True (%s) after its inventory entry was removed; session %s belongs to %s", p.names[0], orphanedMissingInGit, session.GetId(), p.members[0].Email)
+	// The refusal first: Flux's prune marker alone does not erase an
+	// organization whose file is gone from git without a delete pull request.
+	refused, err := p.deleteRefusedWhileMissingFromGit(ctx, session.GetId())
+	if err != nil {
+		return "", err
+	}
+	p.add(organizationVerdict{surface: surfaceProfile, boundary: "the delete of an Orphaned organization missing from git, without a merged delete pull request, is refused", detail: refused})
+	// Then the path of a merged delete pull request, as agent-manager takes
+	// it in mode commit.
+	if err := p.markDeletePullRequest(ctx, p.names[0]); err != nil {
+		return "", err
+	}
+	if err := waitOrganizationOrphaned(ctx, p.names[0], true, orphanedDeleteMerged); err != nil {
+		return "", err
+	}
+	note("organization %s is AgentPlatformOrphaned=True (%s) with %s: %s", p.names[0], orphanedDeleteMerged, organizationDeletePullRequestAnnotation, organizationCleanupPullRequest)
 	if err := p.deleteProofOrganization(ctx, 0); err != nil {
 		return "", err
 	}
-	if err := wait.PollUntilContextTimeout(ctx, pollInterval, time.Minute, true, func(ctx context.Context) (bool, error) {
-		remaining, err := organizationActors(ctx, api, p.namespaces[0])
+	if err := wait.PollUntilContextTimeout(ctx, pollInterval, organizationActorsGoneWait, true, func(ctx context.Context) (bool, error) {
+		var remaining []*ateapi.Actor
+		err := endStateRead(ctx, "ListActors", p.namespaces[0], organizationActorsGoneWait, func() (err error) {
+			remaining, err = organizationActors(ctx, api, p.namespaces[0])
+			return err
+		})
 		return len(remaining) == 0, err
 	}); err != nil {
-		return "", fmt.Errorf("organization actors remain: %w", err)
+		return "", fmt.Errorf("organization actors of %s not gone within %s: %w", p.namespaces[0], organizationActorsGoneWait, err)
 	}
 	if err := requireSnapshotCount(ctx, client, bucket, prefix, 0); err != nil {
 		return "", err
@@ -175,16 +222,8 @@ func (p *organizationsProof) cleanupOrphanedOrganization() (detail string, resul
 	if string(body) != organizationSnapshotBody {
 		return "", fmt.Errorf("control object content changed")
 	}
-	removedSession, readErr := p.apis[0].getSession(ctx, session.GetId())
-	if readErr == nil && removedSession.GetState() != apiv1alpha1.RuntimeState_RUNTIME_STATE_DELETED {
-		return "", fmt.Errorf("deleted organization retains session %s in state %s", session.GetId(), sessionState(removedSession))
-	}
-	if readErr != nil && status.Code(readErr) != codes.NotFound && status.Code(readErr) != codes.PermissionDenied {
-		return "", readErr
-	}
-	_, resumeErr := p.apis[0].sessions.ResumeSession(p.apis[0].callCtx(ctx), &apiv1alpha1.ResumeSessionRequest{SessionId: session.GetId()})
-	if code := status.Code(resumeErr); code != codes.NotFound && code != codes.FailedPrecondition && code != codes.PermissionDenied {
-		return "", fmt.Errorf("deleted session remains runnable: ResumeSession returned %v", resumeErr)
+	if err := requireSessionErased(ctx, p.apis[0], session.GetId()); err != nil {
+		return "", err
 	}
 	p.sessions[0] = nil
 	if err := p.deleteProofOrganization(ctx, 1); err != nil {
@@ -195,7 +234,71 @@ func (p *organizationsProof) cleanupOrphanedOrganization() (detail string, resul
 	}
 	p.sessions[1] = nil
 	p.retainCleanupDiagnostics = false
-	return fmt.Sprintf("member-owned READY session %s and %d actors removed; both organizations and namespaces gone; snapshot prefix %s empty; control %s survived the first cleanup and was deleted with its own organization", session.GetId(), len(actors), prefix, controlKey), nil
+	return fmt.Sprintf("after its delete pull request merged (AgentPlatformOrphaned=True, %s), member-owned READY session %s and %d actors removed; both organizations and namespaces gone; snapshot prefix %s empty; control %s survived the first cleanup and was deleted with its own organization", orphanedDeleteMerged, session.GetId(), len(actors), prefix, controlKey), nil
+}
+
+// endStateReadTimeout bounds the retries of an end-state read of the cleanup
+// proof on a transport error: the kagent controller restarts with its
+// database when the kubelet restarts that for a failed liveness probe, as on
+// a loaded laptop. A variable so the tests wait in milliseconds.
+var endStateReadTimeout = 3 * time.Minute
+
+// The SessionService methods the cleanup proof's end-state reads call.
+const (
+	getSessionMethod    = "GetSession"
+	resumeSessionMethod = "ResumeSession"
+)
+
+// transportError is a gRPC answer that says nothing of the end state: the
+// connection to the server failed (Unavailable), as on its restart.
+func transportError(err error) bool {
+	return status.Code(err) == codes.Unavailable
+}
+
+// endStateRead runs read, a read that proves an end state of the cleanup
+// proof, again on a transport error until timeout, noting the first one;
+// every other answer returns at once for the caller to judge.
+func endStateRead(ctx context.Context, method, id string, timeout time.Duration, read func() error) error {
+	return untilSettled(ctx, method, id, timeout, transportError, read)
+}
+
+// requireSessionErased proves the session id erased with its organization:
+// GetSession answers NotFound or PermissionDenied, or the session DELETED,
+// and ResumeSession answers NotFound, FailedPrecondition or PermissionDenied
+// (not "not yet settled" after a retry). A transport error of either read is
+// tried again (endStateRead); any other answer, and a transport error past
+// the bound, fails the proof.
+func requireSessionErased(ctx context.Context, api *kagentAPI, id string) error {
+	var session *apiv1alpha1.Session
+	readErr := endStateRead(ctx, getSessionMethod, id, endStateReadTimeout, func() error {
+		response, err := api.sessions.GetSession(api.callCtx(ctx), &apiv1alpha1.GetSessionRequest{SessionId: id})
+		session = response.GetSession()
+		return err
+	})
+	switch code := status.Code(readErr); {
+	case readErr == nil && session.GetState() != apiv1alpha1.RuntimeState_RUNTIME_STATE_DELETED:
+		return fmt.Errorf("deleted organization retains session %s in state %s", id, sessionState(session))
+	case readErr != nil && code != codes.NotFound && code != codes.PermissionDenied:
+		return readErr
+	}
+	attempts := 0
+	resumeErr := endStateRead(ctx, resumeSessionMethod, id, endStateReadTimeout, func() error {
+		attempts++
+		_, err := api.sessions.ResumeSession(api.callCtx(ctx), &apiv1alpha1.ResumeSessionRequest{SessionId: id})
+		return err
+	})
+	switch code := status.Code(resumeErr); {
+	case resumeErr == nil:
+		return fmt.Errorf("deleted session %s remains runnable: ResumeSession succeeded", id)
+	case attempts > 1 && notYetSettled(resumeErr):
+		// The Unavailable before may have been the controller's own answer
+		// to a resume it began: a session whose runtime work then runs is
+		// not erased.
+		return fmt.Errorf("deleted session %s is not proven unrunnable: a resume tried again found its runtime work running: %w", id, resumeErr)
+	case code != codes.NotFound && code != codes.FailedPrecondition && code != codes.PermissionDenied:
+		return fmt.Errorf("deleted session %s is not proven unrunnable: %w", id, resumeErr)
+	}
+	return nil
 }
 
 func organizationActors(ctx context.Context, api *ateAPI, namespace string) ([]*ateapi.Actor, error) {
@@ -231,45 +334,187 @@ func requireSnapshotCount(ctx context.Context, client *s3.Client, bucket, prefix
 	return nil
 }
 
+// deleteProofOrganization erases the proof's organization index as the
+// lab's admin and waits until it and its namespace are gone. It refuses an
+// organization without the proof's ownership label.
 func (p *organizationsProof) deleteProofOrganization(ctx context.Context, index int) error {
+	organization, err := p.ownedOrganization(ctx, p.names[index])
+	if err != nil {
+		return err
+	}
+	resource, err := p.adminOrganizations()
+	if err != nil {
+		return err
+	}
+	return eraseOrganization(ctx, resource, organization, p.namespaces[index])
+}
+
+// ownedOrganization reads the organization name and refuses it without the
+// proof's ownership label.
+func (p *organizationsProof) ownedOrganization(ctx context.Context, name string) (*unstructured.Unstructured, error) {
+	organizationGVR, err := gvrFor(organizationResource)
+	if err != nil {
+		return nil, err
+	}
+	organization, err := getObject(ctx, organizationGVR, "", name)
+	if err != nil {
+		return nil, err
+	}
+	if organization.GetLabels()[organizationsTestLabel] != organizationsTestMark {
+		return nil, fmt.Errorf("refusing to delete organization %s without the proof ownership label %s=%s", name, organizationsTestLabel, organizationsTestMark)
+	}
+	return organization, nil
+}
+
+// adminOrganizations is the Organizations resource as the lab's admin, on
+// the admin's own Dex token: the person whose delete the chart's admission
+// judges.
+func (p *organizationsProof) adminOrganizations() (dynamic.ResourceInterface, error) {
+	organizationGVR, err := gvrFor(organizationResource)
+	if err != nil {
+		return nil, err
+	}
+	token, err := passwordGrant(p.cfg, config.KubernetesClientID, config.KubernetesClientSecret, p.admin.Email, p.admin.Password, loginScopes)
+	if err != nil {
+		return nil, err
+	}
+	admin, _, err := personClients(token)
+	if err != nil {
+		return nil, err
+	}
+	return admin.Resource(organizationGVR), nil
+}
+
+// deleteRefusedWhileMissingFromGit is the refusal verdict: the lab's admin
+// deletes the Orphaned organization (reason MissingFromGit) with Flux's prune
+// marker, the chart's delete-intent policy refuses it, and the organization,
+// its namespace and the member's session are still there.
+func (p *organizationsProof) deleteRefusedWhileMissingFromGit(ctx context.Context, sessionID string) (string, error) {
+	organization, err := p.ownedOrganization(ctx, p.names[0])
+	if err != nil {
+		return "", err
+	}
+	resource, err := p.adminOrganizations()
+	if err != nil {
+		return "", err
+	}
+	uid := organization.GetUID()
+	if _, err := resource.Patch(ctx, organization.GetName(), types.MergePatchType, pruneMarkerPatch(uid), metav1.PatchOptions{}); err != nil {
+		return "", err
+	}
+	what := fmt.Sprintf("the lab admin's delete of organization %s (AgentPlatformOrphaned=True, %s, %s: enabled)", organization.GetName(), orphanedMissingInGit, fluxPruneAnnotation)
+	if err := deleteIntentRefusal(what, resource.Delete(ctx, organization.GetName(), metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &uid}})); err != nil {
+		return "", err
+	}
+	organizationGVR, err := gvrFor(organizationResource)
+	if err != nil {
+		return "", err
+	}
+	current, err := getObject(ctx, organizationGVR, "", organization.GetName())
+	if err != nil {
+		return "", fmt.Errorf("organization %s after the refused delete: %w", organization.GetName(), err)
+	}
+	if current.GetUID() != uid || current.GetDeletionTimestamp() != nil {
+		return "", fmt.Errorf("organization %s is being deleted or was replaced after the refused delete", organization.GetName())
+	}
+	if _, err := getObject(ctx, gvrNamespaces, "", p.namespaces[0]); err != nil {
+		return "", fmt.Errorf("namespace %s after the refused delete: %w", p.namespaces[0], err)
+	}
+	session, err := p.apis[0].getSession(ctx, sessionID)
+	if err != nil {
+		return "", fmt.Errorf("session %s after the refused delete: %w", sessionID, err)
+	}
+	if session.GetState() == apiv1alpha1.RuntimeState_RUNTIME_STATE_DELETED {
+		return "", fmt.Errorf("session %s is DELETED after the refused delete", sessionID)
+	}
+	return fmt.Sprintf("%s refused by the ValidatingAdmissionPolicy %s; organization %s, namespace %s and session %s (%s) still there", what, organizationDeleteIntentPolicy, organization.GetName(), p.namespaces[0], sessionID, sessionState(session)), nil
+}
+
+// deleteIntentRefusal reads a delete's answer as the delete-intent policy's
+// refusal of an organization applied from git whose delete pull request has
+// not merged: nil for that refusal, an error naming what happened otherwise
+// (the delete was admitted, or something else refused it, the same policy's
+// check of the prune marker among them).
+func deleteIntentRefusal(what string, err error) error {
+	switch {
+	case err == nil:
+		return fmt.Errorf("%s was admitted; the ValidatingAdmissionPolicy %s refuses it until the delete pull request merged", what, organizationDeleteIntentPolicy)
+	case deniedByPolicy(err, organizationDeleteIntentPolicy) && strings.Contains(err.Error(), orphanedDeleteMerged):
+		return nil
+	}
+	return fmt.Errorf("%s failed, but not as the refusal of the ValidatingAdmissionPolicy %s for an organization without a merged delete pull request: %w", what, organizationDeleteIntentPolicy, err)
+}
+
+// markDeletePullRequest sets the delete pull request annotation on the
+// organization name as the lab's admin, as agent-manager does in mode commit.
+func (p *organizationsProof) markDeletePullRequest(ctx context.Context, name string) error {
+	organization, err := p.ownedOrganization(ctx, name)
+	if err != nil {
+		return err
+	}
+	resource, err := p.adminOrganizations()
+	if err != nil {
+		return err
+	}
+	return patchDeletePullRequest(ctx, resource, name, organization.GetUID())
+}
+
+// patchDeletePullRequest sets the delete pull request annotation on the
+// organization name with uid: the uid in the patch is the API server's
+// precondition, so a replacement of that name is not written.
+func patchDeletePullRequest(ctx context.Context, resource dynamic.ResourceInterface, name string, uid types.UID) error {
+	patch, err := json.Marshal(map[string]any{crMetadata: map[string]any{"uid": uid, "annotations": map[string]string{organizationDeletePullRequestAnnotation: organizationCleanupPullRequest}}})
+	if err != nil {
+		return err
+	}
+	if _, err := resource.Patch(ctx, name, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
+		return fmt.Errorf("annotating organization %s with %s: %w", name, organizationDeletePullRequestAnnotation, err)
+	}
+	return nil
+}
+
+// pruneMarkerPatch sets Flux's prune marker on the organization with uid,
+// which the API server checks as a precondition.
+func pruneMarkerPatch(uid types.UID) []byte {
+	patch, _ := json.Marshal(map[string]any{crMetadata: map[string]any{"uid": uid, "annotations": map[string]string{fluxPruneAnnotation: "enabled"}}})
+	return patch
+}
+
+// eraseOrganization deletes organization through resource with Flux's prune
+// marker, unless its deletion already runs, and waits until it and its
+// namespace are gone, noting each erasure step.
+func eraseOrganization(ctx context.Context, resource dynamic.ResourceInterface, organization *unstructured.Unstructured, namespace string) error {
 	organizationGVR, err := gvrFor(organizationResource)
 	if err != nil {
 		return err
 	}
-	organization, err := getObject(ctx, organizationGVR, organizationsRootNamespace, p.names[index])
-	if err != nil {
-		return err
-	}
-	if organization.GetLabels()[organizationsTestLabel] != organizationsTestMark {
-		return fmt.Errorf("refusing to delete organization %s without the proof ownership label", organization.GetName())
-	}
-	token, err := passwordGrant(p.cfg, config.KubernetesClientID, config.KubernetesClientSecret, p.admin.Email, p.admin.Password, loginScopes)
-	if err != nil {
-		return err
-	}
-	admin, _, err := personClients(token)
-	if err != nil {
-		return err
-	}
-	resource := admin.Resource(organizationGVR).Namespace(organizationsRootNamespace)
-	if _, err := resource.Patch(ctx, organization.GetName(), types.MergePatchType, []byte(`{"metadata":{"annotations":{"kustomize.toolkit.fluxcd.io/prune":"enabled"}}}`), metav1.PatchOptions{}); err != nil {
-		return err
-	}
-	uid := organization.GetUID()
-	if err := resource.Delete(ctx, organization.GetName(), metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &uid}}); err != nil {
-		return err
+	if organization.GetDeletionTimestamp() == nil {
+		uid := organization.GetUID()
+		if _, err := resource.Patch(ctx, organization.GetName(), types.MergePatchType, pruneMarkerPatch(uid), metav1.PatchOptions{}); err != nil {
+			return err
+		}
+		if err := resource.Delete(ctx, organization.GetName(), metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &uid}}); err != nil {
+			return err
+		}
 	}
 	last := ""
 	err = wait.PollUntilContextTimeout(ctx, pollInterval, organizationCleanupWait, true, func(ctx context.Context) (bool, error) {
-		current, err := getObject(ctx, organizationGVR, organizationsRootNamespace, organization.GetName())
+		current, err := getObject(ctx, organizationGVR, "", organization.GetName())
 		if apierrors.IsNotFound(err) {
-			_, err = getObject(ctx, gvrNamespaces, "", p.namespaces[index])
+			if namespace == "" {
+				return true, nil
+			}
+			_, err = getObject(ctx, gvrNamespaces, "", namespace)
 			return apierrors.IsNotFound(err), ignoreNotFound(err)
 		}
 		if err != nil {
 			return false, err
 		}
-		step, _, _ := unstructured.NestedString(current.Object, "status", "erasureStep")
+		state, err := organizationStateFrom(current)
+		if err != nil {
+			return false, err
+		}
+		step := state.erasureStep()
 		if step != last {
 			note("organization %s cleanup: %s", organization.GetName(), step)
 			last = step
