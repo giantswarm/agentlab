@@ -161,10 +161,10 @@ extraVolumeMounts:
 
 // beekeeperDexSidecar is the initContainers value of serve's pod: the
 // dex-localhost forwarder while the issuer is spelled localhost (postrenderers.go,
-// dexLocalhostPatch), none with an externally provisioned pair, whose issuer
+// dexLocalhostPatch), none under the domain (IssuerUnderDomain), whose issuer
 // pods reach through CoreDNS.
 func beekeeperDexSidecar(cfg *config.Config) string {
-	if cfg.Platform.TLS.Set() {
+	if !dexLocalhostBridged(cfg) {
 		return ""
 	}
 	return fmt.Sprintf(`initContainers:

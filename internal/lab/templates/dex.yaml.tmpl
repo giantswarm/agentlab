@@ -288,9 +288,9 @@ spec:
     - name: http
       port: {{ .DexKeysPort }}
       targetPort: {{ .DexKeysPort }}
-{{- if .Platform.TLS.Set }}
+{{- if .IssuerUnderDomain }}
 ---
-# The issuer under platform.domain (platform.tls): inside pods
+# The issuer under platform.domain (IssuerUnderDomain): inside pods
 # {{ .DexHost }} is this Service (the CoreDNS rewrite, coredns.yaml.tmpl), on
 # the issuer URL's port, so every pod dials the one issuer URL straight to
 # Dex — the host reaches the same port through the NodePort above. A

@@ -57,8 +57,9 @@ nodes:
     # lab is spelled `localhost`.
     #
     # These mappings exist ONLY for the host. Nothing inside the cluster uses
-    # them: the apiserver, Backstage and muster all reach Dex through the node's
-    # own localhost:{{ .DexPort }}, which hits the NodePort directly.
+    # them: the apiserver reaches Dex through the node's own loopback on
+    # :{{ .DexPort }}, which hits the NodePort directly, and every pod through
+    # Dex's Service.
     #
     # They are fixed when the node container is created, so changing one means
     # `agentlab down && agentlab up` — you cannot map a new port on a running
@@ -67,10 +68,12 @@ nodes:
     extraPortMappings:
       # Dex's NodePort. The lynchpin: the browser on the host and the apiserver
       # inside the node both resolve {{ .Issuer }} to Dex, so the
-      # issuer URL is identical on both sides.
+      # issuer URL is identical on both sides. Published where the issuer's
+      # host resolves on this machine (DexHostAddress): the edge's address
+      # for dex.{{ .Platform.Domain }}, 127.0.0.1 for localhost.
       - containerPort: {{ .DexPort }}
         hostPort: {{ .DexPort }}
-        listenAddress: "127.0.0.1"
+        listenAddress: "{{ .DexHostAddress }}"
         protocol: TCP
       # Backstage, hostNetwork so it reaches the issuer the same way.
       - containerPort: {{ .Backstage.Port }}
@@ -198,8 +201,8 @@ kubeadmConfigPatches:
           value: groups
         - name: oidc-groups-prefix
           value: "oidc:"
-{{- if .Platform.TLS.Set }}
-      # The issuer lives under the platform domain (platform.tls), and the
+{{- if .IssuerUnderDomain }}
+      # The issuer lives under the platform domain (IssuerUnderDomain), and the
       # apiserver resolves through the node's resolver, which knows nothing
       # of dex.{{ .Platform.Domain }}: its own /etc/hosts puts the name on
       # loopback, where the Dex NodePort answers — the URL the browser dials

@@ -109,6 +109,42 @@ and never into `~/.kube/config`. kind execs the container engine's CLI
 (`docker`, or `podman` when the docker CLI is podman's), which is why the
 engine stays a requirement.
 
+### The stand-in application proofs
+
+Two proofs are `go test` files behind the build tag `standinproof`, so
+`make test` never builds them. They play an outside application that calls
+the platform with its own Dex client, against a lab prepared by hand (its
+MCP servers, Dex clients and connector are not rendered by agentlab):
+
+- `internal/lab/appflow_test.go` (`TestAppFlow*`): the application's token
+  from an RFC 8693 exchange at the lab Dex, a Session started as its
+  customer, the one-time sign-in to the application's MCP server, token
+  refresh across expiry, and its MCP server in an organization with its own
+  authorization server (RFC 9728 discovery, RFC 7591 registration).
+- `internal/lab/sessionmeta_test.go` (`TestSessionMeta*`): the application
+  signs a session reference per A2A request to klaus-gateway, muster forwards
+  it (`forwardMeta`) only to the MCPServer `session-meta`, forged, expired and
+  wrong-audience references are refused, and no model request carries it.
+
+Every lab-specific name comes from the environment; a test whose variable is
+unset is skipped. `APPFLOW_*` covers the first file (`APPFLOW_LAB_DIR`,
+`APPFLOW_ORG_NAMESPACE`, `APPFLOW_SERVER`, `APPFLOW_DCR_SERVER`,
+`APPFLOW_CONNECTOR`, `APPFLOW_APP_CLIENT_ID`, `APPFLOW_APP_SECRET_FILE`,
+`APPFLOW_SUBJECT_TOKEN_FILE`, `APPFLOW_TOKEN_FILE`, `APPFLOW_PASSWORD_FILE`,
+`APPFLOW_CUSTOMER_EMAIL`, `APPFLOW_AGENT_MANAGER_URL`), `META_*` the second
+(`META_LAB_DIR`, `META_ORG_NAMESPACE`, `META_TENANT`, `META_GATEWAY_URL`,
+`META_TOKEN_URL`, `META_APP_CLIENT_ID`, `META_APP_SECRET_FILE`,
+`META_GATEWAY_AUDIENCE`, `META_GATEWAY_SECRET_FILE`, `META_SESSION_KEY_FILE`,
+`META_STATE_URL`, `META_MODEL_RECORDER_URL`; `META_UPDATE` makes the setup
+update the agent, `META_APP_GRANTED` expects the application to see the
+platform servers).
+
+```bash
+source session-meta.env   # the META_* variables of your lab
+go test -tags standinproof ./internal/lab -run 'TestSessionMetaSetup$' -count=1 -v
+go test -tags standinproof ./internal/lab -run 'TestSessionMeta(Sessions|Refusals|Unrelated|Visibility|ModelInputs)$' -count=1 -v
+```
+
 ## The hack journal
 
 [HACKS.md](../HACKS.md) is the audit journal of every hack and workaround in

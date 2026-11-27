@@ -63,6 +63,80 @@ func TestLoadKnownFieldsAndANamelessFile(t *testing.T) {
 	}
 }
 
+// A new lab's issuer lives under the domain; a file an earlier release wrote
+// has no issuerOnDomain key and reads as the localhost issuer its cluster was
+// created with, through every loader, and a write keeps it that way.
+func TestIssuerOnDomainOfARecordedLab(t *testing.T) {
+	if !Default().Platform.IssuerOnDomain {
+		t.Fatal("a new lab's issuer is not under the domain")
+	}
+	t.Chdir(t.TempDir())
+	raw := "clusterName: lab\nplatform:\n  chartVersion: " + loadTestChart + "\n"
+	if err := os.WriteFile(File, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ro, _, err := LoadReadOnly()
+	if err != nil {
+		t.Fatal(err)
+	}
+	peek, err := Peek(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]*Config{"Load": cfg, "LoadReadOnly": ro, "Peek": peek} {
+		if c.Platform.IssuerOnDomain || c.Issuer() != "https://localhost:32000/dex" {
+			t.Errorf("%s: issuer %s (issuerOnDomain %v), want the localhost issuer", name, c.Issuer(), c.Platform.IssuerOnDomain)
+		}
+	}
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if err := RebasePaths(File, "."); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(File)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(after), "issuerOnDomain") {
+		t.Errorf("a recorded lab's write moved its issuer:\n%s", after)
+	}
+	if err := os.WriteFile(File, []byte(raw+"  issuerOnDomain: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, err = Load(); err != nil || !cfg.Platform.IssuerOnDomain || cfg.Issuer() != "https://dex.127.0.0.1.nip.io:32000/dex" {
+		t.Errorf("issuerOnDomain: true loads as %v, %v", cfg, err)
+	}
+}
+
+// The Dex port is probed where it is published (DexHostAddress): the edge's
+// address under the domain, 127.0.0.1 for localhost.
+func TestDexPortProbedWhereItIsPublished(t *testing.T) {
+	cfg := Default()
+	cfg.Platform.GatewayAddress = "127.0.0.2"
+	probed := func(c *Config) string {
+		var addr string
+		c.portConflicts(func(a string, p int) bool {
+			if p == c.DexPort {
+				addr = a
+			}
+			return false
+		})
+		return addr
+	}
+	if got := probed(cfg); got != "127.0.0.2" {
+		t.Errorf("Dex under the domain probed on %s, want 127.0.0.2", got)
+	}
+	cfg.Platform.IssuerOnDomain = false
+	if got := probed(cfg); got != DefaultGatewayAddress {
+		t.Errorf("Dex on localhost probed on %s, want %s", got, DefaultGatewayAddress)
+	}
+}
+
 // The retired platform keys, which files an earlier release wrote carry,
 // still load and are not written back.
 func TestLoadDropsTheRetiredKeys(t *testing.T) {
