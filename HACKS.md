@@ -175,8 +175,11 @@ BOM carries it since the curation that pinned muster 5.7.2. The post-render
 ConfigMap edit is deleted — the values entry alone is effective now.
 
 ### U2. hostNetwork + dnsPolicy + one replica + maxSurge 0 on the muster (and Backstage) Deployment
-muster must resolve `https://localhost:32000/dex` to the Dex NodePort from
-inside the pod (the lab's one-issuer-URL trick), which needs hostNetwork; and
+On a lab created with the localhost issuer, muster must resolve
+`https://localhost:32000/dex` to the Dex NodePort from inside the pod (the
+lab's one-issuer-URL trick), which needs hostNetwork (under the domain,
+`platform.issuerOnDomain`, cluster DNS answers it, and hostNetwork remains for
+muster's direct debug port); and
 with hostNetwork a default rolling update deadlocks on a single node because
 both pods want :8090. For the same reason the lab runs one replica: the
 agent-platform chart's HA default of two muster replicas would leave the
@@ -379,6 +382,15 @@ The sidecar's securityContext meets PodSecurity `restricted`
 (`allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`,
 `seccompProfile: RuntimeDefault`), so a rollout of a server prints no
 PodSecurity warning. Lab-only by construction: real installations have a routable issuer.
+**Retired for new labs:** mcp-oauth (v1.15 on: agent-manager 3.5, vm-manager
+0.27) lets the issuer's host resolve to RFC 1918 and RFC 4193 addresses for
+its JWKS, never to loopback, so a manager behind the sidecar answers every
+forwarded token with 401 (agentlab#1347). Every cluster `agentlab up` creates
+puts the issuer under the domain (`platform.issuerOnDomain`,
+`https://dex.<domain>:<dexPort>/dex`): pods reach it on the `dex-issuer`
+Service through cluster DNS and no sidecar is patched. The sidecar remains
+for a lab whose cluster was created with the localhost issuer, until `down` +
+`up` (docs/identity.md).
 
 ### U14. `hostmodels.go`: the further host backends are wired as static ModelConfigs — FIXED upstream
 `platform.modelManager.backends` lists every model server on the lab host
@@ -1141,3 +1153,19 @@ log. **Fix:** `dockerRun` passes `--security-opt label=disable` to every
 undone by the next `self-update`; the lab's containers are throwaway
 processes of the user's own binary and images, so the separation guards
 nothing the user does not already own.
+
+### U51. `nodepids.go`: the kind node's pids limit is lifted after it is created — ACCEPTED
+Podman creates every container at its compiled-in `pids_limit` of 2048
+unless `containers.conf` sets another, and kind passes no `--pids-limit`.
+kind leaves that default to the user on purpose (kubernetes-sigs/kind#2830,
+#2896: set `pids_limit` in `containers.conf`). A full lab runs about 2000
+processes on the node, so the llm-d CPU runtime's OpenBLAS threads fail with
+`pthread_create ... Resource temporarily unavailable` and `docker exec` into
+the node fails with `errno=11` (giantswarm/agentlab#1336). **Fix:** every
+`up` reads each node's `HostConfig.PidsLimit` and runs
+`docker update --pids-limit=-1` on a node that has one, the same as Docker's
+own default. The engine keeps the update in the container's configuration,
+so it holds across node restarts. Asking for a `containers.conf` edit would
+add a per-machine setup step and change every other container on the
+machine. `agentlab status` shows each node's `pids.current/pids.max`. On
+Docker the nodes have no limit and nothing changes.

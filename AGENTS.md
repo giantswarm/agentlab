@@ -304,7 +304,7 @@ agentlab platform-test   # headless Dex -> muster -> mcp-kubernetes proof
 agentlab polex-test      # the chart's Kyverno PolicyExceptions dry-run against the lab's Kyverno (--chart-version <release> for a candidate)
 agentlab models-test     # managed models: 401 -> pull -> ModelConfig -> dry runs, gitops_owned -> agent turn -> MCP -> unload -> delete (on lmstudio: the 501 refusal -> unwire, U23)
 agentlab serving-test    # platform.serving: llm-d controller + models Gateway up -> 401 -> the lab preset fits the node -> load -> Ready on the CPU runtime -> ModelConfig -> a completion through the models Gateway -> agent turn -> unload
-agentlab vm-manager-test # the vm-manager pod as the person: 401 anonymous -> tools via muster -> create_vm -> ready -> attestation -> delete_vm
+agentlab vm-manager-test # the vm-manager pod as the person: 401 anonymous -> tools via muster -> create_vm -> ready -> attestation -> IPE in force (signed image) -> delete_vm
 agentlab klaus-gateway-test # Swarmgeist on the host against the edge, and with platform.klausGateway the in-cluster component: the OBO link store in a Secret across a pod loss
 agentlab klaus-gateway-test --part signin  # a sign-in a turn needs, decided from Slack (Not now, a typed no, stop, the Sign in click resuming with accept, its retry held in muster's sign-in wait for --hold) and the portal's answer route; an answer to a request the other surface already answered is refused on both
 agentlab klaus-gateway-test --part refresh  # a real Slack sign-in through muster, then two replicas refreshing the same link at once: the person stays signed in and muster logs no refresh token reuse
@@ -506,20 +506,22 @@ Load-bearing invariants (details in docs/):
   install (on by default); its controller runs in `trusted-proxy` mode behind
   the edge's JWT policy on the current line (`unsecure` on the released 3.x
   line, which runs no JWT-validating front proxy).
-- **One issuer URL from every vantage point**: `https://localhost:<dexPort>/dex`
-  works from the Mac, inside the node, and inside hostNetwork pods because the
-  Dex NodePort equals the kind host port. The issuer must be spelled
-  `localhost`, not `127.0.0.1` — muster rejects IP-literal loopback issuers.
-  With an externally provisioned pair (`platform.tls`) it is
-  `https://dex.<domain>:<dexPort>/dex` instead, served with that pair: the
-  apiserver resolves it through its own hosts file, pods through a CoreDNS
-  rewrite to the `dex-issuer` Service (no sidecar) — docs/tls.md "Bring your
-  own certificate".
+- **One issuer URL from every vantage point**: `https://dex.<domain>:<dexPort>/dex`
+  (`platform.issuerOnDomain`, every cluster `up` creates) — the host resolves
+  it like every name of the domain to the loopback address the Dex NodePort is
+  published on, the apiserver through its own hosts file, every pod through a
+  CoreDNS rewrite to the `dex-issuer` Service, a private address the
+  mcp-oauth resource servers fetch the keys from (they refuse loopback).
+  Served with the lab-CA leaf, or with an externally provisioned pair
+  (`platform.tls`, docs/tls.md "Bring your own certificate"). A name, never
+  an IP literal — muster rejects those. A lab whose cluster was created
+  before keeps `https://localhost:<dexPort>/dex`, bridged into pods by the
+  `dex-localhost` sidecar, until `down` + `up` — docs/identity.md.
 - **muster runs on the host network at one replica** by default, the issuer
   reached as the host does. `platform.musterPodNetwork` (`configure
   --muster-pod-network`) is the installation's shape instead: two replicas
   on the pod network behind a PodDisruptionBudget of minAvailable 1, the
-  issuer bridged by the `dex-localhost` sidecar, proven by `platform-test`'s
+  issuer reached through cluster DNS like every pod's, proven by `platform-test`'s
   `muster replicas` stage (one pod deleted mid-session) — docs/platform.md
   "muster on the pod network".
 - **The platform's network policies are off** by default.

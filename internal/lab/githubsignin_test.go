@@ -47,7 +47,7 @@ func TestDexTemplateRendersTheGitHubConnector(t *testing.T) {
 		"id: " + gitHubSignInConnectorID,
 		"clientID: " + testSignInClientID,
 		"clientSecret: $" + config.GitHubSignInSecretEnv,
-		"redirectURI: https://localhost:32000/dex/callback",
+		"redirectURI: https://dex.127.0.0.1.nip.io:32000/dex/callback",
 		"teamNameField: slug",
 		"- name: " + testSignInOrg + "\n",
 		"- name: " + testSignInOrgLabs + "\n",
@@ -154,7 +154,7 @@ func TestGitHubSignInValuesFollowTheConfig(t *testing.T) {
 		SecretName:  config.DefaultGitHubSignInSecretName,
 		SecretKey:   config.GitHubClientSecretKey,
 		SecretEnv:   config.GitHubSignInSecretEnv,
-		RedirectURI: "https://localhost:31000/dex/callback",
+		RedirectURI: "https://dex.127.0.0.1.nip.io:31000/dex/callback",
 		Orgs:        []string{testSignInOrg, testSignInOrgLabs},
 	}
 	if v.SecretVersion != "" || v.ConnectorID != want.ConnectorID || v.ClientID != want.ClientID ||

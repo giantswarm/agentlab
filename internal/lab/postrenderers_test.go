@@ -282,7 +282,7 @@ func TestDexLocalhostPatchRestricted(t *testing.T) {
 	}
 	patches := map[string]kustomizePatch{
 		componentMCPKubernetes: dexLocalhostPatch(componentMCPKubernetes, config.Default().DexPort),
-		"mcp-prometheus":       mcpPrometheusPostRenderers(config.Default(), nil)[0].Kustomize.Patches[0],
+		"mcp-prometheus":       mcpPrometheusPostRenderers(localhostIssuerConfig(), nil)[0].Kustomize.Patches[0],
 	}
 	for name, p := range patches {
 		var d struct {
@@ -339,7 +339,7 @@ func TestMissingImages(t *testing.T) {
 // skipped.
 func TestDexLocalhostTargets(t *testing.T) {
 	const optedIn = "opted-in"
-	cfg := config.Default()
+	cfg := localhostIssuerConfig()
 	renders := map[string]string{
 		clusterManager: `# Source: cluster-manager/templates/serviceaccount.yaml
 apiVersion: v1

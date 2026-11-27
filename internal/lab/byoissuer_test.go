@@ -72,17 +72,88 @@ func byoConfig(t *testing.T, dns ...string) *config.Config {
 	return cfg
 }
 
-// The issuer moves under the platform domain exactly when a pair is
-// configured, and stays a name, never an IP literal.
-func TestIssuerUnderTheDomainWithAnExternalPair(t *testing.T) {
+// localhostIssuerConfig is the default lab as a cluster created before
+// platform.issuerOnDomain records it: the issuer on localhost, bridged into
+// pods by the dex-localhost sidecar.
+func localhostIssuerConfig() *config.Config {
 	cfg := config.Default()
-	if got, want := cfg.Issuer(), "https://localhost:32000/dex"; got != want {
+	cfg.Platform.IssuerOnDomain = false
+	return cfg
+}
+
+// The issuer lives under the platform domain on a new lab and with a pair,
+// on localhost only on a lab whose cluster was created before, and stays a
+// name, never an IP literal.
+func TestIssuerUnderTheDomain(t *testing.T) {
+	cfg := config.Default()
+	if got, want := cfg.Issuer(), "https://dex.127.0.0.1.nip.io:32000/dex"; got != want {
 		t.Errorf("default issuer = %s, want %s", got, want)
 	}
-	cfg.Platform.Domain = byoDomain
-	cfg.Platform.TLS = config.PlatformTLS{CertFile: "c", KeyFile: "k"}
-	if got, want := cfg.Issuer(), "https://dex."+byoDomain+":32000/dex"; got != want {
-		t.Errorf("BYO issuer = %s, want %s", got, want)
+	if got, want := localhostIssuerConfig().Issuer(), "https://localhost:32000/dex"; got != want {
+		t.Errorf("localhost issuer = %s, want %s", got, want)
+	}
+	for _, issuerOnDomain := range []bool{true, false} {
+		cfg := config.Default()
+		cfg.Platform.IssuerOnDomain = issuerOnDomain
+		cfg.Platform.Domain = byoDomain
+		cfg.Platform.TLS = config.PlatformTLS{CertFile: "c", KeyFile: "k"}
+		if got, want := cfg.Issuer(), "https://dex."+byoDomain+":32000/dex"; got != want {
+			t.Errorf("BYO issuer (issuerOnDomain %v) = %s, want %s", issuerOnDomain, got, want)
+		}
+	}
+}
+
+// The Dex leaf carries the issuer's name under the domain next to the fixed
+// names, so one leaf serves either spelling, and a leaf minted without it is
+// re-minted from the unchanged CA.
+func TestDexLeafCarriesTheIssuerUnderTheDomain(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := GenCerts("127.0.0.1.nip.io", false); err != nil {
+		t.Fatal(err)
+	}
+	leaf, ca := readCertFile(tlsCertPath), readCertFile(caCertPath)
+	pool := x509.NewCertPool()
+	pool.AddCert(ca)
+	for _, host := range []string{"dex.127.0.0.1.nip.io", localhostName, dexServiceHost} {
+		if _, err := leaf.Verify(x509.VerifyOptions{Roots: pool, DNSName: host}); err != nil {
+			t.Errorf("the Dex leaf does not verify for %s: %v", host, err)
+		}
+	}
+	if got := leafRemintReason(leaf, ca, dexSANNames); got != "" {
+		t.Errorf("leafRemintReason(fixed names) = %q", got)
+	}
+	if got, want := leafRemintReason(leaf, ca, dexLeafNames("lab2.127.0.0.2.nip.io")), "SAN missing dex.lab2.127.0.0.2.nip.io"; got != want {
+		t.Errorf("leafRemintReason(another domain) = %q, want %q", got, want)
+	}
+}
+
+// A new cluster takes the issuer under the domain, recorded in agentlab.yaml;
+// an existing cluster keeps the one it was created with, and so does a
+// configuration that already records the domain.
+func TestMoveIssuerUnderDomain(t *testing.T) {
+	t.Chdir(t.TempDir())
+	cfg := localhostIssuerConfig()
+	if err := moveIssuerUnderDomain(cfg, true); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Platform.IssuerOnDomain {
+		t.Fatal("an existing cluster's issuer moved")
+	}
+	if _, err := os.Stat(config.File); !os.IsNotExist(err) {
+		t.Fatalf("agentlab.yaml written for an existing cluster: %v", err)
+	}
+	if err := moveIssuerUnderDomain(cfg, false); err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Platform.IssuerOnDomain || cfg.Issuer() != "https://dex.127.0.0.1.nip.io:32000/dex" {
+		t.Fatalf("a new cluster's issuer = %s (issuerOnDomain %v)", cfg.Issuer(), cfg.Platform.IssuerOnDomain)
+	}
+	raw, err := os.ReadFile(config.File)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "issuerOnDomain: true") {
+		t.Errorf("agentlab.yaml does not record the issuer under the domain:\n%s", raw)
 	}
 }
 
@@ -120,8 +191,13 @@ func TestWriteIssuerFiles(t *testing.T) {
 		t.Errorf("apiserver hosts = %q, want dex.%s on loopback", hosts, byoDomain)
 	}
 
+	// The default lab: the issuer under the domain with the lab-CA leaf —
+	// the hosts file, no bundle.
 	plain := config.Default()
 	t.Chdir(t.TempDir())
+	if err := os.MkdirAll("certs", 0o750); err != nil {
+		t.Fatal(err)
+	}
 	if err := writeIssuerFiles(plain); err != nil {
 		t.Fatal(err)
 	}
@@ -130,6 +206,19 @@ func TestWriteIssuerFiles(t *testing.T) {
 	}
 	if _, err := os.Stat(trustBundlePath); !os.IsNotExist(err) {
 		t.Errorf("a bundle written without a pair: %v", err)
+	}
+	hosts, err = os.ReadFile(apiserverHostsPath)
+	if err != nil || !strings.Contains(string(hosts), "127.0.0.1 localhost dex.127.0.0.1.nip.io\n") {
+		t.Errorf("default apiserver hosts = %q, %v; want dex.127.0.0.1.nip.io on loopback", hosts, err)
+	}
+
+	// The localhost issuer: nothing to write.
+	t.Chdir(t.TempDir())
+	if err := writeIssuerFiles(localhostIssuerConfig()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(apiserverHostsPath); !os.IsNotExist(err) {
+		t.Errorf("a hosts file written for the localhost issuer: %v", err)
 	}
 }
 
@@ -181,9 +270,128 @@ func TestKindConfigBYOIssuer(t *testing.T) {
 			t.Errorf("BYO ClusterConfiguration lacks %q:\n%s", want, byo)
 		}
 	}
+	t.Chdir(t.TempDir())
 	plain := apiServer(config.Default())
-	if !strings.Contains(plain, "value: /etc/kubernetes/pki/dex/ca.crt") || strings.Contains(plain, "extraVolumes") {
-		t.Errorf("default ClusterConfiguration changed:\n%s", plain)
+	for _, want := range []string{
+		"value: https://dex.127.0.0.1.nip.io:32000/dex",
+		"value: /etc/kubernetes/pki/dex/ca.crt",
+		"hostPath: /etc/kubernetes/pki/dex/apiserver-hosts\n      mountPath: /etc/hosts",
+	} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("default ClusterConfiguration lacks %q:\n%s", want, plain)
+		}
+	}
+	localhost := apiServer(localhostIssuerConfig())
+	if !strings.Contains(localhost, "value: https://localhost:32000/dex") || !strings.Contains(localhost, "value: /etc/kubernetes/pki/dex/ca.crt") || strings.Contains(localhost, "extraVolumes") {
+		t.Errorf("localhost-issuer ClusterConfiguration changed:\n%s", localhost)
+	}
+}
+
+// Dex's port is published where the issuer's host resolves on this machine:
+// the edge's address under the domain — a second lab's own loopback address
+// — and 127.0.0.1 for localhost.
+func TestKindConfigPublishesDexWhereTheIssuerResolves(t *testing.T) {
+	t.Chdir(t.TempDir())
+	dexListen := func(cfg *config.Config) string {
+		out, err := renderTemplate(cfg, "kind-config.yaml.tmpl", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var kindCfg v1alpha4.Cluster
+		if err := yaml.Unmarshal(out, &kindCfg); err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		for _, m := range kindCfg.Nodes[0].ExtraPortMappings {
+			if int(m.ContainerPort) == cfg.DexPort {
+				return m.ListenAddress
+			}
+		}
+		t.Fatal("no Dex port mapping rendered")
+		return ""
+	}
+	lab2 := config.Default()
+	lab2.Platform.Domain, lab2.Platform.GatewayAddress, lab2.DexPort = "lab2.127.0.0.2.nip.io", "127.0.0.2", 32003
+	legacy2 := localhostIssuerConfig()
+	legacy2.Platform.Domain, legacy2.Platform.GatewayAddress = lab2.Platform.Domain, lab2.Platform.GatewayAddress
+	for name, tc := range map[string]struct {
+		cfg  *config.Config
+		want string
+	}{
+		"the default lab":         {config.Default(), config.DefaultGatewayAddress},
+		"second lab":              {lab2, "127.0.0.2"},
+		"second lab on localhost": {legacy2, config.DefaultGatewayAddress},
+	} {
+		if got := dexListen(tc.cfg); got != tc.want || tc.cfg.DexHostAddress() != tc.want {
+			t.Errorf("%s: Dex published on %s (DexHostAddress %s), want %s", name, got, tc.cfg.DexHostAddress(), tc.want)
+		}
+	}
+}
+
+// The default lab in the cluster: CoreDNS answers dex.<domain> with the
+// issuer Service ahead of the edge wildcard, the Service serves the issuer's
+// port, the JWKS routes keep Dex's in-cluster name (the lab-CA leaf carries
+// it), and no sidecar is patched; the localhost issuer keeps the sidecar and
+// renders neither.
+func TestDefaultIssuerInCluster(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := GenCerts("127.0.0.1.nip.io", false); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	coredns, err := renderTemplate(cfg, "coredns.yaml.tmpl", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule := `name regex ^dex\.127\.0\.0\.1\.nip\.io\. ` + dexIssuerService + ".dex.svc.cluster.local"
+	exact, wildcard := strings.Index(string(coredns), rule), strings.Index(string(coredns), "agentgateway-edge.agent-platform.svc.cluster.local")
+	if exact < 0 || exact > wildcard {
+		t.Errorf("CoreDNS does not send dex.127.0.0.1.nip.io to the issuer Service ahead of the edge wildcard:\n%s", coredns)
+	}
+	dex, err := renderTemplate(cfg, "dex.yaml.tmpl", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(dex), "issuer: https://dex.127.0.0.1.nip.io:32000/dex") || !strings.Contains(string(dex), "name: "+dexIssuerService+"\n") {
+		t.Errorf("Dex render lacks the issuer under the domain or its Service:\n%s", dex)
+	}
+	values, err := renderTemplate(cfg, platformValuesTemplate, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(values), "host: "+dexServiceHost) {
+		t.Errorf("the JWKS routes left Dex's in-cluster name %s", dexServiceHost)
+	}
+	mcpPrometheus, err := renderTemplate(cfg, mcpPrometheusTemplate, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(mcpPrometheus), "name: "+dexLocalhostContainer) {
+		t.Errorf("mcp-prometheus carries the %s sidecar under the domain:\n%s", dexLocalhostContainer, mcpPrometheus)
+	}
+	render := func(cfg *config.Config) map[string]string {
+		return map[string]string{componentMCPKubernetes: "kind: Deployment\nmetadata: {name: x}\nspec:\n  template:\n    spec:\n      containers:\n        - name: x\n          env:\n            - {name: DEX_ISSUER_URL, value: \"" + cfg.Issuer() + "\"}\n"}
+	}
+	if targets, err := dexLocalhostTargets(cfg, render(cfg)); err != nil || len(targets) != 0 {
+		t.Errorf("sidecar targets under the domain = %v, %v; want none", targets, err)
+	}
+	if beekeeperDexSidecar(cfg) != "" {
+		t.Error("beekeeper serve gets the sidecar under the domain")
+	}
+
+	legacy := localhostIssuerConfig()
+	if targets, err := dexLocalhostTargets(legacy, render(legacy)); err != nil || len(targets[componentMCPKubernetes]) != 1 {
+		t.Errorf("sidecar targets with the localhost issuer = %v, %v; want mcp-kubernetes", targets, err)
+	}
+	coredns, err = renderTemplate(legacy, "coredns.yaml.tmpl", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dex, err = renderTemplate(legacy, "dex.yaml.tmpl", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(coredns), dexIssuerService) || strings.Contains(string(dex), "name: "+dexIssuerService+"\n") {
+		t.Error("the localhost issuer renders the issuer Service or its CoreDNS rewrite")
 	}
 }
 
