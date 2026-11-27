@@ -93,21 +93,26 @@ func TestProofModelOf(t *testing.T) {
 }
 
 // TestLoggedFor: model-manager's text log line names the message, the model
-// and the caller; another model's or another caller's line does not count.
+// and the person, by user.subject or by caller; another model's or another
+// person's line does not count.
 func TestLoggedFor(t *testing.T) {
 	logs := strings.Join([]string{
 		`time=2026-10-02T04:00:00Z level=INFO msg="model loaded" backend=ollama model=smollm2:135m keepAlive="" preset="" node="" caller=admin@lab.local`,
 		`time=2026-10-02T04:00:01Z level=INFO msg="model unloaded" backend=ollama model=smollm2:135m caller=dev@lab.local`,
 		`time=2026-10-02T04:00:02Z level=INFO msg="model loaded" backend=ollama model=smollm2:135m-x caller=viewer@lab.local`,
+		`time=2026-10-02T04:00:03Z level=INFO msg="model unloaded" backend=ollama model=smollm2:135m user.issuer=https://dex.lab user.subject=sub-viewer`,
 	}, "\n")
-	if !loggedFor(logs, modelManagerLoggedLoad, "smollm2:135m", testPortalUser) {
+	if !loggedFor(logs, modelManagerLoggedLoad, "smollm2:135m", testPortalUser, "https://dex.lab", "sub-admin") {
 		t.Error("the admin's load is not found")
 	}
-	if loggedFor(logs, modelManagerLoggedUnload, "smollm2:135m", testPortalUser) {
+	if loggedFor(logs, modelManagerLoggedUnload, "smollm2:135m", testPortalUser, "https://dex.lab", "sub-admin") {
 		t.Error("another caller's unload counted")
 	}
-	if loggedFor(logs, modelManagerLoggedLoad, "smollm2:135m", testPortalViewer) {
+	if loggedFor(logs, modelManagerLoggedLoad, "smollm2:135m", testPortalViewer, "https://dex.lab", "sub-viewer") {
 		t.Error("another model's load counted")
+	}
+	if !loggedFor(logs, modelManagerLoggedUnload, "smollm2:135m", testPortalViewer, "https://dex.lab", "sub-viewer") {
+		t.Error("the viewer's unload, logged by user.subject, is not found")
 	}
 }
 

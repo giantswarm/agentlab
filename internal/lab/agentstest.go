@@ -266,10 +266,15 @@ func AgentsTest(cfg *config.Config, email string, opts AgentsTestOptions) error 
 	logCtx, cancelLogs := context.WithTimeout(context.Background(), 60*time.Second)
 	events, _ := podLogs(logCtx, platformNamespace, "deploy/"+agentManagerMCPServer, agentManagerMCPServer, 5*time.Minute)
 	cancelLogs()
-	if !strings.Contains(events, "caller="+user.Email) {
-		return fmt.Errorf("agent-manager's log carries no `caller=%s` line for the create", user.Email)
+	claims, err := decodeJWTClaims(token)
+	if err != nil {
+		return err
 	}
-	note("HelmRelease managers %q, chartRef OCIRepository/%s, serviceAccountName %q, values.toolset %v, agent.harness %s, skill %s @ %.12s; OCIRepository %s -> %s @ %s (managers %q); agent-manager logged the write with caller=%s",
+	issuer, subject := stringAt(claims, "iss"), stringAt(claims, claimSubject)
+	if !managerLogNamesUser(events, user.Email, issuer, subject) {
+		return fmt.Errorf("agent-manager's log carries no line naming %s (user.issuer=%s user.subject=%s, or caller=%s) for the create", user.Email, issuer, subject, user.Email)
+	}
+	note("HelmRelease managers %q, chartRef OCIRepository/%s, serviceAccountName %q, values.toolset %v, agent.harness %s, skill %s @ %.12s; OCIRepository %s -> %s @ %s (managers %q); agent-manager logged the write as %s",
 		release.managers, release.Spec.ChartRef.Name, release.Spec.ServiceAccountName, toolset, kagentHarness, fixture.name(), fixture.Commit, agentChartOCIRepository, chartURL, chartRange, sourceManagers, user.Email)
 
 	step("The render: AgentTemplate %s with the display-name and icon-url annotations, Agent %s pairing it with Harness %s, its RemoteMCPServer %s carrying %s", agentsTestAgent, agentsTestAgent, kagentHarness, agentsTestAgent, toolsetHeader)
@@ -491,7 +496,7 @@ func AgentsTest(cfg *config.Config, email string, opts AgentsTestOptions) error 
 
 	fmt.Println()
 	fmt.Printf("PASS: muster aggregates %s* and agent-manager reports identity caller on the agent chart %s (Harness %s)\n", agentManagerToolPrefix, chartLine, kagentHarness)
-	fmt.Printf("PASS: create_agent without a toolset is refused naming the presets; with [%s] %s created -> Ready on Harness %s -> a turn as the person -> updated -> deleted %s through call_tool, every write requestedBy=%s and logged with caller=\n", agentsTestToolset, user.Email, kagentHarness, agentsTestAgent, user.Email)
+	fmt.Printf("PASS: create_agent without a toolset is refused naming the presets; with [%s] %s created -> Ready on Harness %s -> a turn as the person -> updated -> deleted %s through call_tool, every write requestedBy=%s and logged as the person\n", agentsTestToolset, user.Email, kagentHarness, agentsTestAgent, user.Email)
 	fmt.Printf("PASS: the HelmRelease carries the %s field manager, values.toolset [%s], agent.harness %s and the skill %s pinned to a commit next to OCIRepository %s at %s; its render is the AgentTemplate with %s and %s and the skill entry, the Agent referencing Harness %s, and RemoteMCPServer %s carrying %s=%s (%s=%s); delete_agent removes the release and the render\n",
 		agentManagerFieldManager, agentsTestToolset, kagentHarness, fixture.name(), agentChartOCIRepository, chartLine, displayNameAnnotation, iconURLAnnotation, kagentHarness, agentsTestAgent, toolsetHeader, agentsTestToolset, discoveryLabel, discoveryDisabledValue)
 	fmt.Printf("PASS: get_agent_status agrees with the Agent's status — ready on revision %.12s, and failed with the reason for an Agent on Harness %q\n", harness.LatestSuccessfulRevision, agentsTestNoHarness)

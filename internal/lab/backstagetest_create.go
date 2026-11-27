@@ -318,15 +318,15 @@ func portalAgentStatus(ps *portalSession, name, want string, timeout time.Durati
 // agentManagerLoggedCaller checks agent-manager's log for a write it attributed
 // to the person since the given duration — the identity the muster hop
 // forwarded, as the service logs it.
-func agentManagerLoggedCaller(email string, since time.Duration) error {
+func agentManagerLoggedCaller(email, issuer, subject string, since time.Duration) error {
 	ctx, cancel := context.WithTimeout(context.Background(), kubeReadTimeout)
 	defer cancel()
 	events, err := podLogs(ctx, platformNamespace, "deploy/"+agentManagerMCPServer, agentManagerMCPServer, since+5*time.Second)
 	if err != nil {
 		return fmt.Errorf("reading agent-manager's log: %w", err)
 	}
-	if !strings.Contains(events, "caller="+email) {
-		return fmt.Errorf("agent-manager's log carries no `caller=%s` line for the write", email)
+	if !managerLogNamesUser(events, email, issuer, subject) {
+		return fmt.Errorf("agent-manager's log carries no line naming %s (user.issuer=%s user.subject=%s, or caller=%s) for the write", email, issuer, subject, email)
 	}
 	return nil
 }
@@ -428,7 +428,7 @@ func proveCreatePath(primary, viewer *portalSession) (agentSpec, *agentTemplate,
 	if !slices.Contains(release.managers, agentManagerFieldManager) {
 		return fail(fmt.Errorf("HelmRelease %s has no %s field manager: %q", spec.Name, agentManagerFieldManager, release.managers))
 	}
-	if err := agentManagerLoggedCaller(email, time.Since(started)); err != nil {
+	if err := agentManagerLoggedCaller(email, stringAt(primary.claims, "iss"), stringAt(primary.claims, claimSubject), time.Since(started)); err != nil {
 		return fail(err)
 	}
 	template := readiness.template
@@ -440,9 +440,9 @@ func proveCreatePath(primary, viewer *portalSession) (agentSpec, *agentTemplate,
 		return fail(fmt.Errorf("AgentTemplate %s carries skill %s as %+v, wanted {git: {%s, %s}, path %s}", spec.Name, skill.Name, rendered, skill.RepoURL, skill.Commit, skill.Path))
 	}
 	harness := readiness.agent.Status
-	note("requestedBy=%s (OCIRepository created: %v); HelmRelease managers %q, serviceAccountName %s, values == the dry run's; OCIRepository %s at %s; agent-manager logged caller=%s; Agent Ready on Harness %s at revision %.12s, AgentTemplate with %s=%q, skill %s @ %.12s; RemoteMCPServer %s carries %s=%s",
+	note("requestedBy=%s (OCIRepository created: %v); HelmRelease managers %q, serviceAccountName %s, values == the dry run's; OCIRepository %s at %s; agent-manager logged the write as %s; Agent Ready on Harness %s at revision %.12s, AgentTemplate with %s=%q, skill %s @ %.12s; RemoteMCPServer %s carries %s=%s",
 		written.RequestedBy, written.OCIRepository, release.managers, release.Spec.ServiceAccountName, agentChartOCIRepository, info.Chart.Semver, email, kagentHarness, harness.LatestSuccessfulRevision, displayNameAnnotation, spec.DisplayName, skill.Name, skill.Commit, spec.Name, toolsetHeader, backstageTestToolset)
-	verdicts = append(verdicts, fmt.Sprintf("PASS: Deploy through the portal (POST /api/muster/call %screate_agent as %s) lands HelmRelease %s with exactly the dry run's values as %s next to OCIRepository %s at %s (requestedBy=%s, agent-manager logged caller=%s); the render is the AgentTemplate (%s, %s, skill %s @ %.12s), the Agent on Harness %s and RemoteMCPServer %s with %s=%s, Ready in %s",
+	verdicts = append(verdicts, fmt.Sprintf("PASS: Deploy through the portal (POST /api/muster/call %screate_agent as %s) lands HelmRelease %s with exactly the dry run's values as %s next to OCIRepository %s at %s (requestedBy=%s, agent-manager logged the write as %s); the render is the AgentTemplate (%s, %s, skill %s @ %.12s), the Agent on Harness %s and RemoteMCPServer %s with %s=%s, Ready in %s",
 		agentManagerToolPrefix, email, spec.Name, kagentFluxServiceAccount, agentChartOCIRepository, info.Chart.Semver, written.RequestedBy, email, displayNameAnnotation, iconURLAnnotation, skill.Name, skill.Commit, kagentHarness, spec.Name, toolsetHeader, backstageTestToolset, time.Since(started).Round(time.Second)))
 
 	step("The detail page's poll: %sget_agent_status through the portal says ready on Harness %s", agentManagerToolPrefix, kagentHarness)
