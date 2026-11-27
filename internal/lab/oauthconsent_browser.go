@@ -62,7 +62,7 @@ func consentForm(reply *consentReply, endpoint string) (url.Values, error) {
 	}
 	for _, form := range htmlForms(reply.body) {
 		if form.method == htmlPost && form.action == endpoint && form.fields.Get("consent_id") != "" {
-			return url.Values{"consent_id": {form.fields.Get("consent_id")}, "decision": {consentApprove}}, nil
+			return url.Values{"consent_id": {form.fields.Get("consent_id")}, consentDecisionParam: {consentApprove}}, nil
 		}
 	}
 	return nil, fmt.Errorf("no consent form targeting the public authorization endpoint")
@@ -127,7 +127,7 @@ func (flow *consentProofFlow) checkConsentGate(ctx context.Context) error {
 			return fmt.Errorf("consent page set an unsafe or premature transaction cookie")
 		}
 	}
-	form.Set("decision", "deny")
+	form.Set(consentDecisionParam, "deny")
 	denied, err := flow.answer(ctx, form, consentOrigin(flow.metadata.Authorization))
 	if err := expectConsentStatus(denied, err, http.StatusFound); err != nil {
 		return err
