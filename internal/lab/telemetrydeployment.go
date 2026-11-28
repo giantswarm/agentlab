@@ -14,12 +14,9 @@ import (
 // removed by `down`, read by every command that enters the lab.
 const telemetryDeploymentPath = StateDir + "/telemetry-deployment.json"
 
-// labClusterExists says whether the lab's cluster exists, false when the
-// container engine does not answer; tests stand in for kind.
-var labClusterExists = func(name string) bool {
-	exists, err := kindClusterExists(name)
-	return err == nil && exists
-}
+// labClusterExists says whether the lab's cluster exists; tests stand in for
+// kind.
+var labClusterExists = kindClusterExists
 
 // TelemetryDeployment is the deployment recorded for this lab, false when
 // there is none or the record is unreadable.
@@ -47,15 +44,19 @@ func EnterTelemetryLab(cfg *config.Config) {
 // cluster exists, a new one recorded now when the cluster is about to be
 // created (or the lab records none) — so a cluster deleted past `down` (kind
 // delete, a reset docker) does not hand its deployment to the next, also not
-// while usage data is off. `up`'s usage signal leaves with it
+// while usage data is off. A cluster list the container engine does not
+// answer keeps the record: the cluster may still be there, and `up` stops on
+// that error (moveIssuerUnderDomain). `up`'s usage signal leaves with it
 // (telemetry.StartDeployment). Nothing is recorded with usage data off, in
 // the environment or in cfg, and a record that cannot be written only costs
 // the correlation, said under AGENTLAB_TELEMETRY_DEBUG.
 func StartTelemetryDeployment(cfg *config.Config) {
 	d, ok := TelemetryDeployment()
-	if ok && !labClusterExists(cfg.ClusterName) {
-		endTelemetryDeployment()
-		ok = false
+	if ok {
+		if exists, err := labClusterExists(cfg.ClusterName); err == nil && !exists {
+			endTelemetryDeployment()
+			ok = false
+		}
 	}
 	if !cfg.TelemetryOn() || !telemetry.Enabled() {
 		return
