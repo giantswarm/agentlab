@@ -95,6 +95,24 @@ runs reuse it. It cannot be `backstage.port` (7007), which kind publishes for
 the in-cluster Backstage. Removing the key and running `agentlab reload`
 unregisters it.
 
+**Approving tool calls from `portal dev`.** Lab only.
+
+- *Return from muster's approval page:* muster returns only to origins on
+  `oauth.mcpClient.postLoginRedirectAllowlist`. While `backstage.localDevPort`
+  is set the lab adds `http://localhost:3000/sessions` to muster's list. It is
+  part of the platform values: run `agentlab platform` once after the first
+  `portal dev` (or after removing the key). Without it muster logs `Ignoring a
+  return not in oauth.mcpClient.postLoginRedirectAllowlist` and shows its own
+  page.
+- *Inline decisions:* muster takes them only with the portal backend's workload
+  token beside the person's (audience `muster`, reviewed for verb `decide` on
+  `toolapprovals`). Every `portal dev` mints one for the lab portal's
+  ServiceAccount (`agent-platform/backstage`, 12 hours) with the lab's admin
+  kubeconfig, writes it to `state/backstage-dev/muster-workload-token` (0600)
+  and points `muster.workloadTokenFile` at it. Without that ServiceAccount (no
+  portal in the lab) approvals open muster's own pages. Restart `portal dev`
+  after 12 hours.
+
 **Limits.**
 
 - The database is in memory, so every backend restart starts it empty: the

@@ -347,6 +347,38 @@ not a dev image is configured; `agentlab status` names it on its `registry`
 line, and it goes with `agentlab down`. Removing the overlay and re-running `agentlab platform`
 puts the released chart back.
 
+## Running a lab in governed mode
+
+The chart's `governance.mode` (`trusted`, the default, or `governed`) decides
+whether muster asks a person before an agent runs a write on the platform's own
+servers (see the chart's README). Set it with a `platform.valuesFiles` overlay:
+
+```yaml
+# governed.yaml
+governance:
+  mode: governed
+```
+
+```yaml
+platform:
+  valuesFiles:
+    - /path/to/governed.yaml
+```
+
+Then `agentlab platform`; it rolls muster, which reads the mode once at start.
+`agentlab status` names the overlay and mode. Removing the entry and re-running
+returns the lab to trusted.
+
+- A released chart with tool approval needs only the overlay. Until then the chart
+  refuses `governed` at render (release floors unset): use a dev chart whose
+  floors name dev builds ([Installing an unreleased
+  chart](#installing-an-unreleased-chart)), push the dev muster and
+  agent-manager charts into the lab registry and name them with
+  `components.<name>.versionRange` in the overlay ([An unreleased component
+  chart](#an-unreleased-component-chart)).
+- A portal on another port than 443 needs `backstage.publicPort` (8443 on the
+  default edge).
+
 ## Dev images
 
 To run a component from a build of your own, build the image, and name it

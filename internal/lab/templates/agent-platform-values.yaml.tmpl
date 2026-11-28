@@ -572,6 +572,17 @@ muster:
       mcpClient:
         enabled: true
         publicUrl: "{{ .MusterBaseURL }}"
+{{- with .BackstageLocalDevFrontendURL }}
+        # Lab only: a Backstage run with hot reload (`agentlab portal dev`,
+        # backstage.localDevPort) serves the frontend on http://localhost, not
+        # on the edge, so muster's approval page would refuse to return the
+        # browser to it ("Ignoring a return not in ...postLoginRedirectAllowlist")
+        # and the chat would not continue. The meta chart keeps an own list's
+        # entries and adds the portal's edge /sessions (backstage.publicPort)
+        # to it.
+        postLoginRedirectAllowlist:
+          - {{ . }}/sessions
+{{- end }}
       server:
         enabled: true
         # The public URL through the edge: what Claude Code dials, and what
@@ -1442,6 +1453,15 @@ backstage:
     - federated:id
     - audience:server:client_id:dex-k8s-authenticator
     - audience:server:client_id:kubernetes
+{{- if .PortalClient }}
+  # The portal's own Dex client (dex.yaml.tmpl): its secret is the key
+  # portal-dex-client-secret of agent-platform-secrets, the chart adds the
+  # agent-platform audience to the scopes above, and muster lists it alone in
+  # approval.handoffClients, so a click on Open in portal chat opens muster's
+  # approval page signed in. The lab's CLI helpers and proofs keep signing in
+  # with agent-platform, which muster never trusts for the handoff.
+  oidcClientId: {{ .PortalClientID }}
+{{- end }}
   # The vanilla UI hides the portal's HelmRelease pages, but the create
   # flow's scaffolder result links straight to
   # /deployments/<installation>/helmrelease/<ns>/<name> — without these the

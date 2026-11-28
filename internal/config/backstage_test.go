@@ -35,3 +35,17 @@ func TestBackstageLocalDevPort(t *testing.T) {
 		}
 	}
 }
+
+// TestBackstageLocalDevFrontendURL: the frontend origin of a hot-reload run
+// (muster's return allowlist) follows localDevPort being set, and names the
+// frontend's port, not the backend's.
+func TestBackstageLocalDevFrontendURL(t *testing.T) {
+	c := Default()
+	if got := c.BackstageLocalDevFrontendURL(); got != "" {
+		t.Errorf("default BackstageLocalDevFrontendURL = %q, want none", got)
+	}
+	c.Backstage.LocalDevPort = 7099
+	if got, want := c.BackstageLocalDevFrontendURL(), "http://localhost:3000"; got != want {
+		t.Errorf("BackstageLocalDevFrontendURL = %q, want %q", got, want)
+	}
+}

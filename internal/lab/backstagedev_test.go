@@ -1,12 +1,19 @@
 package lab
 
 import (
+	"context"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"gopkg.in/yaml.v3"
+	authenticationv1 "k8s.io/api/authentication/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	kubefake "k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/giantswarm/agentlab/internal/config"
 )
@@ -18,7 +25,7 @@ func TestBackstageDevOverlay(t *testing.T) {
 	cfg := config.Default()
 	cfg.Platform.GatewayPort = 8443
 	cfg.Backstage.LocalDevPort = 7017
-	raw, err := backstageDevOverlay(cfg, "https://127.0.0.1:6443", []byte("ca"), "/lab/state/backstage-dev/users.yaml")
+	raw, err := backstageDevOverlay(cfg, "https://127.0.0.1:6443", []byte("ca"), "/lab/state/backstage-dev/users.yaml", "/lab/state/backstage-dev/muster-workload-token")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +50,8 @@ func TestBackstageDevOverlay(t *testing.T) {
 			} `yaml:"clusterLocatorMethods"`
 		}
 		Muster struct {
-			Installations []struct{ URL string }
+			Installations     []struct{ URL string }
+			WorkloadTokenFile string `yaml:"workloadTokenFile"`
 		}
 		AgentPlatform struct {
 			Kagent struct {
@@ -64,6 +72,7 @@ func TestBackstageDevOverlay(t *testing.T) {
 		"apiserver":           {got.Kubernetes.ClusterLocatorMethods[0].Clusters[0].URL, "https://127.0.0.1:6443"},
 		"apiserver caData":    {got.Kubernetes.ClusterLocatorMethods[0].Clusters[0].CAData, "Y2E="},
 		"muster url":          {got.Muster.Installations[0].URL, "https://muster.127.0.0.1.nip.io:8443/mcp"},
+		"muster workload":     {got.Muster.WorkloadTokenFile, "/lab/state/backstage-dev/muster-workload-token"},
 		"kagent api":          {got.AgentPlatform.Kagent.Installations[platformNamespace].APIBaseURL, "https://agentgateway.127.0.0.1.nip.io:8443"},
 	}
 	for name, c := range checks {
@@ -169,5 +178,37 @@ func TestBackstageImageBuild(t *testing.T) {
 	}
 	if got := strings.Join(backstageImageBuild("t", true), " "); !strings.HasSuffix(got, "--security-opt label=disable") {
 		t.Errorf("podman build = %s, want it unlabelled", got)
+	}
+}
+
+// TestMintPortalWorkloadToken pins the local portal's workload token for
+// muster: a TokenRequest for the in-cluster portal's ServiceAccount, audience
+// muster, a working day; none (and no error) where the lab has no portal.
+func TestMintPortalWorkloadToken(t *testing.T) {
+	cs := kubefake.NewClientset(&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Namespace: platformNamespace, Name: portalServiceAccount}})
+	var asked *authenticationv1.TokenRequest
+	cs.PrependReactor("create", "serviceaccounts", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		if action.GetSubresource() != "token" {
+			return false, nil, nil
+		}
+		asked = action.(k8stesting.CreateAction).GetObject().(*authenticationv1.TokenRequest)
+		answer := asked.DeepCopy()
+		answer.Status.Token = "lab-portal-token"
+		return true, answer, nil
+	})
+	token, err := mintPortalWorkloadToken(context.Background(), cs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(token) != "lab-portal-token" {
+		t.Errorf("token = %q", token)
+	}
+	if asked == nil || !slices.Equal(asked.Spec.Audiences, []string{musterWorkloadAudience}) || asked.Spec.ExpirationSeconds == nil || *asked.Spec.ExpirationSeconds != 12*3600 {
+		t.Errorf("asked %+v, want audience muster for 12h", asked)
+	}
+
+	none, err := mintPortalWorkloadToken(context.Background(), kubefake.NewClientset())
+	if err != nil || none != nil {
+		t.Errorf("without the portal's ServiceAccount: token %q, err %v; want none and no error", none, err)
 	}
 }

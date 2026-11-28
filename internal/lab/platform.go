@@ -68,10 +68,13 @@ const labCASecret = "dex-ca"
 // The platform's generated secrets (platformSecretsName): created once and
 // then left alone — regenerating the encryption key on every run would
 // invalidate every issued token. dex-client-secret must match the
-// `agent-platform` staticClient in the Dex config.
+// `agent-platform` staticClient in the Dex config, portal-dex-client-secret
+// the portal's own (config.PortalClientID; the chart's backstage.oidcClientId
+// reads it under this key).
 const (
 	platformSecretsName       = "agent-platform-secrets"
 	backstageSessionSecretKey = "backstage-session-secret"
+	portalClientSecretKey     = "portal-dex-client-secret" // #nosec G101 -- a Secret key name, not a credential
 )
 
 // The CoreDNS Deployment the Corefile rewrite rolls, in kube-system.
@@ -1230,6 +1233,7 @@ func ensurePlatformSecrets(ctx context.Context) error {
 			"oauth-encryption-key":    []byte(randBase64(32)),
 			"valkey-password":         []byte(randHex(16)),
 			backstageSessionSecretKey: []byte(randBase64(32)),
+			portalClientSecretKey:     []byte(config.PortalClientSecret),
 		}); err != nil {
 			return err
 		}
@@ -1243,6 +1247,13 @@ func ensurePlatformSecrets(ctx context.Context) error {
 			return err
 		}
 		note("added %s to %s", backstageSessionSecretKey, platformSecretsName)
+	}
+	if !secretHasKey(platformNamespace, platformSecretsName, portalClientSecretKey) {
+		patch := fmt.Sprintf(`{"stringData":{%q:%q}}`, portalClientSecretKey, config.PortalClientSecret)
+		if err := patchObject(ctx, gvrSecrets, platformNamespace, platformSecretsName, types.MergePatchType, []byte(patch)); err != nil {
+			return err
+		}
+		note("added %s to %s", portalClientSecretKey, platformSecretsName)
 	}
 	return nil
 }
