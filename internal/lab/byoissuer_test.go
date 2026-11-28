@@ -127,14 +127,48 @@ func TestDexLeafCarriesTheIssuerUnderTheDomain(t *testing.T) {
 	}
 }
 
+// apiserverManifest is the kube-apiserver static pod manifest of a lab's
+// control-plane node, with the OIDC flags the kind config renders.
+func apiserverManifest(issuer, caFile string) string {
+	return "spec:\n  containers:\n  - command:\n    - kube-apiserver\n    - --oidc-ca-file=" + caFile + "\n    - --oidc-issuer-url=" + issuer + "\n"
+}
+
+// fakeNodeDocker stands in for the docker that kind lists the clusters with
+// (`docker ps`, which runs the shell snippet list) and that the lab reads the
+// control-plane node's apiserver manifest through (`docker exec`, which
+// prints manifest).
+func fakeNodeDocker(t *testing.T, list, manifest string) {
+	t.Helper()
+	dir := t.TempDir()
+	file := filepath.Join(dir, "kube-apiserver.yaml")
+	if err := os.WriteFile(file, []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	installFakeTool(t, dir, "docker", "case \"$1\" in\nps) "+list+" ;;\nexec) cat \""+file+"\" ;;\nesac")
+}
+
 // A new cluster takes the issuer under the domain, recorded in agentlab.yaml;
-// an existing cluster keeps the one it was created with, and so does a
-// configuration that already records the domain.
+// an existing cluster keeps the one it was created with. A cluster list the
+// engine does not answer moves nothing: the next `up`, with the engine back,
+// finds the cluster and accepts its apiserver's localhost issuer.
 func TestMoveIssuerUnderDomain(t *testing.T) {
 	t.Chdir(t.TempDir())
+	withPodman(t, false)
 	cfg := localhostIssuerConfig()
-	if err := moveIssuerUnderDomain(cfg, true); err != nil {
-		t.Fatal(err)
+	fakeNodeDocker(t, "echo 'Cannot connect to the Docker daemon' >&2; exit 1", "")
+	if _, err := moveIssuerUnderDomain(cfg); err == nil || !strings.Contains(err.Error(), "Cannot connect to the Docker daemon") {
+		t.Fatalf("a cluster list the engine does not answer: %v, want its error", err)
+	}
+	if cfg.Platform.IssuerOnDomain {
+		t.Fatal("the issuer moved past a cluster list the engine did not answer")
+	}
+	if _, err := os.Stat(config.File); !os.IsNotExist(err) {
+		t.Fatalf("agentlab.yaml written past a cluster list the engine did not answer: %v", err)
+	}
+
+	fakeNodeDocker(t, "echo "+cfg.ClusterName, apiserverManifest("https://localhost:32000/dex", "/etc/kubernetes/pki/dex/ca.crt"))
+	if exists, err := moveIssuerUnderDomain(cfg); err != nil || !exists {
+		t.Fatalf("an existing cluster: exists %v, %v", exists, err)
 	}
 	if cfg.Platform.IssuerOnDomain {
 		t.Fatal("an existing cluster's issuer moved")
@@ -142,8 +176,13 @@ func TestMoveIssuerUnderDomain(t *testing.T) {
 	if _, err := os.Stat(config.File); !os.IsNotExist(err) {
 		t.Fatalf("agentlab.yaml written for an existing cluster: %v", err)
 	}
-	if err := moveIssuerUnderDomain(cfg, false); err != nil {
-		t.Fatal(err)
+	if err := checkClusterIssuer(cfg); err != nil {
+		t.Fatalf("the existing cluster's localhost issuer refused: %v", err)
+	}
+
+	fakeNodeDocker(t, "echo another-lab", "")
+	if exists, err := moveIssuerUnderDomain(cfg); err != nil || exists {
+		t.Fatalf("a new cluster: exists %v, %v", exists, err)
 	}
 	if !cfg.Platform.IssuerOnDomain || cfg.Issuer() != "https://dex.127.0.0.1.nip.io:32000/dex" {
 		t.Fatalf("a new cluster's issuer = %s (issuerOnDomain %v)", cfg.Issuer(), cfg.Platform.IssuerOnDomain)
@@ -447,11 +486,33 @@ func TestBYOIssuerInCluster(t *testing.T) {
 // The apiserver's issuer is read off its static pod manifest, the check an
 // existing cluster passes before a changed issuer would strand its tokens.
 func TestAPIServerIssuer(t *testing.T) {
-	manifest := "spec:\n  containers:\n  - command:\n    - kube-apiserver\n    - --oidc-ca-file=/etc/kubernetes/pki/dex/ca.crt\n    - --oidc-issuer-url=https://localhost:32000/dex\n"
-	if got, ok := apiserverIssuer(manifest); !ok || got != "https://localhost:32000/dex" {
-		t.Errorf("apiserverIssuer = %q, %v", got, ok)
+	manifest := apiserverManifest("https://localhost:32000/dex", "/etc/kubernetes/pki/dex/ca.crt")
+	if got, ok := apiserverFlag(manifest, oidcIssuerFlag); !ok || got != "https://localhost:32000/dex" {
+		t.Errorf("apiserverFlag(%s) = %q, %v", oidcIssuerFlag, got, ok)
 	}
-	if _, ok := apiserverIssuer("spec: {}\n"); ok {
+	if _, ok := apiserverFlag("spec: {}\n", oidcIssuerFlag); ok {
 		t.Error("an issuer read off a manifest without the flag")
+	}
+}
+
+// platform.tls set on an existing lab whose issuer is under the domain: the
+// issuer stays the same, but an apiserver created without a pair verifies it
+// with the lab CA (ca.crt), which the pair does not chain to, so the check
+// `up` runs before Dex gets the pair refuses it and says to make the lab
+// again. An apiserver created with the pair reads the bundle
+// writeIssuerFiles writes, and passes.
+func TestCheckClusterIssuerRefusesAPairTheAPIServerCannotVerify(t *testing.T) {
+	cfg := byoConfig(t)
+	if err := writeIssuerFiles(cfg); err != nil {
+		t.Fatal(err)
+	}
+	fakeNodeDocker(t, "", apiserverManifest(cfg.Issuer(), "/etc/kubernetes/pki/dex/ca.crt"))
+	err := checkClusterIssuer(cfg)
+	if err == nil || !strings.Contains(err.Error(), "ca.crt") || !strings.Contains(err.Error(), "`agentlab down`, then `agentlab up`") {
+		t.Errorf("an apiserver on ca.crt with platform.tls: %v, want a refusal naming ca.crt and the recreate step", err)
+	}
+	fakeNodeDocker(t, "", apiserverManifest(cfg.Issuer(), "/etc/kubernetes/pki/dex/trust-bundle.crt"))
+	if err := checkClusterIssuer(cfg); err != nil {
+		t.Errorf("an apiserver on the trust bundle with platform.tls: %v", err)
 	}
 }

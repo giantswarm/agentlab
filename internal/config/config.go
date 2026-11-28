@@ -1924,13 +1924,15 @@ func LoadReadOnly() (cfg *Config, note string, err error) {
 
 // decodeTolerant is decodeStrict for a reader that writes nothing: a field
 // this release does not know is skipped, and note says which, who wrote the
-// file and how to get that release. Any other error is decodeStrict's.
+// file and how to get that release. Any other error is decodeStrict's. The
+// second decode starts again from recorded(), what a recorded file decodes
+// over: a file without issuerOnDomain still reads as the localhost issuer.
 func decodeTolerant(raw []byte, cfg *Config) (note string, err error) {
 	strict := decodeStrict(raw, cfg)
 	if strict == nil || !strings.Contains(strict.Error(), "not found in type") {
 		return "", strict
 	}
-	*cfg = *Default()
+	*cfg = *recorded()
 	cfg.ClusterName = ""
 	if err := yaml.Unmarshal(raw, cfg); err != nil {
 		return "", fmt.Errorf("parsing %s: %w", File, err)

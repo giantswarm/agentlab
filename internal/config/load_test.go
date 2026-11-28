@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -315,11 +316,14 @@ func TestLoadForConfigureTakesARefusedShape(t *testing.T) {
 
 // A command that never writes agentlab.yaml reads a file a newer agentlab
 // wrote: the unknown field is read past, the known ones load, the note names
-// the field's writer, and the file stays byte for byte. Peek reads it too.
+// the field's writer, and the file stays byte for byte. Peek reads it too. A
+// file without issuerOnDomain is a second lab whose cluster has the
+// localhost issuer: both read it so, and its Dex port on 127.0.0.1, where
+// that cluster publishes it, not on the lab's gatewayAddress.
 func TestLoadReadOnlyReadsAFileANewerReleaseWrote(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
-	raw := []byte(writtenByPrefix + "v9.0.0.\nclusterName: newer\nplatform:\n  chartVersion: " + loadTestChart + "\n  frobnicate: true\n  serving:\n    enabled: true\n")
+	raw := []byte(writtenByPrefix + "v9.0.0.\nclusterName: newer\nplatform:\n  chartVersion: " + loadTestChart + "\n  frobnicate: true\n  domain: " + lab2Domain + "\n  gatewayAddress: " + secondAddress + "\n  serving:\n    enabled: true\n")
 	if err := os.WriteFile(File, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -335,8 +339,17 @@ func TestLoadReadOnlyReadsAFileANewerReleaseWrote(t *testing.T) {
 			t.Errorf("note %q lacks %q", note, want)
 		}
 	}
-	if peeked, err := Peek(dir); err != nil || peeked.ClusterName != "newer" {
-		t.Errorf("Peek = %+v, %v", peeked, err)
+	peeked, err := Peek(dir)
+	if err != nil || peeked.ClusterName != "newer" {
+		t.Fatalf("Peek = %+v, %v", peeked, err)
+	}
+	for name, read := range map[string]*Config{"LoadReadOnly": cfg, "Peek": peeked} {
+		if got, want := read.Issuer(), "https://localhost:32000/dex"; got != want {
+			t.Errorf("%s: issuer %s, want %s", name, got, want)
+		}
+		if ports := read.HostPorts(); !slices.Contains(ports, "127.0.0.1:32000") || slices.Contains(ports, secondAddress+":32000") {
+			t.Errorf("%s: host ports %v, want Dex on 127.0.0.1:32000", name, ports)
+		}
 	}
 	if after, _ := os.ReadFile(File); string(after) != string(raw) {
 		t.Fatalf("a read-only load rewrote the file:\n%s", after)

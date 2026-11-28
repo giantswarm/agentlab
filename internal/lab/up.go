@@ -2,7 +2,11 @@ package lab
 
 import (
 	"context"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -43,8 +47,8 @@ func Up(cfg *config.Config, offers Offers) error {
 	// A cluster about to be created binds every host port of the
 	// configuration and takes the issuer it records; an existing one already
 	// holds its own.
-	clusterExists := kindClusterExists(cfg.ClusterName)
-	if err := moveIssuerUnderDomain(cfg, clusterExists); err != nil {
+	clusterExists, err := moveIssuerUnderDomain(cfg)
+	if err != nil {
 		return err
 	}
 	// The certificates first: the pre-boot render reads the CA bundle
@@ -327,33 +331,41 @@ func ApplyDex(cfg *config.Config) error {
 }
 
 // kindClusterExists reports whether kind knows a cluster by that name — its
-// node containers exist, running or not (node.go).
-func kindClusterExists(name string) bool {
+// node containers exist, running or not (node.go). A cluster list the
+// container engine does not answer is its error, not "no cluster".
+func kindClusterExists(name string) (bool, error) {
 	clusters, err := kindClusters()
-	return err == nil && slices.Contains(clusters, name)
+	if err != nil {
+		return false, err
+	}
+	return slices.Contains(clusters, name), nil
 }
 
-// moveIssuerUnderDomain records the issuer under the platform domain
-// (platform.issuerOnDomain) for a cluster about to be created, from a
-// configuration that still records the localhost issuer of a cluster
-// created before: the apiserver reads the issuer only at creation, so this
-// is the one moment it can move, and under the domain every pod reaches it
-// on Dex's Service, a private address the platform's OAuth resource servers
-// fetch its keys from — a loopback one they refuse. An existing cluster
-// keeps the issuer it was created with (checkClusterIssuer).
-func moveIssuerUnderDomain(cfg *config.Config, clusterExists bool) error {
-	if cfg.Platform.IssuerOnDomain || clusterExists {
-		return nil
+// moveIssuerUnderDomain looks the lab's cluster up and returns whether it
+// exists. For a cluster about to be created, from a configuration that still
+// records the localhost issuer of a cluster created before, it records the
+// issuer under the platform domain (platform.issuerOnDomain): the apiserver
+// reads the issuer only at creation, so this is the one moment it can move,
+// and under the domain every pod reaches it on Dex's Service, a private
+// address the platform's OAuth resource servers fetch its keys from — a
+// loopback one they refuse. An existing cluster keeps the issuer it was
+// created with (checkClusterIssuer). A cluster list the container engine does
+// not answer moves nothing and returns its error: the cluster may exist, and
+// an issuer moved past it would leave the next `up` refusing that cluster.
+func moveIssuerUnderDomain(cfg *config.Config) (clusterExists bool, err error) {
+	clusterExists, err = kindClusterExists(cfg.ClusterName)
+	if err != nil || clusterExists || cfg.Platform.IssuerOnDomain {
+		return clusterExists, err
 	}
 	from := cfg.Issuer()
 	cfg.Platform.IssuerOnDomain = true
 	if err := cfg.Save(); err != nil {
-		return err
+		return false, err
 	}
 	if to := cfg.Issuer(); to != from {
 		note("issuer %s replaces %s: the new cluster's pods reach it on Dex's Service through cluster DNS (platform.issuerOnDomain)", to, from)
 	}
-	return nil
+	return false, nil
 }
 
 // checkClusterIssuer refuses an existing cluster whose apiserver pins
@@ -367,12 +379,59 @@ func checkClusterIssuer(cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("reading the apiserver's OIDC flags off node %s: %w", node, err)
 	}
-	issuer, ok := apiserverIssuer(manifest)
+	issuer, ok := apiserverFlag(manifest, oidcIssuerFlag)
 	if !ok {
 		return fmt.Errorf("node %s's apiserver manifest carries no %s flag", node, oidcIssuerFlag)
 	}
 	if issuer != cfg.Issuer() {
 		return fmt.Errorf("cluster %q was created for the issuer %s, the configuration's is %s (platform.issuerOnDomain and platform.tls put it under platform.domain): the apiserver reads it only at creation, so recreate the lab (`agentlab down`, then `agentlab up`)", cfg.ClusterName, issuer, cfg.Issuer())
+	}
+	return checkClusterOIDCCA(cfg, node, manifest)
+}
+
+// checkClusterOIDCCA refuses an externally provisioned pair (platform.tls)
+// that the existing cluster's apiserver cannot verify the issuer with: its
+// OIDC CA file is fixed at `kind create` like the issuer, and an apiserver
+// created without a pair names the lab CA (ca.crt), which a pair from
+// another CA does not chain to — Dex would serve the pair, and from the
+// apiserver's next start every token would be refused. The file is read
+// through the node's mount of certs/ after writeIssuerFiles, so it is what
+// the apiserver reads when it starts. Without a pair Dex serves the lab-CA
+// leaf, which both CA files verify.
+func checkClusterOIDCCA(cfg *config.Config, node, manifest string) error {
+	if !cfg.Platform.TLS.Set() {
+		return nil
+	}
+	caFile, ok := apiserverFlag(manifest, oidcCAFileFlag)
+	if !ok {
+		return fmt.Errorf("node %s's apiserver manifest carries no %s flag", node, oidcCAFileFlag)
+	}
+	name, ok := strings.CutPrefix(caFile, nodeCertsDir+"/")
+	if !ok || strings.Contains(name, "/") {
+		return fmt.Errorf("node %s's apiserver verifies the issuer with %s, a file outside the lab's certs/ (%s on the node)", node, caFile, nodeCertsDir)
+	}
+	bundle, err := os.ReadFile(filepath.Join(filepath.Dir(caCertPath), name)) // #nosec G304 -- one file name in the lab's certs/
+	if err != nil {
+		return fmt.Errorf("reading %s, the OIDC CA file of node %s's apiserver: %w", caFile, node, err)
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(bundle) {
+		return fmt.Errorf("%s, the OIDC CA file of node %s's apiserver, holds no PEM certificate", caFile, node)
+	}
+	chain, err := pemCertificates(cfg.Platform.TLS.CertFile)
+	if err != nil {
+		return err
+	}
+	block, _ := pem.Decode(chain)
+	leaf, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return fmt.Errorf("%s: %w", cfg.Platform.TLS.CertFile, err)
+	}
+	intermediates := x509.NewCertPool()
+	intermediates.AppendCertsFromPEM(chain)
+	if _, err := leaf.Verify(x509.VerifyOptions{Roots: roots, Intermediates: intermediates, DNSName: cfg.DexHost()}); err != nil {
+		return fmt.Errorf("cluster %q's apiserver verifies the issuer with %s, which does not verify platform.tls's certificate %s for %s (%v): the apiserver reads that file name only at creation, so recreate the lab for this certificate (`agentlab down`, then `agentlab up`)",
+			cfg.ClusterName, caFile, cfg.Platform.TLS.CertFile, cfg.DexHost(), err)
 	}
 	return nil
 }
@@ -396,14 +455,23 @@ func checkClusterNodes(cfg *config.Config) error {
 	return nil
 }
 
-const oidcIssuerFlag = "--oidc-issuer-url="
+// The apiserver's OIDC flags the lab checks on an existing cluster, as the
+// kind config renders them (kind-config.yaml.tmpl).
+const (
+	oidcIssuerFlag = "--oidc-issuer-url="
+	oidcCAFileFlag = "--oidc-ca-file="
+)
 
-// apiserverIssuer is the --oidc-issuer-url value of a kube-apiserver
+// nodeCertsDir is where the node mounts the lab's certs/
+// (kind-config.yaml.tmpl), the directory of the apiserver's OIDC CA file.
+const nodeCertsDir = "/etc/kubernetes/pki/dex"
+
+// apiserverFlag is the value of a flag ("--name=") of a kube-apiserver
 // static pod manifest.
-func apiserverIssuer(manifest string) (string, bool) {
+func apiserverFlag(manifest, flag string) (string, bool) {
 	for line := range strings.Lines(manifest) {
-		if _, issuer, ok := strings.Cut(strings.TrimSpace(line), oidcIssuerFlag); ok {
-			return issuer, true
+		if _, value, ok := strings.Cut(strings.TrimSpace(line), flag); ok {
+			return value, true
 		}
 	}
 	return "", false

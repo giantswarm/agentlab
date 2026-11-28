@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/giantswarm/agentlab/internal/config"
@@ -19,7 +20,7 @@ func telemetryOn(t *testing.T) (cluster *bool) {
 	telemetry.EnterLab("", true)
 	exists := false
 	prev := labClusterExists
-	labClusterExists = func(string) bool { return exists }
+	labClusterExists = func(string) (bool, error) { return exists, nil }
 	t.Cleanup(func() {
 		labClusterExists = prev
 		telemetry.EnterLab("", true)
@@ -39,9 +40,10 @@ func startDeployment(t *testing.T) telemetry.Deployment {
 }
 
 // TestTelemetryDeploymentLivesWithTheCluster: the `up` that creates the
-// cluster records a deployment, every `up` while the cluster exists keeps it,
-// and a new cluster — after `down`, or after the cluster went missing without
-// one — is a new deployment.
+// cluster records a deployment, every `up` while the cluster exists keeps it
+// (also one whose cluster list the container engine does not answer: the
+// cluster may still be there), and a new cluster — after `down`, or after the
+// cluster went missing without one — is a new deployment.
 func TestTelemetryDeploymentLivesWithTheCluster(t *testing.T) {
 	cluster := telemetryOn(t)
 
@@ -53,6 +55,12 @@ func TestTelemetryDeploymentLivesWithTheCluster(t *testing.T) {
 	if again := startDeployment(t); again != first {
 		t.Errorf("an up on the running cluster changed the deployment: %+v, then %+v", first, again)
 	}
+	stub := labClusterExists
+	labClusterExists = func(string) (bool, error) { return false, errors.New("Cannot connect to the Docker daemon") }
+	if kept := startDeployment(t); kept != first {
+		t.Errorf("an up whose cluster list the engine did not answer changed the deployment: %+v, then %+v", first, kept)
+	}
+	labClusterExists = stub
 
 	*cluster = false // kind delete, a reset docker: no `down`
 	second := startDeployment(t)
