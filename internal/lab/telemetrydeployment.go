@@ -14,9 +14,12 @@ import (
 // removed by `down`, read by every command that enters the lab.
 const telemetryDeploymentPath = StateDir + "/telemetry-deployment.json"
 
-// labClusterExists says whether the lab's cluster exists; tests stand in for
-// kind.
-var labClusterExists = kindClusterExists
+// labClusterExists says whether the lab's cluster exists, false when the
+// container engine does not answer; tests stand in for kind.
+var labClusterExists = func(name string) bool {
+	exists, err := kindClusterExists(name)
+	return err == nil && exists
+}
 
 // TelemetryDeployment is the deployment recorded for this lab, false when
 // there is none or the record is unreadable.

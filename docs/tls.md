@@ -129,8 +129,11 @@ The one issuer URL holds from every vantage point, as it does for every lab
 Every consumer that trusted the lab CA trusts `certs/trust-bundle.crt`
 instead: the lab CA plus the certificates of your `certFile`, so a private
 or self-signed pair verifies too, and a public one where the system roots are
-not consulted (the apiserver's `oidc-ca-file`). The issuer is fixed when the
-cluster is created: a change of the domain under it — `platform.tls` on a
-lab whose cluster still runs the localhost issuer, or a pair for another
-domain — is refused by `up` until you recreate it (`agentlab down`, then
-`agentlab up`).
+not consulted (the apiserver's `oidc-ca-file`). The issuer and the
+apiserver's `oidc-ca-file` are fixed when the cluster is created: a change of
+the domain under it — `platform.tls` on a lab whose cluster still runs the
+localhost issuer, or a pair for another domain — is refused by `up` until you
+recreate it (`agentlab down`, then `agentlab up`). So is a pair that the
+existing apiserver's `oidc-ca-file` does not verify: a cluster created
+without `platform.tls` verifies the issuer with the lab CA (`certs/ca.crt`)
+alone, so `up` refuses a pair from another CA there before Dex serves it.
